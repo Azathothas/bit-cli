@@ -25,7 +25,7 @@ from all three, since none will be updated.
 
 ---
 
-## reference/aria2-next — documentation
+## reference/aria2-next, documentation
 
 ```
 reference/aria2-next/aria2-next.rst
@@ -36,7 +36,7 @@ reference/aria2-next/aria2-next.rst
   Documentation, quote sparingly with attribution.
 ```
 
-## reference/rqbit — corpus, not code
+## reference/rqbit, corpus, not code
 
 ```
 reference/rqbit/issues.json
@@ -52,7 +52,7 @@ Note that the `librqbit` source itself is not under `reference/`. It is a
 crates.io dependency and its source is in the cargo registry cache, which is
 where every claim in this file about "the pinned 9.0.0" was verified from.
 
-## reference/intermodal — CC0-1.0, adapt directly
+## reference/intermodal, CC0-1.0, adapt directly
 
 The one reference where copying is allowed. What has actually been adapted is
 listed in `TODO/licensing.md`.
@@ -96,7 +96,7 @@ reference/intermodal/benches/, reference/intermodal/justfile
   How they drive builds and measurements. CC0-1.0.
 ```
 
-## reference/superseedr — GPL-3.0-or-later, do not copy
+## reference/superseedr, GPL-3.0-or-later, do not copy
 
 Read for architecture. Nothing here may be copied, translated, or closely
 paraphrased into `bit-cli`.
@@ -161,7 +161,7 @@ reference/superseedr/fuzz/, proptest-regressions/, integration_tests/
   Worth copying as a practice, not as code. GPL-3.0, do not copy.
 ```
 
-## reference/FluxDown — AGPL-3.0, do not copy
+## reference/FluxDown, AGPL-3.0, do not copy
 
 The strongest boundary in this file. AGPL network-use disclosure would attach
 to the netdisk deployment.

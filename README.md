@@ -27,25 +27,29 @@ list from a file.
 
 ## Install
 
-Prebuilt binaries for `x86_64-linux`, `aarch64-linux`, and `x86_64-windows` are
-on the releases page, each with a BLAKE3 checksum and a build provenance
-attestation. The Windows binary is statically linked against the C runtime, so
-it runs without a Visual C++ redistributable.
-
-```bash
-b3sum --check bit-cli-x86_64-unknown-linux-musl.tar.xz.b3sum
-```
-
-From source:
+From source. This is the only way today: no version has been tagged, so there
+are no published binaries yet.
 
 ```bash
 cargo install --path crates/bit-cli --locked
 ```
 
+`.github/workflows/release.yml` builds `x86_64-linux`, `aarch64-linux`, and
+`x86_64-windows` on a `v*` tag, each with a BLAKE3 checksum and a build
+provenance attestation. When a release exists, verify it with:
+
+```bash
+b3sum --check bit-cli-x86_64-unknown-linux-musl.tar.xz.b3sum
+```
+
+The Windows binary is statically linked against the C runtime, so it runs
+without a Visual C++ redistributable. `pwsh scripts/check-static.ps1` proves
+that on any build.
+
 ## The addressing model
 
-Every other client treats a web seed as one flat thing: a URL that serves the
-whole torrent. Here a binding is a triple.
+A web seed is normally one flat thing: a URL that serves the whole torrent.
+Here a binding is a triple.
 
 **Source** is where bytes come from: an HTTP(S) URL, with its own headers,
 auth, user agent, timeouts, concurrency, and rate limit.
@@ -105,7 +109,7 @@ coverage             43.95 KiB of 43.95 KiB (100.00%)
 [0] https://mirror.example.com/pub/
   scope              * (100.00%, 2 files, 3 whole pieces, 0 partial)
   composition        auto / auto / priority 0
-  origin             torrent_url_list
+  origin             command_line
   FILE  IN SCOPE   PATH           URL
   0     39.06 KiB  disc 1/a.flac  https://mirror.example.com/pub/album/disc%201/a.flac
   1     4.88 KiB   notes.nfo      https://mirror.example.com/pub/album/notes.nfo
@@ -128,7 +132,7 @@ the latency. One request per source, one byte of payload at most.
 
 ```
 bit-cli download <SOURCE>...    Fetch to completion in the foreground, then exit
-bit-cli info <SOURCE>           Parse a torrent, magnet, or metalink and print its metadata
+bit-cli info <SOURCE>           Parse a torrent or magnet and print its metadata
 bit-cli files <SOURCE>          List files with index, path, and size
 bit-cli peers <SOURCE>          Connect, sample the swarm, report peers, exit
 bit-cli trackers <SOURCE>       Announce or scrape, report tier, interval, seeders, leechers
@@ -138,7 +142,6 @@ bit-cli create <PATH>           Create a .torrent
 bit-cli edit <TORRENT>          Rewrite metainfo fields, writing a new file
 bit-cli magnet <SOURCE>         Convert a torrent to a magnet URI
 bit-cli seed <SOURCE>           Seed existing data in the foreground
-bit-cli bench <SUBCOMMAND>      Measure a target
 bit-cli config show             Print the resolved configuration with the origin of every value
 bit-cli completions <SHELL>     bash | zsh | fish | powershell | elvish | nushell
 bit-cli man                     Generate a man page
@@ -148,10 +151,22 @@ bit-cli version                 Version, build metadata, features, protocol supp
 `bit-cli <SOURCE>` with no subcommand is `bit-cli download <SOURCE>`.
 
 Sources accepted: a path to a `.torrent`, an HTTP(S) URL to one, a magnet URI,
-a bare info hash, a Metalink, and `-` for stdin.
+a bare info hash, and `-` for stdin.
 
 Every command runs in the foreground, does its work, and exits. There is no
 daemon and no stored session.
+
+Two things parse but are not built yet. `bit-cli bench <SUBCOMMAND>` and
+Metalink as a source both exit non-zero naming the `TODO/` entry that closes
+them, rather than pretending to work:
+
+```bash
+bit-cli bench webseed album.torrent
+```
+
+```
+error: `bit-cli bench` is not implemented yet; see TODO/bench.md
+```
 
 ## Fetch one piece from one mirror
 
@@ -244,9 +259,15 @@ The key is absent when nothing changed, which is the common case. `index` is
 the file's index in the torrent, so a caller can reconcile what it asked for
 with what is on disk.
 
-`bit-cli create` refuses to build such a torrent in the first place. The
-`windows-path` and `case-collision` lints catch it, and `--allow` overrides
-either one.
+That is the reading side. On the writing side `bit-cli create` refuses to build
+such a torrent at all, through the `windows-path` and `case-collision` lints,
+with `--allow <LINT>` to override either one. Those lints only have anything to
+catch on a filesystem that can hold the input, which Windows is not, so they
+are exercised on Linux and here:
+
+```bash
+cargo test -p bit-cli-core lint::
+```
 
 ## Exit codes
 
@@ -376,17 +397,27 @@ pwsh scripts/check-static.ps1
 ## Interoperability
 
 A torrent only `bit-cli` can read is not a torrent. `create`, `verify`, and
-`seed` are checked against a second, unrelated implementation on every run of:
+`seed` are checked against two other implementations, `aria2c` and `rqbit`:
+
+```bash
+cargo build --workspace --examples
+```
 
 ```bash
 pwsh scripts/interop-roundtrip.ps1
+pwsh scripts/interop-roundtrip.ps1 -Client rqbit
 ```
 
-It builds a multi-file payload, creates a `.torrent`, verifies it, seeds it,
-and then downloads it with `aria2c`. It passes only when `aria2c`'s output is
-byte-identical to the input. Three cases run: a plain v1 torrent, the same with
-`--private`, and `--web-seed` with no peer at all, where `aria2c` has to
-resolve the `url-list` and fetch over HTTP alone.
+Each run builds a multi-file payload, creates a `.torrent`, verifies it, seeds
+it, and then downloads it with the other client. It passes only when that
+client's output is byte-identical to the input, and only when `bit-cli seed`'s
+own accounting covers the payload. Three cases run: a plain v1 torrent, the
+same with `--private`, and `--web-seed` with no peer at all, where the client
+has to resolve the `url-list` and fetch over HTTP alone.
+
+`rqbit` skips the third case, because it does not implement BEP 19. The skip is
+named in the report rather than dropped. CI runs the `aria2c` matrix on Linux
+and Windows.
 
 Nothing reaches the network. The tracker and the web seed are two fixtures in
 this repository, both bound to `127.0.0.1`:

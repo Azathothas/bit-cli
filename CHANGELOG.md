@@ -4,7 +4,7 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org/spec/v2.0.0.html), and the released version is
 driven from the git tag.
 
-## 0.1.0 — unreleased
+## 0.1.0, unreleased
 
 First release. `bit-cli` started as a fork of
 [`kist`](https://github.com/QaidVoid/kist) and shares no released version with
@@ -90,11 +90,13 @@ it, so the history starts here.
 - `create` output is byte-identical on repeat runs and independent of input
   order, with paths `/`-separated and sorted by raw bytes so no locale can
   affect it.
-- `create`, `verify`, and `seed` round trip through a second implementation.
+- `create`, `verify`, and `seed` round trip through two other implementations.
   `scripts/interop-roundtrip.ps1` seeds a four-file 490,012 byte payload on
-  loopback and downloads it with `aria2c` 1.37.0, byte for byte, in three
-  cases: plain v1, `--private`, and `--web-seed` with no peer at all. CI runs
-  it on Linux and Windows. The record is in `TODO/create-seed.md` under T-084.
+  loopback and downloads it with `aria2c` 1.37.0 and with `rqbit` 9.0.0, byte
+  for byte, in three cases: plain v1, `--private`, and `--web-seed` with no
+  peer at all. `rqbit` skips the third, which it cannot do: it has no BEP 19.
+  CI runs the `aria2c` matrix on Linux and Windows. The record is in
+  `TODO/create-seed.md` under T-084.
 - `edit` splices the original `info` bytes back verbatim and re-hashes before
   returning, so it cannot change the info hash even for a torrent whose
   original encoding was not canonical.

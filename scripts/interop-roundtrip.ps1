@@ -85,10 +85,66 @@ foreach ($required in @($bitCli, $tracker, $fileserver)) {
 }
 
 $clientPath = Resolve-Tool $Client "Install it, or pass -Client with the path to another BitTorrent client."
-if ((Split-Path -Leaf $clientPath) -notmatch '^aria2c') {
-    Exit-With 2 "only aria2c is wired up so far. -Client $Client needs its own invocation added to this script."
+$clientKind = switch -Regex (Split-Path -Leaf $clientPath) {
+    '^aria2c' { 'aria2c' }
+    '^rqbit'  { 'rqbit' }
+    default {
+        Exit-With 2 "-Client $Client is not wired up. Add a branch for it to Get-ClientArgs and Get-ShowArgs in this script."
+    }
 }
 $clientVersion = (& $clientPath --version 2>&1 | Select-Object -First 1)
+
+# How each client is asked to parse a torrent and print what it found, without
+# downloading, and what its output has to contain for the parse to count.
+#
+# The two clients print different things. aria2c prints the info hash, so that
+# is what is checked. rqbit prints the file list and not the hash, so the file
+# names are checked instead. Agreement on the info hash is proven either way by
+# the transfer itself: the tracker keys its swarm on the hash, so a client that
+# computed a different one never finds the seeder and the case fails.
+function Get-ShowArgs($torrent) {
+    switch ($clientKind) {
+        'aria2c' { @("-S", $torrent) }
+        'rqbit'  { @("--disable-dht", "--disable-lsd", "download", "--list", $torrent) }
+    }
+}
+
+function Get-ShowExpectation($infoHash) {
+    switch ($clientKind) {
+        'aria2c' { , @($infoHash) }
+        'rqbit'  { , @("a.flac", "b.flac", "notes.nfo", "tiny.bin") }
+    }
+}
+
+# How each client is asked to download one torrent to one directory, with every
+# means of finding a peer disabled except the tracker in the torrent itself.
+function Get-DownloadArgs($torrent, $outDir, $timeout) {
+    switch ($clientKind) {
+        'aria2c' {
+            @(
+                "--dir=$outDir",
+                "--enable-dht=false", "--enable-dht6=false", "--bt-enable-lpd=false",
+                "--seed-time=0", "--allow-overwrite=true",
+                "--console-log-level=info", "--summary-interval=0",
+                "--listen-port=6881",
+                "--bt-stop-timeout=$timeout",
+                $torrent
+            )
+        }
+        'rqbit' {
+            # rqbit has no BEP 19 support, so the web seed case is skipped for
+            # it rather than reported as a failure. See Invoke-Case.
+            @(
+                "--disable-dht", "--disable-dht-persistence", "--disable-lsd",
+                "--disable-upnp-port-forward", "--http-api-listen-addr", "127.0.0.1:0",
+                "--listen-port", "6882",
+                "download", "--exit-on-finish", "--overwrite",
+                "--output-folder", $outDir,
+                $torrent
+            )
+        }
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Workspace
@@ -277,12 +333,15 @@ function Invoke-Case {
         }
 
         # The second client has to agree on the info hash before anything else
-        # is worth testing. -S parses and prints, it does not download.
-        $show = Invoke-Recorded "$Name-client-show" $clientPath @("-S", $torrent) $Root 30
+        # is worth testing. This parses and prints, it does not download.
+        $show = Invoke-Recorded "$Name-client-show" $clientPath (Get-ShowArgs $torrent) $Root 30
         [void]$steps.Add($show)
-        $shown = Get-Content $show.stdout -Raw
-        if ($shown -notmatch [regex]::Escape($created.info_hash)) {
-            [void]$failures.Add("$Client did not report info hash $($created.info_hash)")
+        # Both streams, because rqbit logs its listing and aria2c prints it.
+        $shown = (Get-Content $show.stdout -Raw) + (Get-Content $show.stderr -Raw)
+        foreach ($wanted in (Get-ShowExpectation $created.info_hash)) {
+            if ($shown -notmatch [regex]::Escape($wanted)) {
+                [void]$failures.Add("$Client parsed the torrent but did not report ``$wanted``")
+            }
         }
 
         # seed
@@ -306,16 +365,8 @@ function Invoke-Case {
         }
 
         # download with the second client
-        $clientArgs = @(
-            "--dir=$outDir",
-            "--enable-dht=false", "--enable-dht6=false", "--bt-enable-lpd=false",
-            "--seed-time=0", "--allow-overwrite=true",
-            "--console-log-level=info", "--summary-interval=0",
-            "--listen-port=6881",
-            "--bt-stop-timeout=$TimeoutSeconds",
-            $torrent
-        )
-        $download = Invoke-Recorded "$Name-client-download" $clientPath $clientArgs $Root $TimeoutSeconds
+        $download = Invoke-Recorded "$Name-client-download" $clientPath `
+            (Get-DownloadArgs $torrent $outDir $TimeoutSeconds) $Root $TimeoutSeconds
         [void]$steps.Add($download)
         if ($download.timed_out) {
             [void]$failures.Add("$Client did not finish within ${TimeoutSeconds}s")
@@ -413,10 +464,22 @@ function Invoke-Case {
 
 $startedAt = Get-Timestamp
 $cases = @()
+$skipped = @()
 try {
     $cases += Invoke-Case -Name "v1"
     $cases += Invoke-Case -Name "private" -CreateArgs @("--private")
-    $cases += Invoke-Case -Name "webseed" -WebSeedOnly
+    # The web seed case asks the second client to resolve a `url-list` and
+    # fetch over HTTP with no peer at all. A client that does not implement
+    # BEP 19 cannot do that, and running it anyway would record a failure that
+    # says nothing about bit-cli. Skipped and named, never silently dropped.
+    if ($clientKind -eq 'rqbit') {
+        $skipped += [pscustomobject]@{
+            name = "webseed"
+            why  = "rqbit does not implement BEP 19 web seeding, which is the gap bit-cli exists to fill"
+        }
+    } else {
+        $cases += Invoke-Case -Name "webseed" -WebSeedOnly
+    }
 } finally {
     Stop-Background
 }
@@ -436,6 +499,7 @@ $report = [ordered]@{
     cases_total    = $cases.Count
     cases_passed   = $passed
     cases          = $cases
+    cases_skipped  = $skipped
 }
 $reportPath = Join-Path $Root "report.json"
 $report | ConvertTo-Json -Depth 8 | Set-Content -Path $reportPath -Encoding utf8NoBOM
@@ -448,6 +512,9 @@ Write-Output ("{0,-10} {1,-8} {2,-42} {3}" -f "CASE", "RESULT", "INFO HASH", "DE
 foreach ($case in $cases) {
     $detail = if ($case.passed) { "$($case.total_bytes) bytes matched" } else { $case.failures -join "; " }
     Write-Output ("{0,-10} {1,-8} {2,-42} {3}" -f $case.name, $(if ($case.passed) { "pass" } else { "FAIL" }), $case.info_hash, $detail)
+}
+foreach ($case in $skipped) {
+    Write-Output ("{0,-10} {1,-8} {2,-42} {3}" -f $case.name, "skip", "", $case.why)
 }
 
 if (-not $Keep) {

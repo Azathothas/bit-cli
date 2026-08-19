@@ -110,16 +110,16 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-120](licensing.md) | P1 | licensing | open | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | open | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | open | reference/ is not deleted at the end of Phase B |
-| [T-200](phase-c.md) | — | phase-c | deferred | Session daemon |
-| [T-201](phase-c.md) | — | phase-c | deferred | JSON-RPC and XML-RPC, with aria2 method parity |
-| [T-202](phase-c.md) | — | phase-c | deferred | Queue management across invocations |
-| [T-203](phase-c.md) | — | phase-c | deferred | Session save and restore |
-| [T-204](phase-c.md) | — | phase-c | deferred | Persistent attached web seeds |
-| [T-205](phase-c.md) | — | phase-c | deferred | Download result registry |
-| [T-206](phase-c.md) | — | phase-c | deferred | GID assignment |
-| [T-207](phase-c.md) | — | phase-c | deferred | Session-attached verbs from the old TUI |
-| [T-208](phase-c.md) | — | phase-c | deferred | status --follow against a live session |
-| [T-209](phase-c.md) | — | phase-c | deferred | Watch directories, RSS, cluster mode, and the control service |
+| [T-200](phase-c.md) | n/a | phase-c | deferred | Session daemon |
+| [T-201](phase-c.md) | n/a | phase-c | deferred | JSON-RPC and XML-RPC, with aria2 method parity |
+| [T-202](phase-c.md) | n/a | phase-c | deferred | Queue management across invocations |
+| [T-203](phase-c.md) | n/a | phase-c | deferred | Session save and restore |
+| [T-204](phase-c.md) | n/a | phase-c | deferred | Persistent attached web seeds |
+| [T-205](phase-c.md) | n/a | phase-c | deferred | Download result registry |
+| [T-206](phase-c.md) | n/a | phase-c | deferred | GID assignment |
+| [T-207](phase-c.md) | n/a | phase-c | deferred | Session-attached verbs from the old TUI |
+| [T-208](phase-c.md) | n/a | phase-c | deferred | status --follow against a live session |
+| [T-209](phase-c.md) | n/a | phase-c | deferred | Watch directories, RSS, cluster mode, and the control service |
 
 ## Counts
 
@@ -137,21 +137,24 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 The P0 list, in the order that unblocks the most:
 
-1. ~~[T-084](create-seed.md)~~ — done. `bit-cli create`, `verify`, and `seed`
+1. [T-084](create-seed.md) is **done**. `bit-cli create`, `verify`, and `seed`
    round trip byte for byte through `aria2c` 1.37.0 for v1, `--private`, and
    `--web-seed`. Run it with
    `pwsh -NoProfile -File scripts/interop-roundtrip.ps1`. The `--version
    hybrid` case is still uncovered and waits on [T-081](create-seed.md).
-2. ~~[T-071](windows.md) and [T-072](windows.md)~~ — done. Every torrent path
+2. [T-071](windows.md) and [T-072](windows.md) are **done**. Every torrent path
    is planned before anything is opened, so no file leaves the output
    directory, no name the filesystem refuses fails a download, and two names
    that collide only on NTFS both land. The mapping is in `--json`. A `C:`
    component escaping the output directory turned up while fixing it and is
    fixed too.
-3. [T-001](webseed.md) — the web seed benchmark. Every architectural decision
+3. [T-091](bench.md) then [T-090](bench.md): the bench report envelope and
+   environment capture, then `bench webseed`. This moved ahead of the
+   measurement items below because they close with a number and there is
+   nowhere to record one until it exists. [T-001](webseed.md) states the
+   envelope as its acceptance.
+4. [T-001](webseed.md), the web seed benchmark. Every architectural decision
    about the fetch path waits on this number.
-4. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md),
-   [T-040](memory.md) — the four long-run failures. Likely fewer than four
-   distinct defects; measure before theorising.
-5. [T-090](bench.md) and [T-091](bench.md) — `bench`, because several of the
-   items above close with a measurement and there is nowhere to record one.
+5. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md), and
+   [T-040](memory.md), the four long-run failures. Likely fewer than four
+   distinct defects. Measure before theorising.

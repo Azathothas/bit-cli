@@ -98,6 +98,9 @@ async fn add(torrent: &[u8]) -> Run {
 
     let engine = Engine::start(&EngineOptions {
         download_directory: out.path().to_path_buf(),
+        // An OS-chosen port. The default range is nine ports wide and these
+        // tests run concurrently, so a fixed range makes them race for it.
+        listen_ports: 0..=0,
         listen_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
         enable_dht: false,
         enable_lsd: false,
@@ -252,6 +255,9 @@ async fn the_plan_names_every_change_and_its_reason() {
 
     let engine = Engine::start(&EngineOptions {
         download_directory: out.path().to_path_buf(),
+        // An OS-chosen port. The default range is nine ports wide and these
+        // tests run concurrently, so a fixed range makes them race for it.
+        listen_ports: 0..=0,
         listen_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
         enable_dht: false,
         enable_lsd: false,
