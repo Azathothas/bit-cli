@@ -56,7 +56,7 @@ Source:      PROMPT.md A3.11
 Category:    memory
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     A3.11 requires peak RSS, total CPU time, and open handle count in
              every `bench` report. None is collected.
@@ -70,3 +70,46 @@ Approach:    On Windows, `GetProcessMemoryInfo` gives `PeakWorkingSetSize` and
 Acceptance:  Every `bench` report carries `peak_rss_bytes`, `cpu_ms`, and
              `open_handles`, and `bit-cli bench webseed --format json` shows
              all three non-zero.
+
+`bit_cli_core::sysinfo::Process::sample` reads all three, with no new
+dependency: raw `extern "system"` declarations against `kernel32` on Windows
+and `/proc` reads on Linux. It also splits CPU time into user and system,
+because on a loopback benchmark the split is the result: the run below spent
+29.9 s of CPU over 10 s of wall time and most of it in the kernel, which says
+the ceiling is the socket rather than the client.
+
+Every sample of the time series carries the three figures as well as the
+summary, so a leak shows up as a slope rather than as one number at the end.
+`Process::max` folds samples so a spike halfway through a run is not lost when
+memory is released before the end.
+
+Acceptance, 2026-08-19T23:13:33.253Z, release build:
+
+```
+$ bit-cli bench webseed .tmp/bench/payload.torrent --web-seed $URL \
+    --format json --duration 10s --warmup 2s --concurrency 8 --request-size 1MiB
+```
+
+```
+"process": {
+  "peak_rss_bytes": 42074112,
+  "rss_bytes": 33861632,
+  "cpu_ms": 29859,
+  "cpu_user_ms": 8609,
+  "cpu_system_ms": 15234,
+  "open_handles": 219
+}
+```
+
+All three are non-zero. The unit tests in `sysinfo::tests` assert that a sample
+reads every field, that CPU time only goes up, and that a delta never goes
+negative:
+
+```
+$ cargo test -p bit-cli-core --lib sysinfo
+test result: ok. 14 passed; 0 failed
+```
+
+The Linux path is written and compiles under `#[cfg(unix)]` but has not been
+run here: this machine is Windows. See the same note under
+[T-091](bench.md).

@@ -9,6 +9,7 @@
 //! text, which is what keeps the machine and human surfaces from drifting
 //! apart.
 
+pub mod bench;
 pub mod completions;
 pub mod config;
 pub mod create;

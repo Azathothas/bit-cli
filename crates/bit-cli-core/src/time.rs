@@ -15,7 +15,11 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 /// A point in time, rendered as ISO 8601 UTC with millisecond precision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// The default is the epoch, which renders as `1970-01-01T00:00:00.000Z`. That
+/// is deliberately conspicuous: a timestamp nobody set should look wrong
+/// rather than look like now.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Timestamp {
     epoch_ms: i64,
 }

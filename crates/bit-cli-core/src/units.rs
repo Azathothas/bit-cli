@@ -30,8 +30,8 @@ pub const PIB: u64 = TIB * 1024;
 /// Serializing a bare `u64` is what leads to output where a caller can read
 /// the number but not the unit, or read the unit but not the number. This type
 /// makes both available without the caller deciding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(from = "u64", into = "SizeRepr")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(from = "SizeWire", into = "SizeRepr")]
 pub struct Size(pub u64);
 
 /// Wire shape of a [`Size`].
@@ -39,6 +39,27 @@ pub struct Size(pub u64);
 struct SizeRepr {
     bytes: u64,
     human: String,
+}
+
+/// What a [`Size`] accepts on the way back in.
+///
+/// A document `bit-cli` wrote carries the object form, and `bench --baseline`
+/// reads its own reports back, so that form has to parse. A bare integer
+/// parses too, because a threshold file written by hand should not have to
+/// carry a rendered string that nothing reads.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum SizeWire {
+    Bytes(u64),
+    Object { bytes: u64 },
+}
+
+impl From<SizeWire> for Size {
+    fn from(wire: SizeWire) -> Self {
+        match wire {
+            SizeWire::Bytes(bytes) | SizeWire::Object { bytes } => Self(bytes),
+        }
+    }
 }
 
 impl From<u64> for Size {
@@ -64,8 +85,8 @@ impl fmt::Display for Size {
 
 /// A duration in whole milliseconds that serializes as both an integer and a
 /// human string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(from = "u64", into = "MillisRepr")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(from = "MillisWire", into = "MillisRepr")]
 pub struct Millis(pub u64);
 
 /// Wire shape of a [`Millis`].
@@ -73,6 +94,22 @@ pub struct Millis(pub u64);
 struct MillisRepr {
     ms: u64,
     human: String,
+}
+
+/// What a [`Millis`] accepts on the way back in. See [`SizeWire`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum MillisWire {
+    Ms(u64),
+    Object { ms: u64 },
+}
+
+impl From<MillisWire> for Millis {
+    fn from(wire: MillisWire) -> Self {
+        match wire {
+            MillisWire::Ms(ms) | MillisWire::Object { ms } => Self(ms),
+        }
+    }
 }
 
 impl From<u64> for Millis {
@@ -492,5 +529,27 @@ mod tests {
             let parsed = parse_size(&bytes.to_string()).unwrap();
             assert_eq!(parsed, bytes);
         }
+    }
+
+    #[test]
+    fn a_size_reads_back_from_what_it_wrote() {
+        for bytes in [0u64, 1, KIB, 3 * GIB + 7] {
+            let json = serde_json::to_string(&Size(bytes)).unwrap();
+            assert_eq!(serde_json::from_str::<Size>(&json).unwrap(), Size(bytes));
+        }
+    }
+
+    #[test]
+    fn a_size_also_reads_a_bare_integer() {
+        assert_eq!(serde_json::from_str::<Size>("4096").unwrap(), Size(4096));
+    }
+
+    #[test]
+    fn a_duration_reads_back_from_what_it_wrote() {
+        for ms in [0u64, 1, 999, 90_000] {
+            let json = serde_json::to_string(&Millis(ms)).unwrap();
+            assert_eq!(serde_json::from_str::<Millis>(&json).unwrap(), Millis(ms));
+        }
+        assert_eq!(serde_json::from_str::<Millis>("250").unwrap(), Millis(250));
     }
 }

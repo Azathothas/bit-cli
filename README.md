@@ -156,17 +156,73 @@ a bare info hash, and `-` for stdin.
 Every command runs in the foreground, does its work, and exits. There is no
 daemon and no stored session.
 
-Two things parse but are not built yet. `bit-cli bench <SUBCOMMAND>` and
-Metalink as a source both exit non-zero naming the `TODO/` entry that closes
-them, rather than pretending to work:
+Metalink as a source, and four of the five `bench` subcommands, parse but are
+not built yet. Each exits non-zero naming the `TODO/` entry that closes it,
+rather than pretending to work:
 
 ```bash
-bit-cli bench webseed album.torrent
+bit-cli bench leech album.torrent
 ```
 
 ```
-error: `bit-cli bench` is not implemented yet; see TODO/bench.md
+error: `bit-cli bench leech` is not implemented yet; see TODO/bench.md
 ```
+
+## Measuring a mirror
+
+`bench webseed` reads real payload out of each source's scope and drops it. It
+measures the transport: latency percentiles, how throughput moves with
+concurrency, and what fails and why. No piece is written and no hash is
+checked.
+
+```bash
+bit-cli bench webseed album.torrent \
+  --web-seed https://mirror.example.com/pub/ \
+  --duration 30s --warmup 3s --concurrency-sweep 1,2,4,8,16 --format text
+```
+
+```
+bench webseed
+
+started                2026-08-19T23:13:33.253Z
+finished               2026-08-19T23:13:43.264Z
+elapsed                10s
+
+Environment
+  bit-cli              0.1.0 (x86_64-pc-windows-msvc, release)
+  os                   Windows 10.0.26200
+  cpu                  12th Gen Intel(R) Core(TM) i7-12700H (20 logical, x86_64)
+  memory               63.63 GiB
+  link                 Intel(R) Ethernet Connection (16) I219-LM at 1.00 Gbit/s
+  cost                 peak RSS 40.13 MiB, CPU 29s, 219 handles
+
+Summary
+  measured over        8s
+  sustained            2.98 GiB/s
+  requests             24418 (0 failed)
+  connect              p50 1ms  p90 1ms  p99 1ms  p99.9 1ms  max 1ms
+  first byte           p50 1ms  p90 3ms  p99 18ms  p99.9 23ms  max 24ms
+```
+
+The report goes to stdout in `--format`, which defaults to `json`. Pass
+`--report <PATH>` to write it to a file instead, and stdout carries the text
+summary. `--format csv` writes the time series as one row per sample, which is
+the part a plotting tool wants; it carries the series and nothing else, because
+a report is nested and a table is not.
+
+Two flags turn a measurement into a check a script can branch on:
+
+```bash
+bit-cli bench webseed album.torrent --web-seed $URL --fail-under 50MiB/s
+bit-cli bench webseed album.torrent --web-seed $URL --baseline last-week.json
+```
+
+`--fail-under` exits 14 when sustained throughput falls below the rate.
+`--baseline` prints a delta per metric with a sign and a percentage, and
+refuses the comparison, with the reason named, when the two reports were taken
+on different hardware. Every report carries the machine, the exact command
+line, and what the process cost, because two numbers from two machines are not
+comparable and nothing in the number itself says so.
 
 ## Fetch one piece from one mirror
 

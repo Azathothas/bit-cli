@@ -46,6 +46,38 @@ it, so the history starts here.
 - `webseed fetch` pulls one named range from one named source and verifies it.
 - `trackers` announces and scrapes over HTTP and UDP directly, reporting each
   tracker's tier, interval, seeder and leecher counts, and failure reason.
+- `bench webseed` measures HTTP sources: latency percentiles for connection
+  establishment, first byte, and completion; a concurrency curve; per-source
+  attribution; and error counts by class and by HTTP status.
+
+### Measurement
+
+- Every `bench` report carries the machine it was taken on. `bit-cli` version,
+  target triple, build profile, and whether debug assertions were on. OS and
+  kernel version, CPU model, logical core count, total memory, and NIC link
+  speed. The exact command line and working directory. Start and end timestamps
+  in ISO 8601 UTC with millisecond precision. Peak RSS, user and system CPU
+  time, and open handle count, sampled on the metrics interval as well as at
+  the end. All of it read through the platform's own interfaces, with no new
+  dependency.
+- Latency percentiles come from a histogram rather than a sorted vector, so a
+  six hour run costs the same memory as a six second one.
+- The warmup window is reported rather than dropped. A sample taken during
+  warmup is marked and excluded from the summary, because "it was slow for the
+  first three seconds" is itself a result.
+- Connection establishment is measured on its own cadence, one connection per
+  source per metrics interval, because a pooled HTTP client cannot report what
+  opening a connection costs.
+- Four report formats: `json`, `ndjson`, `csv`, and `text`. The report goes to
+  stdout unless `--report <PATH>` names a file. `csv` carries the time series
+  only, which is said in the docs rather than left to be discovered.
+- `--fail-under <RATE>` exits 14 when sustained throughput falls below the
+  rate. `--baseline <PATH>` prints a delta per metric with a sign, a
+  percentage, and which direction is an improvement, and refuses a comparison
+  across different hardware, a different subcommand, or a newer report version,
+  naming the reason.
+- `--target-rate` paces the run against its own totals rather than per worker,
+  so the target is the aggregate.
 
 ### Paths
 
@@ -103,7 +135,8 @@ it, so the history starts here.
 
 ### Not in this release
 
-`bench`, Metalink resolution, BEP 52 v2 and hybrid creation, BEP 16
-superseeding, `--log-file` rotation, and `-i/--input-file`. Each has an entry
-in `TODO/` with what closes it. Nothing is stubbed: a command that is not
-implemented says so and exits with a code a script can branch on.
+`bench leech`, `bench seed`, `bench probe`, `bench swarm`, Metalink resolution,
+BEP 52 v2 and hybrid creation, BEP 16 superseeding, `--log-file` rotation, and
+`-i/--input-file`. Each has an entry in `TODO/` with what closes it. Nothing is
+stubbed: a command that is not implemented says so and exits with a code a
+script can branch on.

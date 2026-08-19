@@ -66,7 +66,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
 | [T-040](memory.md) | P0 | memory | open | Memory and descriptors grow without bound over a long run |
 | [T-041](memory.md) | P2 | memory | open | Per-source window cache is bounded but not measured |
-| [T-042](memory.md) | P1 | memory | open | Peak RSS is not captured in any report |
+| [T-042](memory.md) | P1 | memory | **done** | Peak RSS is not captured in any report |
 | [T-050](dht.md) | P2 | dht | open | The DHT cache costs disk I/O even when nothing is running |
 | [T-051](dht.md) | P2 | dht | open | A magnet with no DHT and no trackers fails without saying so |
 | [T-052](dht.md) | P3 | dht | open | DHT is not reported |
@@ -89,10 +89,10 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-083](create-seed.md) | P2 | seeding | open | Seeding does not report choke state or disconnect reasons |
 | [T-084](create-seed.md) | P0 | create | **done** | The create round trip has not been proven against another client |
 | [T-085](create-seed.md) | P1 | create | open | Creation determinism is not proven across platforms |
-| [T-090](bench.md) | P0 | bench | open | bit-cli bench is not implemented |
-| [T-091](bench.md) | P0 | bench | open | Bench reports do not capture their environment |
+| [T-090](bench.md) | P0 | bench | partial | bit-cli bench is not implemented |
+| [T-091](bench.md) | P0 | bench | **done** | Bench reports do not capture their environment |
 | [T-092](bench.md) | P1 | bench | open | bench swarm has no synthetic load generator |
-| [T-093](bench.md) | P2 | bench | open | --baseline comparison is not implemented |
+| [T-093](bench.md) | P2 | bench | **done** | --baseline comparison is not implemented |
 | [T-094](bench.md) | P2 | bench | open | Trace output has no measured cost |
 | [T-100](bep-coverage.md) | P2 | bep | open | BEP 6 fast extension is not implemented |
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested |
@@ -127,9 +127,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 | Priority | Open | Partial | Done |
 | --- | --- | --- | --- |
-| P0 | 7 | 0 | 3 |
-| P1 | 24 | 1 | 2 |
-| P2 | 23 | 1 | 0 |
+| P0 | 5 | 1 | 4 |
+| P1 | 23 | 1 | 3 |
+| P2 | 22 | 1 | 1 |
 | P3 | 9 | 0 | 0 |
 | Phase C | 10 deferred | | |
 
@@ -148,11 +148,14 @@ The P0 list, in the order that unblocks the most:
    that collide only on NTFS both land. The mapping is in `--json`. A `C:`
    component escaping the output directory turned up while fixing it and is
    fixed too.
-3. [T-091](bench.md) then [T-090](bench.md): the bench report envelope and
-   environment capture, then `bench webseed`. This moved ahead of the
-   measurement items below because they close with a number and there is
-   nowhere to record one until it exists. [T-001](webseed.md) states the
-   envelope as its acceptance.
+3. [T-091](bench.md), [T-042](memory.md), and [T-093](bench.md) are **done**,
+   and [T-090](bench.md) is **partial**. Every `bench` report carries the
+   machine it was taken on, the exact command line, and what the process cost
+   in memory, CPU, and handles. `bench webseed` measures HTTP sources with
+   latency percentiles, a concurrency curve, per-source attribution, and error
+   counts by class and by HTTP status. `--fail-under` exits 14 and `--baseline`
+   prints a delta per metric. `leech`, `seed`, `probe`, and `swarm` are still
+   unbuilt and say so.
 4. [T-001](webseed.md), the web seed benchmark. Every architectural decision
    about the fetch path waits on this number.
 5. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md), and

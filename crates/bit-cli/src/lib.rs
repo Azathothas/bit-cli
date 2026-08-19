@@ -78,7 +78,7 @@ fn dispatch(cli: &Cli, renderer: &mut Renderer, env: &mut Env) -> Result<ExitCod
         Some(Command::Seed(args)) => cmd::seed::run(args, &cli.global, renderer, env),
         Some(Command::Peers(args)) => cmd::peers::run(args, &cli.global, renderer, env),
         Some(Command::Trackers(args)) => cmd::trackers::run(args, &cli.global, renderer, env),
-        Some(Command::Bench(_)) => Err(bench_not_implemented()),
+        Some(Command::Bench(args)) => cmd::bench::run(args, &cli.global, renderer, env),
         // `bit-cli <SOURCE>` is `bit-cli download <SOURCE>`.
         None if !cli.sources.is_empty() => {
             let args = cli::DownloadArgs::from_sources(cli.sources.clone());
@@ -89,22 +89,6 @@ fn dispatch(cli: &Cli, renderer: &mut Renderer, env: &mut Env) -> Result<ExitCod
             Ok(ExitCode::Usage)
         }
     }
-}
-
-/// `bit-cli bench` is not implemented yet.
-///
-/// This is a real, reported limit rather than a stub that pretends to work:
-/// the command exists, `--help` describes it, and running it fails loudly with
-/// a code a script can branch on. `TODO/bench.md` tracks the remaining work,
-/// and `bit-cli webseed probe` already covers part of what `bench webseed`
-/// will do.
-fn bench_not_implemented() -> Error {
-    Error::generic("`bit-cli bench` is not implemented yet; see TODO/bench.md")
-        .with("todo", "T-090")
-        .with(
-            "hint",
-            "`bit-cli webseed probe` measures HTTP sources today",
-        )
 }
 
 /// Turn a `clap` parse failure into an exit code.

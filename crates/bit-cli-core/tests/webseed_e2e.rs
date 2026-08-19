@@ -980,3 +980,339 @@ async fn a_scope_that_leaves_a_gap_names_the_uncovered_pieces() {
         serde_json::json!([4, 5, 6, 7, 8, 9])
     );
 }
+
+// -- bench webseed ---------------------------------------------------------
+//
+// `bench webseed` reads real payload off a real socket and throws it away.
+// These drive the whole path against the same loopback server the download
+// tests use, so the numbers in a report come from bytes that actually moved.
+
+/// Options for a short bench run: no warmup, a fine sampling interval, and a
+/// chunk size small enough that a fraction of a second still issues many
+/// requests.
+fn bench_options(duration_ms: u64) -> bit_cli_core::bench::webseed::Options {
+    bit_cli_core::bench::webseed::Options {
+        duration: Duration::from_millis(duration_ms),
+        warmup: Duration::ZERO,
+        metrics_interval: Duration::from_millis(100),
+        concurrency: 4,
+        concurrency_sweep: Vec::new(),
+        target_rate: None,
+        chunk_size: Some(16 * 1024),
+    }
+}
+
+/// A torrent, a server, and the bindings that join them.
+async fn bench_fixture(
+    mode: ServeMode,
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Layout,
+    String,
+    BindingSet,
+) {
+    let src = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("movie.bin"), content(512 * 1024, 71)).unwrap();
+
+    let torrent_path = tmp.path().join("fixture.torrent");
+    make_torrent(&src.path().join("movie.bin"), &torrent_path).await;
+    let meta = bit_cli_core::torrent::Metainfo::read(&torrent_path).unwrap();
+    let layout = meta.layout();
+    let info_hash = meta.info_hash().hex();
+
+    let (base, _) = serve(src.path().to_path_buf(), mode).await;
+    let mut spec = whole(&base);
+    spec.limits.chunk_size = 16 * 1024;
+    let set = BindingSet::resolve(&layout, &info_hash, &[spec]).unwrap();
+    (src, tmp, layout, info_hash, set)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bench_webseed_moves_real_bytes_and_reports_them() {
+    let (_src, _tmp, layout, info_hash, set) = bench_fixture(ServeMode::Ranges).await;
+    let mut samples = 0usize;
+    let outcome =
+        bit_cli_core::bench::webseed::run(&set, &layout, &info_hash, &bench_options(700), |_| {
+            samples += 1
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        outcome.summary.bytes.0 > 0,
+        "no bytes moved: {:?}",
+        outcome.summary
+    );
+    assert!(outcome.summary.requests > 0);
+    assert_eq!(
+        outcome.summary.errors.total, 0,
+        "{:?}",
+        outcome.summary.errors
+    );
+    assert!(outcome.summary.sustained_rate.0 > 0);
+    assert!(outcome.summary.peak_rate.0 > 0);
+    assert!(samples > 0, "the time series was never sampled");
+    assert_eq!(outcome.series.len(), samples);
+
+    let complete = &outcome.summary.latency.complete;
+    assert!(complete.count > 0);
+    assert!(complete.p50_ms <= complete.p90_ms);
+    assert!(complete.p90_ms <= complete.p99_ms);
+    assert!(complete.p99_ms <= complete.max_ms);
+    assert!(
+        outcome.summary.latency.first_byte.count > 0,
+        "first byte latency is not recorded"
+    );
+    assert!(
+        outcome.summary.latency.connect.count > 0,
+        "connection establishment is measured on its own cadence"
+    );
+
+    assert_eq!(outcome.sources.len(), 1);
+    let source = &outcome.sources[0];
+    assert_eq!(
+        source.range_support,
+        bit_cli_core::webseed::probe::RangeSupport::Yes
+    );
+    assert_eq!(source.summary.bytes, outcome.summary.bytes);
+    assert!(source.failure.is_none());
+    assert_eq!(outcome.endpoints.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bench_webseed_series_totals_agree_with_the_summary() {
+    let (_src, _tmp, layout, info_hash, set) = bench_fixture(ServeMode::Ranges).await;
+    let outcome =
+        bit_cli_core::bench::webseed::run(&set, &layout, &info_hash, &bench_options(700), |_| {})
+            .await
+            .unwrap();
+
+    let from_series: u64 = outcome.series.iter().map(|s| s.bytes.0).sum();
+    // The series is sampled on the interval and the run stops between ticks,
+    // so the last partial interval is in the summary and not yet in a sample.
+    assert!(
+        from_series <= outcome.summary.bytes.0,
+        "the series claims {from_series} bytes but the summary claims {}",
+        outcome.summary.bytes.0
+    );
+    assert!(
+        from_series > 0,
+        "the series recorded no bytes at all: {:?}",
+        outcome.series
+    );
+    let last = outcome.series.last().unwrap();
+    assert_eq!(
+        last.cumulative_bytes.0, from_series,
+        "the cumulative column is the running total of the interval column"
+    );
+    for sample in &outcome.series {
+        assert!(sample.process.peak_rss_bytes > 0, "no cost was sampled");
+        assert!(!sample.warmup, "this run had no warmup window");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bench_webseed_reports_a_concurrency_curve_with_its_own_latency() {
+    let (_src, _tmp, layout, info_hash, set) = bench_fixture(ServeMode::Ranges).await;
+    let mut options = bench_options(900);
+    options.concurrency_sweep = vec![1, 4];
+    let outcome = bit_cli_core::bench::webseed::run(&set, &layout, &info_hash, &options, |_| {})
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.concurrency_curve.len(), 2);
+    for step in &outcome.concurrency_curve {
+        assert!(
+            step.requests > 0,
+            "concurrency {} issued no request",
+            step.concurrency
+        );
+        assert!(step.bytes.0 > 0);
+        assert!(
+            step.latency.complete.count > 0,
+            "a step carries its own latency, which is what makes a knee visible"
+        );
+        assert!(step.latency.complete.p99_ms >= step.latency.complete.p50_ms);
+    }
+    assert_eq!(outcome.concurrency_curve[0].concurrency, 1);
+    assert_eq!(outcome.concurrency_curve[1].concurrency, 4);
+    assert!(outcome.summary.best_concurrency.is_some());
+    let total: u64 = outcome.concurrency_curve.iter().map(|s| s.bytes.0).sum();
+    assert_eq!(
+        total, outcome.summary.bytes.0,
+        "the steps add up to the run"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bench_webseed_names_a_server_that_ignores_range() {
+    let (_src, _tmp, layout, info_hash, set) = bench_fixture(ServeMode::IgnoreRange).await;
+    let outcome =
+        bit_cli_core::bench::webseed::run(&set, &layout, &info_hash, &bench_options(500), |_| {})
+            .await
+            .unwrap();
+
+    assert_eq!(
+        outcome.summary.bytes.0, 0,
+        "a server that ignores Range serves no usable byte"
+    );
+    assert!(outcome.summary.errors.total > 0);
+    assert_eq!(
+        outcome
+            .summary
+            .errors
+            .by_class
+            .get("range_ignored")
+            .copied(),
+        Some(outcome.summary.errors.total)
+    );
+    assert_eq!(
+        outcome.summary.errors.by_status.get("200").copied(),
+        Some(outcome.summary.errors.total)
+    );
+    assert_eq!(
+        outcome.sources[0].range_support,
+        bit_cli_core::webseed::probe::RangeSupport::No
+    );
+    assert!(
+        outcome
+            .notes
+            .iter()
+            .any(|note| note.contains("does not honour Range")),
+        "{:?}",
+        outcome.notes
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bench_webseed_counts_a_404_by_class_and_by_status() {
+    let (_src, _tmp, layout, info_hash, set) = bench_fixture(ServeMode::NotFound).await;
+    let outcome =
+        bit_cli_core::bench::webseed::run(&set, &layout, &info_hash, &bench_options(500), |_| {})
+            .await
+            .unwrap();
+
+    assert_eq!(outcome.summary.bytes.0, 0);
+    assert!(outcome.summary.errors.total > 0);
+    assert_eq!(
+        outcome.summary.errors.by_class.get("not_found").copied(),
+        Some(outcome.summary.errors.total)
+    );
+    assert_eq!(
+        outcome.summary.errors.by_status.get("404").copied(),
+        Some(outcome.summary.errors.total)
+    );
+    assert!(
+        outcome.summary.latency.complete.count > 0,
+        "the timing of a failing request is still a measurement"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bench_webseed_honours_a_target_rate() {
+    let (_src, _tmp, layout, info_hash, set) = bench_fixture(ServeMode::Ranges).await;
+    let mut options = bench_options(1500);
+    // Loopback serves far faster than this, so the pacer has to hold it down
+    // or the flag does nothing.
+    options.target_rate = Some(64 * 1024);
+    let outcome = bit_cli_core::bench::webseed::run(&set, &layout, &info_hash, &options, |_| {})
+        .await
+        .unwrap();
+
+    assert!(outcome.summary.bytes.0 > 0);
+    assert!(
+        outcome.summary.sustained_rate.0 <= 4 * 64 * 1024,
+        "asked for 64 KiB/s and got {} B/s",
+        outcome.summary.sustained_rate.0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bench_webseed_measures_only_what_a_scope_covers() {
+    let src = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(src.path().join("album")).unwrap();
+    for (name, seed) in [("a.bin", 11u64), ("b.bin", 12)] {
+        std::fs::write(
+            src.path().join("album").join(name),
+            content(256 * 1024, seed),
+        )
+        .unwrap();
+    }
+    let torrent_path = tmp.path().join("fixture.torrent");
+    make_torrent(&src.path().join("album"), &torrent_path).await;
+    let meta = bit_cli_core::torrent::Metainfo::read(&torrent_path).unwrap();
+    let layout = meta.layout();
+    let info_hash = meta.info_hash().hex();
+
+    let (base, served) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let mut spec = whole(&base).with_scope(Scope::parse("0").unwrap());
+    spec.limits.chunk_size = 16 * 1024;
+    let set = BindingSet::resolve(&layout, &info_hash, &[spec]).unwrap();
+
+    let outcome =
+        bit_cli_core::bench::webseed::run(&set, &layout, &info_hash, &bench_options(600), |_| {})
+            .await
+            .unwrap();
+
+    assert!(outcome.summary.bytes.0 > 0);
+    assert_eq!(outcome.summary.errors.total, 0);
+    assert!(served.load(Ordering::Relaxed) > 0);
+    assert!(
+        outcome.endpoints[0].ends_with("a.bin"),
+        "a scope of file 0 reads file 0: {}",
+        outcome.endpoints[0]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bench_webseed_keeps_a_broken_mirror_apart_from_a_healthy_one() {
+    let src = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("movie.bin"), content(256 * 1024, 83)).unwrap();
+    let torrent_path = tmp.path().join("fixture.torrent");
+    make_torrent(&src.path().join("movie.bin"), &torrent_path).await;
+    let meta = bit_cli_core::torrent::Metainfo::read(&torrent_path).unwrap();
+    let layout = meta.layout();
+    let info_hash = meta.info_hash().hex();
+
+    let (good, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let (bad, _) = serve(src.path().to_path_buf(), ServeMode::NotFound).await;
+    let specs: Vec<SourceSpec> = [good, bad]
+        .iter()
+        .map(|base| {
+            let mut spec = whole(base);
+            spec.limits.chunk_size = 16 * 1024;
+            spec
+        })
+        .collect();
+    let set = BindingSet::resolve(&layout, &info_hash, &specs).unwrap();
+
+    let mut options = bench_options(700);
+    options.concurrency = 2;
+    let outcome = bit_cli_core::bench::webseed::run(&set, &layout, &info_hash, &options, |_| {})
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.sources.len(), 2, "one row per source");
+    let healthy = &outcome.sources[0];
+    let broken = &outcome.sources[1];
+    assert!(healthy.summary.bytes.0 > 0);
+    assert_eq!(healthy.summary.errors, 0);
+    assert_eq!(broken.summary.bytes.0, 0);
+    assert!(broken.summary.errors > 0);
+    assert_eq!(
+        broken
+            .summary
+            .error_detail
+            .as_ref()
+            .unwrap()
+            .by_status
+            .get("404")
+            .copied(),
+        Some(broken.summary.errors),
+        "the failing mirror is visible rather than averaged away"
+    );
+}

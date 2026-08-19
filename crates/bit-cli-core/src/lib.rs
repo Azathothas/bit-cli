@@ -6,6 +6,7 @@
 //! own; configuration is passed in explicitly, which is what makes the whole
 //! surface drivable from a test.
 
+pub mod bench;
 pub mod config;
 pub mod engine;
 pub mod error;
@@ -14,6 +15,7 @@ pub mod layout;
 pub mod paths;
 pub mod span;
 pub mod storage;
+pub mod sysinfo;
 pub mod time;
 pub mod torrent;
 pub mod tracker;

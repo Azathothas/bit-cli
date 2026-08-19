@@ -1114,6 +1114,10 @@ pub enum BenchCommand {
 }
 
 /// Flags shared by every `bench` subcommand.
+///
+/// The report goes to stdout unless `--report <PATH>` names a file, in which
+/// case stdout carries the text summary instead. `--format` decides how the
+/// report is written; `--json` and `--jsonl` set it to `json` and `ndjson`.
 #[derive(Debug, Args, Clone)]
 #[command(next_help_heading = "Benchmark options")]
 pub struct BenchShared {
@@ -1145,11 +1149,21 @@ pub struct BenchShared {
     #[arg(long, value_name = "SIZE", default_value = "8GiB")]
     pub disk_budget: String,
 
-    /// Write the full report here, or `-` for stdout.
+    /// Bytes per request. Defaults to the source's own chunk size.
+    #[arg(long, value_name = "SIZE")]
+    pub request_size: Option<String>,
+
+    /// A rate to report the result as a share of, such as what curl reached
+    /// against the same URL.
+    #[arg(long, value_name = "RATE")]
+    pub ceiling: Option<String>,
+
+    /// Write the full report here, or `-` for stdout. Default: stdout.
     #[arg(long, value_name = "PATH")]
     pub report: Option<String>,
 
-    /// Report format.
+    /// Report format: json, ndjson, csv, or text. `csv` carries the time
+    /// series only, because a report is nested and a table is not.
     #[arg(long, value_name = "FMT", default_value = "json")]
     pub format: ReportFormat,
 
@@ -1157,7 +1171,7 @@ pub struct BenchShared {
     #[arg(long, value_name = "PATH")]
     pub baseline: Option<PathBuf>,
 
-    /// Exit non-zero if sustained throughput falls below this.
+    /// Exit 14 if sustained throughput falls below this.
     #[arg(long, value_name = "RATE")]
     pub fail_under: Option<String>,
 }
