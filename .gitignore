@@ -1,0 +1,32 @@
+# Build output
+/target/
+
+# Session working files (see PROMPT.md handling in the handoff)
+/PROMPT.md
+
+# Reference material cloned for study. Never committed.
+/reference/
+
+# Scratch: downloads, fixtures, payloads, intermediate state
+/.tmp/
+
+# Downloaded payloads and metainfo produced by tests and manual runs
+*.iso
+*.img
+*.qcow2
+*.part
+*.bit-cli-part
+
+# Logs
+*.log
+/logs/
+
+# Editor and OS junk
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,32 @@
+# Third party licences
+
+`bit-cli` is MIT. This file carries the licence text for everything it links,
+and is generated from `Cargo.lock` by `cargo about` so it cannot drift from
+what actually ships. Regenerate it with:
+
+```bash
+cargo about generate --config about.toml --output-file THIRD_PARTY.md about.hbs
+```
+
+Two dependencies are worth calling out by name.
+
+**`librqbit`** and its sibling crates are Apache-2.0 only, not dual licensed.
+Copyright 2021 Igor Katson. Distributing a `bit-cli` binary means distributing
+the Apache-2.0 text below and any NOTICE content upstream provides.
+
+**`intermodal`** is not a dependency and is credited anyway. It is CC0-1.0, a
+public domain dedication that requires no attribution. Torrent creation and
+linting, the size parsing, the aligned table output, and the pattern of
+injecting the environment into the program rather than reading globals are all
+adapted from it. Note that CC0 explicitly does not grant patent rights.
+
+{{#each licenses}}
+## {{{name}}}
+
+Used by {{#each used_by}}`{{{crate.name}}} {{{crate.version}}}`{{#unless @last}}, {{/unless}}{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}

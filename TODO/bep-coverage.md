@@ -1,0 +1,118 @@
+# BEP coverage
+
+Sixty-six issues in the corpus mention a BEP or a protocol feature. This file
+tracks what `bit-cli` speaks today and what it does not.
+
+Implemented means there is a test. Inherited means `librqbit` provides it and
+`bit-cli` has not verified it independently.
+
+| BEP | What | Status |
+| --- | --- | --- |
+| 3  | The BitTorrent protocol | inherited |
+| 5  | DHT | inherited, not reported (T-052) |
+| 6  | Fast extension | not implemented (T-100) |
+| 9  | Metadata from peers (magnet) | inherited |
+| 10 | Extension protocol | implemented in the bridge |
+| 11 | PEX | inherited |
+| 12 | Multitracker metadata | implemented in `create`, `edit`, `trackers` |
+| 14 | Local service discovery | inherited |
+| 15 | UDP tracker protocol | implemented in `tracker.rs` |
+| 16 | Superseeding | not implemented (T-082) |
+| 17 | HTTP seeding, Hoffman style | implemented in `fetch.rs` |
+| 19 | HTTP/FTP seeding, GetRight style | implemented, the headline feature |
+| 20 | Peer id conventions | implemented |
+| 21 | Extension for partial seeds | implemented in the bridge |
+| 23 | Compact peer lists | implemented in `tracker.rs` |
+| 27 | Private torrents | implemented in `create`, `edit` |
+| 29 | uTP | inherited, off by default |
+| 39 | Updating torrents via feed URL | implemented in `create`, `edit` |
+| 47 | Padding files | not implemented (T-081) |
+| 48 | Tracker scrape | implemented in `tracker.rs` |
+| 52 | BitTorrent v2 | not implemented (T-081) |
+| 55 | Holepunch | not implemented (T-102) |
+
+---
+
+### T-100 BEP 6 fast extension is not implemented
+
+Source:      https://github.com/ikatson/rqbit/issues/584 (open)
+Category:    bep
+Priority:    P2
+Effort:      L
+Status:      open
+
+Problem:     No `have all`, `have none`, `suggest piece`, `reject request`, or
+             `allowed fast`.
+Relevance:   Two parts matter here. `have all` and `have none` replace a
+             bitfield with two bytes, which matters on a torrent with a million
+             pieces. `reject request` is what lets a partial seed refuse a
+             piece cleanly instead of timing out, which is exactly what the web
+             seed bridge needs when a source turns out not to hold something it
+             announced.
+Approach:    The bridge is the natural place to start, because it is
+             `bit-cli`'s own peer implementation: set the fast extension
+             reserved bit, send `have all` when the scope covers everything and
+             a bitfield otherwise, and answer an out-of-scope request with
+             `reject request` rather than dropping the connection. The session
+             side needs `librqbit`.
+Acceptance:  The bridge negotiates BEP 6 with a session that supports it, sends
+             `have all` for a complete source, and rejects an out-of-scope
+             request without dropping the connection. Covered by an e2e test.
+
+### T-101 uTP is available but untested
+
+Source:      corpus, `librqbit-utp`
+Category:    bep
+Priority:    P3
+Effort:      M
+Status:      open
+
+Problem:     `ListenerOptions::mode` defaults to `TcpOnly`. `bit-cli` does not
+             expose a way to enable uTP and has never tried it.
+Relevance:   uTP is what keeps a seeding box from saturating its own uplink at
+             the expense of everything else on the connection. On a netdisk
+             that matters.
+Approach:    Add `--transport tcp|utp|both`, default `tcp`, and measure. Rule
+             0.10 applies: if it does not move a number, it does not ship.
+Acceptance:  A download over uTP completes and verifies, and a run with a
+             concurrent latency probe shows lower induced latency than the
+             same run over TCP. Both numbers here.
+
+### T-102 BEP 55 holepunch is not implemented
+
+Source:      https://github.com/ikatson/rqbit/issues/463 (open)
+Category:    bep
+Priority:    P3
+Effort:      L
+Status:      open
+
+Problem:     No holepunch support, so peers behind a filtering NAT are
+             unreachable.
+Relevance:   It raises the reachable swarm size, which matters for a leecher
+             and less for a well-connected seed. The operator's case is the
+             seed, so this is low priority here.
+Approach:    Needs peer protocol work in `librqbit`.
+Acceptance:  Deferred. Revisit if peer reachability shows up as a measured
+             limit in `bench swarm`.
+
+### T-103 Filenames that are not valid UTF-8 are refused
+
+Source:      https://github.com/ikatson/rqbit/issues/452 (closed, 2025-07-09)
+Category:    bep
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `add_torrent` failed with "cannot decode filename bit as UTF-8" on
+             a torrent with a non-UTF-8 path.
+Relevance:   BEP 3 does not require UTF-8. Real torrents carry Shift-JIS and
+             CP1251 names, and the `encoding` key exists to say so.
+             `librqbit` 9.0.0 carries an encoding detector
+             (`torrent_metainfo.rs::detect_encoding`), so the closed label is
+             probably right, but `bit-cli`'s own `Metainfo` parser decodes
+             paths as UTF-8 and has not been tested against anything else.
+Approach:    Add a fixture with a Shift-JIS path and check that `bit-cli info`,
+             `files`, and `webseed list` all handle it, including the percent
+             encoding of the composed URL.
+Acceptance:  A non-UTF-8 fixture parses, lists, and composes a correct web seed
+             URL, and the reported path says which encoding was used.

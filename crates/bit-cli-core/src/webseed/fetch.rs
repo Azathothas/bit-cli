@@ -1,0 +1,1589 @@
+//! Ranged HTTP fetching for one source.
+//!
+//! The session asks for 16 KiB blocks, which would be a pathological number of
+//! HTTP requests. Reads are served out of aligned windows instead: a block
+//! triggers one ranged GET for the window containing it, and the window is
+//! cached so neighbouring blocks are answered from memory. `chunk_size` sets
+//! the window and is deliberately independent of the torrent's piece length,
+//! so one request can cover part of a piece or several pieces.
+//!
+//! Every request is clamped to the source's scope before it is issued. An
+//! out-of-scope request is a bug in `bit-cli`, and letting it reach a server
+//! would disguise it as a 416 from a perfectly healthy mirror.
+//!
+//! Failures are classified rather than counted. A 404 is not worth retrying, a
+//! 503 is, and a server that ignores `Range` and returns the whole entity is
+//! worse than either, because reading its body as if it were the requested
+//! range serves wrong bytes at every offset.
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use reqwest::header::{
+    ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderName,
+    HeaderValue, RANGE, USER_AGENT,
+};
+use reqwest::{Response, StatusCode};
+use tokio::sync::{Mutex, Semaphore};
+
+use crate::error::{Error, Result};
+use crate::layout::Layout;
+use crate::time::Timestamp;
+use crate::webseed::binding::{Auth, Binding, RangeRequest, Style};
+
+/// Default `User-Agent`, used when a source does not set its own.
+pub fn default_user_agent() -> String {
+    format!("bit-cli/{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// When HTTP-sourced data is hash-checked at the source.
+///
+/// The session verifies every piece it writes regardless, so this is not what
+/// stops bad data reaching the disk. It is what makes bad data *attributable*:
+/// with it on, a mirror serving a wrong piece is named, dropped, and reported
+/// with the piece index and both hashes, instead of showing up as "a peer sent
+/// something wrong" with no way to tell which mirror it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verify {
+    /// Check every whole piece the source serves. The default.
+    #[default]
+    Piece,
+    /// Check nothing at the source and leave it to the session.
+    None,
+}
+
+impl Verify {
+    /// The stable name used on the command line and in output.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Piece => "piece",
+            Self::None => "none",
+        }
+    }
+}
+
+/// Why a fetch failed, and whether it is worth trying again.
+#[derive(Debug, Clone)]
+pub enum FetchError {
+    /// Worth retrying: timeouts, connection errors, 5xx, short bodies.
+    Transient { reason: String, status: Option<u16> },
+    /// Not worth retrying: the URL is wrong, the credentials are wrong, or the
+    /// server does not do ranges.
+    Permanent { reason: String, status: Option<u16> },
+    /// The bytes arrived but did not match the torrent's piece hash.
+    HashMismatch { reason: String },
+}
+
+impl FetchError {
+    fn transient(reason: impl Into<String>) -> Self {
+        Self::Transient {
+            reason: reason.into(),
+            status: None,
+        }
+    }
+
+    fn permanent(reason: impl Into<String>) -> Self {
+        Self::Permanent {
+            reason: reason.into(),
+            status: None,
+        }
+    }
+
+    /// The HTTP status that produced this, when there was one.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Transient { status, .. } | Self::Permanent { status, .. } => *status,
+            Self::HashMismatch { .. } => None,
+        }
+    }
+
+    /// Whether a retry could succeed.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Transient { .. })
+    }
+
+    /// A stable name for the failure class, for the error counters a `bench`
+    /// report breaks down by.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::HashMismatch { .. } => "hash_mismatch",
+            Self::Permanent {
+                status: Some(403 | 401),
+                ..
+            } => "auth",
+            Self::Permanent {
+                status: Some(404), ..
+            } => "not_found",
+            Self::Permanent {
+                status: Some(416), ..
+            } => "range_not_satisfiable",
+            Self::Permanent {
+                status: Some(200), ..
+            } => "range_ignored",
+            Self::Permanent { .. } => "permanent",
+            Self::Transient {
+                status: Some(_), ..
+            } => "server_error",
+            Self::Transient { .. } => "transport",
+        }
+    }
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transient { reason, .. }
+            | Self::Permanent { reason, .. }
+            | Self::HashMismatch { reason } => f.write_str(reason),
+        }
+    }
+}
+
+impl From<FetchError> for Error {
+    fn from(err: FetchError) -> Self {
+        let code = match &err {
+            FetchError::HashMismatch { .. } => crate::exit::ExitCode::HashMismatch,
+            FetchError::Permanent { .. } => crate::exit::ExitCode::NoUsableSources,
+            FetchError::Transient { .. } => crate::exit::ExitCode::Network,
+        };
+        let mut error = Error::new(code, err.to_string()).with("class", err.class());
+        if let Some(status) = err.status() {
+            error = error.with("http_status", status);
+        }
+        error
+    }
+}
+
+/// What one ranged GET did, recorded whether it succeeded or not.
+///
+/// This is what `--trace http` prints and what `bench` aggregates. It carries
+/// everything needed to rebuild the request by hand, which is the standard the
+/// trace is held to.
+#[derive(Debug, Clone)]
+pub struct RequestRecord {
+    pub started_at: Timestamp,
+    pub url: String,
+    pub range: String,
+    /// The URL after redirects, when it differs from the one requested.
+    pub resolved_url: Option<String>,
+    pub status: Option<u16>,
+    pub bytes: u64,
+    pub total_ms: u64,
+    pub ttfb_ms: Option<u64>,
+    pub server: Option<String>,
+    pub error: Option<String>,
+}
+
+impl RequestRecord {
+    /// The equivalent `curl` command.
+    ///
+    /// The standard for `--trace http` is that a failing request can be
+    /// reproduced by hand from the log. This is that reproduction, with
+    /// credentials redacted unless the caller passes them through.
+    pub fn as_curl(&self, headers: &[(String, String)]) -> String {
+        let mut parts = vec![
+            "curl".to_string(),
+            "-sS".to_string(),
+            "-D".into(),
+            "-".into(),
+        ];
+        parts.push("-H".into());
+        parts.push(shell_quote(&format!("Range: {}", self.range)));
+        for (name, value) in headers {
+            parts.push("-H".into());
+            parts.push(shell_quote(&format!("{name}: {value}")));
+        }
+        parts.push("-o".into());
+        parts.push("/dev/null".into());
+        parts.push(shell_quote(&self.url));
+        parts.join(" ")
+    }
+}
+
+/// Quote one argument for a POSIX shell.
+fn shell_quote(text: &str) -> String {
+    if !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c))
+    {
+        return text.to_string();
+    }
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+/// Counters for one source, readable while it is running.
+#[derive(Debug, Default)]
+pub struct SourceStats {
+    pub requests: AtomicU64,
+    pub bytes: AtomicU64,
+    pub errors: AtomicU64,
+    pub consecutive_errors: AtomicU32,
+    pub retries: AtomicU64,
+    /// Epoch milliseconds the source may be used again. Zero means now.
+    cooldown_until_ms: AtomicU64,
+}
+
+impl SourceStats {
+    /// Whether the source is currently cooled down.
+    pub fn is_cooling_down(&self) -> bool {
+        let until = self.cooldown_until_ms.load(Ordering::Relaxed);
+        until != 0 && Timestamp::now().epoch_ms() < until as i64
+    }
+
+    /// When the source becomes usable again, if it is cooling down.
+    pub fn cooldown_until(&self) -> Option<Timestamp> {
+        match self.cooldown_until_ms.load(Ordering::Relaxed) {
+            0 => None,
+            ms => Some(Timestamp::from_epoch_ms(ms as i64)),
+        }
+    }
+
+    fn record_success(&self, bytes: u64) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.consecutive_errors.store(0, Ordering::Relaxed);
+    }
+
+    /// Count an error, returning whether it tripped the cooldown.
+    fn record_error(&self, max_errors: u32, cooldown: Duration) -> bool {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        self.errors.fetch_add(1, Ordering::Relaxed);
+        let consecutive = self.consecutive_errors.fetch_add(1, Ordering::Relaxed) + 1;
+        if consecutive < max_errors {
+            return false;
+        }
+        let until = Timestamp::now().epoch_ms() + cooldown.as_millis().min(i64::MAX as u128) as i64;
+        self.cooldown_until_ms
+            .store(until.max(0) as u64, Ordering::Relaxed);
+        true
+    }
+}
+
+/// One window of a file held in memory.
+struct CachedWindow {
+    url: String,
+    start: u64,
+    data: Bytes,
+}
+
+/// Identifies a window as its URL and the offset within the file.
+type WindowKey = (String, u64);
+
+/// Fetches torrent byte ranges from one source over HTTP.
+pub struct Fetcher {
+    client: reqwest::Client,
+    binding: Binding,
+    layout: Arc<Layout>,
+    info_hash: String,
+    headers: HeaderMap,
+    stats: Arc<SourceStats>,
+    limiter: Arc<Semaphore>,
+    window: u64,
+    capacity: usize,
+    cache: Mutex<VecDeque<CachedWindow>>,
+    /// One gate per window in flight, so concurrent workers wanting the same
+    /// window wait on one request rather than each issuing their own. Without
+    /// it every worker misses the cache at the same moment and traffic is
+    /// multiplied by the concurrency.
+    inflight: Mutex<HashMap<WindowKey, Arc<Mutex<()>>>>,
+    /// Records of every request, kept when tracing is on.
+    trace: Option<Mutex<Vec<RequestRecord>>>,
+    /// When to hash-check what this source serves.
+    verify: Verify,
+    /// The torrent's piece hashes, when the caller supplied them.
+    piece_hashes: Option<Arc<Vec<[u8; 20]>>>,
+}
+
+impl Fetcher {
+    /// Build a fetcher for one binding.
+    ///
+    /// `cache_windows` caps how many windows are held, bounding memory at
+    /// `cache_windows * chunk_size` per source.
+    pub fn new(
+        binding: Binding,
+        layout: Arc<Layout>,
+        info_hash: impl Into<String>,
+        cache_windows: usize,
+        trace: bool,
+    ) -> Result<Self> {
+        let limits = &binding.spec.limits;
+        let mut headers = HeaderMap::new();
+        for (name, value) in &binding.spec.headers {
+            let name = HeaderName::try_from(name.as_str()).map_err(|e| {
+                Error::usage(format!("`{name}` is not a valid header name: {e}"))
+                    .with("header", name.clone())
+            })?;
+            let value = HeaderValue::from_str(value).map_err(|e| {
+                Error::usage(format!(
+                    "header `{name}` has a value HTTP cannot carry: {e}"
+                ))
+            })?;
+            headers.insert(name, value);
+        }
+        let agent = binding
+            .spec
+            .user_agent
+            .clone()
+            .unwrap_or_else(default_user_agent);
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&agent)
+                .map_err(|e| Error::usage(format!("invalid user agent: {e}")))?,
+        );
+        if let Auth::Bearer { token } = &binding.spec.auth {
+            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|e| Error::usage(format!("invalid bearer token: {e}")))?;
+            value.set_sensitive(true);
+            headers.insert(AUTHORIZATION, value);
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(limits.timeout())
+            .connect_timeout(limits.connect_timeout())
+            .user_agent(agent)
+            .build()
+            .map_err(|e| Error::network(format!("cannot build an HTTP client: {e}")))?;
+
+        Ok(Self {
+            client,
+            layout,
+            info_hash: info_hash.into(),
+            headers,
+            stats: Arc::new(SourceStats::default()),
+            limiter: Arc::new(Semaphore::new(limits.concurrency.max(1))),
+            window: limits.chunk_size.max(1),
+            capacity: cache_windows.max(1),
+            cache: Mutex::new(VecDeque::new()),
+            inflight: Mutex::new(HashMap::new()),
+            trace: trace.then(|| Mutex::new(Vec::new())),
+            verify: Verify::None,
+            piece_hashes: None,
+            binding,
+        })
+    }
+
+    /// Hash-check whole pieces at the source.
+    ///
+    /// Without the piece hashes there is nothing to check against, so passing
+    /// `Verify::Piece` with no hashes leaves verification off rather than
+    /// pretending to do it.
+    #[must_use]
+    pub fn with_verification(mut self, mode: Verify, hashes: Option<Arc<Vec<[u8; 20]>>>) -> Self {
+        self.verify = match hashes.is_some() {
+            true => mode,
+            false => Verify::None,
+        };
+        self.piece_hashes = hashes;
+        self
+    }
+
+    /// The binding this fetcher serves.
+    pub fn binding(&self) -> &Binding {
+        &self.binding
+    }
+
+    /// Live counters.
+    pub fn stats(&self) -> &Arc<SourceStats> {
+        &self.stats
+    }
+
+    /// Every request recorded so far, when tracing is on.
+    pub async fn records(&self) -> Vec<RequestRecord> {
+        match &self.trace {
+            Some(trace) => trace.lock().await.clone(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Read `length` bytes at torrent offset `offset`.
+    ///
+    /// The range is checked against the source's scope first, so a caller
+    /// asking for bytes this source was never bound to gets a binding error
+    /// rather than an HTTP one.
+    pub async fn read(&self, offset: u64, length: u64) -> std::result::Result<Vec<u8>, FetchError> {
+        // BEP 17 addresses pieces, not files, so it does not go through the
+        // per-file window path at all.
+        if self.binding.spec.style == Style::Hoffman {
+            return self.read_hoffman(offset, length).await;
+        }
+        let requests = self
+            .binding
+            .request_urls(&self.layout, &self.info_hash, offset..offset + length)
+            .map_err(|e| FetchError::permanent(e.to_string()))?;
+
+        let covered: u64 = requests.iter().map(|r| r.length).sum();
+        if covered != length {
+            return Err(FetchError::permanent(format!(
+                "asked for {length} bytes at {offset}, but the torrent only covers {covered}"
+            )));
+        }
+
+        let mut out = Vec::with_capacity(length as usize);
+        for request in requests {
+            self.read_one(&request, &mut out).await?;
+        }
+        Ok(out)
+    }
+
+    /// Read a byte range under BEP 17.
+    ///
+    /// Hoffman-style seeding addresses the torrent by piece rather than by
+    /// file: one request per piece, with the sub-range inside the piece given
+    /// as a query parameter instead of a `Range` header. There is no window
+    /// cache here, because the server already decides the granularity.
+    async fn read_hoffman(
+        &self,
+        offset: u64,
+        length: u64,
+    ) -> std::result::Result<Vec<u8>, FetchError> {
+        let range = offset..offset + length;
+        if !self.binding.covers(&range) {
+            return Err(FetchError::permanent(format!(
+                "{} is scoped to `{}` and cannot serve bytes {}-{}",
+                self.binding.spec.url,
+                self.binding.scope.selector,
+                range.start,
+                range.end.saturating_sub(1)
+            )));
+        }
+
+        let mut out = Vec::with_capacity(length as usize);
+        let mut pos = offset;
+        while pos < range.end {
+            let piece = self
+                .layout
+                .piece_at(pos)
+                .ok_or_else(|| FetchError::permanent(format!("byte {pos} is past the payload")))?;
+            let piece_range = self.layout.piece_range(piece).ok_or_else(|| {
+                FetchError::permanent(format!("piece {piece} is past the payload"))
+            })?;
+            let take = (piece_range.end - pos).min(range.end - pos);
+            let begin = pos - piece_range.start;
+            let url = hoffman_url(&self.binding.spec.url, &self.info_hash, piece, begin, take)?;
+
+            let data = self.fetch_hoffman(&url, take).await?;
+            out.extend_from_slice(&data);
+            pos += take;
+        }
+        Ok(out)
+    }
+
+    /// Hash-check every whole piece inside a freshly fetched window.
+    ///
+    /// A window rarely lines up with piece boundaries, so only the pieces it
+    /// contains end to end can be checked here. Partial pieces are left to the
+    /// session, which sees the whole thing. The point is attribution: a wrong
+    /// piece caught here names the mirror that served it.
+    fn verify_window(&self, absolute: u64, data: &[u8]) -> std::result::Result<(), FetchError> {
+        if self.verify == Verify::None {
+            return Ok(());
+        }
+        let Some(hashes) = &self.piece_hashes else {
+            return Ok(());
+        };
+        let end = absolute + data.len() as u64;
+
+        for piece in self.layout.pieces_overlapping(&(absolute..end)) {
+            let Some(range) = self.layout.piece_range(piece) else {
+                continue;
+            };
+            if range.start < absolute || range.end > end {
+                continue;
+            }
+            let Some(expected) = hashes.get(piece as usize) else {
+                continue;
+            };
+            let from = (range.start - absolute) as usize;
+            let to = (range.end - absolute) as usize;
+            let actual = sha1_of(&data[from..to]);
+            if &actual != expected {
+                return Err(FetchError::HashMismatch {
+                    reason: format!(
+                        "{} served piece {piece} with hash {} but the torrent says {}",
+                        self.binding.spec.url,
+                        hex(&actual),
+                        hex(expected)
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// One BEP 17 request, with the same retry and cooldown policy as a
+    /// ranged GET.
+    async fn fetch_hoffman(
+        &self,
+        url: &str,
+        length: u64,
+    ) -> std::result::Result<Bytes, FetchError> {
+        let limits = &self.binding.spec.limits;
+        if self.stats.is_cooling_down() {
+            return Err(FetchError::permanent(format!(
+                "{url}: source is cooling down after {} errors",
+                self.stats.errors.load(Ordering::Relaxed)
+            )));
+        }
+
+        let mut backoff = Duration::from_millis(500);
+        let mut last: Option<FetchError> = None;
+        for attempt in 0..=limits.retries {
+            if attempt > 0 {
+                self.stats.retries.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(16));
+            }
+            let permit =
+                self.limiter.acquire().await.map_err(|e| {
+                    FetchError::permanent(format!("concurrency limiter closed: {e}"))
+                })?;
+            let outcome = self.hoffman_once(url, length).await;
+            drop(permit);
+            match outcome {
+                Ok(data) => {
+                    self.stats.record_success(data.len() as u64);
+                    return Ok(data);
+                }
+                Err(err) if err.is_retryable() => last = Some(err),
+                Err(err) => {
+                    self.stats
+                        .record_error(limits.max_errors, limits.cooldown());
+                    return Err(err);
+                }
+            }
+        }
+        self.stats
+            .record_error(limits.max_errors, limits.cooldown());
+        Err(last.unwrap_or_else(|| FetchError::transient(format!("{url}: no attempt was made"))))
+    }
+
+    async fn hoffman_once(&self, url: &str, length: u64) -> std::result::Result<Bytes, FetchError> {
+        let began = Instant::now();
+        let started_at = Timestamp::now();
+        let mut request = self.client.get(url).headers(self.headers.clone());
+        if let Auth::Basic { user, password } = &self.binding.spec.auth {
+            request = request.basic_auth(user, Some(password));
+        }
+
+        let sent = request.send().await;
+        let ttfb_ms = began.elapsed().as_millis() as u64;
+        let response = match sent {
+            Ok(response) => response,
+            Err(e) => {
+                let err = classify_transport(url, &e);
+                self.record(
+                    started_at,
+                    url,
+                    "bep17",
+                    None,
+                    0,
+                    began,
+                    Some(ttfb_ms),
+                    None,
+                    Some(&err),
+                )
+                .await;
+                return Err(err);
+            }
+        };
+
+        let status = response.status();
+        let server = response
+            .headers()
+            .get(reqwest::header::SERVER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        if !status.is_success() {
+            let err = classify_status(url, status);
+            self.record(
+                started_at,
+                url,
+                "bep17",
+                Some(status.as_u16()),
+                0,
+                began,
+                Some(ttfb_ms),
+                server,
+                Some(&err),
+            )
+            .await;
+            return Err(err);
+        }
+
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(e) => {
+                let err = FetchError::Transient {
+                    reason: format!("{url}: body was cut short: {e}"),
+                    status: Some(status.as_u16()),
+                };
+                self.record(
+                    started_at,
+                    url,
+                    "bep17",
+                    Some(status.as_u16()),
+                    0,
+                    began,
+                    Some(ttfb_ms),
+                    server,
+                    Some(&err),
+                )
+                .await;
+                return Err(err);
+            }
+        };
+        if body.len() as u64 != length {
+            let err = FetchError::Transient {
+                reason: format!("{url}: asked for {length} bytes, got {}", body.len()),
+                status: Some(status.as_u16()),
+            };
+            self.record(
+                started_at,
+                url,
+                "bep17",
+                Some(status.as_u16()),
+                body.len() as u64,
+                began,
+                Some(ttfb_ms),
+                server,
+                Some(&err),
+            )
+            .await;
+            return Err(err);
+        }
+
+        self.record(
+            started_at,
+            url,
+            "bep17",
+            Some(status.as_u16()),
+            body.len() as u64,
+            began,
+            Some(ttfb_ms),
+            server,
+            None,
+        )
+        .await;
+        Ok(body)
+    }
+
+    /// Assemble one per-file request out of cached or freshly fetched windows.
+    async fn read_one(
+        &self,
+        request: &RangeRequest,
+        out: &mut Vec<u8>,
+    ) -> std::result::Result<(), FetchError> {
+        // A per-request composition has a different URL for every byte range,
+        // so windowing it would fetch the wrong resource. Those go straight
+        // out as written.
+        if self.binding.spec.mode.is_per_request() {
+            let data = self
+                .fetch_with_retry(&request.url, request.file_offset, request.length)
+                .await?;
+            out.extend_from_slice(&data);
+            return Ok(());
+        }
+
+        // Windows are aligned in file coordinates, but the scope is written in
+        // torrent coordinates, so the offset of this file within the payload
+        // is what converts between them.
+        let file_base = request.torrent_offset - request.file_offset;
+        let file_len = self
+            .layout
+            .file(request.file)
+            .map(|f| f.length)
+            .ok_or_else(|| FetchError::permanent(format!("no file at index {}", request.file)))?;
+        let end = request.file_offset + request.length;
+        let mut pos = request.file_offset;
+        while pos < end {
+            let (start, length) = self.window_for(file_base, pos, file_len)?;
+            let data = self.window(&request.url, file_base, start, length).await?;
+            let inner = (pos - start) as usize;
+            let available = data.len().saturating_sub(inner);
+            if available == 0 {
+                return Err(FetchError::permanent(format!(
+                    "{} is shorter than the torrent says",
+                    request.url
+                )));
+            }
+            let take = available.min((end - pos) as usize);
+            out.extend_from_slice(&data[inner..inner + take]);
+            pos += take as u64;
+        }
+        Ok(())
+    }
+
+    /// The window covering `pos`, as a file offset and a length.
+    ///
+    /// Two things bound a window besides `chunk_size`: the end of the file,
+    /// and the edge of the source's scope. The second matters more than it
+    /// looks in both directions.
+    ///
+    /// Aligning to absolute file offsets would make a request at byte 163840
+    /// with a four megabyte window start at byte zero, which is outside the
+    /// scope of a source bound to the second half of the payload. So windows
+    /// are aligned from the start of the scope span they fall in, and tile
+    /// that span. Neighbouring blocks still share one window, which is the
+    /// whole point of windowing, but no window ever reaches a byte the
+    /// operator did not bind to this source.
+    fn window_for(
+        &self,
+        file_base: u64,
+        pos: u64,
+        file_len: u64,
+    ) -> std::result::Result<(u64, u64), FetchError> {
+        let absolute = file_base + pos;
+        let Some(span) = self.binding.scope.spans.span_containing(absolute) else {
+            return Err(FetchError::permanent(format!(
+                "byte {absolute} is outside the scope `{}` of {}",
+                self.binding.scope.selector, self.binding.spec.url
+            )));
+        };
+        // The span in this file's coordinates. It may start before this file
+        // and end after it, so both ends are clamped to the file.
+        let span_start = span.start.saturating_sub(file_base);
+        let span_end = (span.end - file_base).min(file_len);
+
+        let offset_in_span = pos - span_start;
+        let start = span_start + (offset_in_span - offset_in_span % self.window);
+        let length = self.window.min(span_end.saturating_sub(start));
+        if length == 0 {
+            return Err(FetchError::permanent(format!(
+                "window at {start} is past the end of {}",
+                self.binding.spec.url
+            )));
+        }
+        Ok((start, length))
+    }
+
+    /// The window at file offset `start`, from cache or over HTTP.
+    async fn window(
+        &self,
+        url: &str,
+        file_base: u64,
+        start: u64,
+        length: u64,
+    ) -> std::result::Result<Bytes, FetchError> {
+        if let Some(hit) = self.cached(url, start).await {
+            return Ok(hit);
+        }
+        let key = (url.to_string(), start);
+        let gate = self.gate(key.clone()).await;
+        let result = {
+            let _guard = gate.lock().await;
+            // Whoever held the gate before us may have filled the cache.
+            match self.cached(url, start).await {
+                Some(hit) => Ok(hit),
+                None => {
+                    let fetched = self.fetch_with_retry(url, start, length).await;
+                    if let Ok(data) = &fetched {
+                        self.verify_window(file_base + start, data)?;
+                        self.store(url, start, data.clone()).await;
+                    }
+                    fetched
+                }
+            }
+        };
+        self.release(&key, &gate).await;
+        result
+    }
+
+    /// One ranged GET with retries and backoff.
+    async fn fetch_with_retry(
+        &self,
+        url: &str,
+        start: u64,
+        length: u64,
+    ) -> std::result::Result<Bytes, FetchError> {
+        let limits = &self.binding.spec.limits;
+        if self.stats.is_cooling_down() {
+            return Err(FetchError::permanent(format!(
+                "{url}: source is cooling down after {} errors",
+                self.stats.errors.load(Ordering::Relaxed)
+            )));
+        }
+
+        let mut backoff = Duration::from_millis(500);
+        let mut last: Option<FetchError> = None;
+        for attempt in 0..=limits.retries {
+            if attempt > 0 {
+                self.stats.retries.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(16));
+            }
+            let permit =
+                self.limiter.acquire().await.map_err(|e| {
+                    FetchError::permanent(format!("concurrency limiter closed: {e}"))
+                })?;
+            let outcome = self.fetch_once(url, start, length).await;
+            drop(permit);
+            match outcome {
+                Ok(data) => {
+                    self.stats.record_success(data.len() as u64);
+                    return Ok(data);
+                }
+                Err(err) if err.is_retryable() => last = Some(err),
+                Err(err) => {
+                    self.stats
+                        .record_error(limits.max_errors, limits.cooldown());
+                    return Err(err);
+                }
+            }
+        }
+        self.stats
+            .record_error(limits.max_errors, limits.cooldown());
+        Err(last.unwrap_or_else(|| FetchError::transient(format!("{url}: no attempt was made"))))
+    }
+
+    /// Issue one ranged GET and check the server honoured it.
+    async fn fetch_once(
+        &self,
+        url: &str,
+        start: u64,
+        length: u64,
+    ) -> std::result::Result<Bytes, FetchError> {
+        let range = format!("bytes={}-{}", start, start + length - 1);
+        let began = Instant::now();
+        let started_at = Timestamp::now();
+
+        let mut request = self.client.get(url).headers(self.headers.clone());
+        request = request.header(RANGE, &range);
+        if let Auth::Basic { user, password } = &self.binding.spec.auth {
+            request = request.basic_auth(user, Some(password));
+        }
+
+        let sent = request.send().await;
+        let ttfb_ms = began.elapsed().as_millis() as u64;
+        let response = match sent {
+            Ok(response) => response,
+            Err(e) => {
+                let err = classify_transport(url, &e);
+                self.record(
+                    started_at,
+                    url,
+                    &range,
+                    None,
+                    0,
+                    began,
+                    Some(ttfb_ms),
+                    None,
+                    Some(&err),
+                )
+                .await;
+                return Err(err);
+            }
+        };
+
+        let status = response.status();
+        let server = response
+            .headers()
+            .get(reqwest::header::SERVER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let resolved = (response.url().as_str() != url).then(|| response.url().to_string());
+
+        if let Err(err) = check_status(url, &response, start, length) {
+            self.record(
+                started_at,
+                url,
+                &range,
+                Some(status.as_u16()),
+                0,
+                began,
+                Some(ttfb_ms),
+                server.clone(),
+                Some(&err),
+            )
+            .await;
+            return Err(err);
+        }
+
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(e) => {
+                let err = FetchError::Transient {
+                    reason: format!("{url}: body was cut short: {e}"),
+                    status: Some(status.as_u16()),
+                };
+                self.record(
+                    started_at,
+                    url,
+                    &range,
+                    Some(status.as_u16()),
+                    0,
+                    began,
+                    Some(ttfb_ms),
+                    server.clone(),
+                    Some(&err),
+                )
+                .await;
+                return Err(err);
+            }
+        };
+
+        if body.len() as u64 != length {
+            let err = FetchError::Transient {
+                reason: format!("{url}: asked for {length} bytes, got {}", body.len()),
+                status: Some(status.as_u16()),
+            };
+            self.record(
+                started_at,
+                url,
+                &range,
+                Some(status.as_u16()),
+                body.len() as u64,
+                began,
+                Some(ttfb_ms),
+                server,
+                Some(&err),
+            )
+            .await;
+            return Err(err);
+        }
+
+        self.record(
+            started_at,
+            url,
+            &range,
+            Some(status.as_u16()),
+            body.len() as u64,
+            began,
+            Some(ttfb_ms),
+            server,
+            None,
+        )
+        .await;
+        if let Some(url) = resolved {
+            tracing::debug!(target: "bit_cli::http", resolved_url = %url, "followed a redirect");
+        }
+        Ok(body)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn record(
+        &self,
+        started_at: Timestamp,
+        url: &str,
+        range: &str,
+        status: Option<u16>,
+        bytes: u64,
+        began: Instant,
+        ttfb_ms: Option<u64>,
+        server: Option<String>,
+        error: Option<&FetchError>,
+    ) {
+        let total_ms = began.elapsed().as_millis() as u64;
+        tracing::trace!(
+            target: "bit_cli::http",
+            at = %started_at,
+            url = %url,
+            range = %range,
+            status = ?status,
+            bytes,
+            total_ms,
+            ttfb_ms = ?ttfb_ms,
+            error = ?error.map(ToString::to_string),
+            "ranged GET"
+        );
+        let Some(trace) = &self.trace else { return };
+        trace.lock().await.push(RequestRecord {
+            started_at,
+            url: url.to_string(),
+            range: range.to_string(),
+            resolved_url: None,
+            status,
+            bytes,
+            total_ms,
+            ttfb_ms,
+            server,
+            error: error.map(ToString::to_string),
+        });
+    }
+
+    /// The gate for one window, creating it if this is the first request.
+    async fn gate(&self, key: WindowKey) -> Arc<Mutex<()>> {
+        self.inflight.lock().await.entry(key).or_default().clone()
+    }
+
+    /// Drop a window's gate once nobody else is waiting on it.
+    async fn release(&self, key: &WindowKey, gate: &Arc<Mutex<()>>) {
+        let mut inflight = self.inflight.lock().await;
+        // Two references means the map's and ours, so nobody else is waiting.
+        // Insertion also takes this lock, so a new waiter cannot slip in here.
+        if Arc::strong_count(gate) == 2 {
+            inflight.remove(key);
+        }
+    }
+
+    /// Look a window up, promoting it to most-recently-used.
+    async fn cached(&self, url: &str, start: u64) -> Option<Bytes> {
+        let mut cache = self.cache.lock().await;
+        let index = cache
+            .iter()
+            .position(|w| w.url == url && w.start == start)?;
+        let window = cache.remove(index)?;
+        let data = window.data.clone();
+        cache.push_front(window);
+        Some(data)
+    }
+
+    /// Insert a window, evicting the least-recently-used one when full.
+    async fn store(&self, url: &str, start: u64, data: Bytes) {
+        let mut cache = self.cache.lock().await;
+        cache.push_front(CachedWindow {
+            url: url.to_string(),
+            start,
+            data,
+        });
+        while cache.len() > self.capacity {
+            cache.pop_back();
+        }
+    }
+}
+
+/// The BEP 17 request URL for one sub-range of one piece.
+///
+/// The query is `info_hash`, `piece`, and `ranges`, in that order. `info_hash`
+/// carries the raw twenty bytes percent-encoded, not the hex rendering: a
+/// server given hex answers for a torrent it does not have.
+///
+/// `ranges` is inclusive at both ends, as BEP 17 defines it. Sending it for a
+/// whole piece is allowed and harmless, and sending it always keeps one code
+/// path rather than two.
+pub fn hoffman_url(
+    base: &str,
+    info_hash_hex: &str,
+    piece: u32,
+    begin: u64,
+    length: u64,
+) -> std::result::Result<String, FetchError> {
+    let raw = decode_hex(info_hash_hex)
+        .ok_or_else(|| FetchError::permanent(format!("`{info_hash_hex}` is not an info hash")))?;
+    let separator = match base.contains('?') {
+        true => '&',
+        false => '?',
+    };
+    Ok(format!(
+        "{base}{separator}info_hash={}&piece={piece}&ranges={begin}-{}",
+        percent_encode_bytes(&raw),
+        begin + length - 1
+    ))
+}
+
+/// The SHA-1 of one piece.
+fn sha1_of(data: &[u8]) -> [u8; 20] {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}
+
+/// Hex, for a hash in an error message.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Twenty bytes from forty hex characters.
+fn decode_hex(text: &str) -> Option<Vec<u8>> {
+    if text.len() % 2 != 0 {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+/// Percent-encode raw bytes for a query string, per RFC 3986.
+fn percent_encode_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 3);
+    for byte in bytes {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char);
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// Classify an unsuccessful HTTP status.
+fn classify_status(url: &str, status: StatusCode) -> FetchError {
+    let code = status.as_u16();
+    match code {
+        404 | 410 => FetchError::Permanent {
+            reason: format!("{url}: {status}"),
+            status: Some(code),
+        },
+        401 | 403 => FetchError::Permanent {
+            reason: format!("{url}: {status}"),
+            status: Some(code),
+        },
+        416 => FetchError::Permanent {
+            reason: format!("{url}: {status}"),
+            status: Some(code),
+        },
+        _ => FetchError::Transient {
+            reason: format!("{url}: {status}"),
+            status: Some(code),
+        },
+    }
+}
+
+/// Turn a transport failure into a classified error.
+fn classify_transport(url: &str, err: &reqwest::Error) -> FetchError {
+    if err.is_timeout() {
+        return FetchError::transient(format!("{url}: timed out"));
+    }
+    if err.is_connect() {
+        return FetchError::transient(format!("{url}: could not connect: {err}"));
+    }
+    if err.is_redirect() {
+        return FetchError::permanent(format!("{url}: too many redirects: {err}"));
+    }
+    if err.is_builder() {
+        return FetchError::permanent(format!("{url}: malformed request: {err}"));
+    }
+    FetchError::transient(format!("{url}: {err}"))
+}
+
+/// Check the response is actually the range that was asked for.
+fn check_status(
+    url: &str,
+    response: &Response,
+    start: u64,
+    length: u64,
+) -> std::result::Result<(), FetchError> {
+    let status = response.status();
+    match status {
+        StatusCode::PARTIAL_CONTENT => {}
+        // A 200 means the server ignored `Range` and is sending the whole
+        // entity. Reading the body as if it were the requested range would
+        // serve wrong bytes at every offset, so refuse rather than guess.
+        StatusCode::OK => {
+            let whole_file_asked_for = start == 0
+                && response
+                    .headers()
+                    .get(CONTENT_LENGTH)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    == Some(length);
+            if whole_file_asked_for {
+                // The request happened to cover the entire entity, so a 200
+                // carries exactly the right bytes.
+                return Ok(());
+            }
+            let accepts = response
+                .headers()
+                .get(ACCEPT_RANGES)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("none");
+            return Err(FetchError::Permanent {
+                reason: format!(
+                    "{url}: server ignored the Range header and returned the whole entity (Accept-Ranges: {accepts})"
+                ),
+                status: Some(200),
+            });
+        }
+        StatusCode::RANGE_NOT_SATISFIABLE => {
+            let total = response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.rsplit('/').next().map(str::to_string))
+                .unwrap_or_else(|| "unknown".to_string());
+            return Err(FetchError::Permanent {
+                reason: format!(
+                    "{url}: 416 for bytes {start}-{}, the server says the resource is {total} bytes; the mirror does not match the torrent",
+                    start + length - 1
+                ),
+                status: Some(416),
+            });
+        }
+        StatusCode::NOT_FOUND => {
+            return Err(FetchError::Permanent {
+                reason: format!("{url}: 404, the composed URL does not exist on this mirror"),
+                status: Some(404),
+            });
+        }
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+            return Err(FetchError::Permanent {
+                reason: format!("{url}: {status}, check --web-seed-auth and --web-seed-header"),
+                status: Some(status.as_u16()),
+            });
+        }
+        StatusCode::TOO_MANY_REQUESTS => {
+            return Err(FetchError::Transient {
+                reason: format!(
+                    "{url}: 429, lower --web-seed-concurrency or set --web-seed-speed-limit"
+                ),
+                status: Some(429),
+            });
+        }
+        s if s.is_server_error() => {
+            return Err(FetchError::Transient {
+                reason: format!("{url}: {s}"),
+                status: Some(s.as_u16()),
+            });
+        }
+        s => {
+            return Err(FetchError::Permanent {
+                reason: format!("{url}: {s}"),
+                status: Some(s.as_u16()),
+            });
+        }
+    }
+
+    // A 206 for a different range than was asked for is as wrong as a 200, and
+    // far cheaper to catch here than as a hash failure once per piece.
+    if let Some(header) = response.headers().get(CONTENT_RANGE)
+        && let Some(got) = header.to_str().ok().and_then(parse_content_range_start)
+        && got != start
+    {
+        return Err(FetchError::Permanent {
+            reason: format!("{url}: asked for byte {start} but the server sent byte {got}"),
+            status: Some(206),
+        });
+    }
+    Ok(())
+}
+
+/// Extract the first byte position from `Content-Range: bytes 0-99/200`.
+pub fn parse_content_range_start(value: &str) -> Option<u64> {
+    let spec = value.trim().strip_prefix("bytes ")?;
+    let (start, _) = spec.split_once('-')?;
+    start.trim().parse().ok()
+}
+
+/// Extract the total size from `Content-Range: bytes 0-99/200`.
+pub fn parse_content_range_total(value: &str) -> Option<u64> {
+    let total = value.trim().rsplit('/').next()?;
+    total.trim().parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_range_start_is_parsed_and_junk_is_rejected() {
+        assert_eq!(parse_content_range_start("bytes 0-99/200"), Some(0));
+        assert_eq!(
+            parse_content_range_start("bytes 1024-2047/4096"),
+            Some(1024)
+        );
+        assert_eq!(parse_content_range_start("bytes */200"), None);
+        assert_eq!(parse_content_range_start("items 0-99/200"), None);
+        assert_eq!(parse_content_range_start(""), None);
+    }
+
+    #[test]
+    fn content_range_total_is_parsed() {
+        assert_eq!(parse_content_range_total("bytes 0-99/200"), Some(200));
+        assert_eq!(parse_content_range_total("bytes 0-99/*"), None);
+    }
+
+    #[test]
+    fn error_classes_are_stable_names() {
+        let cases = [
+            (
+                FetchError::Permanent {
+                    reason: "x".into(),
+                    status: Some(404),
+                },
+                "not_found",
+            ),
+            (
+                FetchError::Permanent {
+                    reason: "x".into(),
+                    status: Some(416),
+                },
+                "range_not_satisfiable",
+            ),
+            (
+                FetchError::Permanent {
+                    reason: "x".into(),
+                    status: Some(403),
+                },
+                "auth",
+            ),
+            (
+                FetchError::Permanent {
+                    reason: "x".into(),
+                    status: Some(200),
+                },
+                "range_ignored",
+            ),
+            (
+                FetchError::Transient {
+                    reason: "x".into(),
+                    status: Some(503),
+                },
+                "server_error",
+            ),
+            (
+                FetchError::Transient {
+                    reason: "x".into(),
+                    status: None,
+                },
+                "transport",
+            ),
+            (
+                FetchError::HashMismatch { reason: "x".into() },
+                "hash_mismatch",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.class(), expected);
+        }
+    }
+
+    #[test]
+    fn only_transient_errors_are_retried() {
+        assert!(FetchError::transient("x").is_retryable());
+        assert!(!FetchError::permanent("x").is_retryable());
+        assert!(!FetchError::HashMismatch { reason: "x".into() }.is_retryable());
+    }
+
+    /// A fetcher for one source over a ten-piece single-file torrent.
+    fn fetcher(scope: &str, chunk_size: u64) -> Fetcher {
+        use crate::webseed::binding::{BindingSet, Origin, SourceSpec};
+        use crate::webseed::scope::Scope;
+
+        let layout = Arc::new(Layout::from_lengths(
+            "movie.bin",
+            false,
+            32 * 1024,
+            [("movie.bin".to_string(), 320 * 1024u64)],
+        ));
+        let mut spec = SourceSpec::new("https://mirror.example.com/movie.bin", Origin::CommandLine)
+            .with_scope(Scope::parse(scope).unwrap());
+        spec.limits.chunk_size = chunk_size;
+        let hash = "0".repeat(40);
+        let set = BindingSet::resolve(&layout, &hash, &[spec]).unwrap();
+        Fetcher::new(set.bindings[0].clone(), layout, hash, 4, false).unwrap()
+    }
+
+    #[test]
+    fn a_window_tiles_the_file_when_the_whole_torrent_is_in_scope() {
+        let fetcher = fetcher("*", 64 * 1024);
+        assert_eq!(fetcher.window_for(0, 0, 320 * 1024).unwrap(), (0, 65536));
+        assert_eq!(fetcher.window_for(0, 1000, 320 * 1024).unwrap(), (0, 65536));
+        assert_eq!(
+            fetcher.window_for(0, 65536, 320 * 1024).unwrap(),
+            (65536, 65536)
+        );
+    }
+
+    #[test]
+    fn the_last_window_stops_at_the_end_of_the_file() {
+        let fetcher = fetcher("*", 256 * 1024);
+        // 320 KiB with a 256 KiB window leaves 64 KiB in the second one.
+        assert_eq!(
+            fetcher.window_for(0, 300 * 1024, 320 * 1024).unwrap(),
+            (262144, 65536)
+        );
+    }
+
+    #[test]
+    fn a_window_never_starts_before_the_scope_it_serves() {
+        // This is the trap that a naive alignment falls into: a request at
+        // 160 KiB with a 4 MiB window aligns to zero, which this source was
+        // never bound to.
+        let fetcher = fetcher("piece:5-", 4 * crate::units::MIB);
+        let (start, length) = fetcher.window_for(0, 5 * 32 * 1024, 320 * 1024).unwrap();
+        assert_eq!(
+            start,
+            5 * 32 * 1024,
+            "the window starts where the scope does"
+        );
+        assert_eq!(length, 5 * 32 * 1024, "and runs to the end of the payload");
+    }
+
+    #[test]
+    fn a_window_never_reaches_past_the_end_of_its_scope() {
+        let fetcher = fetcher("piece:0-4", 4 * crate::units::MIB);
+        let (start, length) = fetcher.window_for(0, 0, 320 * 1024).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(length, 5 * 32 * 1024, "five pieces, not the whole file");
+    }
+
+    #[test]
+    fn windows_inside_one_scope_span_still_share_a_cache_entry() {
+        // Two blocks a few kilobytes apart have to resolve to the same window,
+        // or the cache never hits and every block costs an HTTP request.
+        let fetcher = fetcher("piece:5-", 64 * 1024);
+        let first = fetcher.window_for(0, 5 * 32 * 1024, 320 * 1024).unwrap();
+        let second = fetcher
+            .window_for(0, 5 * 32 * 1024 + 16384, 320 * 1024)
+            .unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn a_byte_outside_the_scope_is_refused_before_any_request_is_made() {
+        let fetcher = fetcher("piece:5-", 4 * crate::units::MIB);
+        let err = fetcher.window_for(0, 0, 320 * 1024).unwrap_err();
+        assert!(
+            !err.is_retryable(),
+            "an out-of-scope read is a bug, not a transient failure"
+        );
+        assert!(err.to_string().contains("outside the scope"), "{err}");
+    }
+
+    const HASH: &str = "0102030405060708090a0b0c0d0e0f1011121314";
+
+    #[test]
+    fn a_bep_17_url_carries_the_raw_info_hash_not_the_hex_one() {
+        let url = hoffman_url("https://seed.example.com/data", HASH, 3, 0, 16384).unwrap();
+        assert!(
+            url.contains("info_hash=%01%02%03%04%05%06%07%08%09%0A%0B%0C%0D%0E%0F%10%11%12%13%14"),
+            "{url}"
+        );
+        assert!(
+            !url.contains(HASH),
+            "the hex rendering is the wrong twenty bytes: {url}"
+        );
+    }
+
+    #[test]
+    fn a_bep_17_url_names_the_piece_and_an_inclusive_range() {
+        let url = hoffman_url("https://seed.example.com/data", HASH, 3, 0, 16384).unwrap();
+        assert!(url.contains("&piece=3"), "{url}");
+        assert!(
+            url.ends_with("&ranges=0-16383"),
+            "the range is inclusive at both ends: {url}"
+        );
+
+        let url = hoffman_url("https://seed.example.com/data", HASH, 0, 16384, 16384).unwrap();
+        assert!(url.ends_with("&ranges=16384-32767"), "{url}");
+    }
+
+    #[test]
+    fn a_bep_17_base_that_already_has_a_query_gets_an_ampersand() {
+        let url = hoffman_url("https://seed.example.com/s?k=v", HASH, 0, 0, 1).unwrap();
+        assert!(
+            url.starts_with("https://seed.example.com/s?k=v&info_hash="),
+            "{url}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_info_hash_is_refused_rather_than_sent() {
+        assert!(hoffman_url("https://s.example.com/", "not-hex", 0, 0, 1).is_err());
+        assert!(hoffman_url("https://s.example.com/", "abc", 0, 0, 1).is_err());
+    }
+
+    #[test]
+    fn statuses_are_classified_the_same_way_on_both_wire_styles() {
+        assert!(!classify_status("u", StatusCode::NOT_FOUND).is_retryable());
+        assert!(!classify_status("u", StatusCode::FORBIDDEN).is_retryable());
+        assert!(!classify_status("u", StatusCode::RANGE_NOT_SATISFIABLE).is_retryable());
+        assert!(classify_status("u", StatusCode::SERVICE_UNAVAILABLE).is_retryable());
+        assert_eq!(
+            classify_status("u", StatusCode::NOT_FOUND).class(),
+            "not_found"
+        );
+    }
+
+    #[test]
+    fn a_file_offset_is_converted_into_the_torrent_offset_the_scope_uses() {
+        // The second file of a multi-file torrent starts at byte 160 KiB, so
+        // its file offset zero is torrent offset 163840.
+        let fetcher = fetcher("piece:5-", 64 * 1024);
+        let (start, _) = fetcher.window_for(5 * 32 * 1024, 0, 160 * 1024).unwrap();
+        assert_eq!(
+            start, 0,
+            "the scope span starts exactly where this file does"
+        );
+        assert!(fetcher.window_for(0, 0, 320 * 1024).is_err());
+    }
+
+    #[test]
+    fn errors_carry_the_right_exit_code() {
+        use crate::exit::ExitCode;
+        assert_eq!(
+            Error::from(FetchError::transient("x")).code(),
+            ExitCode::Network
+        );
+        assert_eq!(
+            Error::from(FetchError::permanent("x")).code(),
+            ExitCode::NoUsableSources
+        );
+        assert_eq!(
+            Error::from(FetchError::HashMismatch { reason: "x".into() }).code(),
+            ExitCode::HashMismatch
+        );
+    }
+
+    #[test]
+    fn a_record_reproduces_the_request_as_curl() {
+        let record = RequestRecord {
+            started_at: Timestamp::from_epoch_ms(0),
+            url: "https://mirror.example.com/pub/album/disc 1/a.flac".to_string(),
+            range: "bytes=1024-2047".to_string(),
+            resolved_url: None,
+            status: Some(206),
+            bytes: 1024,
+            total_ms: 42,
+            ttfb_ms: Some(11),
+            server: Some("nginx".to_string()),
+            error: None,
+        };
+        let curl = record.as_curl(&[("X-Region".to_string(), "apac".to_string())]);
+        assert!(curl.contains("'Range: bytes=1024-2047'"), "{curl}");
+        assert!(curl.contains("'X-Region: apac'"), "{curl}");
+        assert!(
+            curl.contains("'https://mirror.example.com/pub/album/disc 1/a.flac'"),
+            "{curl}"
+        );
+    }
+
+    #[test]
+    fn shell_quoting_survives_a_single_quote() {
+        assert_eq!(shell_quote("plain"), "plain");
+        assert_eq!(shell_quote("https://e.com/a?b=c"), "'https://e.com/a?b=c'");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn cooldown_trips_only_after_the_configured_run_of_errors() {
+        let stats = SourceStats::default();
+        let cooldown = Duration::from_secs(600);
+        assert!(!stats.record_error(3, cooldown));
+        assert!(!stats.record_error(3, cooldown));
+        assert!(
+            stats.record_error(3, cooldown),
+            "the third consecutive error trips it"
+        );
+        assert!(stats.is_cooling_down());
+        assert!(stats.cooldown_until().is_some());
+    }
+
+    #[test]
+    fn a_success_clears_the_consecutive_error_run() {
+        let stats = SourceStats::default();
+        let cooldown = Duration::from_secs(600);
+        stats.record_error(3, cooldown);
+        stats.record_error(3, cooldown);
+        stats.record_success(1024);
+        assert_eq!(stats.consecutive_errors.load(Ordering::Relaxed), 0);
+        assert!(!stats.record_error(3, cooldown), "the run started over");
+        assert!(!stats.is_cooling_down());
+        assert_eq!(stats.bytes.load(Ordering::Relaxed), 1024);
+    }
+
+    #[test]
+    fn the_default_user_agent_names_the_tool_and_version() {
+        let agent = default_user_agent();
+        assert!(agent.starts_with("bit-cli/"), "{agent}");
+        assert!(agent.len() > "bit-cli/".len());
+    }
+}

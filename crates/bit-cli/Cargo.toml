@@ -1,0 +1,53 @@
+[package]
+name = "bit-cli"
+description = "Non-interactive BitTorrent and HTTP download tool with first-class web seed control"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+keywords = ["torrent", "bittorrent", "webseed", "bep19", "cli"]
+categories = ["command-line-utilities", "network-programming"]
+publish = false
+
+[[bin]]
+name = "bit-cli"
+path = "src/main.rs"
+
+[lib]
+name = "bit_cli"
+path = "src/lib.rs"
+
+[features]
+default = ["dht", "pex", "lsd", "upnp"]
+dht = ["bit-cli-core/dht"]
+pex = ["bit-cli-core/pex"]
+lsd = ["bit-cli-core/lsd"]
+upnp = ["bit-cli-core/upnp"]
+
+[dependencies]
+bit-cli-core.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+clap_complete_nushell.workspace = true
+clap_mangen.workspace = true
+globset.workspace = true
+ignore.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+sha1.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
