@@ -199,6 +199,55 @@ bit-cli info album.torrent --json | ConvertFrom-Json
 bit-cli info album.torrent --json | Out-File -Encoding utf8NoBOM info.json
 ```
 
+## Paths
+
+A `.torrent` is untrusted input, and its file names decide where bytes land.
+Three of them cannot be used as written:
+
+- A component the platform reads as a drive or a root. On Windows
+  `Path::new("D:/out").join("C:")` is `C:`, so a two-character component
+  relocates the download out of the output directory.
+- A name the filesystem refuses: `CON`, `NUL`, `COM1`, a trailing dot or space,
+  or any of `< > : " | ? *`.
+- Two names that differ only in case. NTFS and APFS treat `README` and `readme`
+  as one file, so the second write wins and the first payload is gone.
+
+`bit-cli` plans every path before it opens anything. Each file lands inside the
+output directory, under a name the filesystem accepts, and no two files collide.
+The rules run on every platform, so a payload downloaded on Linux and copied to
+Windows still works.
+
+Nothing is silent. A changed path is reported on stderr and in `--json`:
+
+```bash
+bit-cli download hostile.torrent --json | jq '.torrents[0].renamed'
+```
+
+```json
+[
+  {
+    "index": 0,
+    "torrent_path": "C:/pwned.txt",
+    "disk_path": "C_/pwned.txt",
+    "reasons": ["escape", "illegal-character"]
+  },
+  {
+    "index": 1,
+    "torrent_path": "CON.txt",
+    "disk_path": "CON_.txt",
+    "reasons": ["reserved-name"]
+  }
+]
+```
+
+The key is absent when nothing changed, which is the common case. `index` is
+the file's index in the torrent, so a caller can reconcile what it asked for
+with what is on disk.
+
+`bit-cli create` refuses to build such a torrent in the first place. The
+`windows-path` and `case-collision` lints catch it, and `--allow` overrides
+either one.
+
 ## Exit codes
 
 The exit code is the primary success signal. A caller branches on it without

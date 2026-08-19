@@ -16,6 +16,7 @@ use bit_cli_core::ExitCode;
 use bit_cli_core::engine::{AddOptions, Engine, TorrentSnapshot};
 use bit_cli_core::error::{Error, Result};
 use bit_cli_core::layout::Layout;
+use bit_cli_core::paths::Rename;
 use bit_cli_core::torrent::Metainfo;
 use bit_cli_core::units::{Size, format_rate, format_size};
 use bit_cli_core::webseed::binding::SourceSpec;
@@ -54,6 +55,10 @@ pub struct TorrentReport {
     pub peers_seen: u32,
     pub sources: Vec<SourceReport>,
     pub output_directory: String,
+    /// Files whose on-disk path is not the path in the torrent, and why.
+    /// Empty for the ordinary torrent. See `bit_cli_core::paths`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub renamed: Vec<Rename>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -315,6 +320,7 @@ async fn one(
                 peers_seen: 0,
                 sources: Vec::new(),
                 output_directory: options.directory.display().to_string(),
+                renamed: Vec::new(),
                 error: Some(error.to_string()),
             }
         }
@@ -348,6 +354,26 @@ async fn one_inner(
         .await;
 
     engine.wait_until_initialized(&handle).await?;
+    // A rename is not an error, but a caller who is not told about one cannot
+    // find the file it asked for, so it goes to stderr as well as into the
+    // report.
+    if let Some(planned) = engine.path_plan(&handle)
+        && !planned.is_clean()
+    {
+        let reasons: Vec<&str> = planned
+            .reasons()
+            .iter()
+            .map(|reason| reason.description())
+            .collect();
+        let _ = tx
+            .send(Msg::Warn(format!(
+                "{} of {} paths were changed to be writable here ({}); see `renamed` in --json",
+                planned.renames.len(),
+                planned.disk_paths.len(),
+                reasons.join(", ")
+            )))
+            .await;
+    }
     let layout = Arc::new(engine.layout(&handle).ok_or_else(|| {
         Error::source_resolution(format!("{}: the torrent has no metadata", plan.source))
     })?);
@@ -374,6 +400,7 @@ async fn one_inner(
             &[],
             Stopped::Completed,
             Duration::ZERO,
+            renames(engine, &handle),
         ));
     }
 
@@ -419,7 +446,15 @@ async fn one_inner(
     }
     let (stopped, elapsed) = outcome;
     let snapshot = engine.snapshot(&handle);
-    let report = finish(plan, options, &snapshot, &sources, stopped, elapsed);
+    let report = finish(
+        plan,
+        options,
+        &snapshot,
+        &sources,
+        stopped,
+        elapsed,
+        renames(engine, &handle),
+    );
 
     let _ = tx
         .send(Msg::Event(
@@ -549,6 +584,19 @@ async fn watch(
     }
 }
 
+/// Where this torrent's files were actually written, when that is not where
+/// the torrent said.
+///
+/// A torrent path that cannot exist on the filesystem, or that would leave the
+/// output directory, is rewritten before anything is opened. The caller has to
+/// be told, or it cannot find what it downloaded.
+fn renames(engine: &Engine, handle: &bit_cli_core::engine::Handle) -> Vec<Rename> {
+    engine
+        .path_plan(handle)
+        .map(|plan| plan.renames)
+        .unwrap_or_default()
+}
+
 fn finish(
     plan: &Plan,
     options: &Options,
@@ -556,6 +604,7 @@ fn finish(
     sources: &[AttachedSource],
     stopped: Stopped,
     elapsed: Duration,
+    renamed: Vec<Rename>,
 ) -> TorrentReport {
     let served: u64 = sources.iter().map(|s| s.status.served_bytes()).sum();
     let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
@@ -581,6 +630,7 @@ fn finish(
         peers_seen: snapshot.peers.seen,
         sources: sources.iter().map(AttachedSource::report).collect(),
         output_directory: options.directory.display().to_string(),
+        renamed,
         error: snapshot.error.clone(),
     }
 }
@@ -877,6 +927,14 @@ fn lines(report: &DownloadReport) -> Vec<String> {
         out.push(field("mean rate", &torrent.mean_rate_human));
         out.push(field("peers seen", torrent.peers_seen));
         out.push(field("written to", &torrent.output_directory));
+        // A caller that does not know a file was renamed cannot find it, so
+        // every rename is listed rather than counted.
+        for rename in &torrent.renamed {
+            out.push(field(
+                &format!("renamed [{}]", rename.index),
+                format!("{} -> {}", rename.torrent_path, rename.disk_path),
+            ));
+        }
         if let Some(error) = &torrent.error {
             out.push(field("error", error));
         }
@@ -912,6 +970,133 @@ fn lines(report: &DownloadReport) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::cli::SelectionArgs;
+    use crate::test_support::{TorrentFixture, run_json_code};
+
+    /// A torrent whose paths cannot be written as given still reports where
+    /// its files went. Without this a caller cannot find what it downloaded.
+    ///
+    /// The run has no peers and no web seeds, so it stops on its deadline. The
+    /// storage is created when the torrent is added, which is before any of
+    /// that matters, so the mapping is there either way. See
+    /// `TODO/windows.md` T-071 and T-072.
+    #[test]
+    fn a_hostile_torrent_reports_every_renamed_path_in_json() {
+        let fixture = TorrentFixture::hostile();
+        let out = fixture.dir().join("out");
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                "http://127.0.0.1:9/",
+                "--no-tracker",
+                "--stop-after",
+                "2s",
+            ],
+            fixture.dir(),
+            ExitCode::Timeout,
+        );
+
+        let renamed = report["torrents"][0]["renamed"]
+            .as_array()
+            .expect("a renamed array")
+            .clone();
+        let pairs: Vec<(String, String)> = renamed
+            .iter()
+            .map(|entry| {
+                (
+                    entry["torrent_path"].as_str().unwrap().to_string(),
+                    entry["disk_path"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            pairs,
+            [
+                ("C:/pwned.txt".to_string(), "C_/pwned.txt".to_string()),
+                ("CON.txt".to_string(), "CON_.txt".to_string()),
+                ("a<b.bin".to_string(), "a_b.bin".to_string()),
+                ("x .".to_string(), "x".to_string()),
+                ("readme".to_string(), "readme-1".to_string()),
+            ]
+        );
+        // The index ties each entry back to the torrent's own file list, and
+        // the reason says which rule applied.
+        assert_eq!(renamed[0]["index"], 0);
+        assert_eq!(renamed[0]["reasons"][0], "escape");
+        assert_eq!(renamed[1]["reasons"][0], "reserved-name");
+        assert_eq!(renamed[4]["reasons"][0], "case-collision");
+
+        // Every file landed, including the two that collide only on a
+        // case-insensitive filesystem.
+        let mut landed: Vec<String> = walk(&out.join("hostile"));
+        landed.sort();
+        assert_eq!(
+            landed,
+            [
+                "CON_.txt",
+                "C_/pwned.txt",
+                "README",
+                "a_b.bin",
+                "readme-1",
+                "x"
+            ]
+        );
+    }
+
+    /// An ordinary torrent reports no renames at all, so a caller can test for
+    /// an empty list rather than comparing every path.
+    #[test]
+    fn an_ordinary_torrent_reports_no_renames() {
+        let fixture = TorrentFixture::multi_file();
+        let out = fixture.dir().join("out");
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                "http://127.0.0.1:9/",
+                "--no-tracker",
+                "--stop-after",
+                "2s",
+            ],
+            fixture.dir(),
+            ExitCode::Timeout,
+        );
+        assert!(report["torrents"][0].get("renamed").is_none());
+    }
+
+    fn walk(root: &std::path::Path) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if let Ok(relative) = path.strip_prefix(root) {
+                    out.push(
+                        relative
+                            .components()
+                            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                            .collect::<Vec<_>>()
+                            .join("/"),
+                    );
+                }
+            }
+        }
+        out
+    }
 
     fn selection_args(select: &[&str], exclude: &[&str]) -> SelectionArgs {
         SelectionArgs {

@@ -77,11 +77,12 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-064](trackers.md) | P2 | trackers | open | UDP tracker retry does not follow the BEP 15 backoff |
 | [T-065](trackers.md) | P3 | trackers | open | Scrape is only implemented for the BEP 48 URL convention |
 | [T-070](windows.md) | P1 | windows | open | A downloaded executable cannot be run until the process exits |
-| [T-071](windows.md) | P0 | windows | open | Reserved device names in torrent paths are not sanitised |
-| [T-072](windows.md) | P0 | windows | open | Case-colliding paths silently overwrite |
+| [T-071](windows.md) | P0 | windows | **done** | Reserved device names in torrent paths are not sanitised |
+| [T-072](windows.md) | P0 | windows | **done** | Case-colliding paths silently overwrite |
 | [T-073](windows.md) | P1 | windows | open | Long paths are not tested |
 | [T-074](windows.md) | P1 | windows | **done** | A false hash-check pass on empty files |
 | [T-075](windows.md) | P2 | windows | open | PowerShell redirection encoding is not documented |
+| [T-076](windows.md) | P2 | windows | open | seed and verify do not report renamed paths |
 | [T-080](create-seed.md) | P1 | create | open | librqbit's create_torrent writes an extra piece hash |
 | [T-081](create-seed.md) | P1 | create | open | BEP 52 v2 and hybrid torrents are not implemented |
 | [T-082](create-seed.md) | P2 | seeding | open | BEP 16 superseeding is not implemented |
@@ -122,13 +123,13 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-79 items: 69 to work through, and 10 deferred to Phase C.
+80 items: 70 to work through, and 10 deferred to Phase C.
 
 | Priority | Open | Partial | Done |
 | --- | --- | --- | --- |
-| P0 | 9 | 0 | 1 |
+| P0 | 7 | 0 | 3 |
 | P1 | 24 | 1 | 2 |
-| P2 | 22 | 1 | 0 |
+| P2 | 23 | 1 | 0 |
 | P3 | 9 | 0 | 0 |
 | Phase C | 10 deferred | | |
 
@@ -141,8 +142,12 @@ The P0 list, in the order that unblocks the most:
    `--web-seed`. Run it with
    `pwsh -NoProfile -File scripts/interop-roundtrip.ps1`. The `--version
    hybrid` case is still uncovered and waits on [T-081](create-seed.md).
-2. [T-071](windows.md) and [T-072](windows.md) — path sanitisation and case
-   collisions. Both are silent data loss on legal torrents.
+2. ~~[T-071](windows.md) and [T-072](windows.md)~~ — done. Every torrent path
+   is planned before anything is opened, so no file leaves the output
+   directory, no name the filesystem refuses fails a download, and two names
+   that collide only on NTFS both land. The mapping is in `--json`. A `C:`
+   component escaping the output directory turned up while fixing it and is
+   fixed too.
 3. [T-001](webseed.md) — the web seed benchmark. Every architectural decision
    about the fetch path waits on this number.
 4. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md),

@@ -100,6 +100,77 @@ impl TorrentFixture {
         }
     }
 
+    /// A torrent whose paths cannot be written as given: a drive component
+    /// that escapes the output directory, a reserved Windows device name,
+    /// characters NTFS refuses, a name Windows strips to another, and a pair
+    /// that collides on a case-insensitive filesystem.
+    ///
+    /// The bencode is written by hand because `create` refuses all of this,
+    /// which is correct on the creating side and exactly the input a hostile
+    /// torrent carries on the reading side. No payload is written: the fixture
+    /// exists to be added, not completed.
+    pub fn hostile() -> Self {
+        use std::collections::BTreeMap;
+
+        use bit_cli_core::torrent::bencode::{Value, encode};
+        use sha1::{Digest, Sha1};
+
+        const PIECE_LENGTH: usize = 1024;
+        let paths = [
+            "C:/pwned.txt",
+            "CON.txt",
+            "a<b.bin",
+            "x .",
+            "README",
+            "readme",
+        ];
+
+        let mut payload = Vec::new();
+        let mut files = Vec::new();
+        let mut recorded = Vec::new();
+        for (index, path) in paths.iter().enumerate() {
+            let bytes = vec![index as u8 + 1; 500];
+            payload.extend_from_slice(&bytes);
+            files.push(Value::Dict(BTreeMap::from([
+                (b"length".to_vec(), Value::Int(bytes.len() as i64)),
+                (
+                    b"path".to_vec(),
+                    Value::List(
+                        path.split('/')
+                            .map(|c| Value::Bytes(c.as_bytes().to_vec()))
+                            .collect(),
+                    ),
+                ),
+            ])));
+            recorded.push(((*path).to_string(), bytes));
+        }
+
+        let mut pieces = Vec::new();
+        for chunk in payload.chunks(PIECE_LENGTH) {
+            pieces.extend_from_slice(&Sha1::digest(chunk));
+        }
+        let info = Value::Dict(BTreeMap::from([
+            (b"files".to_vec(), Value::List(files)),
+            (b"name".to_vec(), Value::Bytes(b"hostile".to_vec())),
+            (b"piece length".to_vec(), Value::Int(PIECE_LENGTH as i64)),
+            (b"pieces".to_vec(), Value::Bytes(pieces)),
+        ]));
+        let bytes = encode(&Value::Dict(BTreeMap::from([(b"info".to_vec(), info)])));
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().to_path_buf();
+        let torrent = root.join("hostile.torrent");
+        std::fs::write(&torrent, &bytes).expect("write torrent");
+
+        Self {
+            _temp: temp,
+            root,
+            torrent,
+            info_hash: Metainfo::parse(&bytes).expect("parse").info_hash().hex(),
+            files: recorded,
+        }
+    }
+
     /// The `.torrent` path, as an argument.
     pub fn path_str(&self) -> &str {
         self.torrent.to_str().expect("utf-8 path")
@@ -144,6 +215,33 @@ pub fn run_err(args: &[&str], cwd: impl Into<PathBuf>, expected: ExitCode) -> St
         captured.err()
     );
     captured.err()
+}
+
+/// Run the binary and return stdout parsed as JSON, requiring a given exit
+/// code.
+///
+/// For the commands whose JSON report is the point even though the run did not
+/// succeed: a download that hit its deadline still reports where it wrote.
+pub fn run_json_code(
+    args: &[&str],
+    cwd: impl Into<PathBuf>,
+    expected: ExitCode,
+) -> serde_json::Value {
+    let mut full = vec!["--json"];
+    full.extend_from_slice(args);
+    let (mut env, captured) = Env::test(&full, cwd);
+    let code = crate::run(&mut env);
+    assert_eq!(
+        code,
+        expected,
+        "`bit-cli {}` exited {code}, expected {expected}\nstdout:\n{}\nstderr:\n{}",
+        full.join(" "),
+        captured.out(),
+        captured.err()
+    );
+    captured
+        .json()
+        .unwrap_or_else(|e| panic!("stdout was not JSON: {e}\n{}", captured.out()))
 }
 
 /// Run the binary and return stdout parsed as JSON.

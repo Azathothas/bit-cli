@@ -47,6 +47,22 @@ it, so the history starts here.
 - `trackers` announces and scrapes over HTTP and UDP directly, reporting each
   tracker's tier, interval, seeder and leecher counts, and failure reason.
 
+### Paths
+
+- Every torrent path is planned before anything is opened. A component the
+  platform reads as a drive or a root cannot leave the output directory, a name
+  the filesystem refuses is rewritten rather than failing the download, and two
+  names that collide only on a case-insensitive filesystem both land under
+  distinct names.
+- The rules run on every platform, not only Windows, so a payload downloaded on
+  Linux and copied to a Windows machine still works.
+- Every change is reported on stderr and in `--json` as a `renamed` array
+  carrying the file index, both paths, and the reason. The key is absent when
+  nothing changed.
+- `bit-cli` supplies its own storage to do this. Reads and writes are addressed
+  by file index and offset rather than by a cursor, so many pieces can be in
+  flight against one file.
+
 ### Contract
 
 - 16 exit codes. Codes 11 through 15 exist so a script can tell "your mirrors

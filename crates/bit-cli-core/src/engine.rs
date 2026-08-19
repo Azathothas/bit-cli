@@ -11,16 +11,17 @@
 //! what lets the rendering layer be written once and stay stable if the engine
 //! underneath changes.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use librqbit::api::TorrentIdOrHash;
 use librqbit::http_api_types::PeerStatsFilter;
 use librqbit::limits::LimitsConfig;
+use librqbit::storage::StorageFactoryExt;
 use librqbit::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, Api, DhtSessionConfig, ListenerOptions,
     ManagedTorrent, Session, SessionOptions, TorrentStats, TorrentStatsState,
@@ -29,6 +30,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::layout::Layout;
+use crate::paths::PathPlan;
+use crate::storage::{PlanHandle, SafeStorageFactory};
 use crate::torrent::InfoHash;
 
 /// How the session is configured for one run.
@@ -247,6 +250,12 @@ pub struct Engine {
     api: Api,
     listen_addr: Option<SocketAddr>,
     warnings: Vec<String>,
+    download_directory: PathBuf,
+    /// One path plan per added torrent, by torrent id. A torrent's files are
+    /// not written where the metainfo says when the metainfo says something
+    /// the filesystem cannot do, and this is where the caller reads what
+    /// happened instead.
+    plans: Mutex<HashMap<usize, PlanHandle>>,
 }
 
 impl Engine {
@@ -311,6 +320,8 @@ impl Engine {
             api,
             listen_addr,
             warnings,
+            download_directory: options.download_directory.clone(),
+            plans: Mutex::new(HashMap::new()),
         })
     }
 
@@ -343,6 +354,18 @@ impl Engine {
         response.into_handle().ok_or_else(|| {
             Error::source_resolution(format!("{source}: the torrent was listed but not added"))
         })
+    }
+
+    /// Where this torrent's files are actually written.
+    ///
+    /// A torrent path that cannot exist on the filesystem, or that would leave
+    /// the output directory, is rewritten before anything is opened. The plan
+    /// records every such change with the reason. `None` until the metadata
+    /// has resolved and storage has been created, and
+    /// [`PathPlan::is_clean`] for the ordinary torrent that needed nothing.
+    pub fn path_plan(&self, handle: &ManagedTorrent) -> Option<PathPlan> {
+        let plans = self.plans.lock().ok()?;
+        plans.get(&handle.id())?.get().cloned()
     }
 
     /// Read a torrent's metadata without starting it.
@@ -389,6 +412,19 @@ impl Engine {
         let add = AddTorrent::from_cli_argument(source).map_err(|e| {
             Error::source_resolution(format!("{source}: {e}")).with("source", source.to_string())
         })?;
+        // A torrent's own file names decide where its bytes go, and a torrent
+        // is untrusted input. The session's default storage joins those names
+        // onto the output directory as given, which on Windows is enough to
+        // leave it. This factory plans safe paths first. See `crate::storage`.
+        // A caller that named an output directory gets exactly that directory.
+        // Otherwise the session's rule applies and a multi-file torrent goes
+        // into a directory named after itself, which the factory reproduces.
+        let (output_folder, subfolder) = match &options.output_folder {
+            Some(folder) => (PathBuf::from(folder), false),
+            None => (self.download_directory.clone(), true),
+        };
+        let storage = SafeStorageFactory::new(output_folder, options.overwrite, subfolder);
+        let plan = storage.plan_handle();
         let opts = AddTorrentOptions {
             paused: options.paused,
             output_folder: options.output_folder.clone(),
@@ -401,12 +437,21 @@ impl Engine {
             initial_peers: (!options.initial_peers.is_empty())
                 .then(|| options.initial_peers.clone()),
             peer_limit: options.peer_limit,
+            storage_factory: Some(storage.boxed()),
             ..Default::default()
         };
-        self.session
+        let response = self
+            .session
             .add_torrent(add, Some(opts))
             .await
-            .map_err(|e| classify_add_error(source, &e))
+            .map_err(|e| classify_add_error(source, &e))?;
+        if let AddTorrentResponse::Added(id, _) | AddTorrentResponse::AlreadyManaged(id, _) =
+            &response
+            && let Ok(mut plans) = self.plans.lock()
+        {
+            plans.insert(*id, plan);
+        }
+        Ok(response)
     }
 
     /// A snapshot of one torrent. No I/O.
