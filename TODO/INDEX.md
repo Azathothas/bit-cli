@@ -86,7 +86,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-081](create-seed.md) | P1 | create | open | BEP 52 v2 and hybrid torrents are not implemented |
 | [T-082](create-seed.md) | P2 | seeding | open | BEP 16 superseeding is not implemented |
 | [T-083](create-seed.md) | P2 | seeding | open | Seeding does not report choke state or disconnect reasons |
-| [T-084](create-seed.md) | P0 | create | open | The create round trip has not been proven against another client |
+| [T-084](create-seed.md) | P0 | create | **done** | The create round trip has not been proven against another client |
 | [T-085](create-seed.md) | P1 | create | open | Creation determinism is not proven across platforms |
 | [T-090](bench.md) | P0 | bench | open | bit-cli bench is not implemented |
 | [T-091](bench.md) | P0 | bench | open | Bench reports do not capture their environment |
@@ -126,7 +126,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 | Priority | Open | Partial | Done |
 | --- | --- | --- | --- |
-| P0 | 10 | 0 | 0 |
+| P0 | 9 | 0 | 1 |
 | P1 | 24 | 1 | 2 |
 | P2 | 22 | 1 | 0 |
 | P3 | 9 | 0 | 0 |
@@ -136,9 +136,11 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 The P0 list, in the order that unblocks the most:
 
-1. [T-084](create-seed.md) — prove the create round trip against another
-   client. A torrent nobody else can read is not a torrent, and this is the
-   most important untested claim in the tool.
+1. ~~[T-084](create-seed.md)~~ — done. `bit-cli create`, `verify`, and `seed`
+   round trip byte for byte through `aria2c` 1.37.0 for v1, `--private`, and
+   `--web-seed`. Run it with
+   `pwsh -NoProfile -File scripts/interop-roundtrip.ps1`. The `--version
+   hybrid` case is still uncovered and waits on [T-081](create-seed.md).
 2. [T-071](windows.md) and [T-072](windows.md) — path sanitisation and case
    collisions. Both are silent data loss on legal torrents.
 3. [T-001](webseed.md) — the web seed benchmark. Every architectural decision

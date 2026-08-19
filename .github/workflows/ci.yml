@@ -120,6 +120,45 @@ jobs:
         with:
           command: check licenses advisories bans sources
 
+  interop:
+    name: Create round trip (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install NASM (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1.5.2
+      # A second, unrelated BitTorrent implementation. A torrent only bit-cli
+      # can read is not a torrent, so this job is what stops the metainfo or
+      # the wire protocol drifting into something nothing else accepts.
+      - name: Install aria2 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends aria2
+      - name: Install aria2 (Windows)
+        if: runner.os == 'Windows'
+        run: choco install aria2 --no-progress -y
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2.9.2
+      - run: cargo build --workspace --examples --locked
+      # Everything binds 127.0.0.1: the tracker, the web seed, the seeder, and
+      # aria2c. The job never reaches the network.
+      - name: Round trip against aria2c
+        shell: pwsh
+        run: ./scripts/interop-roundtrip.ps1 -TimeoutSeconds 180
+      - name: Upload the record
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: interop-${{ matrix.os }}
+          path: .tmp/interop/
+          retention-days: 7
+
   determinism:
     name: Create determinism
     runs-on: ${{ matrix.os }}

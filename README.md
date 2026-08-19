@@ -324,6 +324,32 @@ Windows release builds link the C runtime statically, set in
 pwsh scripts/check-static.ps1
 ```
 
+## Interoperability
+
+A torrent only `bit-cli` can read is not a torrent. `create`, `verify`, and
+`seed` are checked against a second, unrelated implementation on every run of:
+
+```bash
+pwsh scripts/interop-roundtrip.ps1
+```
+
+It builds a multi-file payload, creates a `.torrent`, verifies it, seeds it,
+and then downloads it with `aria2c`. It passes only when `aria2c`'s output is
+byte-identical to the input. Three cases run: a plain v1 torrent, the same with
+`--private`, and `--web-seed` with no peer at all, where `aria2c` has to
+resolve the `url-list` and fetch over HTTP alone.
+
+Nothing reaches the network. The tracker and the web seed are two fixtures in
+this repository, both bound to `127.0.0.1`:
+
+```bash
+cargo run -p bit-cli-core --example loopback-tracker
+cargo run -p bit-cli-core --example loopback-fileserver -- --root .
+```
+
+Each prints its URL on the first line of stdout and logs every request to
+stderr. The last recorded run is in `TODO/create-seed.md` under T-084.
+
 ## Licence and attribution
 
 `bit-cli` is MIT. See `LICENSE`.

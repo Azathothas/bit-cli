@@ -21,6 +21,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Write-Error is a terminating error under `Stop`, so a `Write-Error` followed
+# by `exit 2` never reaches the exit and the caller sees 1. The exit codes in
+# the header above are the contract, so failures go out this way instead.
+function Exit-With([int]$code, [string]$message) {
+    [Console]::Error.WriteLine("check-static: $message")
+    exit $code
+}
+
 # Resolve a relative path against the repository root rather than the caller's
 # working directory, so the script works from anywhere and from CI.
 if (-not [System.IO.Path]::IsPathRooted($Path)) {
@@ -29,8 +37,7 @@ if (-not [System.IO.Path]::IsPathRooted($Path)) {
 }
 
 if (-not (Test-Path $Path)) {
-    Write-Error "no binary at $Path. Build it first: cargo build --release --locked --target x86_64-pc-windows-msvc"
-    exit 2
+    Exit-With 2 "no binary at $Path. Build it first: cargo build --release --locked --target x86_64-pc-windows-msvc"
 }
 
 # dumpbin ships with the MSVC build tools and is not on PATH by default.
@@ -40,8 +47,7 @@ $dumpbin = Get-ChildItem -Path @(
 ) -ErrorAction SilentlyContinue | Select-Object -Last 1
 
 if (-not $dumpbin) {
-    Write-Error "dumpbin not found. Install the Visual Studio build tools, or run this on a machine that has them."
-    exit 2
+    Exit-With 2 "dumpbin not found. Install the Visual Studio build tools, or run this on a machine that has them."
 }
 
 $imports = & $dumpbin.FullName /dependents $Path |
@@ -49,8 +55,7 @@ $imports = & $dumpbin.FullName /dependents $Path |
     ForEach-Object { $_.Matches[0].Groups[1].Value }
 
 if (-not $imports) {
-    Write-Error "dumpbin reported no imports for $Path, which cannot be right"
-    exit 2
+    Exit-With 2 "dumpbin reported no imports for $Path, which cannot be right"
 }
 
 # The C runtime, in every spelling that means "not statically linked".
@@ -67,8 +72,7 @@ $imports | ForEach-Object { Write-Output "  $_" }
 
 if ($forbidden) {
     Write-Output ""
-    Write-Error "the binary depends on the dynamic C runtime: $($forbidden -join ', ')"
-    exit 1
+    Exit-With 1 "the binary depends on the dynamic C runtime: $($forbidden -join ', ')"
 }
 
 Write-Output ""
