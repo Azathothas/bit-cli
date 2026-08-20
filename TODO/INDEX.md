@@ -152,7 +152,8 @@ block it and what would unblock it.
 
 ## Start here
 
-The P0 list, in the order that unblocks the most:
+What is settled and what is next, in the order that unblocks the most. The
+first six are done or mostly done; item seven is where the open P0 work is.
 
 1. [T-084](create-seed.md) is **done**. `bit-cli create`, `verify`, and `seed`
    round trip byte for byte through `aria2c` 1.37.0 for v1, `--private`, and
@@ -184,16 +185,15 @@ The P0 list, in the order that unblocks the most:
    reason is that one source is one peer.** A block arriving from a peer is
    written, and at a piece boundary the whole piece is read back and hashed,
    inline on that connection's own task before the next block from that peer
-   is processed. One bridge reaches 21.55% of `bit-cli`'s own HTTP path on
-   loopback; the same source attached over four bridges reaches 39.54%, which
-   is 1.84x.
+   is processed. One connection reaches 18.18% of `bit-cli`'s own HTTP path on
+   loopback; the same source over two reaches 34.90%, which is 1.92x.
 
    Three things it is **not**. Not the requests in flight: the same 64
-   requests on one bridge reach 0.82x, slightly worse than 8 requests on the
-   same bridge. Not the request window: the bridge sees `librqbit`'s 128 block
+   requests on one connection reach 0.81x, slightly worse than 8 on the same
+   connection. Not the request window: the bridge sees `librqbit`'s 128 block
    window reached, but the run sits at 40% of what that peak would allow. Not
-   hashing: piece checks are 11% of a one-bridge run. The disk is the second
-   wall and it is what stops the sweep at four, recorded as
+   hashing: piece checks are 11% of a one-connection run. The disk is the
+   second wall and it is what flattens the curve after two, recorded as
    [T-017](disk-io.md).
 
    The fix the measurement points at is [T-009](webseed.md), and it is
@@ -233,9 +233,21 @@ The P0 list, in the order that unblocks the most:
    by volume free space before the payload arrives.
    `scripts/check-handles.ps1` and `scripts/check-allocation.ps1` are the
    acceptance for those two.
-6. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md), and
+6. [T-003](webseed.md) and [T-035](performance.md) are **done**.
+   `--prefer-web-seed` doubles a source's connections rather than its request
+   budget, and moves the HTTP share of a hybrid run from a mean of 46.72% to
+   62.60% across five paired runs. `scripts/check-prefer.ps1` is the
+   measurement. It found `--web-seed-speed-limit` accepted and ignored, which
+   is T-035, now a token bucket per source.
+7. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md), and
    [T-040](memory.md), the four long-run failures. Likely fewer than four
    distinct defects. Measure before theorising. [T-042](memory.md) built the
    sampler they need, and `download` and `seed` now report their own peak RSS,
    CPU time, and handle count. [T-011](disk-io.md) removed one of the two
    things [T-040](memory.md) names: descriptors are now bounded by a flag.
+
+   [T-017](disk-io.md) is the first thing to look at for
+   [T-030](performance.md). The same 1 GiB of writes costs 1,137 ms across one
+   receive path and 14,036 ms across eight, and several torrents at once is
+   several receive paths against several files. It may be one defect rather
+   than two.

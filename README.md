@@ -339,12 +339,13 @@ pwsh scripts/bench-webseed.ps1 `
 ```
 
 `scripts/bench-leech.ps1` then divides that gap. It runs `bench webseed` and
-`bench leech` against the same payload, steps how many bridge connections the
-one source is attached over, and runs a control that puts the same total HTTP
-concurrency on a single connection so the two cannot be confused.
+`bench leech` against the same payload, steps `--web-seed-connections`, runs a
+control that puts the same total HTTP concurrency on a single connection so the
+two cannot be confused, and compares against the same URL named N times so the
+cost of not sharing a window cache is visible.
 
 ```bash
-pwsh scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -BridgeSweep "1,2,4,8"
+pwsh scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -ConnectionSweep "1,2,4,8"
 ```
 
 The results are in `TODO/webseed.md` under T-001 and `TODO/bench.md` under

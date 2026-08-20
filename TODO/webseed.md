@@ -191,10 +191,14 @@ and one peer is one serial receive path.
 two ways, five runs per step, and steps the number of bridge connections the
 one source is attached over. Run 2026-08-20T04:06:06.879Z, release build,
 1 GiB payload, 1024 pieces, medians. Report:
-`bench/leech-20260820T040606879Z.json`.
+`bench/leech-20260820T040606879Z.json`. The sweep steps the same URL named N
+times, which was the only way to get N connections when this ran;
+[T-009](#t-009-a-source-cannot-be-attached-over-more-than-one-connection)
+re-measured it through `--web-seed-connections` and those are the numbers to
+quote.
 
 ```
-$ pwsh -NoProfile -File scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -BridgeSweep "1,2,4,8"
+$ pwsh -NoProfile -File scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -ConnectionSweep "1,2,4,8"
 ```
 
 | Stage | Median | Slowest | Fastest | Share of fetch | Against 1 bridge |

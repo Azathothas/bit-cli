@@ -88,7 +88,7 @@ Acceptance, 2026-08-20T04:06:06.879Z, release build, 1 GiB payload on the
 loopback file server, five runs per step, medians:
 
 ```
-$ pwsh -NoProfile -File scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -BridgeSweep "1,2,4,8"
+$ pwsh -NoProfile -File scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -ConnectionSweep "1,2,4,8"
 ```
 
 Report: `bench/leech-20260820T040606879Z.json`.
@@ -101,6 +101,13 @@ Report: `bench/leech-20260820T040606879Z.json`.
 | `bench leech`, 4 bridges | 338.40 MiB/s | 313.53 MiB/s | 372.23 MiB/s | 39.54% |
 | `bench leech`, 8 bridges | 292.07 MiB/s | 213.20 MiB/s | 340.09 MiB/s | 34.12% |
 | control: 1 bridge, 64 requests in flight | 150.37 MiB/s | 126.33 MiB/s | 169.54 MiB/s | 17.57% |
+
+These bridges are the same URL named N times, which is N separate sources.
+That was the only way to get N connections when this ran.
+[T-009](webseed.md) built `--web-seed-connections` and re-measured: the numbers
+there are the shipped flag and they are the ones to quote, because N separate
+sources at one URL keep N window caches and pull the payload nearly N times
+over.
 
 What that says is written up under
 [T-001](webseed.md#the-measurement-bench-leech-took), because it is the
