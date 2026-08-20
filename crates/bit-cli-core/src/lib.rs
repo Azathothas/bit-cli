@@ -6,6 +6,7 @@
 //! own; configuration is passed in explicitly, which is what makes the whole
 //! surface drivable from a test.
 
+pub mod alloc;
 pub mod bench;
 pub mod config;
 pub mod engine;

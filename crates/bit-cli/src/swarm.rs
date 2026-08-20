@@ -102,6 +102,9 @@ pub struct SessionSetup<'a> {
     pub listen_ports: std::ops::RangeInclusive<u16>,
     pub no_dht: bool,
     pub no_lsd: bool,
+    /// How space is reserved for each payload file. `seed` and `peers` never
+    /// create one, so they leave it at the default.
+    pub allocation: bit_cli_core::alloc::Allocation,
 }
 
 impl SessionSetup<'_> {
@@ -131,6 +134,8 @@ impl SessionSetup<'_> {
             extra_trackers: Vec::new(),
             ipv4_only: false,
             client_name: Some(format!("bit-cli {}", bit_cli_core::VERSION)),
+            allocation: self.allocation,
+            max_open_files: self.limits.max_open_files,
         })
     }
 

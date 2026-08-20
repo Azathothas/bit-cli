@@ -612,6 +612,14 @@ pub struct LimitArgs {
     #[arg(long, value_name = "N")]
     pub max_peers_total: Option<usize>,
 
+    /// Payload files kept open at once.
+    ///
+    /// Files open when they are first touched and the least recently opened
+    /// closes when this cap is reached, so a torrent with twenty thousand
+    /// files does not need twenty thousand descriptors.
+    #[arg(long, value_name = "N", default_value_t = bit_cli_core::storage::DEFAULT_MAX_OPEN_FILES)]
+    pub max_open_files: usize,
+
     /// Stop seeding at this ratio. 0 means do not seed.
     #[arg(long, value_name = "RATIO")]
     pub seed_ratio: Option<f64>,

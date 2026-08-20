@@ -1,0 +1,350 @@
+{
+  "schema_version": "1",
+  "kind": "bench_webseed_comparison",
+  "todo": "T-001",
+  "generated_at": "2026-08-20T00:43:07.837Z",
+  "bit_cli_version": "0.1.0",
+  "environment": {
+    "build": {
+      "version": "0.1.0",
+      "target": "x86_64-pc-windows-msvc",
+      "profile": "release",
+      "debug_assertions": false
+    },
+    "host": {
+      "os": {
+        "name": "Windows",
+        "version": "10.0.26200"
+      },
+      "cpu": {
+        "model": "12th Gen Intel(R) Core(TM) i7-12700H",
+        "architecture": "x86_64",
+        "logical_cores": 20
+      },
+      "memory_total": {
+        "bytes": 68321587200,
+        "human": "63.63 GiB"
+      },
+      "network": [
+        {
+          "name": "Hyper-V Virtual Ethernet Adapter #2",
+          "link_speed_bps": 1000000000,
+          "link_speed_human": "1.00 Gbit/s",
+          "up": true
+        },
+        {
+          "name": "ZeroTier Virtual Port",
+          "link_speed_bps": 100000000,
+          "link_speed_human": "100.00 Mbit/s",
+          "up": true
+        }
+      ]
+    },
+    "command_line": [
+      "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\target\\release\\bit-cli.exe",
+      "bench",
+      "webseed",
+      "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\target.torrent",
+      "--web-seed",
+      "https://geo.mirror.pkgbuild.com/iso/2026.08.01/",
+      "--no-torrent-web-seed",
+      "--web-seed-only",
+      "--duration",
+      "234s",
+      "--warmup",
+      "1s",
+      "--concurrency",
+      "8",
+      "--request-size",
+      "1MiB",
+      "--metrics-interval",
+      "250ms",
+      "--report",
+      "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-1.json",
+      "--format",
+      "json",
+      "--quiet"
+    ],
+    "working_directory": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror",
+    "started_at": {
+      "iso": "2026-08-20T00:32:26.299Z",
+      "epoch_ms": 1787185946299
+    },
+    "finished_at": {
+      "iso": "2026-08-20T00:36:20.577Z",
+      "epoch_ms": 1787186180577
+    },
+    "elapsed": {
+      "ms": 234278,
+      "human": "3m54s"
+    },
+    "process": {
+      "peak_rss_bytes": 37081088,
+      "rss_bytes": 34680832,
+      "cpu_ms": 45203,
+      "cpu_user_ms": 16500,
+      "cpu_system_ms": 28703,
+      "open_handles": 286
+    },
+    "tracing_enabled": false
+  },
+  "tool_versions": {
+    "curl": "curl 8.21.0 (Windows) libcurl/8.21.0 Schannel zlib/1.3.2 WinIDN WinLDAP",
+    "bit_cli": "bit-cli 0.1.0"
+  },
+  "target": {
+    "kind": "mirror",
+    "name": "archlinux-2026.08.01-x86_64.iso",
+    "info_hash": "ed8507e22addc40fd6fb4f1677bf27fd75967f70",
+    "total_bytes": 1597014016,
+    "total_human": "1.49 GiB",
+    "piece_count": 3047,
+    "web_seed": "https://geo.mirror.pkgbuild.com/iso/2026.08.01/",
+    "file_url": "https://geo.mirror.pkgbuild.com/iso/2026.08.01/archlinux-2026.08.01-x86_64.iso"
+  },
+  "parameters": {
+    "runs": 3,
+    "concurrency": 8,
+    "request_size": "1MiB",
+    "profile": "release"
+  },
+  "stages": {
+    "ceiling_serial": {
+      "what": "curl, one connection, one request for the whole file",
+      "wall_ms": {
+        "runs": 3,
+        "min": 87261,
+        "median": 121682.0,
+        "mean": 132963.33333333334,
+        "max": 189947,
+        "spread": 102686,
+        "spread_percent": 117.68,
+        "values": [
+          87261,
+          121682,
+          189947
+        ]
+      },
+      "rate_bytes_per_sec": 18301578,
+      "rate_human": "17.45 MiB/s",
+      "cpu_ms": {
+        "runs": 3,
+        "min": 3594,
+        "median": 3734.0,
+        "mean": 3979.0,
+        "max": 4609,
+        "spread": 1015,
+        "spread_percent": 28.24,
+        "values": [
+          3594,
+          3734,
+          4609
+        ]
+      }
+    },
+    "ceiling_parallel": {
+      "what": "curl, 8 connections, one contiguous slice each. The ceiling the bit-cli stages are compared against, because they run in the same shape.",
+      "connections": 8,
+      "slice_bytes": 199626752,
+      "wall_ms": {
+        "runs": 3,
+        "min": 77691,
+        "median": 82867.0,
+        "mean": 84987.33333333333,
+        "max": 94404,
+        "spread": 16713,
+        "spread_percent": 21.51,
+        "values": [
+          77691,
+          82867,
+          94404
+        ]
+      },
+      "rate_bytes_per_sec": 20555972,
+      "rate_human": "19.60 MiB/s",
+      "cpu_ms": {
+        "runs": 3,
+        "min": 5500,
+        "median": 5516.0,
+        "mean": 5620.0,
+        "max": 5844,
+        "spread": 344,
+        "spread_percent": 6.25,
+        "values": [
+          5500,
+          5516,
+          5844
+        ]
+      },
+      "speedup_over_serial": 1.123
+    },
+    "fetch": {
+      "what": "bit-cli bench webseed: bit-cli's HTTP fetch path, no bridge, no hashing, no disk",
+      "rate_bytes_per_sec": 44184151.0,
+      "rate_human": "42.14 MiB/s",
+      "share_of_ceiling": "214.95%",
+      "runs": [
+        44184151,
+        41315770
+      ],
+      "peak_rss_bytes": 37081088.0,
+      "cpu_ms": 45203.0
+    },
+    "download": {
+      "what": "bit-cli download --web-seed-only: fetch, loopback bridge, verify, write",
+      "wall_ms": null,
+      "rate_bytes_per_sec": 0,
+      "rate_human": "0 B/s",
+      "share_of_ceiling": null,
+      "share_of_fetch": null,
+      "peak_rss_bytes": null,
+      "open_handles": null,
+      "cpu_ms": null,
+      "time_to_first_verified_piece_ms": null,
+      "time_to_first_verified_piece_resolution_ms": 100,
+      "loopback_bytes": null,
+      "loopback_bytes_per_payload_byte": null,
+      "framing_bytes_per_block": 13
+    }
+  },
+  "failure_cases": [],
+  "steps": [
+    {
+      "label": "curl-serial-1",
+      "command": "C:\\Windows\\system32\\curl.exe -sS --http1.1 -o NUL https://geo.mirror.pkgbuild.com/iso/2026.08.01/archlinux-2026.08.01-x86_64.iso",
+      "started_at": "2026-08-20T00:21:32.197Z",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_ms": 87261,
+      "peak_rss_bytes": null,
+      "cpu_ms": 3594,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-serial-1.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-serial-1.err"
+    },
+    {
+      "label": "curl-serial-2",
+      "command": "C:\\Windows\\system32\\curl.exe -sS --http1.1 -o NUL https://geo.mirror.pkgbuild.com/iso/2026.08.01/archlinux-2026.08.01-x86_64.iso",
+      "started_at": "2026-08-20T00:22:59.484Z",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_ms": 121682,
+      "peak_rss_bytes": null,
+      "cpu_ms": 3734,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-serial-2.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-serial-2.err"
+    },
+    {
+      "label": "curl-serial-3",
+      "command": "C:\\Windows\\system32\\curl.exe -sS --http1.1 -o NUL https://geo.mirror.pkgbuild.com/iso/2026.08.01/archlinux-2026.08.01-x86_64.iso",
+      "started_at": "2026-08-20T00:25:01.203Z",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_ms": 189947,
+      "peak_rss_bytes": null,
+      "cpu_ms": 4609,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-serial-3.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-serial-3.err"
+    },
+    {
+      "label": "curl-parallel-1",
+      "command": "C:\\Windows\\system32\\curl.exe -sS --http1.1 -Z --parallel-max 8 -K C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-parallel.cfg",
+      "started_at": "2026-08-20T00:28:11.213Z",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_ms": 94404,
+      "peak_rss_bytes": null,
+      "cpu_ms": 5500,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-parallel-1.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-parallel-1.err"
+    },
+    {
+      "label": "curl-parallel-2",
+      "command": "C:\\Windows\\system32\\curl.exe -sS --http1.1 -Z --parallel-max 8 -K C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-parallel.cfg",
+      "started_at": "2026-08-20T00:29:45.655Z",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_ms": 77691,
+      "peak_rss_bytes": null,
+      "cpu_ms": 5844,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-parallel-2.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-parallel-2.err"
+    },
+    {
+      "label": "curl-parallel-3",
+      "command": "C:\\Windows\\system32\\curl.exe -sS --http1.1 -Z --parallel-max 8 -K C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-parallel.cfg",
+      "started_at": "2026-08-20T00:31:03.366Z",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_ms": 82867,
+      "peak_rss_bytes": null,
+      "cpu_ms": 5516,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-parallel-3.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\curl-parallel-3.err"
+    },
+    {
+      "label": "fetch-1",
+      "command": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\target\\release\\bit-cli.exe bench webseed C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\target.torrent --web-seed https://geo.mirror.pkgbuild.com/iso/2026.08.01/ --no-torrent-web-seed --web-seed-only --duration 234s --warmup 1s --concurrency 8 --request-size 1MiB --metrics-interval 250ms --report C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-1.json --format json --quiet",
+      "started_at": "2026-08-20T00:32:26.257Z",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_ms": 234340,
+      "peak_rss_bytes": null,
+      "cpu_ms": 45219,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-1.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-1.err"
+    },
+    {
+      "label": "fetch-2",
+      "command": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\target\\release\\bit-cli.exe bench webseed C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\target.torrent --web-seed https://geo.mirror.pkgbuild.com/iso/2026.08.01/ --no-torrent-web-seed --web-seed-only --duration 234s --warmup 1s --concurrency 8 --request-size 1MiB --metrics-interval 250ms --report C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-2.json --format json --quiet",
+      "started_at": "2026-08-20T00:36:20.850Z",
+      "exit_code": 0,
+      "timed_out": false,
+      "elapsed_ms": 234467,
+      "peak_rss_bytes": null,
+      "cpu_ms": 41094,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-2.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-2.err"
+    },
+    {
+      "label": "fetch-3",
+      "command": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\target\\release\\bit-cli.exe bench webseed C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\target.torrent --web-seed https://geo.mirror.pkgbuild.com/iso/2026.08.01/ --no-torrent-web-seed --web-seed-only --duration 234s --warmup 1s --concurrency 8 --request-size 1MiB --metrics-interval 250ms --report C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-3.json --format json --quiet",
+      "started_at": "2026-08-20T00:40:15.475Z",
+      "exit_code": -1,
+      "timed_out": false,
+      "elapsed_ms": 62715,
+      "peak_rss_bytes": null,
+      "cpu_ms": 11938,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-3.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\fetch-3.err"
+    },
+    {
+      "label": "download-1",
+      "command": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\target\\release\\bit-cli.exe download C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\target.torrent --web-seed https://geo.mirror.pkgbuild.com/iso/2026.08.01/ --no-torrent-web-seed --web-seed-only --dir C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\out-1 --web-seed-concurrency 8 --web-seed-chunk-size 1MiB --report-interval 100ms --jsonl",
+      "started_at": "2026-08-20T00:41:18.215Z",
+      "exit_code": -1,
+      "timed_out": false,
+      "elapsed_ms": 109593,
+      "peak_rss_bytes": null,
+      "cpu_ms": 14188,
+      "stdout": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\download-1.out",
+      "stderr": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\bench-mirror\\download-1.err"
+    }
+  ],
+  "failures": [
+    "bench webseed run 3 exited -1",
+    "download run 1 exited -1"
+  ],
+  "link": {
+    "fastest_bps": 1000000000,
+    "fastest_human": "Hyper-V Virtual Ethernet Adapter #2 at 1.00 Gbit/s",
+    "download_bits_per_sec": 0,
+    "download_human": null,
+    "saturates_fastest_link": false
+  },
+  "notes": [
+    "A loopback run has no network cost, so the share of the ceiling is the worst case for bit-cli and the best case for curl. On a real link the network is the bottleneck long before either of them is, which is what the link object is for: it says whether the measured rate would saturate this machine's fastest interface.",
+    "The page cache is not dropped between runs: Windows has no supported way to do it. Both the ceiling and the candidates read the same file through the same server, so the cache helps each of them equally.",
+    "time_to_first_verified_piece is derived from the --jsonl piece_verified event, which is emitted on the --report-interval poll, so its resolution is that interval and not finer. See TODO/cli-surface.md, T-111.",
+    "loopback_bytes counts the BEP 3 piece message framing the bridge writes over loopback: 13 bytes per block on top of the payload. The handshake and the bitfield are one-off and are not counted."
+  ]
+}

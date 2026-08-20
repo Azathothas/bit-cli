@@ -316,11 +316,60 @@ The key is absent when nothing changed, which is the common case. `index` is
 the file's index in the torrent, so a caller can reconcile what it asked for
 with what is on disk.
 
-That is the reading side. On the writing side `bit-cli create` refuses to build
-such a torrent at all, through the `windows-path` and `case-collision` lints,
-with `--allow <LINT>` to override either one. Those lints only have anything to
-catch on a filesystem that can hold the input, which Windows is not, so they
-are exercised on Linux and here:
+## Disk
+
+A payload file is created when it is first written, not when the torrent is
+added. Two things follow.
+
+`--select-file 0` writes one file and leaves the rest off the disk, rather than
+creating eleven empty ones beside the one you asked for.
+
+`--max-open-files` is a real cap. Files close on a least-recently-opened basis
+when it is reached, so a torrent with twenty thousand files needs the cap in
+descriptors and not twenty thousand:
+
+```bash
+bit-cli seed many.torrent --data . --max-open-files 64
+```
+
+```bash
+pwsh scripts/check-handles.ps1
+```
+
+measures it: three seeds of a 300-file torrent at caps of 8, 64, and 128, with
+the process handle count sampled while each runs. The steps in the cap and the
+steps in the handle count match exactly.
+
+`--file-allocation` picks how space is reserved, and the four methods do four
+different things:
+
+| Method | What happens |
+| --- | --- |
+| `none` | The length is set and nothing else. On NTFS that allocates; on ext4 it does not. |
+| `sparse` | The file is marked sparse first, so the hole is explicit. The default. |
+| `prealloc` | Zeroes are written across the file and flushed. Slow, and the space is certainly there. |
+| `falloc` | The filesystem reserves the blocks without writing them. `posix_fallocate` on Linux. |
+
+`falloc` on Windows needs `SeManageVolumePrivilege`, which an ordinary process
+does not hold, so it falls back to `prealloc` and says so on stderr rather than
+doing something other than what it was told.
+
+```bash
+pwsh scripts/check-allocation.ps1
+```
+
+measures all four against a real download, reading volume free space before the
+payload arrives. On NTFS with a 512 MiB payload, `sparse` costs the volume
+nothing and the other three cost it 512 MiB. Every method's output hashes equal
+to the source.
+
+## Paths, on the writing side
+
+The rules above are the reading side. On the writing side `bit-cli create`
+refuses to build such a torrent at all, through the `windows-path` and
+`case-collision` lints, with `--allow <LINT>` to override either one. Those
+lints only have anything to catch on a filesystem that can hold the input,
+which Windows is not, so they are exercised on Linux and here:
 
 ```bash
 cargo test -p bit-cli-core lint::

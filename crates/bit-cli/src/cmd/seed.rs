@@ -90,6 +90,8 @@ pub fn run(
         listen_ports: swarm::port_range(&args.port)?,
         no_dht: args.no_dht,
         no_lsd: args.no_lsd,
+        // Seeding reads what is already on disk and creates nothing.
+        allocation: bit_cli_core::alloc::Allocation::default(),
     };
     let mut engine_options = setup.engine_options(env)?;
     // Seeding reads the payload from where it already lives, which is not

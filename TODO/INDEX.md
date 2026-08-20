@@ -47,10 +47,10 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-005](webseed.md) | P3 | webseed | open | A source restricted mid-run cannot be re-scoped |
 | [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
 | [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
-| [T-010](disk-io.md) | P1 | disk-io | open | pwrite takes a read lock where it needs a write lock |
-| [T-011](disk-io.md) | P1 | disk-io | open | No file handle pool, so long runs exhaust descriptors |
-| [T-012](disk-io.md) | P2 | disk-io | open | Preallocation is not implemented |
-| [T-013](disk-io.md) | P2 | disk-io | open | Selecting a subset of files still creates all of them |
+| [T-010](disk-io.md) | P1 | disk-io | **done** | pwrite takes a read lock where it needs a write lock |
+| [T-011](disk-io.md) | P1 | disk-io | **done** | No file handle pool, so long runs exhaust descriptors |
+| [T-012](disk-io.md) | P2 | disk-io | **done** | Preallocation is not implemented |
+| [T-013](disk-io.md) | P2 | disk-io | **done** | Selecting a subset of files still creates all of them |
 | [T-014](disk-io.md) | P2 | disk-io | open | Adding a torrent can fail with "File exists (os error 17)" |
 | [T-015](disk-io.md) | P1 | disk-io | open | Hash checking can hang at 0 percent |
 | [T-016](disk-io.md) | P2 | disk-io | open | fastresume is not used when adding a torrent |
@@ -130,8 +130,8 @@ by the T-001 measurement: a stalling source takes 24 seconds to give up.
 | Priority | Open | Partial | Done |
 | --- | --- | --- | --- |
 | P0 | 4 | 1 | 5 |
-| P1 | 22 | 1 | 4 |
-| P2 | 23 | 1 | 1 |
+| P1 | 20 | 1 | 6 |
+| P2 | 21 | 1 | 3 |
 | P3 | 9 | 0 | 0 |
 | Phase C | 10 deferred | | |
 
@@ -166,8 +166,17 @@ The P0 list, in the order that unblocks the most:
    ran against all 468 web seeds in the Arch Linux ISO torrent, and two defects
    that had made `webseed test` unusable against any HTTPS mirror were found
    and fixed there.
-5. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md), and
+5. The disk I/O cluster: [T-010](disk-io.md), [T-011](disk-io.md),
+   [T-012](disk-io.md), and [T-013](disk-io.md) are **done**. Payload files
+   open when they are first touched and close on an LRU when
+   `--max-open-files` says so, so a torrent with twenty thousand files does not
+   need twenty thousand descriptors, and a file selection no longer creates the
+   files it did not select. All four `--file-allocation` methods do four
+   different things, measured. `scripts/check-handles.ps1` and
+   `scripts/check-allocation.ps1` are the acceptance.
+6. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md), and
    [T-040](memory.md), the four long-run failures. Likely fewer than four
    distinct defects. Measure before theorising. [T-042](memory.md) built the
    sampler they need, and `download` and `seed` now report their own peak RSS,
-   CPU time, and handle count.
+   CPU time, and handle count. [T-011](disk-io.md) removed one of the two
+   things [T-040](memory.md) names: descriptors are now bounded by a flag.

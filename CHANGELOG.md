@@ -95,6 +95,28 @@ it, so the history starts here.
   by file index and offset rather than by a cursor, so many pieces can be in
   flight against one file.
 
+### Disk
+
+- A payload file is created when it is first written, not when the torrent is
+  added, and a read of a file that is not there does not bring one into
+  existence. `--select-file 0` therefore writes one file and leaves the rest
+  off the disk instead of creating them empty beside it.
+- `--max-open-files` caps how many payload files stay open, closing the least
+  recently opened when it is reached. The default is 128. A torrent with twenty
+  thousand files needs the cap in descriptors and not twenty thousand.
+  `scripts/check-handles.ps1` measures it: the steps in the cap and the steps
+  in the process handle count match exactly.
+- `--file-allocation` does four different things rather than four names for
+  one. `none` sets the length, `sparse` marks the file sparse first, `prealloc`
+  writes and flushes zeroes, and `falloc` asks the filesystem to reserve the
+  blocks. `falloc` on Windows needs a privilege an ordinary process does not
+  hold, so it falls back to `prealloc` and says so on stderr.
+  `scripts/check-allocation.ps1` measures all four against a real download by
+  reading volume free space before the payload arrives.
+- Concurrent positioned writes to one file are safe against each other, which
+  is why the handle lock is taken by the read half. A test drives eight threads
+  at one file and checks every block for the byte its writer owned.
+
 ### Contract
 
 - 16 exit codes. Codes 11 through 15 exist so a script can tell "your mirrors

@@ -117,6 +117,7 @@ pub fn run(
         listen_ports: swarm::port_range(&args.port)?,
         no_dht: false,
         no_lsd: false,
+        allocation: allocation_of(args.selection.file_allocation),
     };
     let engine_options = setup.engine_options(env)?;
     let directory = engine_options.download_directory.clone();
@@ -233,6 +234,13 @@ pub fn run(
             }
         }
         while workers.join_next().await.is_some() {}
+        // Storage runs on the session's threads and the streams belong to this
+        // one, so it collects what the caller should know and this is where it
+        // is read: an allocation method that could not be used, and what ran
+        // instead.
+        for note in engine.storage_notes() {
+            renderer.warn(env, note);
+        }
         Arc::try_unwrap(engine).ok().map(Engine::stop);
 
         Ok::<_, Error>(reports)
@@ -267,6 +275,21 @@ pub fn run(
     run_hooks(&report, args, renderer, env);
     renderer.emit(env, "download", &report, || lines(&report))?;
     Ok(code)
+}
+
+/// The CLI's allocation names, as the core knows them.
+///
+/// Two enums for one concept because the core does not depend on `clap` and
+/// the CLI does not define storage behaviour. The mapping is total, so a new
+/// method cannot be added on one side without the other failing to compile.
+fn allocation_of(method: crate::cli::FileAllocation) -> bit_cli_core::alloc::Allocation {
+    use bit_cli_core::alloc::Allocation;
+    match method {
+        crate::cli::FileAllocation::None => Allocation::None,
+        crate::cli::FileAllocation::Sparse => Allocation::Sparse,
+        crate::cli::FileAllocation::Prealloc => Allocation::Prealloc,
+        crate::cli::FileAllocation::Falloc => Allocation::Falloc,
+    }
 }
 
 /// Everything one worker needs beyond the plan.

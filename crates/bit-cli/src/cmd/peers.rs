@@ -126,6 +126,9 @@ pub fn run(
         listen_ports: swarm::port_range(&args.port)?,
         no_dht: false,
         no_lsd: false,
+        // `peers` samples a swarm and writes no payload, so allocation never
+        // comes up.
+        allocation: bit_cli_core::alloc::Allocation::default(),
     };
     let mut engine_options = setup.engine_options(env)?;
     // Sampling a swarm must never write a payload. The session still needs a

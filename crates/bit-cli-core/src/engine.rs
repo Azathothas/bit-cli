@@ -70,6 +70,10 @@ pub struct EngineOptions {
     pub ipv4_only: bool,
     /// The client name announced to peers and trackers.
     pub client_name: Option<String>,
+    /// How space is reserved for each payload file.
+    pub allocation: crate::alloc::Allocation,
+    /// How many payload files stay open at once. Zero means the default.
+    pub max_open_files: usize,
 }
 
 impl Default for EngineOptions {
@@ -88,6 +92,8 @@ impl Default for EngineOptions {
             extra_trackers: Vec::new(),
             ipv4_only: false,
             client_name: Some(format!("bit-cli {}", crate::VERSION)),
+            allocation: crate::alloc::Allocation::default(),
+            max_open_files: crate::storage::DEFAULT_MAX_OPEN_FILES,
         }
     }
 }
@@ -256,6 +262,10 @@ pub struct Engine {
     /// the filesystem cannot do, and this is where the caller reads what
     /// happened instead.
     plans: Mutex<HashMap<usize, PlanHandle>>,
+    allocation: crate::alloc::Allocation,
+    max_open_files: usize,
+    /// What storage needed the caller to know, gathered across every torrent.
+    storage_notes: Mutex<Vec<Arc<Mutex<Vec<String>>>>>,
 }
 
 impl Engine {
@@ -322,12 +332,38 @@ impl Engine {
             warnings,
             download_directory: options.download_directory.clone(),
             plans: Mutex::new(HashMap::new()),
+            allocation: options.allocation,
+            max_open_files: options.max_open_files,
+            storage_notes: Mutex::new(Vec::new()),
         })
     }
 
     /// Non-fatal problems found while starting.
     pub fn warnings(&self) -> &[String] {
         &self.warnings
+    }
+
+    /// What storage needed the caller to know, across every torrent added.
+    ///
+    /// Storage cannot report to a stream itself: it runs on the session's
+    /// threads and the streams belong to the caller. So it collects, and the
+    /// caller reads this when it is ready to report. The only thing that
+    /// appears here today is an allocation method that could not be used, with
+    /// what ran instead.
+    pub fn storage_notes(&self) -> Vec<String> {
+        let Ok(handles) = self.storage_notes.lock() else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = Vec::new();
+        for handle in handles.iter() {
+            let Ok(notes) = handle.lock() else { continue };
+            for note in notes.iter() {
+                if !out.contains(note) {
+                    out.push(note.clone());
+                }
+            }
+        }
+        out
     }
 
     /// The address incoming peer connections arrive on.
@@ -423,8 +459,13 @@ impl Engine {
             Some(folder) => (PathBuf::from(folder), false),
             None => (self.download_directory.clone(), true),
         };
-        let storage = SafeStorageFactory::new(output_folder, options.overwrite, subfolder);
+        let storage = SafeStorageFactory::new(output_folder, options.overwrite, subfolder)
+            .with_allocation(self.allocation)
+            .with_max_open_files(self.max_open_files);
         let plan = storage.plan_handle();
+        if let Ok(mut notes) = self.storage_notes.lock() {
+            notes.push(storage.notes_handle());
+        }
         let opts = AddTorrentOptions {
             paused: options.paused,
             output_folder: options.output_folder.clone(),
