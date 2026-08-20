@@ -275,6 +275,10 @@ pub fn run(
                     "ratio": format!("{:.3}", snapshot.ratio()),
                     "peers": snapshot.peers,
                     "peer_detail": peers,
+                    // What the process costs right now, so a soak reads a slope out of
+                    // the event stream rather than sampling the process from outside.
+                    // See `TODO/memory.md`, T-040.
+                    "process": bit_cli_core::sysinfo::Process::sample(),
                 }),
             )?;
             if renderer.progress == crate::cli::ProgressMode::Plain {
@@ -600,5 +604,66 @@ mod tests {
                 ("readme".to_string(), "readme-1".to_string()),
             ]
         );
+    }
+
+    /// A soak reads its series out of the event stream.
+    ///
+    /// `bit-cli seed` is the long-lived process, and the question T-040 asks
+    /// is whether its memory and handles grow over hours. Sampling it from
+    /// outside needs a second tool per platform, so every `progress` event
+    /// carries what the process costs at that moment. See `TODO/memory.md`,
+    /// T-040.
+    #[test]
+    fn every_seed_progress_event_carries_what_the_process_costs() {
+        let fixture = crate::test_support::TorrentFixture::hostile();
+        let data = fixture.dir().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "--jsonl",
+                "seed",
+                fixture.path_str(),
+                "--data",
+                data.to_str().unwrap(),
+                "--port",
+                "0",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--report-interval",
+                "200ms",
+                "--stop-after",
+                "2s",
+            ],
+            fixture.dir(),
+        );
+        let _ = crate::run(&mut env);
+        let events = captured.jsonl().expect("stdout was not ndjson");
+        let progress: Vec<_> = events
+            .iter()
+            .filter(|event| event["type"] == "progress")
+            .collect();
+        assert!(
+            progress.len() >= 2,
+            "a 2s run at a 200ms interval should tick more than once, got {}",
+            progress.len()
+        );
+        for event in &progress {
+            let process = &event["process"];
+            assert!(
+                process["open_handles"].as_u64().unwrap_or(0) > 0,
+                "no handle count in {event}"
+            );
+            assert!(
+                process["rss_bytes"].as_u64().unwrap_or(0) > 1024 * 1024,
+                "no resident memory in {event}"
+            );
+            assert!(
+                process["peak_rss_bytes"].as_u64().unwrap_or(0)
+                    >= process["rss_bytes"].as_u64().unwrap_or(0),
+                "peak below current in {event}"
+            );
+        }
     }
 }

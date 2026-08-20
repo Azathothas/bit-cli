@@ -226,6 +226,8 @@ pub struct SourceStats {
     pub retries: AtomicU64,
     /// Epoch milliseconds the source may be used again. Zero means now.
     cooldown_until_ms: AtomicU64,
+    /// How many times the error budget has run out over this run.
+    cooldowns: AtomicU64,
     /// Retries charged to each HTTP status.
     ///
     /// A plain `std::sync::Mutex` rather than an async one: it is taken only
@@ -253,13 +255,28 @@ impl SourceStats {
 }
 
 impl SourceStats {
-    /// Whether the source is currently cooled down.
+    /// Whether the source has run out of its error budget.
+    ///
+    /// True from the moment `max_errors` consecutive requests fail until
+    /// something clears it, which only [`Self::end_cooldown`] does. A source
+    /// with `cooldown_ms` at zero, the default, is never cleared and so is out
+    /// for the rest of the run.
+    ///
+    /// This is the guard on the fetch path. [`Self::is_cooling_down`] is the
+    /// narrower question of whether the deadline is still ahead, which is what
+    /// the bridge sleeps on. The two differ exactly when the cooldown is zero:
+    /// the budget is spent and there is nothing to wait for.
+    pub fn budget_spent(&self) -> bool {
+        self.cooldown_until_ms.load(Ordering::Relaxed) != 0
+    }
+
+    /// Whether the source is inside a cooldown it will come out of.
     pub fn is_cooling_down(&self) -> bool {
         let until = self.cooldown_until_ms.load(Ordering::Relaxed);
         until != 0 && Timestamp::now().epoch_ms() < until as i64
     }
 
-    /// When the source becomes usable again, if it is cooling down.
+    /// When the source becomes usable again, if its budget is spent.
     pub fn cooldown_until(&self) -> Option<Timestamp> {
         match self.cooldown_until_ms.load(Ordering::Relaxed) {
             0 => None,
@@ -267,10 +284,54 @@ impl SourceStats {
         }
     }
 
+    /// How long is left of the cooldown, or `None` when there is nothing to
+    /// wait for.
+    pub fn cooldown_remaining(&self) -> Option<Duration> {
+        let until = self.cooldown_until_ms.load(Ordering::Relaxed);
+        if until == 0 {
+            return None;
+        }
+        let left = until as i64 - Timestamp::now().epoch_ms();
+        (left > 0).then(|| Duration::from_millis(left as u64))
+    }
+
     fn record_success(&self, bytes: u64) {
         self.requests.fetch_add(1, Ordering::Relaxed);
         self.bytes.fetch_add(bytes, Ordering::Relaxed);
         self.consecutive_errors.store(0, Ordering::Relaxed);
+    }
+
+    /// How many times this source has been cooled down.
+    ///
+    /// Counted rather than derived, because a source that came back and went
+    /// out again looks exactly like one that never came back in a report that
+    /// only carries the current state.
+    pub fn cooldowns(&self) -> u64 {
+        self.cooldowns.load(Ordering::Relaxed)
+    }
+
+    /// Clear a cooldown the caller has waited out, so the source may be used
+    /// again. Returns whether it was still the one in force.
+    ///
+    /// Called by a bridge once it has slept out the deadline it read. The
+    /// deadline is passed back rather than assumed, because several
+    /// connections share one `SourceStats`: without it, a bridge waking from
+    /// an old cooldown could clear a newer one that another connection had
+    /// only just tripped.
+    ///
+    /// The error and request totals are not touched. They are the run's
+    /// history, and a source that failed five times before recovering should
+    /// still say so.
+    pub fn end_cooldown(&self, deadline: Timestamp) -> bool {
+        let expected = deadline.epoch_ms().max(0) as u64;
+        let cleared = self
+            .cooldown_until_ms
+            .compare_exchange(expected, 0, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok();
+        if cleared {
+            self.consecutive_errors.store(0, Ordering::Relaxed);
+        }
+        cleared
     }
 
     /// Count an error, returning whether it tripped the cooldown.
@@ -281,9 +342,15 @@ impl SourceStats {
         if consecutive < max_errors {
             return false;
         }
+        // A zero cooldown is still a cooldown. It says "do not come back",
+        // which the bridge reads as retiring the source, and it has to be
+        // distinguishable from "never tripped" or the budget would never be
+        // reached. One millisecond in the past is in the past, so
+        // `is_cooling_down` is false and `cooldown_until` is `Some`.
         let until = Timestamp::now().epoch_ms() + cooldown.as_millis().min(i64::MAX as u128) as i64;
         self.cooldown_until_ms
-            .store(until.max(0) as u64, Ordering::Relaxed);
+            .store(until.max(1) as u64, Ordering::Relaxed);
+        self.cooldowns.fetch_add(1, Ordering::Relaxed);
         true
     }
 }
@@ -613,7 +680,7 @@ impl Fetcher {
         length: u64,
     ) -> std::result::Result<Bytes, FetchError> {
         let limits = &self.binding.spec.limits;
-        if self.stats.is_cooling_down() {
+        if self.stats.budget_spent() {
             return Err(FetchError::permanent(format!(
                 "{url}: source is cooling down after {} errors",
                 self.stats.errors.load(Ordering::Relaxed)
@@ -920,7 +987,7 @@ impl Fetcher {
         length: u64,
     ) -> std::result::Result<Bytes, FetchError> {
         let limits = &self.binding.spec.limits;
-        if self.stats.is_cooling_down() {
+        if self.stats.budget_spent() {
             return Err(FetchError::permanent(format!(
                 "{url}: source is cooling down after {} errors",
                 self.stats.errors.load(Ordering::Relaxed)
@@ -1754,7 +1821,51 @@ mod tests {
             "the third consecutive error trips it"
         );
         assert!(stats.is_cooling_down());
+        assert!(stats.budget_spent());
         assert!(stats.cooldown_until().is_some());
+        assert_eq!(stats.cooldowns(), 1);
+    }
+
+    /// A zero cooldown still spends the budget. It is the default, and it
+    /// means the source does not come back, so the two questions have to be
+    /// answerable apart: the budget is spent and there is nothing to wait for.
+    /// See `TODO/multi-source.md`, T-137.
+    #[test]
+    fn a_zero_cooldown_spends_the_budget_with_nothing_to_wait_for() {
+        let stats = SourceStats::default();
+        let none = Duration::ZERO;
+        assert!(!stats.record_error(2, none));
+        assert!(stats.record_error(2, none), "the second error trips it");
+        assert!(
+            stats.budget_spent(),
+            "a source out for the run is still out for the run"
+        );
+        assert!(!stats.is_cooling_down(), "there is nothing to wait for");
+        assert_eq!(stats.cooldown_remaining(), None);
+        assert_eq!(stats.cooldowns(), 1);
+    }
+
+    /// Waiting the deadline out puts the source back to work, and the run's
+    /// history is kept.
+    #[test]
+    fn ending_a_cooldown_clears_the_error_run_but_not_the_totals() {
+        let stats = SourceStats::default();
+        let cooldown = Duration::from_millis(50);
+        stats.record_error(1, cooldown);
+        let deadline = stats.cooldown_until().expect("a deadline");
+        assert!(stats.budget_spent());
+
+        assert!(
+            !stats.end_cooldown(Timestamp::from_epoch_ms(deadline.epoch_ms() + 1)),
+            "a deadline that is not the one in force clears nothing"
+        );
+        assert!(stats.budget_spent());
+
+        assert!(stats.end_cooldown(deadline));
+        assert!(!stats.budget_spent(), "the source is usable again");
+        assert_eq!(stats.consecutive_errors.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.errors.load(Ordering::Relaxed), 1, "history is kept");
+        assert_eq!(stats.cooldowns(), 1, "and so is the count of cooldowns");
     }
 
     #[test]

@@ -19,7 +19,7 @@
 //! pass it to `--web-seed`. Every request is logged to stderr with an ISO 8601
 //! UTC millisecond timestamp.
 //!
-//! Five failure modes, so a client's handling of each can be measured from the
+//! Six failure modes, so a client's handling of each can be measured from the
 //! same binary rather than by finding a broken mirror in the wild:
 //!
 //! - `--ignore-range` answers every request with the whole entity and
@@ -38,6 +38,11 @@
 //!   back to serving, which is a mirror that falls over and comes back. It is
 //!   what separates a status worth retrying from one that is not, without
 //!   depending on a clock.
+//! - `--down-for <SECONDS>` ends the same window on a clock instead, starting
+//!   from the first request that falls into it. A client that is waiting out a
+//!   cooldown is making no requests, so an outage counted in requests never
+//!   advances while it waits and the mirror never comes back. Measuring a wait
+//!   against an outage needs the outage to be a wall clock.
 //!
 //! Three more make it behave like a CDN that signs its URLs, which is what
 //! `TODO/multi-source.md` T-131 asks for:
@@ -87,6 +92,18 @@ struct Config {
     healthy_requests: u64,
     /// How many requests the failure mode lasts before service resumes.
     failing_requests: u64,
+    /// How long the failure mode lasts in milliseconds, from the first
+    /// request that falls into it. Zero leaves the outage counted in requests
+    /// alone.
+    ///
+    /// A source that is cooling down makes no requests, so a request-counted
+    /// outage does not advance while it sleeps and the mirror never recovers.
+    /// Anything measuring a wait against an outage needs the outage to be a
+    /// wall clock. See `TODO/multi-source.md`, T-137.
+    down_ms: u64,
+    /// Milliseconds since `started` when the failure mode began, or zero
+    /// before it has.
+    down_since_ms: AtomicU64,
     /// Requests served so far, across every connection.
     served: AtomicU64,
     /// Signature lifetime in milliseconds. Zero turns signing off.
@@ -114,10 +131,34 @@ impl Config {
     /// The window is `[healthy_requests, healthy_requests + failing_requests)`,
     /// so `--fail-after 6 --recover-after 4` fails requests 7 through 10 and
     /// serves everything on either side.
+    ///
+    /// With `--down-for` set the window closes on a clock as well: the first
+    /// request that falls inside it starts the outage, and everything after
+    /// `down_ms` from that moment is served whatever the request count says.
+    /// That is the form an outage a caller waits out has to take, because a
+    /// caller that is waiting is not making requests.
     fn failing(&self) -> bool {
         let n = self.served.fetch_add(1, Ordering::Relaxed);
-        n >= self.healthy_requests
-            && n < self.healthy_requests.saturating_add(self.failing_requests)
+        let by_count = n >= self.healthy_requests
+            && n < self.healthy_requests.saturating_add(self.failing_requests);
+        if self.down_ms == 0 || !by_count {
+            return by_count;
+        }
+        let elapsed = self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        // The clock starts on the first failing request rather than at
+        // startup, so `--fail-after` still decides when the outage begins.
+        // `elapsed` is never zero in practice, and zero is the sentinel for
+        // "not started", so it is nudged past it.
+        let began = match self.down_since_ms.compare_exchange(
+            0,
+            elapsed.max(1),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => elapsed.max(1),
+            Err(existing) => existing,
+        };
+        elapsed.saturating_sub(began) < self.down_ms
     }
 
     /// The signature window a moment falls in, counted from startup.
@@ -184,6 +225,7 @@ fn main() {
     let mut stall_after: Option<u64> = None;
     let mut healthy_requests: u64 = 0;
     let mut failing_requests: u64 = u64::MAX;
+    let mut down_ms: u64 = 0;
     let mut sign_ms: u64 = 0;
     let mut require_sig = false;
     let mut redirect_chain: u32 = 0;
@@ -209,6 +251,16 @@ fn main() {
                 healthy_requests = next_value(&mut args, "--fail-after")
                     .parse()
                     .expect("--fail-after")
+            }
+            "--down-for" => {
+                let seconds: f64 = next_value(&mut args, "--down-for")
+                    .parse()
+                    .expect("--down-for");
+                if !(seconds.is_finite() && seconds >= 0.0) {
+                    eprintln!("loopback-fileserver: --down-for needs a number of seconds");
+                    std::process::exit(2);
+                }
+                down_ms = (seconds * 1000.0) as u64;
             }
             "--recover-after" => {
                 failing_requests = next_value(&mut args, "--recover-after")
@@ -282,6 +334,8 @@ fn main() {
         stall_after,
         healthy_requests,
         failing_requests,
+        down_ms,
+        down_since_ms: AtomicU64::new(0),
         served: AtomicU64::new(0),
         sign_ms,
         require_sig,
@@ -736,6 +790,8 @@ mod tests {
             stall_after: None,
             healthy_requests: 0,
             failing_requests: u64::MAX,
+            down_ms: 0,
+            down_since_ms: AtomicU64::new(0),
             served: AtomicU64::new(0),
             sign_ms,
             require_sig,
@@ -865,5 +921,47 @@ mod tests {
         assert_eq!(param("nohop=3", "hop"), None);
         assert_eq!(param("", "hop"), None);
         assert_eq!(param("hop", "hop"), None, "a bare key carries no value");
+    }
+
+    /// An outage on a clock closes even though no request advanced it.
+    ///
+    /// A source waiting out `--web-seed-cooldown` makes no requests, so an
+    /// outage counted in requests alone would never end. See
+    /// `TODO/multi-source.md`, T-137.
+    #[test]
+    fn a_timed_outage_closes_on_the_clock_rather_than_on_a_request_count() {
+        let mut config = config(0, false, 0, 0);
+        config.healthy_requests = 1;
+        config.down_ms = 60;
+        assert!(!config.failing(), "the first request is served");
+        assert!(config.failing(), "the second opens the outage");
+        assert!(config.failing(), "and it is still open");
+        std::thread::sleep(std::time::Duration::from_millis(90));
+        assert!(
+            !config.failing(),
+            "the clock closed it with no request in between"
+        );
+    }
+
+    /// The clock starts at the first failing request, not at startup, so
+    /// `--fail-after` still decides when the outage begins.
+    #[test]
+    fn a_timed_outage_starts_when_the_failure_window_does() {
+        let mut config = config(0, false, 0, 0);
+        config.healthy_requests = 1;
+        config.down_ms = 80;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!config.failing(), "the healthy run is still served");
+        assert!(config.failing(), "the outage opens now, not 100ms ago");
+    }
+
+    /// Without it, the window is counted in requests exactly as before.
+    #[test]
+    fn no_down_for_leaves_the_window_counted_in_requests() {
+        let mut config = config(0, false, 0, 0);
+        config.healthy_requests = 1;
+        config.failing_requests = 2;
+        let outcome: Vec<bool> = (0..4).map(|_| config.failing()).collect();
+        assert_eq!(outcome, vec![false, true, true, false]);
     }
 }

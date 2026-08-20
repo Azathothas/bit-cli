@@ -357,13 +357,14 @@ pub struct SourceLimits {
     pub retries: u32,
     /// Errors before the source is cooled down.
     pub max_errors: u32,
-    /// How long a cooled-down source stays out, in milliseconds.
+    /// How long a source that spent its error budget stays out, in
+    /// milliseconds. Zero, the default, means it does not come back.
     ///
-    /// Sets the timer that [`SourceStats::is_cooling_down`] reads. Nothing
-    /// waits it out: the bridge retires a source whose budget has run out
-    /// rather than sleeping on it. See `TODO/multi-source.md`, T-137.
-    ///
-    /// [`SourceStats::is_cooling_down`]: crate::webseed::fetch::SourceStats::is_cooling_down
+    /// The bridge sleeps this out and then reconnects with the error run
+    /// cleared. Zero retires the source for the rest of the run instead, which
+    /// is what keeps an unattended run against one dead mirror failing in
+    /// seconds rather than sitting on a timer. See `TODO/multi-source.md`,
+    /// T-137.
     pub cooldown_ms: u64,
     /// Bytes per second cap, or `None` for unlimited.
     pub rate_limit: Option<u64>,
@@ -385,7 +386,7 @@ impl Default for SourceLimits {
             connect_timeout_ms: 10_000,
             retries: 3,
             max_errors: 5,
-            cooldown_ms: 600_000,
+            cooldown_ms: 0,
             rate_limit: None,
             retry_status: StatusSet::default(),
             fatal_status: StatusSet::default(),

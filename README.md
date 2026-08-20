@@ -202,13 +202,13 @@ the flag the first expiry ends the source. With it the run rides them out:
 pwsh scripts/check-signed-source.ps1
 ```
 
-That drives six cases against a loopback server that signs, redirects, and
-expires. The pair that matters is the same server and the same signature
-window run twice, differing only in the flag. In the recorded run, 22
-signatures expired over 64 MiB: without the flag the run downloaded nothing
-and exited 1, with it the payload completed byte for byte. The report is
-`bench/signed-source-20260820T093157813Z.json`. The count varies with timing;
-whether the run completes does not.
+That drives nine cases against a loopback server that signs, redirects,
+expires, and falls over. The pair that matters here is the same server and the
+same signature window run twice, differing only in the flag. In the recorded
+run, 22 signatures expired over 64 MiB: without the flag the run downloaded
+nothing and exited 1, with it the payload completed byte for byte. The report
+is `bench/signed-source-20260820T132602637Z.json`. The count varies with
+timing; whether the run completes does not.
 
 `--web-seed-fatal-status` is the other direction, same spelling: a code it
 names retires the source even though the built-in classification would retry
@@ -227,10 +227,49 @@ source               http://127.0.0.1:57581/cdn/a3f1b2c4-signed-blob.dat
 
 What bounds a retried source is `--web-seed-retries`, the attempts one request
 gets, and `--web-seed-max-errors`, the consecutive failed requests a source
-gets before it is retired for the rest of the run. A request that fails
-transiently after spending its retries drops the connection and reconnects, so
-a mirror that restarts mid-download is not lost. At the defaults that is four
-attempts per request and five requests, about 17 seconds of outage.
+gets before it is out. A request that fails transiently after spending its
+retries drops the connection and reconnects, so a mirror that restarts
+mid-download is not lost. At the defaults that is four attempts per request and
+five requests: measured against a mirror answering 503 forever, the source is
+retired and the run exits 1 after 33.4 seconds.
+
+### Giving a mirror another chance
+
+A source that spends that budget is out for the rest of the run.
+`--web-seed-cooldown` puts it back to work instead:
+
+```bash
+bit-cli download release.torrent \
+  --web-seed https://mirror-a.example.com/pub/ \
+  --web-seed-cooldown 30s --timeout 10m
+```
+
+The source sleeps for that long, then reconnects with the error run cleared. A
+mirror that is down for five minutes is usable again at minute six instead of
+lost at second seventeen.
+
+It is zero by default, which means the source does not come back. That is what
+keeps an unattended run against one dead mirror failing in half a minute rather
+than sitting on a timer, and it is why the flag is opt-in: a caller who wants
+patience says how much.
+
+While it sleeps the source reports `"state": "cooling"` rather than `failed`,
+with `cooldown_until` and `cooldown_remaining_ms` beside it, and `cooldowns`
+counts how many times it has been out. A cooling source is not a dead one, so
+`--web-seed-require` and the "every source is dead" stop condition keep waiting
+for it. Bound that with `--timeout` or `--stop-timeout`.
+
+Measured, one mirror down for twenty seconds and two runs differing only in the
+cooldown:
+
+| cooldown | exit | downloaded | state | cooldowns |
+| --- | --- | --- | --- | --- |
+| 5s | 0 | 64.00 MiB | active | 4 |
+| 300s | 9 | 3.00 MiB | cooling | 1 |
+
+Both were given `--timeout 60s`. The first woke into a mirror that was still
+down twice, then into one that was back, and finished in 23.5 seconds. The
+second was still asleep with 241.1 seconds left when the deadline fired.
 
 ## Check the addressing before you download
 
@@ -595,6 +634,35 @@ So pick `--stop-timeout` deliberately. For an unattended run that a supervisor
 retries, short is right: fail in seconds and start again. For one that has to
 finish on its own, leave it off or set it past ten minutes. The numbers are in
 `TODO/peers.md` under T-021.
+
+`--redial-after` stops the waiting instead of budgeting for it:
+
+```bash
+bit-cli download release.torrent \
+  --peer 203.0.113.9:51413 \
+  --stop-timeout 300s --redial-after 30s
+```
+
+After that long with no progress, the torrent is paused and started again. That
+throws away every peer connection and the backoff counters behind them, then
+dials `--peer` and the trackers from scratch. Piece state is kept and nothing is
+re-hashed, so the cost is the live connections and not the disk.
+
+Measured on the same 120 second outage: without it the run exits 9 with 17.00
+MiB of 128 after 300 seconds of patience, and with it the run re-dials four
+times and completes byte for byte, finishing 55.6 seconds after the peer came
+back.
+
+```bash
+pwsh scripts/check-peer-recovery.ps1 -OutageSeconds 120 -StopTimeout 60 -PatientTimeout 300
+```
+
+It is off by default, and it should stay off for a healthy swarm: the trigger is
+no progress at all, and a swarm where every peer is choking is exactly the case
+where dropping every connection every thirty seconds can make things worse. Set
+`--max-redials` to cap how many times it fires, ten by default. Each one is in
+the report as `redials[]` and on the event stream as `peer_redial`, with how
+long the run had been stalled and how many live connections it cost.
 
 ## Fetch one piece from one mirror
 

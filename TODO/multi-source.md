@@ -622,7 +622,7 @@ Acceptance:  A run against a mirror serving one corrupt byte completes from
 Category:    webseed
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `--web-seed-cooldown` and the table's `cooldown_ms` set a timer,
              and nothing waits it out. `SourceStats::record_error` stores an
@@ -672,6 +672,80 @@ Acceptance:  Two runs against `loopback-fileserver --status 503 --fail-after 4
              and for how long. Plus a run against a dead mirror with
              `--web-seed-only` proving the fail-fast path still exits in
              seconds.
+
+**Option 1, with a default of zero, which is what the entry expected.**
+
+The bridge sleeps out the deadline and reconnects with the error run cleared.
+`--web-seed-cooldown 0`, the default, retires the source instead, so the
+fail-fast path is unchanged and the flag is entirely opt-in.
+
+Three things had to be separated that were one thing before:
+
+- **The budget being spent and the wait being over.** `SourceStats` now has
+  `budget_spent`, true from the moment `max_errors` consecutive requests fail
+  until `end_cooldown` clears it, and `is_cooling_down`, true only while the
+  deadline is ahead. They differ exactly when the cooldown is zero: the budget
+  is spent and there is nothing to wait for. The guard on the fetch path is
+  `budget_spent`, so a source that is out stays out whatever the timer says.
+  `record_error` stores `until.max(1)` rather than `until`, because zero is the
+  sentinel for "never tripped" and a zero-millisecond cooldown has to be
+  distinguishable from one.
+- **A sleeping source and a dead one.** `BridgeState::Cooling` sits between
+  `Idle` and `Failed` in `AttachedSource::state`'s ranking. The report carries
+  `cooldowns`, `cooldown_until`, and `cooldown_remaining_ms`, and a
+  `source_cooling` event fires once per cooldown rather than once per source,
+  so a mirror that goes out, comes back, and goes out again is reported each
+  time. The "every source is dead" stop condition in `cmd::download::watch` is
+  unchanged and now means what it says: a cooling source is not failed, so the
+  run waits for it, bounded by `--timeout` or `--stop-timeout`.
+- **Which deadline a waking bridge is allowed to clear.** Several connections
+  share one `SourceStats`, so `end_cooldown` takes the deadline the caller
+  slept on and compare-exchanges it. Without that, a bridge waking from an old
+  cooldown could clear a newer one another connection had only just tripped.
+
+**The outage had to become a clock.** `loopback-fileserver`'s failure window
+was counted in requests, and a source that is cooling down makes no requests,
+so the window never advanced while it waited and the mirror never came back.
+`--down-for <SECONDS>` ends the window on a clock instead, starting at the
+first request that falls into it, so `--fail-after` still decides when the
+outage begins. Three unit tests in the example cover it.
+
+**The measurement, 2026-08-20T13:26:02.637Z.** `scripts/check-signed-source.ps1`
+now drives nine cases, the last three of which are this entry's:
+
+```
+case             exit downloaded hash    state   cooldowns
+cooldown_short      0 64.00 MiB  matches active          4
+cooldown_long       9 3.00 MiB   -       cooling         1
+dead_mirror         1 0 B        -       failed          1
+```
+
+```
+$ pwsh -NoProfile -File scripts/check-signed-source.ps1
+```
+
+`cooldown_short` and `cooldown_long` are the same server, the same 20 second
+outage, the same `--timeout 60s`, and the same `--web-seed-max-errors 2
+--web-seed-retries 0`. The only difference is `--web-seed-cooldown`: 5 seconds
+against 300. The first cooled down four times, waking twice into a mirror that
+was still down and once into one that was back, and completed in 24.3 seconds
+with the payload hashing equal. The second cooled down once and was still
+asleep with 241.1 seconds left when the deadline fired, at 3.00 MiB of 64.
+
+`dead_mirror` is the fail-fast case at every default, including
+`--web-seed-cooldown 0`: a mirror answering 503 forever retires the source and
+the run exits 1 after 33.4 seconds. That is longer than the "about 17 seconds"
+this entry predicted, and the difference is the bridge's own reconnect backoff
+between attempts, which the estimate did not count. Both numbers are seconds
+rather than the ten minutes the old default would have produced, which is the
+point of the default.
+
+Five unit tests cover the state machine without a network:
+`a_zero_cooldown_spends_the_budget_with_nothing_to_wait_for`,
+`ending_a_cooldown_clears_the_error_run_but_not_the_totals`,
+`cooldown_trips_only_after_the_configured_run_of_errors`,
+`a_timed_outage_closes_on_the_clock_rather_than_on_a_request_count`, and
+`a_timed_outage_starts_when_the_failure_window_does`.
 
 ---
 

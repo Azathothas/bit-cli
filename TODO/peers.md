@@ -202,7 +202,10 @@ recoverable outage into a failure, and that is a choice a caller has to make
 deliberately rather than discover.
 
 The residue, forcing a re-dial rather than waiting out the backoff, is
-[T-138](#t-138-a-peer-that-comes-back-waits-out-a-backoff-that-grows-by-six).
+[T-138](#t-138-a-peer-that-comes-back-waits-out-a-backoff-that-grows-by-six),
+and it is now **done**. `--redial-after 30s` finishes the same 120 second
+outage this entry could not, in four re-dials. The paragraph above stays as
+written because it is what happens with the flag off, which is the default.
 
 ### T-138 A peer that comes back waits out a backoff that grows by six
 
@@ -210,7 +213,7 @@ Source:      came out of closing T-021
 Category:    peers
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     `librqbit`'s peer reconnect backoff is 10 seconds minimum with a
              factor of 6, so attempts land at about 10s, 70s, 430s, and then
@@ -242,6 +245,109 @@ Acceptance:  A 120 second outage with `--stop-timeout 300s` completes, and the
              re-dialled. Today the same run exits 9 at t+189s with 17.00 MiB
              of 128, recorded under
              [T-021](#t-021-a-temporary-network-drop-stops-the-download-permanently).
+
+**Option 1, and it turned out to cost nothing rather than a hash check.**
+
+The entry priced option 1 as "remove the torrent and add it again", with a full
+read of the payload every time. That is not what is needed. `librqbit` 9.0.0
+exports `Session::pause` and `Session::unpause`, and the pair does exactly the
+job:
+
+- `ManagedTorrent::pause` on a live torrent calls `TorrentStateLive::pause`,
+  which takes the piece tracker out and hands back a `TorrentStatePaused`
+  holding the chunk tracker (`torrent_state/live/mod.rs:767`). The peer map and
+  its backoff counters live in `TorrentStateLive` and are dropped with it.
+- `Session::unpause` calls `make_peer_rx_managed_torrent(handle, true)`, which
+  rebuilds the peer stream from `initial_peers`, the trackers, the DHT, and
+  LSD, then `start`s the torrent (`session.rs:1511` and `session.rs:1610`).
+- `Paused` to `Live` is a direct transition. Only a fresh add or an error goes
+  through `Initializing`, which is the state that hash checks. So no payload is
+  re-read.
+
+So the cost is the live connections, not the disk. Option 3, reaching the
+backoff constants, is still the change that fixes it at the source, and it is
+still the fork question [T-002](webseed.md) priced. It is not needed for this.
+
+**`--redial-after <DUR>`, off by default, with `--max-redials <N>` at 10.**
+
+`bit_cli_core::engine::Engine::redial` is the pause and unpause pair.
+`cmd::download::watch` calls it when the byte count has been flat for
+`--redial-after` and the last re-dial was at least that long ago, checked after
+the stop conditions so a run that was going to give up this tick does. Every
+re-dial goes into the report as `redials[]` with the attempt number, the
+milliseconds into the run, how long the run had been stalled, and how many live
+peer connections it threw away, and out as a `peer_redial` event under
+`--jsonl`.
+
+Off by default because the trigger is a stall and the cost is every live
+connection: a swarm where one peer is slow and the rest are working is not a
+stall, but a swarm where every peer is choking is, and tearing that down every
+thirty seconds is a way to make it worse. A caller who wants an unattended run
+to survive an outage says how long to wait first. `bit-cli` warns when
+`--redial-after` is not shorter than `--stop-timeout`, because in that order the
+run gives up before it ever re-dials.
+
+**The measurement, 2026-08-20T13:01:50.325Z.** Three scenarios, the first two
+and the third differing in exactly one flag:
+
+```
+$ pwsh -NoProfile -File scripts/check-peer-recovery.ps1 \
+    -OutageSeconds 120 -StopTimeout 60 -PatientTimeout 300 -RedialAfter 30
+```
+
+```
+scenario  stop-timeout redial-after exit stopped   downloaded hash    re-dials
+patient   300s         off             9 stalled   17.00 MiB  -              0
+impatient 60s          off             9 stalled   17.00 MiB  -              0
+redial    300s         30s             0 completed 128.00 MiB matches        4
+```
+
+`patient` is the acceptance's "today" line reproduced: 300 seconds of patience
+against a 120 second outage, and it still exits 9 with 17.00 MiB of 128.
+`redial` is the same run with `--redial-after 30s` and it completes with the
+payload hashing equal.
+
+The four re-dials, from the report:
+
+| attempt | at | stalled for | peers dropped |
+| --- | --- | --- | --- |
+| 1 | t+38.2s | 30.1s | 0 |
+| 2 | t+68.3s | 60.3s | 0 |
+| 3 | t+98.4s | 90.4s | 0 |
+| 4 | t+128.5s | 120.5s | 0 |
+
+The seeder was cut at t+9.0s and came back at t+129.4s. The run finished at
+t+185.0s, which is 55.6s after the peer returned and is what 111 MiB of 128 at
+`--max-download-rate 2MiB/s` takes. So it resumed as soon as there was
+something to resume from.
+
+**What actually recovers it is the reset, not the re-dial.** The fourth
+re-dial at t+128.5s was still during the outage, one second before the seeder
+was back, so its own dial failed like the three before it. What it left behind
+was a fresh `TorrentStateLive` whose backoff was back at its 10 second minimum,
+so the next automatic attempt was due at about t+138.5s rather than at t+438s.
+That is the whole mechanism: the flag does not have to land on the moment the
+network returns, it only has to keep the wait bounded by `--redial-after` plus
+10 seconds instead of letting it multiply by six.
+
+`peers_dropped` is 0 on all four because there was nothing live to drop during
+an outage. It is in the report for the case where a re-dial fires against a
+swarm that is connected but not moving, which is where the cost is real.
+
+`pwsh -NoProfile -File scripts/check-peer-recovery.ps1` is the acceptance and
+now drives all three scenarios. `patient` is failed only when the outage is
+inside the backoff's second attempt at about 70 seconds; past that its stalling
+is what [T-021](#t-021-a-temporary-network-drop-stops-the-download-permanently)
+recorded, and failing the build for it would fail the build for behaviour that
+is documented. `redial` is failed whenever it does not complete, and also when
+it completes without re-dialling at all, because a scenario the flag did not
+change proves nothing.
+
+Two unit tests cover the plumbing without a network:
+`a_stalled_run_redials_up_to_the_cap_and_reports_each_one` holds `--max-redials`
+to its cap and checks the interval between attempts, and
+`a_stalled_run_without_the_flag_never_redials` checks that the report says
+nothing when the flag is off.
 
 ### T-022 Peer connections churn on IPv6-only swarms
 

@@ -53,6 +53,11 @@ pub struct TorrentReport {
     pub mean_rate: Size,
     pub mean_rate_human: String,
     pub peers_seen: u32,
+    /// Every time `--redial-after` fired, and what the run had been waiting
+    /// for when it did. Empty when the flag is off or the run never stalled.
+    /// See `TODO/peers.md`, T-138.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub redials: Vec<Redial>,
     pub sources: Vec<SourceReport>,
     pub output_directory: String,
     /// Files whose on-disk path is not the path in the torrent, and why.
@@ -67,6 +72,23 @@ pub struct TorrentReport {
     /// failure, which is exactly the distinction the exit code table exists to
     /// make. See `TODO/disk-io.md`, T-014.
     pub code: ExitCode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// One forced re-dial: the peer state was thrown away and the peer list
+/// dialled again, because nothing had arrived for `--redial-after`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Redial {
+    /// Which re-dial this was, counting from 1.
+    pub attempt: u32,
+    /// Milliseconds into the run.
+    pub at_ms: u64,
+    /// How long the byte count had been flat when it fired.
+    pub stalled_ms: u64,
+    /// Live peer connections thrown away, which is what this cost.
+    pub peers_dropped: u32,
+    /// The reason it did not happen, when it did not. `None` on success.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -174,6 +196,19 @@ pub fn run(
         crate::cli::VerifyWhen::Piece | crate::cli::VerifyWhen::File => Verify::Piece,
     };
     let peers = swarm::peer_addrs(&args.peers)?;
+    let redial_after = swarm::optional_duration(&args.redial_after, "redial-after")?;
+    if let (Some(redial), Some(stall)) = (redial_after, stop.stall)
+        && redial >= stall
+    {
+        renderer.warn(
+            env,
+            format!(
+                "--redial-after {} is not shorter than --stop-timeout {}, so the run gives up before it re-dials",
+                bit_cli_core::units::format_duration(redial),
+                bit_cli_core::units::format_duration(stall),
+            ),
+        );
+    }
     let concurrency = args.max_concurrent_downloads.max(1);
     let started = std::time::Instant::now();
     let runtime = swarm::runtime()?;
@@ -224,6 +259,8 @@ pub fn run(
                 trace_http,
                 directory: directory.clone(),
                 peers: peers.clone(),
+                redial_after,
+                max_redials: args.max_redials,
             };
             workers.spawn(async move {
                 let _permit = permits.acquire().await;
@@ -322,6 +359,11 @@ struct Options {
     verify: Verify,
     trace_http: bool,
     directory: std::path::PathBuf,
+    /// How long with no progress before every peer connection is dropped and
+    /// the peer list is dialled again. `None` never re-dials.
+    redial_after: Option<Duration>,
+    /// How many times that may happen in one run.
+    max_redials: u32,
     /// Peers to dial before any are discovered, from `--peer`.
     peers: Vec<std::net::SocketAddr>,
 }
@@ -365,6 +407,7 @@ async fn one(
                 mean_rate: Size(0),
                 mean_rate_human: format_rate(0),
                 peers_seen: 0,
+                redials: Vec::new(),
                 sources: Vec::new(),
                 output_directory: options.directory.display().to_string(),
                 renamed: Vec::new(),
@@ -451,6 +494,7 @@ async fn one_inner(
             &[],
             Stopped::Completed,
             Duration::ZERO,
+            Vec::new(),
             renames(engine, &handle),
         ));
     }
@@ -495,7 +539,7 @@ async fn one_inner(
     for source in &sources {
         source.stop();
     }
-    let (stopped, elapsed) = outcome;
+    let (stopped, elapsed, redials) = outcome;
     let snapshot = engine.snapshot(&handle);
     let report = finish(
         plan,
@@ -504,6 +548,7 @@ async fn one_inner(
         &sources,
         stopped,
         elapsed,
+        redials,
         renames(engine, &handle),
     );
 
@@ -540,12 +585,19 @@ async fn watch(
     sources: &[AttachedSource],
     options: &Options,
     tx: &mpsc::Sender<Msg>,
-) -> (Stopped, Duration) {
+) -> (Stopped, Duration, Vec<Redial>) {
     let lengths: Vec<u64> = layout.files.iter().map(|f| f.length).collect();
     let mut progress = Progress::new(layout.piece_count(), lengths);
+    let mut redials: Vec<Redial> = Vec::new();
+    // Measured from the last re-dial rather than from the last byte, so a
+    // stall that outlasts the interval re-dials once per interval instead of
+    // once per report tick. `--stop-timeout` keeps measuring from the last
+    // byte, which is what lets a run both re-dial and still give up.
+    let mut last_redial = std::time::Instant::now();
     let mut ticker = tokio::time::interval(options.report_interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut reported_failures = HashSet::new();
+    let mut reported_cooldowns: HashSet<(usize, u64)> = HashSet::new();
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
 
@@ -577,7 +629,7 @@ async fn watch(
 
     loop {
         tokio::select! {
-            _ = &mut interrupt => return (Stopped::Interrupted, progress.elapsed()),
+            _ = &mut interrupt => return (Stopped::Interrupted, progress.elapsed(), redials),
             _ = ticker.tick() => {}
             _ = &mut completion, if !completed => completed = true,
             _ = &mut deadline, if !deadline_fired => deadline_fired = true,
@@ -628,6 +680,32 @@ async fn watch(
                     ))
                     .await;
             }
+            // Keyed by how many times the source has cooled down, not by its
+            // index, so a mirror that goes out, comes back, and goes out again
+            // is reported each time. A run waiting on a sleeping source has to
+            // be told, or the wait looks like a hang. See
+            // `TODO/multi-source.md`, T-137.
+            if source.state() == bit_cli_core::webseed::BridgeState::Cooling {
+                let report = source.report();
+                if reported_cooldowns.insert((source.index, report.cooldowns)) {
+                    let _ = tx
+                        .send(Msg::Warn(format!(
+                            "web seed {} is cooling down for {}: {}",
+                            report.url,
+                            bit_cli_core::units::format_duration(Duration::from_millis(
+                                report.cooldown_remaining_ms.unwrap_or(0)
+                            )),
+                            report.error.as_deref().unwrap_or("no reason given")
+                        )))
+                        .await;
+                    let _ = tx
+                        .send(Msg::Event(
+                            "source_cooling",
+                            serde_json::to_value(&report).unwrap_or_default(),
+                        ))
+                        .await;
+                }
+            }
         }
 
         let served: u64 = sources.iter().map(AttachedSource::served_bytes).sum();
@@ -645,6 +723,10 @@ async fn watch(
                     "from_web_seeds": served,
                     "eta_ms": snapshot.eta_ms,
                     "eta_confidence": snapshot.eta_confidence,
+                    // What the process costs right now, so a long run reads a slope out
+                    // of the event stream rather than sampling the process from outside.
+                    // See `TODO/memory.md`, T-040.
+                    "process": bit_cli_core::sysinfo::Process::sample(),
                 }),
             ))
             .await;
@@ -660,12 +742,45 @@ async fn watch(
                 .iter()
                 .all(|s| s.state() == bit_cli_core::webseed::BridgeState::Failed)
         {
-            return (Stopped::Failed, progress.elapsed());
+            return (Stopped::Failed, progress.elapsed(), redials);
         }
 
         let seeding = options.stop.seed_ratio.is_some() || options.stop.seed_time.is_some();
         if let Some(reason) = progress.should_stop(&snapshot, &options.stop, seeding) {
-            return (reason, progress.elapsed());
+            return (reason, progress.elapsed(), redials);
+        }
+
+        // Checked after the stop conditions, so a run that was going to give
+        // up this tick gives up rather than re-dialling on its way out.
+        if let Some(interval) = options.redial_after
+            && !snapshot.finished
+            && (redials.len() as u32) < options.max_redials
+            && progress.stalled_for() >= interval
+            && last_redial.elapsed() >= interval
+        {
+            let attempt = redials.len() as u32 + 1;
+            let stalled = progress.stalled_for();
+            let error = engine.redial(handle).await.err().map(|e| e.to_string());
+            last_redial = std::time::Instant::now();
+            let redial = Redial {
+                attempt,
+                at_ms: progress.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                stalled_ms: stalled.as_millis().min(u128::from(u64::MAX)) as u64,
+                peers_dropped: snapshot.peers.live,
+                error: error.clone(),
+            };
+            let _ = tx
+                .send(Msg::Event(
+                    "peer_redial",
+                    serde_json::to_value(&redial).unwrap_or_default(),
+                ))
+                .await;
+            if let Some(reason) = &error {
+                let _ = tx
+                    .send(Msg::Warn(format!("re-dial {attempt} failed: {reason}")))
+                    .await;
+            }
+            redials.push(redial);
         }
     }
 }
@@ -683,6 +798,7 @@ fn renames(engine: &Engine, handle: &bit_cli_core::engine::Handle) -> Vec<Rename
         .unwrap_or_default()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish(
     plan: &Plan,
     options: &Options,
@@ -690,6 +806,7 @@ fn finish(
     sources: &[AttachedSource],
     stopped: Stopped,
     elapsed: Duration,
+    redials: Vec<Redial>,
     renamed: Vec<Rename>,
 ) -> TorrentReport {
     let served: u64 = sources.iter().map(AttachedSource::served_bytes).sum();
@@ -714,6 +831,7 @@ fn finish(
         mean_rate: Size(mean),
         mean_rate_human: format_rate(mean),
         peers_seen: snapshot.peers.seen,
+        redials,
         sources: sources.iter().map(AttachedSource::report).collect(),
         output_directory: options.directory.display().to_string(),
         renamed,
@@ -1018,6 +1136,19 @@ fn lines(report: &DownloadReport) -> Vec<String> {
         out.push(field("elapsed", &torrent.elapsed_human));
         out.push(field("mean rate", &torrent.mean_rate_human));
         out.push(field("peers seen", torrent.peers_seen));
+        // A run that finished only because it threw its peer state away three
+        // times is not the same result as one that never stalled, and the
+        // totals alone cannot tell them apart.
+        if let Some(last) = torrent.redials.last() {
+            out.push(field(
+                "re-dialled",
+                format!(
+                    "{} time(s), last after {} of no progress",
+                    torrent.redials.len(),
+                    bit_cli_core::units::format_duration(Duration::from_millis(last.stalled_ms)),
+                ),
+            ));
+        }
         out.push(field("written to", &torrent.output_directory));
         // A caller that does not know a file was renamed cannot find it, so
         // every rename is listed rather than counted.
@@ -1502,6 +1633,97 @@ mod tests {
             cache_windows(std::slice::from_ref(&spec)),
             16,
             "and never above sixteen"
+        );
+    }
+
+    /// A run that stalls with `--redial-after` set throws its peer state away
+    /// and says so, rather than waiting out a backoff that grows by six.
+    ///
+    /// Nothing answers here, so every re-dial fires and none of them helps.
+    /// That is the point: what is under test is that the flag reaches the
+    /// watch loop, that the cap holds, and that the report carries both
+    /// numbers T-138's acceptance asks for. Whether a re-dial recovers a real
+    /// outage is `scripts/check-peer-recovery.ps1`, which measures it against
+    /// a seeder that comes back. See `TODO/peers.md`, T-138.
+    #[test]
+    fn a_stalled_run_redials_up_to_the_cap_and_reports_each_one() {
+        let fixture = TorrentFixture::single_file();
+        let out = fixture.dir().join("out");
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "--report-interval",
+                "200ms",
+                "--redial-after",
+                "500ms",
+                "--max-redials",
+                "2",
+                "--stop-after",
+                "4s",
+            ],
+            fixture.dir(),
+            // Nothing serves the payload, so the run ends on its deadline.
+            ExitCode::Timeout,
+        );
+        let redials = report["torrents"][0]["redials"]
+            .as_array()
+            .expect("a redials array");
+        assert_eq!(redials.len(), 2, "--max-redials 2 is a cap: {redials:?}");
+        assert_eq!(redials[0]["attempt"], 1);
+        assert_eq!(redials[1]["attempt"], 2);
+        for redial in redials {
+            assert!(
+                redial["stalled_ms"].as_u64().unwrap_or(0) >= 500,
+                "a re-dial fired before --redial-after elapsed: {redial}"
+            );
+            assert!(redial["error"].is_null(), "a re-dial failed: {redial}");
+        }
+        // The second waits out the interval again rather than firing on the
+        // next report tick.
+        let first = redials[0]["at_ms"].as_u64().unwrap();
+        let second = redials[1]["at_ms"].as_u64().unwrap();
+        assert!(
+            second >= first + 400,
+            "re-dials {first}ms and {second}ms apart, under --redial-after"
+        );
+    }
+
+    /// With the flag off, nothing re-dials and the report says nothing.
+    #[test]
+    fn a_stalled_run_without_the_flag_never_redials() {
+        let fixture = TorrentFixture::single_file();
+        let out = fixture.dir().join("out");
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "--report-interval",
+                "200ms",
+                "--stop-after",
+                "2s",
+            ],
+            fixture.dir(),
+            ExitCode::Timeout,
+        );
+        assert!(
+            report["torrents"][0]["redials"].is_null(),
+            "an empty array is not serialised: {}",
+            report["torrents"][0]
         );
     }
 }

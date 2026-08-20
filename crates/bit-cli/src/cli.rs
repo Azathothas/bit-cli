@@ -436,11 +436,19 @@ pub struct WebSeedArgs {
     #[arg(long = "web-seed-max-errors", value_name = "N")]
     pub web_seed_max_errors: Option<u32>,
 
-    /// Reserved for a cooled-down source coming back. Sets the timer only.
+    /// Give a source that spent its error budget another chance after this
+    /// long. Zero, the default, means it does not come back.
     ///
-    /// A source that runs out of its `--web-seed-max-errors` budget is
-    /// retired for the rest of the run, so nothing waits this out today. See
-    /// TODO/multi-source.md, T-137.
+    /// A source that runs out of its `--web-seed-max-errors` budget is out.
+    /// With a cooldown set it is out for that long and then reconnects with
+    /// the error run cleared, so a mirror that is down for five minutes is
+    /// still usable at minute six. With the default of zero it is out for the
+    /// rest of the run, which is what makes a run against one dead mirror fail
+    /// in seconds instead of sitting on a timer.
+    ///
+    /// A cooling source is reported as `cooling`, not `failed`, so
+    /// `--web-seed-require` and the "every source is dead" stop condition keep
+    /// waiting for it. Set `--timeout` or `--stop-timeout` to bound that.
     #[arg(long = "web-seed-cooldown", value_name = "DUR")]
     pub web_seed_cooldown: Option<String>,
 
@@ -551,6 +559,30 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub no_lsd: bool,
 
+    /// Drop every peer connection and dial again after this long with no
+    /// progress. Off by default.
+    ///
+    /// A peer that dies is retried on a backoff with a 10 second minimum and a
+    /// factor of 6, so attempts land at about 10s, 70s, 430s, and then 36
+    /// minutes. A peer that comes back one second after an attempt fails is
+    /// not tried again for six times the last wait. On a swarm of one, which
+    /// is what `--peer` builds and what a private tracker often is, that is
+    /// the difference between a download finishing and a download timing out.
+    ///
+    /// This throws the peer state away instead of waiting: the torrent is
+    /// paused and started again, which drops the backoff counters and dials
+    /// `--peer` and the trackers from scratch. Piece state is kept and nothing
+    /// is re-hashed. What it costs is every live connection, so set it longer
+    /// than a slow peer's quiet spell.
+    ///
+    /// Set it shorter than `--stop-timeout` or the run gives up first.
+    #[arg(long, value_name = "DUR")]
+    pub redial_after: Option<String>,
+
+    /// How many times `--redial-after` may fire in one run.
+    #[arg(long, value_name = "N", default_value_t = 10)]
+    pub max_redials: u32,
+
     /// Sources fetched in parallel within this one invocation.
     #[arg(short = 'j', long, value_name = "N", default_value_t = 1)]
     pub max_concurrent_downloads: usize,
@@ -603,6 +635,8 @@ impl DownloadArgs {
             peers: Vec::new(),
             no_dht: false,
             no_lsd: false,
+            redial_after: None,
+            max_redials: 10,
             max_concurrent_downloads: 1,
             check_integrity: false,
             hash_check_only: false,

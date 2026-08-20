@@ -1,11 +1,12 @@
 # Drive a source that signs its URLs, redirects, and answers 403.
 #
-# This is the acceptance for two entries in `TODO/multi-source.md`:
+# This is the acceptance for three entries in `TODO/multi-source.md`:
 #
 #   T-131  the loopback file server can sign, redirect, and expire a signature
 #   T-130  a source can be told which statuses are worth retrying
+#   T-137  a cooled-down source comes back
 #
-# Six cases, all on loopback, all against the same 64 MiB payload served under
+# Nine cases, all on loopback, all against the same 64 MiB payload served under
 # a name and a path that have nothing to do with the torrent's:
 #
 #   redirects        --redirect-chain 3 --sign-redirect 2 --require-sig
@@ -25,6 +26,20 @@
 #                    retrying.
 #   recovering_503   the same mirror with no policy at all, as the control:
 #                    503 is already transient, so it completes.
+#   cooldown_short   a mirror down for -OutageSeconds on a clock, with
+#                    --web-seed-cooldown shorter than that. The source spends
+#                    its budget, sleeps, wakes into a mirror that is still
+#                    down, sleeps again, and finishes once it is back.
+#   cooldown_long    the same mirror with a cooldown past the run's deadline.
+#                    Does not finish, and the report says the source is
+#                    cooling and for how much longer.
+#   dead_mirror      a mirror that never recovers, at the default cooldown of
+#                    zero. The source retires and the run fails in seconds,
+#                    which is the fail-fast path the default protects.
+#
+# cooldown_short and cooldown_long are the same server and the same deadline.
+# The only difference is the cooldown, so the pair is what says the flag moved
+# the number.
 #
 # Usage:
 #   pwsh scripts/check-signed-source.ps1
@@ -34,7 +49,7 @@
 # when the check could not run. The record goes to
 # bench/signed-source-<timestamp>.json.
 #
-# See TODO/multi-source.md, T-130 and T-131.
+# See TODO/multi-source.md, T-130, T-131, and T-137.
 
 [CmdletBinding()]
 param(
@@ -44,6 +59,21 @@ param(
     # trip from the 302 to the request that carries the signature, or nothing
     # ever expires: see the note under T-131.
     [double]$Window = 0.01,
+    # How long the mirror in the three cooldown cases stays down, on a clock.
+    [int]$OutageSeconds = 20,
+    # A cooldown shorter than the outage, so the source wakes into a mirror
+    # that is still down and then into one that is back.
+    [int]$ShortCooldown = 5,
+    # A cooldown longer than the deadline, so the source is still asleep when
+    # the run gives up.
+    [int]$LongCooldown = 300,
+    # `--timeout` for the three cooldown cases. Longer than the outage and
+    # shorter than the long cooldown, which is what makes the pair a
+    # measurement rather than two unrelated runs.
+    [int]$CooldownDeadline = 60,
+    # How long a run against a mirror that never recovers may take before
+    # "fails fast" stops being true.
+    [int]$FailFastCeiling = 45,
     [string]$Root = ".tmp/signed",
     [string]$ReportDir = "bench",
     [ValidateSet("debug", "release")]
@@ -270,6 +300,9 @@ function Add-Case([string]$name, $run, $log, [string]$expectation, [bool]$ok, [s
         source_error      = if ($source) { $source.error } else { $null }
         retries           = if ($source -and $source.PSObject.Properties.Name -contains 'retries') { $source.retries } else { 0 }
         retries_by_status = $retriesByStatus
+        cooldowns         = if ($source -and $source.PSObject.Properties.Name -contains 'cooldowns') { $source.cooldowns } else { 0 }
+        cooldown_remaining_ms = if ($source -and $source.PSObject.Properties.Name -contains 'cooldown_remaining_ms') { $source.cooldown_remaining_ms } else { $null }
+        cooldown_until    = if ($source -and $source.PSObject.Properties.Name -contains 'cooldown_until') { $source.cooldown_until } else { $null }
         server_redirects  = $log.redirects
         server_refusals   = $log.refusals
         server_served     = $log.served
@@ -356,6 +389,62 @@ Add-Case "recovering_503" $run $log `
     "the same failure with no policy completes, because 503 is already transient" `
     $ok "exit $($run.exit_code), hash $(if ($hash -eq $expected) { 'matches' } else { 'differs' })"
 
+# --- 7. a cooldown shorter than the outage ---------------------------------
+#
+# The mirror is down for -OutageSeconds on a clock rather than for a number of
+# requests, because a source that is cooling down makes no requests and a
+# request-counted outage would never end while it waits.
+
+Write-Step "cooldown_short: a ${OutageSeconds}s outage, --web-seed-cooldown ${ShortCooldown}s"
+$server = Start-Server @("--status", "503", "--fail-after", "4", "--down-for", "$OutageSeconds") "cool-short"
+$run = Invoke-Download "cool-short" $server.base @(
+    "--web-seed-cooldown", "${ShortCooldown}s",
+    "--web-seed-max-errors", "2",
+    "--web-seed-retries", "0",
+    "--timeout", "${CooldownDeadline}s")
+Stop-Server $server
+$log = Measure-ServerLog $server.log
+$hash = Get-PayloadHash $run.out_dir
+$shortSource = if ($run.report -and $run.report.torrents) { $run.report.torrents[0].sources[0] } else { $null }
+$shortCooldowns = if ($shortSource -and $shortSource.PSObject.Properties.Name -contains 'cooldowns') { $shortSource.cooldowns } else { 0 }
+$ok = ($run.exit_code -eq 0) -and ($hash -eq $expected) -and ($shortCooldowns -gt 0)
+Add-Case "cooldown_short" $run $log `
+    "the source cools down, comes back, and finishes the payload byte for byte" `
+    $ok "exit $($run.exit_code), $shortCooldowns cooldown(s), hash $(if ($hash -eq $expected) { 'matches' } else { 'differs' })"
+
+# --- 8. a cooldown longer than the outage ----------------------------------
+Write-Step "cooldown_long: the same outage, --web-seed-cooldown ${LongCooldown}s past the deadline"
+$server = Start-Server @("--status", "503", "--fail-after", "4", "--down-for", "$OutageSeconds") "cool-long"
+$run = Invoke-Download "cool-long" $server.base @(
+    "--web-seed-cooldown", "${LongCooldown}s",
+    "--web-seed-max-errors", "2",
+    "--web-seed-retries", "0",
+    "--timeout", "${CooldownDeadline}s")
+Stop-Server $server
+$log = Measure-ServerLog $server.log
+$hash = Get-PayloadHash $run.out_dir
+$longSource = if ($run.report -and $run.report.torrents) { $run.report.torrents[0].sources[0] } else { $null }
+$longState = if ($longSource) { $longSource.state } else { $null }
+$longRemaining = if ($longSource -and $longSource.PSObject.Properties.Name -contains 'cooldown_remaining_ms') { $longSource.cooldown_remaining_ms } else { $null }
+$ok = ($run.exit_code -ne 0) -and ($hash -ne $expected) -and ($longState -eq "cooling") -and ($null -ne $longRemaining)
+Add-Case "cooldown_long" $run $log `
+    "the same outage with a cooldown past the deadline does not finish, and the report says the source is cooling and for how much longer" `
+    $ok "exit $($run.exit_code), state '$longState', $(if ($null -ne $longRemaining) { "$([math]::Round($longRemaining / 1000, 1))s left" } else { 'no remaining time reported' })"
+
+# --- 9. the default: a dead mirror still fails fast ------------------------
+Write-Step "dead_mirror: a mirror that never recovers, at the default cooldown of zero"
+$server = Start-Server @("--status", "503") "dead"
+$run = Invoke-Download "dead" $server.base @("--timeout", "${CooldownDeadline}s")
+Stop-Server $server
+$log = Measure-ServerLog $server.log
+$deadSource = if ($run.report -and $run.report.torrents) { $run.report.torrents[0].sources[0] } else { $null }
+$deadState = if ($deadSource) { $deadSource.state } else { $null }
+$fast = $run.elapsed_ms -lt ($FailFastCeiling * 1000)
+$ok = ($run.exit_code -ne 0) -and $fast -and ($deadState -eq "failed")
+Add-Case "dead_mirror" $run $log `
+    "with no cooldown set the source retires and the run fails in seconds rather than sitting on a timer" `
+    $ok "exit $($run.exit_code) after $([math]::Round($run.elapsed_ms / 1000, 1))s, state '$deadState', ceiling ${FailFastCeiling}s"
+
 Stop-Background
 
 # ---------------------------------------------------------------------------
@@ -383,6 +472,11 @@ $verdict = switch ($true) {
         payload_bytes = $payloadBytes
         chunk_size   = $ChunkSize
         window_s     = $Window
+        outage_s     = $OutageSeconds
+        short_cooldown_s = $ShortCooldown
+        long_cooldown_s  = $LongCooldown
+        cooldown_deadline_s = $CooldownDeadline
+        fail_fast_ceiling_s = $FailFastCeiling
         profile      = $Profile
     }
     payload_sha256 = $expected
@@ -394,7 +488,10 @@ $verdict = switch ($true) {
         "The signature window has to be shorter than the round trip from the 302 to the request carrying the signature. bit-cli re-resolves the stable URL on every ranged request, so a window measured in seconds never expires mid-request: measured at 2s and 0.1s, zero refusals; at 0.01s, refusals on every run. See TODO/multi-source.md under T-131.",
         "expiring_default and expiring_retry are the same server and the same window. The only difference is --web-seed-retry-status 403, so the pair is what says the flag and not the timing decided the outcome.",
         "recovering_503 is the control for fatal_override: the same failure with no policy completes, so the failure in fatal_override came from the flag.",
-        "The redirect count in redirects is four per answered request: three plain hops from --redirect-chain 3 and one signing hop. A client that pinned the resolved URL would show one redirect for the whole run."
+        "The redirect count in redirects is four per answered request: three plain hops from --redirect-chain 3 and one signing hop. A client that pinned the resolved URL would show one redirect for the whole run.",
+        "The three cooldown cases use --down-for, which ends the outage on a clock rather than after a number of requests. A source that is cooling down makes no requests, so a request-counted outage would never advance while it waits and the mirror would never come back.",
+        "cooldown_short and cooldown_long share a server, a payload, a deadline, and every other flag. The cooldown is the only difference, which is what makes the pair a measurement. See TODO/multi-source.md, T-137.",
+        "dead_mirror runs at every default, including --web-seed-cooldown 0. It is the case the default exists for: one mirror that never comes back has to fail in seconds rather than sit on a timer."
     )
 } | ConvertTo-Json -Depth 8 | Set-Content -Path $reportPath -Encoding utf8NoBOM
 
@@ -411,6 +508,8 @@ $cases | ForEach-Object {
         "302"       = $_.server_redirects
         "403"       = $_.server_refusals
         retries     = $_.retries
+        state       = $_.source_state
+        cooldowns   = $_.cooldowns
         ok          = if ($_.ok) { "yes" } else { "NO" }
     }
 } | Format-Table -AutoSize | Out-String | Write-Host

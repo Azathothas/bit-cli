@@ -266,12 +266,15 @@ impl AttachedSource {
     ///
     /// One connection failing while another serves is a source that is
     /// serving. A source is failed only when every connection has given up,
-    /// which is also when it has nothing left to try.
+    /// which is also when it has nothing left to try. Cooling ranks above
+    /// failed and below everything else: it is out now and coming back, so a
+    /// caller waiting on it should keep waiting.
     pub fn state(&self) -> BridgeState {
         let rank = |state: BridgeState| match state {
-            BridgeState::Active => 3,
-            BridgeState::Connecting => 2,
-            BridgeState::Idle => 1,
+            BridgeState::Active => 4,
+            BridgeState::Connecting => 3,
+            BridgeState::Idle => 2,
+            BridgeState::Cooling => 1,
             BridgeState::Failed => 0,
         };
         self.statuses
@@ -365,8 +368,26 @@ pub struct SourceReport {
     /// by the code as a string because JSON object keys are strings.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub retries_by_status: BTreeMap<String, u64>,
+    /// How many times this source spent its error budget.
+    ///
+    /// One with `--web-seed-cooldown` at zero is the source being retired.
+    /// More than one means it came back and went out again, which the state
+    /// alone cannot say. See `TODO/multi-source.md`, T-137.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cooldowns: u64,
+    /// When it may be used again, while it is cooling down.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cooldown_until: Option<String>,
+    /// Milliseconds left of that wait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cooldown_remaining_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// `serde` cannot take `u64::eq` by reference in a `skip_serializing_if`.
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl AttachedSource {
@@ -393,6 +414,18 @@ impl AttachedSource {
                 .into_iter()
                 .map(|(code, count)| (code.to_string(), count))
                 .collect(),
+            cooldowns: self.fetcher.stats().cooldowns(),
+            cooldown_until: self
+                .fetcher
+                .stats()
+                .cooldown_remaining()
+                .and(self.fetcher.stats().cooldown_until())
+                .map(|at| at.iso()),
+            cooldown_remaining_ms: self
+                .fetcher
+                .stats()
+                .cooldown_remaining()
+                .map(|left| left.as_millis().min(u128::from(u64::MAX)) as u64),
             error: self.error(),
         }
     }
@@ -643,6 +676,15 @@ impl Progress {
     /// How long the run has been going.
     pub fn elapsed(&self) -> Duration {
         self.started.elapsed()
+    }
+
+    /// How long since the byte count last went up.
+    ///
+    /// Zero on a run that has just made progress. This is the same clock
+    /// `--stop-timeout` reads, so a caller comparing the two is comparing like
+    /// with like. See `TODO/peers.md`, T-138.
+    pub fn stalled_for(&self) -> Duration {
+        self.last_progress_at.elapsed()
     }
 
     /// Fold one observation in, returning what changed.

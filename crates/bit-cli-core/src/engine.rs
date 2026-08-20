@@ -751,6 +751,40 @@ impl Engine {
         self.session.ratelimits.set_upload_bps(rate_to_bps(upload));
     }
 
+    /// Drop every peer connection and dial the peer list again.
+    ///
+    /// A peer that dies is retried on a backoff with a minimum of 10 seconds
+    /// and a factor of 6, so attempts land at about 10s, 70s, 430s, and then
+    /// 36 minutes (`librqbit` 9.0.0,
+    /// `torrent_state/live/peer/stats/atomic.rs`). A peer that comes back one
+    /// second after an attempt fails waits six times the last wait. On a swarm
+    /// of one, which is what `--peer` builds, that is the difference between
+    /// finishing and timing out.
+    ///
+    /// The backoff itself is not reachable: it is built in `pub(crate)` code
+    /// from constants and `SessionOptions` does not carry it. What is
+    /// reachable is throwing the peer state away. Pausing a live torrent moves
+    /// it to `Paused`, which drops `TorrentStateLive` and with it the set of
+    /// peers already seen and their backoff counters, while keeping the chunk
+    /// tracker. Starting it again builds a fresh peer stream carrying
+    /// `initial_peers` and a fresh tracker announce.
+    ///
+    /// It costs no hash check: `Paused` to `Live` is a direct transition, and
+    /// only a fresh add or an error goes through `Initializing`. What it does
+    /// cost is every live connection, so it is worth doing when nothing is
+    /// arriving and not otherwise. See `TODO/peers.md`, T-138.
+    pub async fn redial(&self, handle: &Handle) -> Result<()> {
+        self.session
+            .pause(handle)
+            .await
+            .map_err(|e| Error::generic(format!("could not pause the torrent to re-dial: {e}")))?;
+        self.session.unpause(handle).await.map_err(|e| {
+            Error::generic(format!(
+                "could not restart the torrent after a re-dial: {e}"
+            ))
+        })
+    }
+
     /// Stop the session and everything running under it.
     pub async fn stop(self) {
         self.session.stop().await;

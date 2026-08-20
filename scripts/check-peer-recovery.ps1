@@ -11,18 +11,29 @@
 # while, and then everything is reachable again. So the outage is the seeder
 # being killed and restarted on the same port.
 #
-# Two scenarios, because they ask different questions:
+# Three scenarios, because they ask different questions:
 #
 #   patient    `--stop-timeout` longer than the outage, so the run is still
-#              alive when the peer returns. Does the client re-dial? This is
-#              the one that says whether T-021 reproduces at all.
+#              alive when the peer returns. Does the client re-dial on its own?
+#              This is the one that says whether T-021 reproduces at all.
 #   impatient  `--stop-timeout` shorter than the outage. Does the run give up
 #              and say so, rather than sitting at 60 percent forever? This is
 #              the one that says whether an unattended caller can retry.
+#   redial     the patient run again with `--redial-after`, which throws the
+#              peer state away instead of waiting the backoff out. This is
+#              T-138's acceptance, and the pair with `patient` is what says the
+#              flag moves a number.
 #
-# The first has to complete with the payload hashing equal. The second has to
-# exit 9 with "stopped": "stalled" inside -StopTimeout of the cut. A run that
-# does neither is the failure the entry is about.
+# `impatient` has to exit 9 with "stopped": "stalled" inside -StopTimeout of
+# the cut, and `redial` has to complete with the payload hashing equal.
+#
+# `patient` is held to completing only when the outage is short enough for
+# librqbit's own backoff to catch it. That backoff is 10 seconds minimum with a
+# factor of 6, so attempts land at about 10s, 70s, 430s. An outage that ends
+# before the 70 second attempt is caught by it; one that ends after it waits
+# for the 430 second attempt, which is exactly what T-021 measured and what
+# T-138 exists to fix. Past that reach `patient` is recorded rather than
+# judged, so this script does not fail the build for a defect that is open.
 #
 # The transfer is held open with `--max-download-rate`, measured and holding in
 # TODO/performance.md under T-031, so the outage lands in the middle of it
@@ -30,13 +41,13 @@
 #
 # Usage:
 #   pwsh scripts/check-peer-recovery.ps1
-#   pwsh scripts/check-peer-recovery.ps1 -OutageSeconds 120 -StopTimeout 60
+#   pwsh scripts/check-peer-recovery.ps1 -OutageSeconds 120 -StopTimeout 60 -PatientTimeout 300
 #
-# Exits 0 when both scenarios behave as described, 1 when one does not, and 2
-# when the check could not run. The record goes to
+# Exits 0 when every judged scenario behaved as described, 1 when one did not,
+# and 2 when the check could not run. The record goes to
 # bench/peer-recovery-<timestamp>.json.
 #
-# See TODO/peers.md, T-021.
+# See TODO/peers.md, T-021 and T-138.
 
 [CmdletBinding()]
 param(
@@ -50,6 +61,12 @@ param(
     # has to be shorter than the outage, or the impatient scenario never
     # reaches its deadline.
     [int]$StopTimeout = 20,
+    # `--stop-timeout` for the two scenarios that are meant to outlive the
+    # outage. Zero derives it from the outage and -StopTimeout.
+    [int]$PatientTimeout = 0,
+    # `--redial-after` for the third scenario. It has to be shorter than the
+    # patient timeout or the run gives up before it re-dials.
+    [int]$RedialAfter = 30,
     [string]$Root = ".tmp/peer-recovery",
     [string]$ReportDir = "bench",
     [ValidateSet("debug", "release")]
@@ -204,8 +221,9 @@ function Stop-Seed($process) {
 
 $commands = [System.Collections.ArrayList]::new()
 
-function Invoke-Scenario([string]$name, [int]$stopTimeout) {
-    Write-Step "$name : --stop-timeout ${stopTimeout}s against a ${OutageSeconds}s outage"
+function Invoke-Scenario([string]$name, [int]$stopTimeout, [int]$redialAfter = 0) {
+    $with = if ($redialAfter -gt 0) { ", --redial-after ${redialAfter}s" } else { "" }
+    Write-Step "$name : --stop-timeout ${stopTimeout}s against a ${OutageSeconds}s outage$with"
     $seed = Start-Seed "$name-seed-before"
 
     $outDir = Join-Path $Root "out-$name"
@@ -222,6 +240,7 @@ function Invoke-Scenario([string]$name, [int]$stopTimeout) {
         "--report-interval", "2s",
         "--json"
     )
+    if ($redialAfter -gt 0) { $arguments += @("--redial-after", "${redialAfter}s") }
     [void]$commands.Add("bit-cli $($arguments -join ' ')")
 
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -286,20 +305,36 @@ function Invoke-Scenario([string]$name, [int]$stopTimeout) {
     $hash = if (Test-Path $landed) { (Get-FileHash -Algorithm SHA256 $landed).Hash.ToLower() } else { $null }
     $gaveUpAfterMs = if ($exitedAtMs) { $exitedAtMs - $cutAtMs } else { $null }
 
+    # What the run did about the stall, from its own report rather than from
+    # this script's clock. T-138's acceptance asks for both numbers.
+    $redials = @()
+    if ($report -and $report.torrents -and $report.torrents[0].redials) {
+        $redials = @($report.torrents[0].redials)
+    }
+    $recoveredAfterMs = $null
+    if ($redials.Count -gt 0) {
+        $last = $redials[$redials.Count - 1]
+        $recoveredAfterMs = [int64]$last.at_ms - $cutAtMs
+    }
+
     [pscustomobject]@{
-        scenario         = $name
-        stop_timeout_s   = $stopTimeout
-        exit_code        = $exitCode
-        stopped          = $stopped
-        downloaded_bytes = if ($report) { [int64]$report.downloaded.bytes } else { 0 }
-        downloaded_human = if ($report) { $report.downloaded.human } else { "0 B" }
-        cut_at_ms        = $cutAtMs
-        exited_at_ms     = $exitedAtMs
-        gave_up_after_ms = $gaveUpAfterMs
-        elapsed_ms       = $clock.ElapsedMilliseconds
-        sha256           = $hash
-        hash_matches     = ($hash -eq $expected)
-        timeline         = @($timeline)
+        scenario           = $name
+        stop_timeout_s     = $stopTimeout
+        redial_after_s     = $redialAfter
+        exit_code          = $exitCode
+        stopped            = $stopped
+        downloaded_bytes   = if ($report) { [int64]$report.downloaded.bytes } else { 0 }
+        downloaded_human   = if ($report) { $report.downloaded.human } else { "0 B" }
+        cut_at_ms          = $cutAtMs
+        exited_at_ms       = $exitedAtMs
+        gave_up_after_ms   = $gaveUpAfterMs
+        elapsed_ms         = $clock.ElapsedMilliseconds
+        redials            = $redials
+        redial_count       = $redials.Count
+        last_redial_after_cut_ms = $recoveredAfterMs
+        sha256             = $hash
+        hash_matches       = ($hash -eq $expected)
+        timeline           = @($timeline)
     }
 }
 
@@ -308,16 +343,35 @@ function Invoke-Scenario([string]$name, [int]$stopTimeout) {
 # to clear librqbit's own peer reconnect backoff too, which is 10s minimum with
 # a factor of 6: attempts land at roughly 10s, 70s, and 430s after a peer
 # drops, so an outage that ends between two of them waits for the next.
-$patientTimeout = $OutageSeconds + $StopTimeout + 60
+$patientTimeout = if ($PatientTimeout -gt 0) { $PatientTimeout } else { $OutageSeconds + $StopTimeout + 60 }
+if ($RedialAfter -ge $patientTimeout) {
+    Exit-With 2 "-RedialAfter $RedialAfter has to be shorter than the patient timeout of $patientTimeout, or the redial scenario gives up before it re-dials."
+}
+
+# The second attempt of librqbit's own backoff, in seconds after a peer drops.
+# An outage that ends before it is caught without any help; one that ends after
+# it waits for the third attempt, at about 430s. See TODO/peers.md, T-021.
+$backoffReach = 70
+
 $patient = Invoke-Scenario "patient" $patientTimeout
 $impatient = Invoke-Scenario "impatient" $StopTimeout
+$redial = Invoke-Scenario "redial" $patientTimeout $RedialAfter
 Stop-Background
 
 $failures = [System.Collections.ArrayList]::new()
+$notes = [System.Collections.ArrayList]::new()
 $recovered = ($patient.exit_code -eq 0) -and ($patient.stopped -eq "completed") -and $patient.hash_matches
 if (-not $recovered) {
-    [void]$failures.Add(
-        "patient: exit $($patient.exit_code), stopped '$($patient.stopped)', downloaded $($patient.downloaded_human). Given ${patientTimeout}s of patience against a ${OutageSeconds}s outage, the run did not re-dial and finish.")
+    $message = "patient: exit $($patient.exit_code), stopped '$($patient.stopped)', downloaded $($patient.downloaded_human). Given ${patientTimeout}s of patience against a ${OutageSeconds}s outage, the run did not re-dial and finish."
+    if ($OutageSeconds -le $backoffReach) {
+        [void]$failures.Add($message)
+    }
+    else {
+        # Recorded, not judged: a ${OutageSeconds}s outage is past the second
+        # backoff attempt, so waiting is the documented behaviour and T-138 is
+        # the entry for it. The `redial` scenario is what has to pass here.
+        [void]$notes.Add("$message This is T-021's recorded behaviour past the ${backoffReach}s backoff attempt, not a regression.")
+    }
 }
 $saidSo = ($impatient.exit_code -eq 9) -and ($impatient.stopped -eq "stalled")
 $inTime = ($null -ne $impatient.gave_up_after_ms) -and
@@ -331,16 +385,25 @@ elseif (-not $inTime) {
     [void]$failures.Add(
         "impatient: gave up ${late}s after the cut, past --stop-timeout ${StopTimeout}s plus slack.")
 }
+$redialed = ($redial.exit_code -eq 0) -and ($redial.stopped -eq "completed") -and $redial.hash_matches
+if (-not $redialed) {
+    [void]$failures.Add(
+        "redial: exit $($redial.exit_code), stopped '$($redial.stopped)', downloaded $($redial.downloaded_human) after $($redial.redial_count) re-dial(s). --redial-after ${RedialAfter}s has to finish a run that a ${OutageSeconds}s outage would otherwise strand.")
+}
+elseif ($redial.redial_count -eq 0) {
+    [void]$failures.Add(
+        "redial: completed without re-dialling once, so the flag was not what finished it. Raise -OutageSeconds or lower -RedialAfter.")
+}
 
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")
 $reportPath = Join-Path $ReportDir "peer-recovery-$stamp.json"
 $gaveUpIn = if ($impatient.gave_up_after_ms) { [math]::Round($impatient.gave_up_after_ms / 1000, 1) } else { "no" }
 $verdict = switch ($true) {
     ($failures.Count -eq 0) {
-        "the download re-dialled and completed after a ${OutageSeconds}s outage, and gave up in ${gaveUpIn}s when told to be less patient"
+        "--redial-after finished a ${OutageSeconds}s outage in $($redial.redial_count) re-dial(s), and the run gave up in ${gaveUpIn}s when told to be less patient"
         break
     }
-    default { "$($failures.Count) of 2 scenarios did not behave as described"; break }
+    default { "$($failures.Count) of 3 scenarios did not behave as described"; break }
 }
 
 [ordered]@{
@@ -360,20 +423,25 @@ $verdict = switch ($true) {
         outage_seconds    = $OutageSeconds
         stop_timeout      = $StopTimeout
         patient_timeout   = $patientTimeout
+        redial_after      = $RedialAfter
+        backoff_reach     = $backoffReach
         port              = $port
         profile           = $Profile
     }
     payload_sha256 = $expected
-    scenarios      = @($patient, $impatient)
+    scenarios      = @($patient, $impatient, $redial)
     verdict        = $verdict
     failures       = @($failures)
+    recorded       = @($notes)
     commands       = @($commands)
     notes          = @(
         "The outage is the seeder being killed and restarted on the same port. Disabling a network adapter is a change to the machine and is not done here; what the client sees is the same either way, every peer connection dying at once and nothing reachable for a while.",
         "The port is chosen once by the OS on a socket that is then closed, because the peer has to come back at the address the client already knows and --port 0 would move it.",
         "The transfer is held open with --max-download-rate so the outage lands in the middle of it. That cap is measured and holding in TODO/performance.md under T-031.",
         "gave_up_after_ms is measured from the cut, polled every 500ms, so it is when the run decided rather than when this script noticed.",
-        "The impatient scenario is allowed 15s of slack over --stop-timeout, because the stall clock starts at the last progress rather than at the cut and the report interval quantises when it is checked."
+        "The impatient scenario is allowed 15s of slack over --stop-timeout, because the stall clock starts at the last progress rather than at the cut and the report interval quantises when it is checked.",
+        "patient and redial differ in exactly one flag, so the pair is the measurement: same payload, same rate, same outage, same stop timeout. See TODO/peers.md, T-138.",
+        "patient is only failed when the outage is inside librqbit's backoff reach, backoff_reach seconds. Past that, waiting is what T-021 measured and recorded, and failing the build for it would fail the build for an open defect."
     )
 } | ConvertTo-Json -Depth 8 | Set-Content -Path $reportPath -Encoding utf8NoBOM
 
@@ -381,17 +449,20 @@ Write-Host ""
 Write-Host "payload: $(Format-Size $payloadBytes) at $Rate, ${OutageSeconds}s outage after ${CutAfterSeconds}s"
 Write-Host "report:  $reportPath"
 Write-Host ""
-@($patient, $impatient) | ForEach-Object {
+@($patient, $impatient, $redial) | ForEach-Object {
     [pscustomobject][ordered]@{
         scenario        = $_.scenario
         "stop-timeout"  = "$($_.stop_timeout_s)s"
+        "redial-after"  = if ($_.redial_after_s -gt 0) { "$($_.redial_after_s)s" } else { "off" }
         exit            = $_.exit_code
         stopped         = $_.stopped
         downloaded      = $_.downloaded_human
         hash            = if ($_.hash_matches) { "matches" } else { "-" }
+        "re-dials"      = $_.redial_count
         "gave up after" = if ($_.gave_up_after_ms) { "{0:N1}s" -f ($_.gave_up_after_ms / 1000) } else { "-" }
     }
 } | Format-Table -AutoSize | Out-String | Write-Host
+foreach ($note in $notes) { Write-Host "recorded: $note" }
 Write-Host "verdict: $verdict"
 
 if (-not $Keep) { Remove-Item -Recurse -Force $Root -ErrorAction SilentlyContinue }

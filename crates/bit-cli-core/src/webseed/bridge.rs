@@ -96,6 +96,12 @@ pub enum BridgeState {
     Active,
     /// Nothing to do: the torrent is not live, or it is already complete.
     Idle,
+    /// Out for now, and coming back. The source spent its error budget and
+    /// `--web-seed-cooldown` is non-zero, so the bridge is sleeping until the
+    /// deadline and will reconnect. A cooling source is not a failed one: a
+    /// caller waiting on it should keep waiting. See `TODO/multi-source.md`,
+    /// T-137.
+    Cooling,
     /// The source is unusable and the bridge has given up on it.
     Failed,
 }
@@ -403,13 +409,33 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
             }
             Err(BridgeError::Link(reason)) => status.set_error(Some(reason)),
             Err(BridgeError::Stalled(reason)) => {
-                // The cooldown is the budget running out. Retire here rather
-                // than on the next fetch, so the reported reason is the run of
-                // errors and not the cooldown that followed it.
+                // The budget running out is decided here rather than on the
+                // next fetch, so the reported reason is the run of errors and
+                // not the refusal that followed it.
                 status.set_error(Some(reason.clone()));
-                if fetcher.stats().is_cooling_down() {
-                    status.set_state(BridgeState::Failed);
-                    return;
+                if fetcher.stats().budget_spent() {
+                    let deadline = fetcher.stats().cooldown_until();
+                    match (deadline, fetcher.stats().cooldown_remaining()) {
+                        // Nothing to wait for. `--web-seed-cooldown 0`, the
+                        // default, means the source does not come back.
+                        (_, None) => {
+                            status.set_state(BridgeState::Failed);
+                            return;
+                        }
+                        (Some(deadline), Some(remaining)) => {
+                            status.set_state(BridgeState::Cooling);
+                            tokio::time::sleep(remaining).await;
+                            fetcher.stats().end_cooldown(deadline);
+                            // The mirror has had its time. Dial straight away
+                            // rather than adding the link backoff on top of a
+                            // wait the caller already chose.
+                            delay = RECONNECT_BASE;
+                            continue;
+                        }
+                        (None, Some(_)) => {
+                            unreachable!("cooldown_remaining is Some only when cooldown_until is")
+                        }
+                    }
                 }
             }
         }
