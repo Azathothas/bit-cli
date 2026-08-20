@@ -287,7 +287,8 @@ to survive an outage says how long to wait first. `bit-cli` warns when
 `--redial-after` is not shorter than `--stop-timeout`, because in that order the
 run gives up before it ever re-dials.
 
-**The measurement, 2026-08-20T13:01:50.325Z.** Three scenarios, the first two
+**The measurement, 2026-08-20T13:01:50.325Z**, in
+`bench/peer-recovery-20260820T130150325Z.json`. Three scenarios, the first two
 and the third differing in exactly one flag:
 
 ```

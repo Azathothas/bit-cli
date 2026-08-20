@@ -875,7 +875,8 @@ so the window never advanced while it waited and the mirror never came back.
 first request that falls into it, so `--fail-after` still decides when the
 outage begins. Three unit tests in the example cover it.
 
-**The measurement, 2026-08-20T13:26:02.637Z.** `scripts/check-signed-source.ps1`
+**The measurement, 2026-08-20T13:26:02.637Z**, in
+`bench/signed-source-20260820T132602637Z.json`. `scripts/check-signed-source.ps1`
 now drives nine cases, the last three of which are this entry's:
 
 ```

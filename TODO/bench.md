@@ -179,7 +179,9 @@ rather than a slow seeder, so it exits 2 and names the directory. A run where
 nobody connected exits 6, the same code a leech run with no usable source
 takes, because zero bytes with no peer is not a measurement.
 
-`scripts/bench-seed.ps1` drives one seeder and N leechers on loopback:
+`scripts/bench-seed.ps1` drives one seeder and N leechers on loopback, and the
+record is `bench/seed-20260820T144744522Z.json` beside
+`bench/bench-seed-20260820T144823484Z.json`:
 
 ```
 $ pwsh -NoProfile -File scripts/bench-seed.ps1 -PayloadSize 256MiB \
