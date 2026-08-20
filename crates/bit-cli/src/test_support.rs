@@ -312,6 +312,13 @@ impl FileServer {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                     continue;
                 };
+                // The listener polls, the connection does not. An accepted
+                // socket inherits the listener's non-blocking mode, and the
+                // read below treats every error as the end of the connection,
+                // so a request that had not arrived yet was answered by
+                // hanging up. That is one flaky test in a hundred runs, and it
+                // took a captured failure to see.
+                let _ = stream.set_nonblocking(false);
                 let root = root.clone();
                 std::thread::spawn(move || {
                     let mut request = Vec::new();
@@ -470,6 +477,13 @@ impl Tracker {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                     continue;
                 };
+                // The listener polls, the connection does not. An accepted
+                // socket inherits the listener's non-blocking mode, and the
+                // read below treats every error as the end of the connection,
+                // so a request that had not arrived yet was answered by
+                // hanging up. That is one flaky test in a hundred runs, and it
+                // took a captured failure to see.
+                let _ = stream.set_nonblocking(false);
                 let body = body.clone();
                 let log = log.clone();
                 std::thread::spawn(move || {
