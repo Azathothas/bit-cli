@@ -130,6 +130,13 @@ session's own listening port, which is what makes them updates rather than a
 second peer. The test asserts one peer id and one port across all three
 announces.
 
+One thing the shape of this costs. The `completed` announce is awaited inside
+the watch loop, so a tracker that is slow to answer delays the next progress
+tick by up to `--tracker-timeout`. It is bounded, it happens once, and it
+happens at the moment the payload is already on disk, which is why it is
+awaited rather than spawned: a run that exits before its own announce has left
+has not announced.
+
 The acceptance, run as a test rather than as a capture. The tracker records
 every request line and the run is a real transfer from a loopback file server:
 

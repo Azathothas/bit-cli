@@ -1,7 +1,7 @@
 {
   "kind": "soak",
   "schema_version": "1",
-  "generated_at": "2026-08-20T18:34:17.218Z",
+  "generated_at": "2026-08-20T18:38:50.451Z",
   "complete": false,
   "host": {
     "machine": "AJAM",
@@ -25,41 +25,41 @@
   },
   "info_hash": "35bb0e03ff014dc8d9deea0852ba6698589b7de1",
   "csv": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\bench\\soak-20260820T155309362Z.csv",
-  "elapsed_hours": 2.6855,
-  "samples": 306,
+  "elapsed_hours": 2.7614,
+  "samples": 315,
   "cycles": {
     "leech_completed": 0,
     "leech_failed": 0,
     "churn_runs": 0,
     "churn_connections_total": 0,
-    "progress_events": 323
+    "progress_events": 332
   },
   "slopes": {
     "rss_bytes": {
       "column": "rss_bytes",
-      "samples": 306,
+      "samples": 315,
       "first": 13778944.0,
       "last": 12980224.0,
       "min": 12976128.0,
       "max": 14331904.0,
-      "mean": 14162348.34,
-      "slope_per_hour": -97969.975,
-      "r_squared": 0.0477
+      "mean": 14128573.36,
+      "slope_per_hour": -160906.315,
+      "r_squared": 0.1059
     },
     "peak_rss_bytes": {
       "column": "peak_rss_bytes",
-      "samples": 306,
+      "samples": 315,
       "first": 13778944.0,
       "last": 14331904.0,
       "min": 13778944.0,
       "max": 14331904.0,
-      "mean": 14271534.85,
-      "slope_per_hour": 105858.033,
-      "r_squared": 0.4787
+      "mean": 14273259.68,
+      "slope_per_hour": 100604.666,
+      "r_squared": 0.4686
     },
     "handles": {
       "column": "handles",
-      "samples": 306,
+      "samples": 315,
       "first": 188.0,
       "last": 188.0,
       "min": 188.0,
@@ -70,18 +70,18 @@
     },
     "threads": {
       "column": "threads",
-      "samples": 306,
+      "samples": 315,
       "first": 25.0,
       "last": 21.0,
       "min": 21.0,
       "max": 25.0,
       "mean": 21.07,
-      "slope_per_hour": -0.132,
-      "r_squared": 0.0723
+      "slope_per_hour": -0.125,
+      "r_squared": 0.071
     },
     "tcp_total": {
       "column": "tcp_total",
-      "samples": 306,
+      "samples": 315,
       "first": 1.0,
       "last": 1.0,
       "min": 1.0,
@@ -92,7 +92,7 @@
     },
     "tcp_close_wait": {
       "column": "tcp_close_wait",
-      "samples": 306,
+      "samples": 315,
       "first": 0.0,
       "last": 0.0,
       "min": 0.0,
@@ -103,7 +103,7 @@
     },
     "tcp_established": {
       "column": "tcp_established",
-      "samples": 306,
+      "samples": 315,
       "first": 0.0,
       "last": 0.0,
       "min": 0.0,
@@ -113,13 +113,13 @@
       "r_squared": null
     }
   },
-  "rss_mib_per_hour": -0.093,
+  "rss_mib_per_hour": -0.153,
   "self_reported": {
     "peak_rss_bytes": 14331904,
     "open_handles": 188
   },
   "seed_exited_early": false,
-  "verdict": "in flight: 306 samples over 2.69 of the 6 hours asked for",
+  "verdict": "in flight: 315 samples over 2.76 of the 6 hours asked for",
   "failures": [],
   "commands": "C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\soak-idle\\bin\\bit-cli.exe seed C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\soak-idle\\soak.torrent --data C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\soak-idle --port 0 --no-dht --no-lsd --report-interval 30s --seed-time 21900s --jsonl --no-tracker",
   "notes": [

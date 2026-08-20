@@ -317,7 +317,7 @@ item eight is the operator's own list.
    by time. `--max-handles` bounds it with a loud exit 16.
 
    What the soak adds: `CLOSE_WAIT` was zero at every sample of a 2.26 hour
-   `steady` run and of a 2.55 hour `idle` one, so this needs the churn shape
+   `steady` run and of a 2.76 hour `idle` one, so this needs the churn shape
    and does not appear under a deployment-shaped load.
 
    [T-017](disk-io.md) rules the disk out rather than in. `bit-cli bench disk`
@@ -361,8 +361,8 @@ item eight is the operator's own list.
    writes the three series to `bench/soak-<timestamp>.csv`, and rewrites
    `bench/soak-<timestamp>.json` after every sample, so a run that is killed
    still leaves its slopes. Three partial runs are recorded in the entry. The
-   `idle` control is the useful new one: **188 handles at every one of 291
-   samples over 2.55 hours**, resident memory flat at 0.04 MiB an hour, and
+   `idle` control is the useful new one: **188 handles at every one of 315
+   samples over 2.76 hours**, resident memory flat or slightly falling, and
    `CLOSE_WAIT` zero. So the descriptors half of this entry does not reproduce
    at all, and whatever the `steady` load does is the load. Under `steady`,
    over 2.26 hours: `CLOSE_WAIT` zero at all 258 samples, handles noise, and

@@ -445,7 +445,7 @@ a bare info hash, and `-` for stdin.
 Every command runs in the foreground, does its work, and exits. There is no
 daemon and no stored session.
 
-Metalink as a source, and two of the six `bench` subcommands, parse but are
+Metalink as a source, and one of the six `bench` subcommands, parse but are
 not built yet. Each exits non-zero naming the `TODO/` entry that closes it,
 rather than pretending to work:
 

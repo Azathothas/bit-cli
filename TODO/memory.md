@@ -121,18 +121,18 @@ now written after every sample rather than only at the end. That change is the
 harness residue this entry named, and it paid for itself on the first run: the
 `steady` run died at 2.26 hours and its record survived.
 
-| series | steady, 2.26 h, 258 samples | idle, 2.55 h, 291 samples |
+| series | steady, 2.26 h, 258 samples | idle, 2.76 h, 315 samples |
 | --- | --- | --- |
-| `rss_bytes` per hour | **+0.93 MiB**, r squared 0.65 | **+0.04 MiB**, r squared 0.01 |
-| `rss_bytes` first, last, max | 14.75, 18.23, 20.19 MiB | 13.14, 12.49, 13.67 MiB |
+| `rss_bytes` per hour | **+0.93 MiB**, r squared 0.65 | **-0.15 MiB**, r squared 0.11 |
+| `rss_bytes` first, last, max | 14.75, 18.23, 20.19 MiB | 13.14, 12.38, 13.67 MiB |
 | `handles` per hour | +2.09, r squared 0.015 | **0.00**, and 188 at every sample |
 | `tcp_close_wait` max | **0** | **0** |
 | leech cycles | 514 | none by design |
 
 **The idle control is the new fact.** A seeder with no tracker and nothing
-connecting holds 188 handles at every one of 291 samples over two and a half
-hours, and its resident memory does not move: 0.04 MiB an hour at an r squared
-of 0.01 is the sampler's own noise. So whatever the `steady` run is doing, it
+connecting holds 188 handles at every one of 315 samples over 2.76 hours, and
+its resident memory does not rise: the slope is slightly negative at an r
+squared of 0.11, which is a flat line with noise on it. So whatever the `steady` run is doing, it
 is the load doing it and not the session's timers, and this entry's report of
 descriptors climbing on their own does not reproduce at all.
 
@@ -182,7 +182,8 @@ names a leak worth chasing.
 Runs recorded so far, all partial, all under `bench/`:
 `soak-20260820T132757504Z` (steady, 1.76 h, the first),
 `soak-20260820T155246381Z` (steady, 2.26 h, killed by the harness defect above),
-`soak-20260820T155309362Z` (idle, 2.55 h, the control), and
+`soak-20260820T155309362Z` (idle, 2.76 h, the control, stopped with the
+session), and
 `soak-20260820T181505020Z` (steady, restarted at 18:15 UTC and still running
 when the session ended, so its files are not committed).
 
