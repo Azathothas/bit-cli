@@ -51,9 +51,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-011](disk-io.md) | P1 | disk-io | **done** | No file handle pool, so long runs exhaust descriptors |
 | [T-012](disk-io.md) | P2 | disk-io | **done** | Preallocation is not implemented |
 | [T-013](disk-io.md) | P2 | disk-io | **done** | Selecting a subset of files still creates all of them |
-| [T-014](disk-io.md) | P2 | disk-io | open | Adding a torrent can fail with "File exists (os error 17)" |
-| [T-015](disk-io.md) | P1 | disk-io | open | Hash checking can hang at 0 percent |
-| [T-016](disk-io.md) | P2 | disk-io | open | fastresume is not used when adding a torrent |
+| [T-014](disk-io.md) | P2 | disk-io | **done** | Adding a torrent can fail with "File exists (os error 17)" |
+| [T-015](disk-io.md) | P1 | disk-io | **done** | Hash checking can hang at 0 percent |
+| [T-016](disk-io.md) | P2 | disk-io | blocked | fastresume is not used when adding a torrent |
 | [T-020](peers.md) | P0 | peers | open | Connections accumulate in CLOSE_WAIT until TCP is unusable |
 | [T-021](peers.md) | P0 | peers | open | A temporary network drop stops the download permanently |
 | [T-022](peers.md) | P1 | peers | open | Peer connections churn on IPv6-only swarms |

@@ -657,6 +657,47 @@ impl Engine {
             .map_err(|e| Error::generic(format!("torrent failed to initialize: {e}")))
     }
 
+    /// Wait for initialisation, giving up after `timeout`.
+    ///
+    /// Initialisation is reading the metadata and hash-checking whatever is
+    /// already on disk, and it is where a torrent can stop making progress
+    /// without failing: upstream reports roughly one add in twenty of a
+    /// torrent with existing files sticking at "checking files" and never
+    /// leaving. See `TODO/disk-io.md`, T-015.
+    ///
+    /// A run bounded only by `--timeout` survives that, but reports a deadline
+    /// rather than the reason, so the error carries the phase, how far the
+    /// check had got, and how long it waited. "It hung hashing at 43%" is
+    /// something an operator can act on; "it timed out" is not.
+    pub async fn wait_until_initialized_within(
+        &self,
+        handle: &ManagedTorrent,
+        timeout: Duration,
+    ) -> Result<()> {
+        match tokio::time::timeout(timeout, self.wait_until_initialized(handle)).await {
+            Ok(result) => result,
+            Err(_) => {
+                let snapshot = self.snapshot(handle);
+                let checked = crate::units::format_percent(snapshot.fraction());
+                Err(Error::timeout(format!(
+                    "{}: still initializing after {}ms, hash-checked {checked}",
+                    snapshot.name,
+                    timeout.as_millis()
+                ))
+                .with("phase", "initializing")
+                .with("info_hash", snapshot.info_hash)
+                .with(
+                    "waited_ms",
+                    timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                )
+                .with("checked_bytes", snapshot.progress_bytes)
+                .with("total_bytes", snapshot.total_bytes)
+                .with("checked_percent", checked)
+                .with("state", snapshot.state.as_str()))
+            }
+        }
+    }
+
     /// Wait until every wanted piece is present and verified.
     pub async fn wait_until_completed(&self, handle: &ManagedTorrent) -> Result<()> {
         handle
@@ -750,16 +791,39 @@ fn to_state(state: &TorrentStatsState) -> State {
 
 /// Give an add failure the exit code that matches what actually went wrong.
 ///
-/// `librqbit` reports these as one opaque error chain, so the classification
-/// is by the text of the chain. A caller branches on the exit code, and
-/// "could not write the file" and "the tracker is unreachable" must not both
-/// arrive as a generic failure.
+/// A caller branches on the exit code, so "could not write the file" and "the
+/// tracker is unreachable" must not both arrive as a generic failure.
+///
+/// Anything `bit-cli`'s own storage raises is classified by type, because an
+/// exit code decided by a string is an exit code that changes when somebody
+/// rewords an error. `librqbit` reports its own failures as one opaque chain
+/// with no types to match on, so those still go by text, and every phrase
+/// matched there is pinned by a test.
 fn classify_add_error(source: &str, err: &anyhow::Error) -> Error {
     let text = format!("{err:#}");
+    let code = match classify_by_type(err) {
+        Some(code) => code,
+        None => classify_by_text(&text),
+    };
+    Error::new(code, format!("{source}: {text}")).with("source", source.to_string())
+}
+
+/// The classification `bit-cli`'s own errors carry with them.
+fn classify_by_type(err: &anyhow::Error) -> Option<crate::exit::ExitCode> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<crate::storage::AlreadyExists>())
+        .map(|_| crate::exit::ExitCode::Disk)
+}
+
+/// The classification for an error that arrived as prose.
+fn classify_by_text(text: &str) -> crate::exit::ExitCode {
     let lower = text.to_lowercase();
-    let code = if lower.contains("no such file")
+    if lower.contains("no such file")
         || lower.contains("cannot find the file")
         || lower.contains("permission denied")
+        || lower.contains("already exists")
+        // `EEXIST`. `librqbit`'s own cache files hit this when a previous run
+        // left them behind.
         || lower.contains("os error 17")
     {
         crate::exit::ExitCode::Disk
@@ -767,8 +831,7 @@ fn classify_add_error(source: &str, err: &anyhow::Error) -> Error {
         crate::exit::ExitCode::Network
     } else {
         crate::exit::ExitCode::SourceResolution
-    };
-    Error::new(code, format!("{source}: {text}")).with("source", source.to_string())
+    }
 }
 
 /// Address families tried when binding the peer listener.
@@ -1075,5 +1138,75 @@ mod tests {
         // not produce a fraction above one.
         snapshot.progress_bytes = 500;
         assert_eq!(snapshot.fraction(), 1.0);
+    }
+    /// A file that is already there is a disk failure, not a bad source.
+    ///
+    /// A caller branches on the exit code, and  over an
+    /// existing payload without  is exactly the case where
+    /// a generic failure is useless: the fix is a flag, and the code has to say
+    /// so. See , T-014.
+    #[test]
+    fn an_existing_file_is_classified_by_type_rather_than_by_its_wording() {
+        let error = anyhow::Error::new(crate::storage::AlreadyExists {
+            path: std::path::PathBuf::from("out/payload.bin"),
+        })
+        .context("could not create storage");
+        let classified = classify_add_error("payload.torrent", &error);
+        assert_eq!(classified.code(), crate::exit::ExitCode::Disk);
+        assert!(classified.message().contains("payload.bin"), "{classified}");
+        assert!(
+            classified.message().contains("--allow-overwrite"),
+            "the error names the fix: {classified}"
+        );
+    }
+
+    /// The phrases the text classifier matches on, pinned.
+    ///
+    ///  reports its own failures as prose with no type to match, so
+    /// these are matched by string. A test is what keeps a reworded phrase from
+    /// silently changing an exit code.
+    #[test]
+    fn every_text_classification_maps_to_the_code_it_is_there_for() {
+        for (text, expected) in [
+            (
+                "No such file or directory (os error 2)",
+                crate::exit::ExitCode::Disk,
+            ),
+            (
+                "The system cannot find the file specified",
+                crate::exit::ExitCode::Disk,
+            ),
+            (
+                "Permission denied (os error 13)",
+                crate::exit::ExitCode::Disk,
+            ),
+            ("File exists (os error 17)", crate::exit::ExitCode::Disk),
+            ("out/a.bin already exists", crate::exit::ExitCode::Disk),
+            (
+                "dns error: failed to lookup address",
+                crate::exit::ExitCode::Network,
+            ),
+            ("tcp connect error", crate::exit::ExitCode::Network),
+            ("invalid TLS certificate", crate::exit::ExitCode::Network),
+            (
+                "torrent file is not bencode",
+                crate::exit::ExitCode::SourceResolution,
+            ),
+        ] {
+            assert_eq!(classify_by_text(text), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_type_beats_the_text_when_both_could_match() {
+        // The message says "connect", which the text classifier would call a
+        // network failure. The type says otherwise and the type wins.
+        let error = anyhow::Error::new(crate::storage::AlreadyExists {
+            path: std::path::PathBuf::from("connect/payload.bin"),
+        });
+        assert_eq!(
+            classify_add_error("x.torrent", &error).code(),
+            crate::exit::ExitCode::Disk
+        );
     }
 }

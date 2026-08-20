@@ -349,10 +349,15 @@ $failures = [System.Collections.ArrayList]@()
 # between `fetch` and `download` where it belongs.
 $nullDevice = if ($IsWindows) { "NUL" } else { "/dev/null" }
 
-# One warm run before anything is timed. The payload was written moments ago
-# and the server has never been asked for it, so the first read pays for both.
-Write-Step "warming the server and the page cache"
-$null = & $curlPath -sS --http1.1 -o $nullDevice $fileUrl 2>&1
+# One warm run before anything is timed, for the loopback case only. The
+# payload was written moments ago and the server has never been asked for it,
+# so the first read pays for both. Against a real mirror there is no local
+# cache to warm and the mirror's is not ours to warm, so a warm-up would only
+# spend somebody else's bandwidth.
+if (-not $Mirror) {
+    Write-Step "warming the server and the page cache"
+    $null = & $curlPath -sS --http1.1 -o $nullDevice $fileUrl 2>&1
+}
 
 # 1a. curl, one connection, the whole file. What a single stream gets.
 Write-Step "stage 1 of 4: curl ceiling, one connection, $Runs runs"
@@ -731,6 +736,15 @@ $rows = @(
 )
 $rows | Format-Table -AutoSize | Out-String | Write-Host
 Write-Host "The ceiling is curl at $Concurrency connections, which is the shape both bit-cli stages run in."
+# A share above 100 percent means the reference was not a ceiling for this
+# target. That is a result, not an error, and saying so is better than leaving
+# a reader to work out why a percentage of a maximum exceeds the maximum.
+foreach ($over in @(
+    @{ name = "bit-cli fetch"; rate = $fetchRate }
+    @{ name = "bit-cli download"; rate = $downloadRate }
+) | Where-Object { $ceilingRate -gt 0 -and $_.rate -gt $ceilingRate }) {
+    Write-Host ("{0} beat the reference, so curl at {1} connections was not the limit here." -f $over.name, $Concurrency)
+}
 
 if ($loopbackRatio) {
     Write-Host "loopback bytes per payload byte: $loopbackRatio"

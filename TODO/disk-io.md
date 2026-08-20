@@ -352,7 +352,7 @@ Source:      https://github.com/ikatson/rqbit/issues/349 (open)
 Category:    disk-io
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      open, blocked
 
 Problem:     A cached bitfield at `.cache/rqbit/{infohash}.bitv` is not read
              when a torrent is added, so every add re-hashes the whole payload.
@@ -369,3 +369,75 @@ Approach:    `SessionOptions::fastresume` exists in 9.0.0 and `bit-cli` leaves
 Acceptance:  Either a `--fastresume` flag with a documented cache location and
              a test that a stale cache is detected and discarded, or an entry
              in `phase-c.md` saying why not.
+
+## The cost, measured
+
+512 MiB payload, one file, 1 MiB pieces, release build, seeded three times:
+
+```
+$ bit-cli seed p.torrent --data . --verify <MODE> --exit-when-idle 1s --json
+
+--verify full     6087 ms wall
+--verify quick    6372 ms
+--verify none     6398 ms
+```
+
+Identical within noise, because all three do the same thing. Roughly 85 MiB/s
+of hashing plus process startup, so a 40 GiB payload costs about eight minutes
+of disk read on every `seed` invocation. That is the number the entry was
+asking for.
+
+## The blocker
+
+**`fastresume` in `librqbit` 9.0.0 does nothing without session persistence.**
+`session.rs:640-680`:
+
+```rust
+match &opts.persistence {
+    Some(SessionPersistenceConfig::Json { folder }) => { ... make_result!(s) }
+    None => Ok((None, Arc::new(NonPersistentBitVFactory {}))),
+}
+```
+
+`make_result!` is the only place `opts.fastresume` is read, and it is only
+reached when `persistence` is `Some`. With `persistence: None`, which is what
+decision 7.4 requires, the bitfield factory is `NonPersistentBitVFactory`
+whatever `fastresume` says.
+
+So getting a resume cache means turning on `SessionPersistenceConfig::Json`,
+which writes a store of every torrent in the session. That is stored session
+state, and 7.4 puts it in Phase C.
+
+`AddTorrentOptions` in 9.0.0 also carries no way to skip the initial check:
+`paused`, `only_files`, `overwrite`, `list_only`, `output_folder`,
+`sub_folder`, `peer_opts`, `force_tracker_interval`, `disable_trackers`,
+`ratelimits`, `initial_peers`, `peer_limit`, `preferred_id`, and the storage
+factory. Nothing else. So there is no second route either.
+
+## What would unblock it
+
+One of three, in the order they are worth trying:
+
+1. An upstream `SessionOptions` that takes a `BitVFactory` directly, or a
+   `fastresume` that works without a persistence store. Then `bit-cli` supplies
+   a factory that reads and writes one file per info hash beside the payload,
+   with the file length and modification time recorded so a stale cache is
+   detected and discarded, and nothing about the session is stored.
+2. A `TorrentStorage` hook that lets storage answer "this piece is already
+   verified". `bit-cli` already supplies its own storage, so this would need no
+   session state at all. The trait has no such method in 9.0.0.
+3. Candidate C, a native fetch and verification path that does not go through
+   `librqbit`'s initialisation at all.
+
+Until one of those exists this cannot be built without contradicting 7.4, so it
+stays open here rather than moving to `phase-c.md`: the cache itself is derived
+data that can be recomputed, which is not what 7.4 is about, and the thing
+blocking it is an upstream API rather than a decision.
+
+## What ships in the meantime
+
+`seed --verify` now says what it does. All three values behaved identically and
+only `none` warned, so `quick` claimed to be a quick check and was a full one.
+Both `quick` and `none` warn now, naming what actually happens, and `--help`
+says the same. A flag whose values are all the same is worse than no flag; a
+flag that says so is not.

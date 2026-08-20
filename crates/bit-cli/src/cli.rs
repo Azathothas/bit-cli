@@ -505,9 +505,18 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub hash_check_only: bool,
 
-    /// Resume a partial download.
-    #[arg(short = 'c', long, default_value_t = true)]
+    /// Resume a partial download. On by default.
+    #[arg(short = 'c', long, overrides_with = "no_continue")]
     pub r#continue: bool,
+
+    /// Refuse to write into a file that is already there.
+    ///
+    /// `--continue` is the default, so this is how a run says "these files
+    /// should not exist yet". Without it a partial download resumes and a
+    /// complete one is hash-checked and left alone. A flag that could only
+    /// ever be on would not be a flag.
+    #[arg(long = "no-continue", overrides_with = "continue")]
+    pub no_continue: bool,
 
     /// Overwrite existing files.
     #[arg(long)]
@@ -537,6 +546,7 @@ impl DownloadArgs {
             check_integrity: false,
             hash_check_only: false,
             r#continue: true,
+            no_continue: false,
             allow_overwrite: false,
             report_interval: "1s".to_string(),
         }
@@ -631,6 +641,15 @@ pub struct LimitArgs {
     /// Give up if there is no progress for this long.
     #[arg(long, value_name = "DUR")]
     pub stop_timeout: Option<String>,
+
+    /// Give up if the hash check has not finished in this long.
+    ///
+    /// Initialisation is reading the metadata and hash-checking whatever is
+    /// on disk, and it is where a torrent can stop making progress without
+    /// failing. The error names the phase and how far the check got, which a
+    /// plain deadline does not.
+    #[arg(long, value_name = "DUR", default_value = "10m")]
+    pub init_timeout: String,
 
     /// Abort if the rate drops below this.
     #[arg(long, value_name = "RATE")]
@@ -1074,6 +1093,11 @@ pub struct SeedArgs {
     pub data: Option<PathBuf>,
 
     /// Hash-check before announcing.
+    ///
+    /// `full` is what happens today whatever this says: the session hash-checks
+    /// the whole payload on add and offers no way to skip it. `quick` and
+    /// `none` are accepted, warn, and do the same thing. See `TODO/disk-io.md`,
+    /// T-016.
     #[arg(long, value_name = "MODE", default_value = "full")]
     pub verify: SeedVerify,
 

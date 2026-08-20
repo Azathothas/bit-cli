@@ -651,12 +651,34 @@ fn subfolder_for(metadata: &TorrentMetadata) -> Option<String> {
     Some(crate::paths::plan_one(&name))
 }
 
+/// A payload file is already there and the run was not told it could use it.
+///
+/// This is a type rather than a message so the caller can classify it by
+/// downcasting the error chain instead of matching on the text. An exit code
+/// decided by a string is an exit code that changes when somebody rewords an
+/// error. See `TODO/disk-io.md`, T-014.
+#[derive(Debug)]
+pub struct AlreadyExists {
+    pub path: PathBuf,
+}
+
+impl std::fmt::Display for AlreadyExists {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} already exists. Pass --allow-overwrite to write through it, or --continue to resume into it",
+            self.path.display()
+        )
+    }
+}
+
+impl std::error::Error for AlreadyExists {}
+
 /// The error for a file that is already there and was not asked to be.
 fn refuse_existing(path: &Path) -> anyhow::Error {
-    anyhow::anyhow!(
-        "{} already exists. Pass --allow-overwrite to write through it, or --continue to resume into it",
-        path.display()
-    )
+    anyhow::Error::new(AlreadyExists {
+        path: path.to_path_buf(),
+    })
 }
 
 /// Open one payload file, creating it if it is not there.

@@ -127,13 +127,26 @@ pub fn run(
         return Ok(ExitCode::Success);
     }
 
-    if args.verify == SeedVerify::None {
+    // All three values behave the same today, and saying so is better than
+    // letting a caller believe `--verify none` skipped anything. `librqbit`
+    // 9.0.0 hash-checks on add and `AddTorrentOptions` carries no way to ask
+    // it not to, so there is nothing for the other two values to reach.
+    // Measured on a 512 MiB payload: 6087 ms, 6372 ms, and 6398 ms. See
+    // `TODO/disk-io.md`, T-016.
+    if args.verify != SeedVerify::Full {
         renderer.warn(
             env,
-            "--verify none still hash-checks on start; the session cannot serve unverified data",
+            format!(
+                "--verify {} still hash-checks the whole payload on start: the session cannot serve unverified data and has no way to skip the check",
+                match args.verify {
+                    SeedVerify::Quick => "quick",
+                    _ => "none",
+                }
+            ),
         );
     }
 
+    let init_timeout = swarm::duration_flag(&args.limits.init_timeout, "init-timeout")?;
     let source = args.source.source.clone();
     let announce_only = args.announce_only;
     let runtime = swarm::runtime()?;
@@ -168,7 +181,9 @@ pub fn run(
             }),
         )?;
 
-        engine.wait_until_initialized(&handle).await?;
+        engine
+            .wait_until_initialized_within(&handle, init_timeout)
+            .await?;
         let layout = engine.layout(&handle).ok_or_else(|| {
             Error::source_resolution(format!("{source}: the torrent has no metadata"))
         })?;

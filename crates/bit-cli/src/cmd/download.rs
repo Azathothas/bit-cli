@@ -59,6 +59,14 @@ pub struct TorrentReport {
     /// Empty for the ordinary torrent. See `bit_cli_core::paths`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub renamed: Vec<Rename>,
+    /// The exit code this torrent's outcome produces.
+    ///
+    /// A run's code is the worst of its torrents'. Without this, a torrent
+    /// that failed because a file was already there and one that failed
+    /// because the tracker was unreachable would both arrive as a generic
+    /// failure, which is exactly the distinction the exit code table exists to
+    /// make. See `TODO/disk-io.md`, T-014.
+    pub code: ExitCode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -149,6 +157,7 @@ pub fn run(
         });
     }
 
+    let init_timeout = swarm::duration_flag(&args.limits.init_timeout, "init-timeout")?;
     let trace_http = global.trace.iter().any(|t| t == "http");
     // A source-level check is per piece or nothing. `file` asks for a coarser
     // grain than the fetcher works at, and the per-piece check subsumes it, so
@@ -197,10 +206,11 @@ pub fn run(
                 // what is already on disk", so they all reach the session the
                 // same way.
                 overwrite: args.allow_overwrite
-                    || args.r#continue
+                    || !args.no_continue
                     || args.check_integrity
                     || args.hash_check_only,
                 hash_check_only: args.hash_check_only,
+                init_timeout,
                 only_files: selection(&args.selection)?,
                 report_interval,
                 stop: stop.clone(),
@@ -268,7 +278,7 @@ pub fn run(
     let code = report
         .torrents
         .iter()
-        .map(|r| r.stopped.code())
+        .map(|r| r.code)
         .max_by_key(|c| c.code())
         .unwrap_or(ExitCode::Success);
 
@@ -297,6 +307,8 @@ fn allocation_of(method: crate::cli::FileAllocation) -> bit_cli_core::alloc::All
 struct Options {
     overwrite: bool,
     hash_check_only: bool,
+    /// How long the hash check gets before the run gives up on it.
+    init_timeout: Duration,
     only_files: Option<Vec<usize>>,
     report_interval: Duration,
     stop: StopConditions,
@@ -351,6 +363,7 @@ async fn one(
                 sources: Vec::new(),
                 output_directory: options.directory.display().to_string(),
                 renamed: Vec::new(),
+                code: error.code(),
                 error: Some(error.to_string()),
             }
         }
@@ -383,7 +396,9 @@ async fn one_inner(
         ))
         .await;
 
-    engine.wait_until_initialized(&handle).await?;
+    engine
+        .wait_until_initialized_within(&handle, options.init_timeout)
+        .await?;
     // A rename is not an error, but a caller who is not told about one cannot
     // find the file it asked for, so it goes to stderr as well as into the
     // report.
@@ -661,6 +676,7 @@ fn finish(
         sources: sources.iter().map(AttachedSource::report).collect(),
         output_directory: options.directory.display().to_string(),
         renamed,
+        code: stopped.code(),
         error: snapshot.error.clone(),
     }
 }
@@ -1110,6 +1126,117 @@ mod tests {
             ExitCode::Timeout,
         );
         assert!(report["torrents"][0].get("renamed").is_none());
+    }
+
+    /// Writing over an existing payload without permission is a disk failure,
+    /// not a generic one.
+    ///
+    /// A caller branches on the exit code, and the fix here is a flag, so the
+    /// code has to say "disk" and the message has to name the flag. See
+    /// `TODO/disk-io.md`, T-014.
+    #[test]
+    fn a_download_over_an_existing_file_exits_eight_and_names_the_flag() {
+        let fixture = TorrentFixture::multi_file();
+        let out = fixture.dir().join("out");
+        // The payload is already there, written by something else.
+        let existing = out.join("album").join("notes.nfo");
+        std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
+        std::fs::write(&existing, b"not the payload").unwrap();
+
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                "http://127.0.0.1:9/",
+                "--no-tracker",
+                "--port",
+                "0",
+                // `--continue` defaults on and means "resume into what is
+                // there", so it has to be off for this to be the refusal case.
+                "--no-continue",
+                "--stop-after",
+                "5s",
+            ],
+            fixture.dir(),
+            ExitCode::Disk,
+        );
+        let torrent = &report["torrents"][0];
+        assert_eq!(torrent["code"], "disk", "the per-torrent code says why");
+        let message = torrent["error"].as_str().unwrap_or_default();
+        assert!(message.contains("already exists"), "{message}");
+        assert!(message.contains("--allow-overwrite"), "{message}");
+        // Nothing was written over.
+        assert_eq!(std::fs::read(&existing).unwrap(), b"not the payload");
+    }
+
+    /// `--init-timeout` is a real value that reaches the wait.
+    ///
+    /// What the deadline does when it fires is asserted in
+    /// `webseed_e2e::a_hash_check_that_has_not_finished_names_the_phase_it_is_in`,
+    /// which needs a payload large enough that hashing it takes measurable
+    /// time. This is the flag half: that it parses, that it defaults, and that
+    /// a bad value is refused rather than ignored. See `TODO/disk-io.md`,
+    /// T-015.
+    #[test]
+    fn the_initialisation_deadline_parses_and_a_bad_one_is_refused() {
+        use crate::cli::{Cli, Command};
+        use clap::Parser;
+
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["bit-cli", "download", "a.torrent"];
+            args.extend_from_slice(extra);
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Some(Command::Download(args)) = cli.command else {
+                panic!("expected download")
+            };
+            args.limits.init_timeout
+        };
+        assert_eq!(parse(&[]), "10m");
+        assert_eq!(parse(&["--init-timeout", "45s"]), "45s");
+
+        let fixture = TorrentFixture::multi_file();
+        let error = crate::test_support::run_err(
+            &[
+                "download",
+                fixture.path_str(),
+                "--init-timeout",
+                "not-a-duration",
+            ],
+            fixture.dir(),
+            ExitCode::Usage,
+        );
+        assert!(error.contains("--init-timeout"), "{error}");
+    }
+
+    /// `--continue` is on by default and `--no-continue` turns it off.
+    ///
+    /// Before this, `--continue` defaulted to true with nothing to set it
+    /// false, so the refusal above was unreachable from the command line and
+    /// the flag could not do anything.
+    #[test]
+    fn continue_is_on_by_default_and_no_continue_turns_it_off() {
+        use crate::cli::{Cli, Command};
+        use clap::Parser;
+
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["bit-cli", "download", "a.torrent"];
+            args.extend_from_slice(extra);
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Some(Command::Download(args)) = cli.command else {
+                panic!("expected download")
+            };
+            args.no_continue
+        };
+        assert!(!parse(&[]), "resuming is the default");
+        assert!(parse(&["--no-continue"]));
+        assert!(!parse(&["--continue"]));
+        // The later flag wins, so a script can append an override.
+        assert!(!parse(&["--no-continue", "--continue"]));
+        assert!(parse(&["--continue", "--no-continue"]));
     }
 
     /// A download reports what it cost.

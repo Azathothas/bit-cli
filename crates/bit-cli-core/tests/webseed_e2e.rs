@@ -1380,3 +1380,63 @@ async fn many_sources_are_probed_in_parallel_and_every_one_is_reported() {
         }
     }
 }
+
+/// A hash check that has not finished reports the phase rather than a bare
+/// deadline.
+///
+/// Upstream reports roughly one add in twenty of a torrent with existing files
+/// sticking at "checking files" and never leaving. A run bounded only by
+/// `--timeout` survives that but reports a deadline with no reason attached,
+/// so `--init-timeout` fires first and the error names the phase, how far the
+/// check had got, and how long it waited.
+///
+/// The hang is simulated by a deadline shorter than the check rather than by a
+/// stuck volume: what is under test is that the wait is bounded and that the
+/// error says what was happening, and both are the same either way. See
+/// `TODO/disk-io.md`, T-015.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hash_check_that_has_not_finished_names_the_phase_it_is_in() {
+    let src = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    // Large enough that hashing it cannot finish inside one poll.
+    std::fs::write(src.path().join("movie.bin"), content(64 * 1024 * 1024, 17)).unwrap();
+    let torrent_path = tmp.path().join("fixture.torrent");
+    make_torrent(&src.path().join("movie.bin"), &torrent_path).await;
+
+    let engine = engine(src.path()).await;
+    let handle = engine
+        .add(
+            torrent_path.to_str().unwrap(),
+            &AddOptions {
+                // The payload is already there, so adding it means hashing it.
+                overwrite: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let began = std::time::Instant::now();
+    let error = engine
+        .wait_until_initialized_within(&handle, Duration::from_millis(1))
+        .await
+        .expect_err("a 64 MiB hash check does not finish in a millisecond");
+
+    assert_eq!(error.code(), bit_cli_core::ExitCode::Timeout);
+    assert_eq!(error.context()["phase"], "initializing");
+    assert_eq!(error.context()["waited_ms"], 1);
+    assert!(error.context().contains_key("checked_percent"));
+    assert!(error.context().contains_key("total_bytes"));
+    assert!(error.message().contains("still initializing"), "{error}");
+    assert!(error.message().contains("hash-checked"), "{error}");
+    assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "the deadline did not bound the wait: {:?}",
+        began.elapsed()
+    );
+
+    // Without a deadline the same wait finishes, so the timeout is the only
+    // thing that ended it.
+    engine.wait_until_initialized(&handle).await.unwrap();
+    engine.stop().await;
+}
