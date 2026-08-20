@@ -365,6 +365,16 @@ async fn drive(
 /// One ranged GET, recorded whether it worked or not.
 async fn request(source: &Arc<Source>, recorder: &Arc<Recorder>) {
     let window = source.next_window();
+    if crate::webseed::local::is_file_url(&window.url) {
+        return read_local(
+            source,
+            recorder,
+            window.url.clone(),
+            window.offset,
+            window.length,
+        )
+        .await;
+    }
     let range = format!(
         "bytes={}-{}",
         window.offset,
@@ -411,6 +421,48 @@ async fn request(source: &Arc<Source>, recorder: &Arc<Recorder>) {
     };
     recorder.live.in_flight.fetch_sub(1, Ordering::Relaxed);
     recorder.observe(observation);
+}
+
+/// One positioned read of a `file:` source, recorded the same way.
+///
+/// A local source has no status and no connect phase, so it carries no status
+/// into the counters and `connect_cost` skips it. Everything else is the same
+/// measurement: the same windows, the same concurrency, the same latency
+/// percentiles. Time to first byte is the whole read, because a positioned
+/// read has no earlier moment to name.
+async fn read_local(
+    source: &Arc<Source>,
+    recorder: &Arc<Recorder>,
+    url: String,
+    offset: u64,
+    length: u64,
+) {
+    recorder.live.in_flight.fetch_add(1, Ordering::Relaxed);
+    let began = Instant::now();
+    let (_, read) = crate::webseed::local::read_range(&url, offset, length).await;
+    let elapsed = began.elapsed();
+    let observation = match read {
+        Ok(data) if data.len() as u64 >= length => {
+            Observation::success(source.index, data.len() as u64, elapsed, elapsed)
+        }
+        Ok(_) => Observation::failure(source.index, "short_read", None).with_complete(elapsed),
+        Err(err) => {
+            Observation::failure(source.index, local_class(&err), None).with_complete(elapsed)
+        }
+    };
+    recorder.live.in_flight.fetch_sub(1, Ordering::Relaxed);
+    recorder.observe(observation);
+}
+
+/// Name a local read failure the way the error counters break them down.
+fn local_class(error: &std::io::Error) -> &'static str {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => "not_found",
+        std::io::ErrorKind::PermissionDenied => "auth",
+        std::io::ErrorKind::UnexpectedEof => "short_read",
+        std::io::ErrorKind::TimedOut => "timeout",
+        _ => "transport",
+    }
 }
 
 /// Read a `206` body and time it.

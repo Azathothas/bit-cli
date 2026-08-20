@@ -121,7 +121,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-130](multi-source.md) | P1 | webseed | **done** | A source cannot be told which statuses are worth retrying |
 | [T-131](multi-source.md) | P1 | bench | **done** | The loopback file server cannot simulate a signed URL |
 | [T-132](multi-source.md) | P1 | performance | open | The swarm cannot be rate limited separately from HTTP sources |
-| [T-133](multi-source.md) | P1 | webseed | open | Two torrents holding the same file cannot share its bytes |
+| [T-133](multi-source.md) | P1 | webseed | partial | Two torrents holding the same file cannot share its bytes |
 | [T-134](multi-source.md) | P2 | bep | open | v1 and v2 info hashes are not reconciled |
 | [T-135](multi-source.md) | P2 | performance | open | Source selection cannot be steered by method or by priority at run time |
 | [T-136](multi-source.md) | P2 | cli | open | Nothing states the end-to-end integrity guarantee |
@@ -161,7 +161,7 @@ scenarios work, with the commands that were run, and what the rest need.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 3 | 1 | 0 | 7 |
-| P1 | 19 | 1 | 0 | 15 |
+| P1 | 18 | 2 | 0 | 15 |
 | P2 | 23 | 1 | 1 | 5 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
@@ -320,12 +320,21 @@ item eight is the operator's own list.
    `--web-seed-max-errors` could never be reached. Both are written up under
    their entries. [T-137](multi-source.md) came out of the second.
 
-   What is genuinely missing is cross-torrent identity,
-   [T-133](multi-source.md), and real control of which source answers a piece,
-   [T-135](multi-source.md), and both were already priced by
-   [T-002](webseed.md) and [T-003](webseed.md).
-   [T-133](multi-source.md) layer 1, a `file:` source, is the next slice: it
-   needs no cross-torrent machinery and makes Scenario 2 a two-step.
+   [T-133](multi-source.md) **layer 1 is done** and Scenario 2 works as a
+   two-step. A source URL may be `file:`, so bytes already on the disk under
+   another name are a source with a scope, a composition, a rate limit, and
+   the same per-piece verification. `pwsh scripts/check-local-source.ps1` is
+   the acceptance: six cases, no server and no bound port, and one 64 MiB
+   payload landing under three info hashes and three piece lengths with one
+   distinct hash between them.
+
+   What is left is cross-torrent identity **computed rather than named**,
+   [T-133](multi-source.md) layers 2 and 3, and real control of which source
+   answers a piece, [T-135](multi-source.md). Both were already priced by
+   [T-002](webseed.md) and [T-003](webseed.md). Layer 2 also needs a
+   per-torrent `--web-seed-for`, because a binding today applies to every
+   torrent in the invocation and the shared file is at a different index in
+   each.
 
    `scripts/make-scenario-fixture.ps1` builds the payloads, the three
    torrents, the CDN copy, and the partial on-disk state the acceptances

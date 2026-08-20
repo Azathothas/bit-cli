@@ -435,20 +435,22 @@ Acceptance:  A hybrid run with `--max-peer-rate 10MiB/s --web-seed-speed-limit
 Category:    webseed
 Priority:    P1
 Effort:      L
-Status:      open
+Status:      **layer 1 done**, layers 2 and 3 open
 
 Problem:     Scenario 2. Three torrents with different info hashes each contain
              a bit-identical `file.blob`. One is 60% done and stalled, one is
              slow, and one is slow but carries a fast web seed. Nothing in
              `bit-cli` connects them: there is no cross-torrent identity, no
              shared content store, and a source URL must be `http` or `https`,
-             so a completed copy on the local disk cannot be named as a source
-             either:
+             so a completed copy on the local disk could not be named as a
+             source either:
 
              ```
              $ bit-cli webseed list t.torrent --web-seed-for 'file:0=file:///C:/path/file.blob'
              error: only http and https sources are supported
              ```
+
+             That last part is fixed: see **Layer 1** below.
 Relevance:   It is the difference between downloading the same 64 MiB once and
              downloading it three times, which is Scenario 5's "minimize
              bandwidth usage" in its sharpest form.
@@ -479,6 +481,56 @@ Acceptance:  Layer 1: a `file:` source completes a torrent with no network at
              surrounding files, added in one invocation, and the report shows
              the shared file's bytes fetched once and written into all three
              output directories, with all three hashing equal.
+Layer 1:     **done.** A source URL may be `file:`, and everything else about a
+             source still applies to it: scope, composition, chunk size, rate
+             limit, retries, per-piece verification, per-source accounting, and
+             the same loopback bridge. `crates/bit-cli-core/src/webseed/local.rs`
+             is the whole of the URL handling and the positioned read;
+             `Fetcher::fetch_once` branches on the scheme and nothing above it
+             changes.
+
+             `webseed list`, `webseed test`, `webseed probe`, and
+             `bench webseed` all take a `file:` source. `test` reports the
+             length off the filesystem and `range_support: yes` without asking,
+             because a positioned read always works. `probe` and `bench` read
+             the same windows at the same concurrencies, so a local source gets
+             the same curve an HTTP one does.
+
+             `pwsh -NoProfile -File scripts/check-local-source.ps1` is the
+             acceptance. Six cases at 64 MiB, no server and no bound port:
+
+             ```
+             case        exit downloaded hash    ok
+             exact          0 64.00 MiB  matches yes
+             auto           0 68.00 MiB  matches yes
+             shared_a       0 64.00 MiB  matches yes
+             shared_b       0 64.00 MiB  matches yes
+             wrong_bytes    1 0 B        -       yes
+             missing        1 0 B        -       yes
+
+             the shared file landed with 1 distinct hash across three info hashes
+             ```
+
+             `shared_a` and `shared_b` are Scenario 2's two-step: torrent C
+             finishes `file.blob` from the CDN copy, then torrents A and B read
+             the copy C wrote. Three info hashes, three piece lengths (2 MiB,
+             1 MiB, 512 KiB), one 64 MiB payload fetched once, four copies
+             hashing equal.
+
+             `wrong_bytes` is the case that says the source is not trusted: a
+             file of exactly the right length holding something else is refused
+             by the per-piece check with the path and the piece named. Only
+             that check can catch it, and it is the default.
+
+             Two things layer 1 does not do, both of which are layers 2 and 3.
+             A `--web-seed-for` binding applies to every torrent in the
+             invocation, so `-j 2` over torrents A and B needs the shared file
+             to be at the same index in both; it is index 0 in A and index 1 in
+             B, so the two need separate invocations. And nothing derives the
+             equivalence: the caller names the path.
+
+Layers 2 and 3 stay open, and the two-step above is what the operator can drive
+in the meantime.
 
 ### T-134 v1 and v2 info hashes are not reconciled
 
@@ -720,15 +772,16 @@ optimisation that a cold run reproduces by reading the payload.
 | Scenario | Works today | Needs | Size |
 | --- | --- | --- | --- |
 | 1. DDL for one selected file, resumed | **Yes, in full.** Binding, resume, rename, selection, redirects, and a signature that expires mid-run, all run and recorded above | nothing | none |
-| 2. Three torrents, one shared file | No | [T-133](#t-133-two-torrents-holding-the-same-file-cannot-share-its-bytes) | S for layer 1, L for 2 and 3 |
+| 2. Three torrents, one shared file | **As a two-step**: torrent C finishes the file, A and B read C's copy over a `file:` source, run and recorded under T-133 | [T-133](#t-133-two-torrents-holding-the-same-file-cannot-share-its-bytes) layers 2 and 3, for one invocation with no path named | L |
 | 3. DDL for one file, rest via swarm | **Yes, in full** | nothing | none |
 | 4. Remapping and encoding | **Yes, in full**, through `exact`, `prefix`, `template`, per-source headers, and the status overrides | nothing | none |
 | 5. All of it, with per-method control | Per-source caps, headers, auth, priority, and status policy: yes. Per-method caps and picker control: no | [T-132](#t-132-the-swarm-cannot-be-rate-limited-separately-from-http-sources), [T-134](#t-134-v1-and-v2-info-hashes-are-not-reconciled), [T-135](#t-135-source-selection-cannot-be-steered-by-method-or-by-priority-at-run-time), [T-136](#t-136-nothing-states-the-end-to-end-integrity-guarantee) | M to L |
 
 The honest summary: the addressing model was built for exactly this and it
-holds. Three of the five scenarios work in full. What is genuinely missing is
-cross-torrent identity and real control of which source answers a piece. Both
-of those were already known and already priced, by [T-002](webseed.md) and
+holds. Three of the five scenarios work in full and the fourth works as a
+two-step. What is genuinely missing is cross-torrent identity computed rather
+than asserted, and real control of which source answers a piece. Both were
+already known and already priced, by [T-002](webseed.md) and
 [T-003](webseed.md).
 
 What none of this needs is a daemon, a database, or a state file. Every

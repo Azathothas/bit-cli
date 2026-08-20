@@ -560,10 +560,21 @@ impl SourceSpec {
         }
     }
 
+    /// Whether this source reads a local path rather than the network.
+    pub fn is_local(&self) -> bool {
+        let probe = match self.template_text() {
+            Some(template) => template.split('{').next().unwrap_or(template),
+            None => &self.url,
+        };
+        crate::webseed::local::is_file_url(probe.trim())
+    }
+
     /// Check the URL is one `bit-cli` can fetch from.
     ///
-    /// BEP 17 and BEP 19 define HTTP and FTP sources. FTP is out of scope, so
-    /// only the HTTP family is accepted.
+    /// BEP 17 and BEP 19 define HTTP and FTP sources. FTP is out of scope.
+    /// `file:` is not in either BEP and is not offered to a swarm: it is a
+    /// source for this process only, for bytes that are already on the disk
+    /// under some other name. See `TODO/multi-source.md`, T-133.
     pub fn validate_url(&self) -> Result<()> {
         // A template is not a URL until it is expanded, so only its literal
         // prefix can be checked here.
@@ -575,12 +586,25 @@ impl SourceSpec {
         if lower.starts_with("http://") || lower.starts_with("https://") {
             return Ok(());
         }
+        if crate::webseed::local::is_file_url(&lower) {
+            // Resolve it now rather than at the first read, so a malformed
+            // path is reported beside the other binding errors.
+            crate::webseed::local::path_of(probe.trim())?;
+            if self.style == Style::Hoffman {
+                return Err(Error::binding(format!(
+                    "{}: BEP 17 is an HTTP wire style and a file: source does not speak it",
+                    self.url
+                ))
+                .with("url", self.url.clone()));
+            }
+            return Ok(());
+        }
         let reason = if lower.starts_with("ftp://") || lower.starts_with("sftp://") {
             "FTP is not a valid web seed transport under BEP 17 or BEP 19"
         } else if probe.contains("://") {
-            "only http and https sources are supported"
+            "only http, https, and file sources are supported"
         } else {
-            "a web seed source must be an absolute http or https URL"
+            "a web seed source must be an absolute http, https, or file URL"
         };
         Err(Error::binding(format!("{}: {reason}", self.url)).with("url", self.url.clone()))
     }
@@ -1087,7 +1111,34 @@ mod tests {
                 .validate_url()
                 .unwrap_err()
                 .message()
-                .contains("absolute http or https URL")
+                .contains("absolute http, https, or file URL")
+        );
+
+        // A local path is a source. `file:` is not in BEP 17 or BEP 19 and is
+        // never offered to a swarm; it exists so bytes already on the disk can
+        // be reused. See T-133.
+        assert!(
+            SourceSpec::new("file:///tmp/payload.bin", Origin::CommandLine)
+                .validate_url()
+                .is_ok()
+        );
+        let hoffman = SourceSpec {
+            style: Style::Hoffman,
+            ..SourceSpec::new("file:///tmp/payload.bin", Origin::CommandLine)
+        };
+        assert!(
+            hoffman
+                .validate_url()
+                .unwrap_err()
+                .message()
+                .contains("BEP 17 is an HTTP wire style"),
+        );
+        assert!(
+            SourceSpec::new("file://fileserver/share/x", Origin::CommandLine)
+                .validate_url()
+                .unwrap_err()
+                .message()
+                .contains("remote host")
         );
 
         assert!(

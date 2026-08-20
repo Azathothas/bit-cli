@@ -21,6 +21,7 @@ pub mod binding;
 pub mod bridge;
 pub mod composition;
 pub mod fetch;
+pub mod local;
 pub mod probe;
 pub mod scope;
 pub mod table;

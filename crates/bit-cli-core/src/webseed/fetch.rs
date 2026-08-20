@@ -972,6 +972,11 @@ impl Fetcher {
     }
 
     /// Issue one ranged GET and check the server honoured it.
+    ///
+    /// A `file:` source takes the local branch and everything above this stays
+    /// the same: the same window cache, the same concurrency limit, the same
+    /// rate cap, the same retries, the same per-piece verification, and the
+    /// same trace record. Only where the bytes come from differs.
     async fn fetch_once(
         &self,
         url: &str,
@@ -981,6 +986,25 @@ impl Fetcher {
         let range = format!("bytes={}-{}", start, start + length - 1);
         let began = Instant::now();
         let started_at = Timestamp::now();
+
+        if crate::webseed::local::is_file_url(url) {
+            let outcome = read_local(url, start, length).await;
+            let ttfb_ms = began.elapsed().as_millis() as u64;
+            let bytes = outcome.as_ref().map(|data| data.len() as u64).unwrap_or(0);
+            self.record(
+                started_at,
+                url,
+                &range,
+                None,
+                bytes,
+                began,
+                Some(ttfb_ms),
+                Some("local file".to_string()),
+                outcome.as_ref().err(),
+            )
+            .await;
+            return outcome;
+        }
 
         let mut request = self.client.get(url).headers(self.headers.clone());
         request = request.header(RANGE, &range);
@@ -1244,6 +1268,39 @@ fn percent_encode_bytes(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Read one byte range out of a local file.
+///
+/// Open, seek, and read on a blocking thread, once per window, rather than
+/// through `tokio::fs`, which is three hops for the same three calls. The
+/// handle is not pooled: at the default four megabyte window a one gigabyte
+/// file is 256 opens, which is not what bounds this path.
+///
+/// What is permanent and what is transient follows the same rule as HTTP. A
+/// path that is not there, or is shorter than the torrent says, is the source
+/// being wrong and will still be wrong next time. An I/O error is the disk
+/// being busy or a network share dropping, which is worth another attempt.
+async fn read_local(url: &str, start: u64, length: u64) -> std::result::Result<Bytes, FetchError> {
+    let (path, read) = crate::webseed::local::read_range(url, start, length).await;
+    let display = path.display().to_string();
+    match read {
+        Ok(data) => Ok(Bytes::from(data)),
+        Err(err) => Err(match err.kind() {
+            std::io::ErrorKind::NotFound => {
+                FetchError::permanent(format!("{display}: no such file"))
+            }
+            std::io::ErrorKind::UnexpectedEof => FetchError::permanent(format!(
+                "{display}: is shorter than the torrent says, asked for bytes {start}-{}",
+                start + length - 1
+            )),
+            std::io::ErrorKind::PermissionDenied => {
+                FetchError::permanent(format!("{display}: permission denied"))
+            }
+            std::io::ErrorKind::InvalidInput => FetchError::permanent(err.to_string()),
+            _ => FetchError::transient(format!("{display}: {err}")),
+        }),
+    }
 }
 
 /// Classify an unsuccessful HTTP status.

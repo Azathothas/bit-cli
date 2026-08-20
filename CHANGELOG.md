@@ -44,6 +44,15 @@ it, so the history starts here.
 - `--web-seed-speed-limit` and a binding table's `rate_limit` are enforced. They
   parsed and were never applied, so a source told to stay under 24 MiB/s ran at
   116. A token bucket per source now paces requests before they go out.
+- A source URL may be `file:`, so bytes already on the disk under another name
+  are a source with a scope, a composition, a chunk size, a rate limit, and the
+  same per-piece verification. `webseed list`, `webseed test`, `webseed probe`,
+  and `bench webseed` all take one. It is never offered to a swarm: `file:` is
+  in neither BEP 17 nor BEP 19 and exists so the same 64 MiB is not fetched
+  three times. `pwsh scripts/check-local-source.ps1` drives six cases with no
+  server and no bound port, including one payload landing under three info
+  hashes and three piece lengths with one distinct hash between them. See
+  `TODO/multi-source.md` under T-133.
 - `--web-seed-retry-status` and `--web-seed-fatal-status` decide which HTTP
   statuses retire a source, per source, as codes and inclusive ranges. A CDN
   that signs its URLs answers 403 when a signature expires and the next request

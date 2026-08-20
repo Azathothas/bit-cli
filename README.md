@@ -51,8 +51,9 @@ that on any build.
 A web seed is normally one flat thing: a URL that serves the whole torrent.
 Here a binding is a triple.
 
-**Source** is where bytes come from: an HTTP(S) URL, with its own headers,
-auth, user agent, timeouts, concurrency, and rate limit.
+**Source** is where bytes come from: an HTTP(S) URL with its own headers, auth,
+user agent, timeouts, concurrency, and rate limit, or a `file:` URL naming
+bytes already on the disk.
 
 **Scope** is what part of the torrent that source may serve. A mirror holding
 part of the payload is a first-class case, not an error.
@@ -132,6 +133,48 @@ file:3:byte:0-4MiB   a byte range within one file
 
 Selectors are checked against the metainfo before any request goes out. A
 selector matching nothing is an error, not a silent no-op.
+
+### A local path as a source
+
+A source URL may be `file:`. The bytes for a torrent are often already on the
+disk under a different name, in a different directory, or inside a finished
+copy of a different torrent that happens to hold the same file. Naming that
+path is how they get reused instead of fetched again.
+
+```bash
+bit-cli download release.torrent \
+  --web-seed-for 'file:0=file:///srv/archive/a3f1-blob.dat' \
+  --web-seed-mode exact
+```
+
+Everything else about a source still applies: scope, composition, chunk size,
+rate limit, retries, per-source accounting, and the same loopback bridge. In
+particular the source is not trusted. `--web-seed-verify piece` is on by
+default, so a local file of exactly the right length holding the wrong bytes is
+refused with the path and the piece named, the same way a wrong mirror is.
+
+`auto` composition works against a directory, so a tree you already have is one
+flag:
+
+```bash
+bit-cli download album.torrent --web-seed file:///mnt/backup/
+```
+
+That resolves to `/mnt/backup/album/disc 1/a.flac` and so on, exactly as the
+BEP 19 composition does over HTTP. `webseed list` shows the resolved paths
+before anything is read.
+
+`file:` is not in BEP 17 or BEP 19 and is never offered to a swarm. It is a
+source for one invocation, like every other source here.
+
+```bash
+pwsh scripts/check-local-source.ps1
+```
+
+That drives six cases with no server running and no port bound, including the
+one this exists for: three torrents with three info hashes and three piece
+lengths (2 MiB, 1 MiB, 512 KiB) sharing one 64 MiB file. The file is fetched
+once and lands in three output directories with one distinct hash between them.
 
 ### Which failures are worth retrying
 

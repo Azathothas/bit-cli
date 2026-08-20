@@ -1688,3 +1688,162 @@ async fn a_404_the_caller_calls_retryable_is_still_bounded_by_the_retry_count() 
     );
     run.engine.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_source_completes_a_torrent_with_no_server_at_all() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let data = content(200 * 1024, 61);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    // The same bytes under a name and a directory the torrent knows nothing
+    // about, which is the case this exists for.
+    let copy = elsewhere.path().join("a3f1-blob.dat");
+    std::fs::write(&copy, &data).unwrap();
+
+    let mut spec = SourceSpec::new(
+        bit_cli_core::webseed::local::url_of(&copy),
+        Origin::CommandLine,
+    );
+    spec.mode = bit_cli_core::webseed::Mode::Exact;
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![spec],
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(60), || run.finished()).await,
+        "did not complete: {:?}",
+        run.reasons()
+    );
+    assert_eq!(
+        std::fs::read(out.path().join("movie.bin")).unwrap(),
+        data,
+        "the payload has to be byte for byte the source"
+    );
+    run.engine.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_source_holding_the_wrong_bytes_is_caught_at_the_source() {
+    let src = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("movie.bin"), content(200 * 1024, 63)).unwrap();
+
+    // The right length and the wrong bytes: the case a length check misses
+    // and the per-piece check is for.
+    let wrong = elsewhere.path().join("not-it.dat");
+    std::fs::write(&wrong, content(200 * 1024, 64)).unwrap();
+
+    let torrent_path = tmp.path().join("fixture.torrent");
+    make_torrent(&src.path().join("movie.bin"), &torrent_path).await;
+    let meta = bit_cli_core::torrent::Metainfo::read(&torrent_path).unwrap();
+    let layout = Arc::new(meta.layout());
+    let hashes = Arc::new(meta.info().pieces.clone());
+
+    let mut spec = SourceSpec::new(
+        bit_cli_core::webseed::local::url_of(&wrong),
+        Origin::CommandLine,
+    );
+    spec.mode = bit_cli_core::webseed::Mode::Exact;
+    let set = BindingSet::resolve(&layout, &meta.info_hash().hex(), &[spec]).unwrap();
+    let fetcher = Fetcher::new(
+        set.bindings[0].clone(),
+        layout.clone(),
+        meta.info_hash().hex(),
+        4,
+        false,
+    )
+    .unwrap()
+    .with_verification(bit_cli_core::webseed::fetch::Verify::Piece, Some(hashes));
+
+    let err = fetcher.read(0, 16 * 1024).await.unwrap_err();
+    assert_eq!(err.class(), "hash_mismatch", "{err}");
+    let text = err.to_string();
+    assert!(
+        text.contains("not-it.dat"),
+        "the path has to be named: {text}"
+    );
+    assert!(
+        text.contains("piece 0"),
+        "the piece has to be named: {text}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_source_that_is_not_there_fails_the_source_by_name() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("movie.bin"), content(100 * 1024, 65)).unwrap();
+
+    let mut spec = SourceSpec::new(
+        bit_cli_core::webseed::local::url_of(&elsewhere.path().join("gone.dat")),
+        Origin::CommandLine,
+    );
+    spec.mode = bit_cli_core::webseed::Mode::Exact;
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![spec],
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(30), || run.failed()).await,
+        "a path that is not there has to fail the source"
+    );
+    let reasons = run.reasons().join(" ");
+    assert!(
+        reasons.contains("gone.dat") && reasons.contains("no such file"),
+        "the reason should name the path: {reasons}"
+    );
+    run.engine.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_source_composes_a_directory_the_way_an_http_one_does() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    // A multi-file torrent, so the composition has both a name and a path to
+    // append. `auto` against a directory is what "I already have this tree"
+    // looks like.
+    let tree = src.path().join("album");
+    std::fs::create_dir_all(tree.join("disc 1")).unwrap();
+    let first = content(90 * 1024, 67);
+    let second = content(40 * 1024, 68);
+    std::fs::write(tree.join("disc 1/a.flac"), &first).unwrap();
+    std::fs::write(tree.join("notes.nfo"), &second).unwrap();
+
+    // The base is the directory holding `album`, so `auto` composes
+    // `<base>/album/disc 1/a.flac`, space and all.
+    let spec = SourceSpec::new(
+        bit_cli_core::webseed::local::url_of(src.path()),
+        Origin::CommandLine,
+    );
+    let run = attach(&tree, out.path(), tmp.path(), vec![spec]).await;
+
+    assert!(
+        wait_for(Duration::from_secs(60), || run.finished()).await,
+        "did not complete: {:?}",
+        run.reasons()
+    );
+    assert_eq!(
+        std::fs::read(out.path().join("album/disc 1/a.flac")).unwrap(),
+        first
+    );
+    assert_eq!(
+        std::fs::read(out.path().join("album/notes.nfo")).unwrap(),
+        second
+    );
+    run.engine.stop().await;
+}

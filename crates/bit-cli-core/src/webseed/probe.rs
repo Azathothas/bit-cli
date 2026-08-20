@@ -232,6 +232,13 @@ pub async fn test_source(
         }
     };
 
+    // A local source answers from the filesystem, so there is no request to
+    // make, no redirect to follow, and no TLS to report. What a caller wants
+    // to know is the same though: is it there, and is it the right size.
+    if crate::webseed::local::is_file_url(&request_url) {
+        return test_local(binding, &request_url, entry.length, started);
+    }
+
     let client = match probe_client(binding) {
         Ok(client) => client,
         Err(e) => {
@@ -508,6 +515,87 @@ pub async fn probe_source(
     report
 }
 
+/// Stat a `file:` source, as the HTTP path probes a mirror.
+///
+/// Range support is `yes` without asking: a positioned read on a local file
+/// always works, and reporting `unknown` would make a working source look
+/// doubtful. The length comes from the filesystem, so the check that catches
+/// the wrong file is the same one that catches the wrong mirror.
+fn test_local(
+    binding: &Binding,
+    request_url: &str,
+    expected_length: u64,
+    started: Instant,
+) -> SourceTest {
+    let path = match crate::webseed::local::path_of(request_url) {
+        Ok(path) => path,
+        Err(e) => {
+            return SourceTest::failed(
+                binding,
+                request_url.to_string(),
+                "READ",
+                started.elapsed(),
+                e.to_string(),
+            );
+        }
+    };
+    let length = match std::fs::metadata(&path) {
+        Ok(meta) if meta.is_dir() => {
+            return SourceTest::failed(
+                binding,
+                request_url.to_string(),
+                "READ",
+                started.elapsed(),
+                format!("{} is a directory, not a file", path.display()),
+            );
+        }
+        Ok(meta) => meta.len(),
+        Err(e) => {
+            return SourceTest::failed(
+                binding,
+                request_url.to_string(),
+                "READ",
+                started.elapsed(),
+                format!("{}: {e}", path.display()),
+            );
+        }
+    };
+    let elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    // A file longer than the torrent says is fine: a composition can point at
+    // a container the torrent's file is a prefix of. Shorter is not.
+    let long_enough = length >= expected_length;
+    SourceTest {
+        index: binding.index,
+        url: binding.spec.url.clone(),
+        request_url: request_url.to_string(),
+        origin: binding.spec.origin.as_str().to_string(),
+        scope: binding.scope.selector.clone(),
+        mode: binding.spec.mode.as_str().to_string(),
+        ok: long_enough,
+        method: "READ",
+        status: None,
+        resolved_url: None,
+        redirects: Vec::new(),
+        range_support: RangeSupport::Yes,
+        content_length: Some(length),
+        expected_length,
+        length_matches: Some(length == expected_length),
+        server: Some("local file".to_string()),
+        http_version: "file".to_string(),
+        tls: None,
+        ttfb_ms: elapsed,
+        total_ms: elapsed,
+        at: Timestamp::now().iso(),
+        error: match long_enough {
+            true => None,
+            false => Some(format!(
+                "{} is {length} bytes and the torrent says the file is {expected_length}",
+                path.display()
+            )),
+        },
+    }
+}
+
 /// The `(url, offset, length)` triples a probe reads from.
 ///
 /// Reading the same offset repeatedly would measure the mirror's cache rather
@@ -561,6 +649,20 @@ async fn run_step(
                 let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % offsets.len();
                 let (url, offset, length) = &offsets[index];
                 let began = Instant::now();
+                // A local source reads the same range off the disk. The curve
+                // then says whether concurrency helps the filesystem, which is
+                // the same question and the same shape of answer.
+                if crate::webseed::local::is_file_url(url) {
+                    let (_, read) = crate::webseed::local::read_range(url, *offset, *length).await;
+                    let ttfb = began.elapsed();
+                    let (bytes, failed) = match read {
+                        Ok(data) => (data.len() as u64, false),
+                        Err(_) => (0, true),
+                    };
+                    let mut samples = total.lock().unwrap_or_else(|e| e.into_inner());
+                    samples.record(began.elapsed(), ttfb, bytes, failed);
+                    continue;
+                }
                 let mut request = client
                     .get(url)
                     .headers(headers.clone())
