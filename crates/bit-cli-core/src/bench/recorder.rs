@@ -21,7 +21,7 @@ use crate::bench::report::{
 };
 use crate::sysinfo::Process;
 use crate::time::Timestamp;
-use crate::units::{Millis, Size};
+use crate::units::{Millis, Rate, Size};
 
 /// The widest latency a histogram tracks, in milliseconds.
 ///
@@ -394,7 +394,7 @@ impl Recorder {
             concurrency,
             bytes: Size(window.bytes),
             elapsed: Millis(elapsed_ms),
-            rate: Size(window.bytes.saturating_mul(1000) / elapsed_ms),
+            rate: Rate(window.bytes.saturating_mul(1000) / elapsed_ms),
             requests: window.requests,
             errors: window.errors.total,
             latency: window.latency.snapshot(),
@@ -539,7 +539,7 @@ impl Recorder {
             concurrency: state.concurrency,
             bytes: Size(window.bytes),
             cumulative_bytes: Size(state.cumulative),
-            rate: Size(window.bytes.saturating_mul(1000) / interval_ms),
+            rate: Rate(window.bytes.saturating_mul(1000) / interval_ms),
             requests: window.requests,
             errors: window.errors.total,
             latency: window.latency.snapshot(),
@@ -619,8 +619,8 @@ impl Recorder {
         Summary {
             bytes: Size(bytes),
             duration: Millis(duration_ms),
-            sustained_rate: Size(sustained),
-            peak_rate: Size(peak),
+            sustained_rate: Rate(sustained),
+            peak_rate: Rate(peak),
             ceiling_share: None,
             requests: state.measured.requests,
             errors: state.measured.errors.clone(),
@@ -629,7 +629,7 @@ impl Recorder {
                 pieces: state.pieces_verified,
                 bytes: Size(state.hashed_bytes),
                 total: Millis(state.hashing.as_millis().min(u128::from(u64::MAX)) as u64),
-                rate: Size(match state.hashing.as_millis() {
+                rate: Rate(match state.hashing.as_millis() {
                     0 => 0,
                     ms => state.hashed_bytes.saturating_mul(1000) / ms as u64,
                 }),
@@ -686,7 +686,7 @@ impl Recorder {
                 label,
                 kind,
                 bytes: Size(source.window.bytes),
-                rate: Size(source.window.bytes.saturating_mul(1000) / duration_ms),
+                rate: Rate(source.window.bytes.saturating_mul(1000) / duration_ms),
                 requests: source.window.requests,
                 errors: errors.total,
                 connections: None,
@@ -835,7 +835,7 @@ mod tests {
         recorder.stop();
         let summary = recorder.summary();
         assert_eq!(summary.bytes, Size(0));
-        assert_eq!(summary.sustained_rate, Size(0));
+        assert_eq!(summary.sustained_rate, Rate(0));
         assert_eq!(summary.requests, 0);
         assert!(summary.latency.is_empty());
         assert!(summary.hashing.is_none());

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sysinfo::{Host, Process};
 use crate::time::Timestamp;
-use crate::units::{Millis, Size, format_rate, format_share, format_size};
+use crate::units::{Millis, Rate, Size, format_rate, format_share, format_size};
 
 /// The version of the report contract.
 ///
@@ -157,7 +157,7 @@ pub struct Parameters {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub concurrency_sweep: Vec<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_rate: Option<Size>,
+    pub target_rate: Option<Rate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fail_under: Option<Size>,
     /// A rate the measurement is a percentage of, stated by the caller. For
@@ -311,7 +311,7 @@ pub struct Sample {
     /// Bytes moved since the run started.
     pub cumulative_bytes: Size,
     /// Bytes per second during this interval.
-    pub rate: Size,
+    pub rate: Rate,
     pub requests: u64,
     pub errors: u64,
     #[serde(skip_serializing_if = "Latencies::is_empty", default)]
@@ -375,7 +375,7 @@ pub struct DiskStep {
     pub bytes: Size,
     /// Wall time of the write phase.
     pub elapsed: Millis,
-    pub rate: Size,
+    pub rate: Rate,
     /// Every thread's write time added together. Against `elapsed` it says how
     /// many writes were really in flight.
     pub total_write_time: Millis,
@@ -408,7 +408,7 @@ pub struct ConcurrencyStep {
     pub concurrency: usize,
     pub bytes: Size,
     pub elapsed: Millis,
-    pub rate: Size,
+    pub rate: Rate,
     pub requests: u64,
     pub errors: u64,
     pub latency: Latencies,
@@ -423,7 +423,7 @@ pub struct SourceSummary {
     /// `web_seed` or `peer`.
     pub kind: String,
     pub bytes: Size,
-    pub rate: Size,
+    pub rate: Rate,
     pub requests: u64,
     pub errors: u64,
     /// Peer connections this source was presented over, for an HTTP source.
@@ -463,7 +463,7 @@ pub struct Hashing {
     pub bytes: Size,
     pub total: Millis,
     /// Bytes hashed per second.
-    pub rate: Size,
+    pub rate: Rate,
 }
 
 /// Choke and unchoke traffic, for the peer-facing benchmarks.
@@ -566,9 +566,9 @@ pub struct Summary {
     /// Length of the measured window.
     pub duration: Millis,
     /// Bytes per second across the whole measured window.
-    pub sustained_rate: Size,
+    pub sustained_rate: Rate,
     /// The best single interval.
-    pub peak_rate: Size,
+    pub peak_rate: Rate,
     /// Sustained rate as a share of `parameters.ceiling`, when one was stated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ceiling_share: Option<String>,
@@ -615,9 +615,9 @@ impl Summary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Threshold {
     /// The rate the run had to reach.
-    pub fail_under: Size,
+    pub fail_under: Rate,
     /// The rate it reached.
-    pub observed: Size,
+    pub observed: Rate,
     pub met: bool,
 }
 
@@ -687,7 +687,7 @@ impl Report {
         };
         let met = self.summary.sustained_rate.0 >= rate;
         self.threshold = Some(Threshold {
-            fail_under: Size(rate),
+            fail_under: Rate(rate),
             observed: self.summary.sustained_rate,
             met,
         });
@@ -927,7 +927,7 @@ mod tests {
             kind,
             Environment::begin(build(), vec!["bit-cli".into()], "/w".into(), Vec::new()),
         );
-        report.summary.sustained_rate = Size(rate);
+        report.summary.sustained_rate = Rate(rate);
         report.summary.bytes = Size(rate * 10);
         report
     }
@@ -984,7 +984,7 @@ mod tests {
         assert!(report.threshold.as_ref().unwrap().met);
         assert!(!report.apply_threshold(Some(1001)));
         assert!(!report.threshold.as_ref().unwrap().met);
-        assert_eq!(report.threshold.as_ref().unwrap().observed, Size(1000));
+        assert_eq!(report.threshold.as_ref().unwrap().observed, Rate(1000));
     }
 
     #[test]
@@ -1087,12 +1087,12 @@ mod tests {
     #[test]
     fn a_share_of_a_ceiling_is_a_percentage_and_a_zero_ceiling_is_none() {
         let mut summary = Summary {
-            sustained_rate: Size(500),
+            sustained_rate: Rate(500),
             ..Default::default()
         };
         assert_eq!(summary.share_of(1000).as_deref(), Some("50.00%"));
         assert!(summary.share_of(0).is_none());
-        summary.sustained_rate = Size(2000);
+        summary.sustained_rate = Rate(2000);
         // `--ceiling` is a reference the caller states, such as what `curl`
         // reached against the same URL, and a run can beat it. Reporting that
         // as `100.00%` would hide a result: `TODO/webseed.md` T-001 measured

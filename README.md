@@ -396,7 +396,7 @@ a bare info hash, and `-` for stdin.
 Every command runs in the foreground, does its work, and exits. There is no
 daemon and no stored session.
 
-Metalink as a source, and three of the six `bench` subcommands, parse but are
+Metalink as a source, and two of the six `bench` subcommands, parse but are
 not built yet. Each exits non-zero naming the `TODO/` entry that closes it,
 rather than pretending to work:
 
@@ -512,6 +512,62 @@ total.
 
 `--fail-under` and `--baseline` work here exactly as they do on `bench
 webseed`.
+
+## Measuring a seeder
+
+`bench seed` serves a payload and reports what leaves, per peer. It is the same
+report `bench leech` writes with every counter facing the other way: bytes sent
+rather than received, and positioned reads rather than writes, because a
+seeder's storage cost is reading the payload back.
+
+```bash
+bit-cli bench seed album.torrent --data ./payload \
+  --port 51413 --duration 120s --exit-when-idle 5s \
+  --include-hash-check --format text
+```
+
+```
+Summary
+  measured over        35s
+  bytes                737.94 MiB
+  sustained            20.89 MiB/s
+  peak                 24.15 MiB/s
+  peak peers           3
+  verification         256 pieces, 1.48 GiB/s in 169ms
+  disk read            772.83 MiB in 878ms over 49152 reads
+  disk write           0 B in 0ms over 0 writes
+
+Peers
+  peer                 127.0.0.1:60374
+    sent               245.84 MiB at 6.96 MiB/s
+```
+
+The rows are peers, not sources: a seeder serving one peer well and another
+badly looks the same in the total and different here.
+
+`disk read` against `bytes` is the read amplification. 772.83 MiB read to send
+737.94 MiB, with three peers pulling the same payload at once, is 1.047: every
+byte was read about once and nothing is re-reading a piece for the second peer.
+
+`--include-hash-check` puts the check on add into the report. A seeder reads and
+hashes the whole payload before it serves a byte, and that read is normally not
+part of what is being measured, so it is reported separately rather than folded
+into the rate.
+
+`--exit-when-idle` stops the run once no peer has been connected for that long.
+Without it the seeder waits out `--duration` with nobody connected and the
+sustained rate is diluted by the idle tail.
+
+```bash
+pwsh scripts/bench-seed.ps1 -PayloadSize 256MiB -Leechers 3 -Rate 8MiB/s
+```
+
+That drives one seeder and N leechers on loopback and writes both reports to
+`bench/`. The leechers are rate capped, because an uncapped loopback transfer
+finishes inside one metrics interval. So the default run measures whether the
+seeder keeps up with N capped leechers rather than how fast it can go: the
+sustained rate is bounded by `-Leechers` times `-Rate`. Pass `-Rate 0` with a
+larger payload for a capacity number.
 
 ### What the whole path costs
 

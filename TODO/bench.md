@@ -161,10 +161,68 @@ and a block-size range, alternating the order so no layout always gets the disk
 in the same state, and writes the medians and a verdict to
 `bench/disk-contention-<timestamp>.json`.
 
-Still open: `seed`, `probe`, and `swarm` refuse with exit 1 naming this entry,
-the same as before. Each is its own slice of work on the envelope that now
-exists. `bench seed` is next and reuses everything above except the pipeline
-counters, which face the other way.
+`bench seed` is built. It is `seed` with the clock on, and every counter faces
+the other way from `bench leech`: `uploaded_bytes` per peer rather than
+`downloaded_bytes`, and positioned reads rather than writes, because a seeder's
+storage cost is reading the payload back.
+
+Three things a leech run has that this one does not, and saying so is the
+point of the entry. There is no source list, because a seeder has no HTTP
+sources: the rows are the peers. There is no pipeline depth, because the
+request window belongs to the side asking. And there is no piece verification
+inside the measured window: a seeder hash-checks the whole payload once on add
+and then serves it, so `--include-hash-check` is what puts that read into the
+report rather than leaving it before the clock starts.
+
+Two refusals. Serving a payload that is not there at all is a missing payload
+rather than a slow seeder, so it exits 2 and names the directory. A run where
+nobody connected exits 6, the same code a leech run with no usable source
+takes, because zero bytes with no peer is not a measurement.
+
+`scripts/bench-seed.ps1` drives one seeder and N leechers on loopback:
+
+```
+$ pwsh -NoProfile -File scripts/bench-seed.ps1 -PayloadSize 256MiB \
+    -Leechers 3 -Rate 8MiB/s -IncludeHashCheck
+```
+
+```
+peer            kind sent       rate
+127.0.0.1:50677 peer 245.94 MiB 6.96 MiB/s
+127.0.0.1:50678 peer 246.11 MiB 6.97 MiB/s
+127.0.0.1:50679 peer 246.20 MiB 6.97 MiB/s
+
+sent 738.25 MiB at 20.90 MiB/s sustained, 24.09 MiB/s peak;
+read 772.83 MiB off the disk over 49152 reads
+read amplification: 1.047
+hash check on add: 256 pieces, 256.00 MiB in 169ms at 1.48 GiB/s
+```
+
+**What that run measures is whether the seeder keeps up with three capped
+leechers, not how fast it can go.** The cap is what makes a loopback transfer
+last long enough for a one second metrics interval to sample it, and the
+sustained rate is bounded by three times 8 MiB/s. Reading 20.90 MiB/s as a
+capacity number would be reading the cap. The script says so in its header and
+takes `-Rate 0` with a larger payload for the capacity run.
+
+The number worth reading here is **read amplification, 1.047**: 772.83 MiB off
+the disk to put 738.25 MiB on the wire, with three peers pulling the same
+payload at once. Every byte was read about once, so nothing is re-reading a
+piece for a second peer.
+
+`--fail-under` above the observed rate exits 14, checked by hand at
+`--fail-under 100GiB/s` against this fixture.
+
+One change to the report envelope came with it. Rates were `Size`, so a field
+named `rate` serialized `"human": "2.75 MiB"` where ground rule 0.2 says rates
+carry `MiB/s`. `bit_cli_core::units::Rate` is the same wire shape with the
+right string, so an older report still reads back and `--baseline` still
+compares the same field. `a_rate_and_a_size_share_a_wire_shape_and_differ_in_the_string`
+is the test.
+
+Still open: `probe` and `swarm` refuse with exit 1 naming this entry, the same
+as before. `bench swarm` is [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator)
+and is the largest of the three.
 
 ### T-091 Bench reports do not capture their environment
 

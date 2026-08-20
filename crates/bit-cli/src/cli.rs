@@ -1288,7 +1288,7 @@ pub enum BenchCommand {
     /// Download from a target and measure.
     Leech(BenchLeechArgs),
     /// Seed and measure what the swarm pulls.
-    Seed(BenchArgs),
+    Seed(BenchSeedArgs),
     /// Measure HTTP sources: latency percentiles, concurrency scaling, ranges.
     Webseed(BenchWebseedArgs),
     /// Measure the payload file under several writers, with no session.
@@ -1466,6 +1466,58 @@ pub struct BenchLeechArgs {
     /// Keep running until `--duration` elapses even after the payload is in.
     #[arg(long, overrides_with = "stop_on_complete")]
     pub run_full_duration: bool,
+}
+
+/// `bit-cli bench seed`.
+///
+/// The same envelope as `bench leech` with the counters facing the other way:
+/// what leaves rather than what arrives, per peer rather than per source. See
+/// `TODO/bench.md`, T-090.
+#[derive(Debug, Args)]
+pub struct BenchSeedArgs {
+    #[command(flatten)]
+    pub source: SourceArgs,
+
+    #[command(flatten)]
+    pub trackers: TrackerArgs,
+
+    #[command(flatten)]
+    pub limits: LimitArgs,
+
+    #[command(flatten)]
+    pub shared: BenchShared,
+
+    /// Where the payload already lives, when that is not `--dir`.
+    #[arg(long, value_name = "DIR")]
+    pub data: Option<PathBuf>,
+
+    /// Listen port, or a range as START-END. `0` asks the OS for a free one.
+    #[arg(long, value_name = "PORT")]
+    pub port: Vec<String>,
+
+    /// Disable the DHT.
+    #[arg(long)]
+    pub no_dht: bool,
+
+    /// Disable local service discovery.
+    #[arg(long)]
+    pub no_lsd: bool,
+
+    /// Stop once no peer has been connected for this long.
+    ///
+    /// A seeder nobody pulls from measures nothing, and waiting out
+    /// `--duration` to find that out wastes the caller's time. Off by default,
+    /// because a run that expects a leecher to arrive late wants to wait.
+    #[arg(long, value_name = "DUR")]
+    pub exit_when_idle: Option<String>,
+
+    /// Measure the payload's hash check on add as well.
+    ///
+    /// A seeder reads and hashes the whole payload before it serves a byte,
+    /// and that read is normally not part of what is being measured. With this
+    /// on, the report carries how long it took and how fast it went.
+    #[arg(long)]
+    pub include_hash_check: bool,
 }
 
 /// `bit-cli bench webseed`.

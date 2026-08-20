@@ -83,6 +83,55 @@ impl fmt::Display for Size {
     }
 }
 
+/// A byte rate that serializes as both an integer and a human string.
+///
+/// The same wire shape as [`Size`], so a report written before this type
+/// existed still reads back and `--baseline` compares the same field. What
+/// differs is the string beside the integer: a rate renders as `2.75 MiB/s`
+/// where a size renders as `2.75 MiB`. Ground rule 0.2 says rates carry their
+/// unit, and a field named `rate` whose human form reads like a size is a
+/// number that says something it is not.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(from = "SizeWire", into = "RateRepr")]
+pub struct Rate(pub u64);
+
+/// Wire shape of a [`Rate`]. `bytes` rather than `bytes_per_second`, because
+/// it has to stay the field an older report already carries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RateRepr {
+    bytes: u64,
+    human: String,
+}
+
+impl From<SizeWire> for Rate {
+    fn from(wire: SizeWire) -> Self {
+        match wire {
+            SizeWire::Bytes(bytes) | SizeWire::Object { bytes } => Self(bytes),
+        }
+    }
+}
+
+impl From<u64> for Rate {
+    fn from(bytes: u64) -> Self {
+        Self(bytes)
+    }
+}
+
+impl From<Rate> for RateRepr {
+    fn from(rate: Rate) -> Self {
+        Self {
+            bytes: rate.0,
+            human: format_rate(rate.0),
+        }
+    }
+}
+
+impl fmt::Display for Rate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&format_rate(self.0))
+    }
+}
+
 /// A duration in whole milliseconds that serializes as both an integer and a
 /// human string.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -428,6 +477,31 @@ mod tests {
     fn rates_append_per_second() {
         assert_eq!(format_rate(MIB), "1.00 MiB/s");
         assert_eq!(format_rate(0), "0 B/s");
+    }
+
+    /// A rate carries its unit in the string beside the integer, and a size
+    /// does not. Ground rule 0.2: a field named `rate` whose human form reads
+    /// like a size is a number that says something it is not.
+    #[test]
+    fn a_rate_and_a_size_share_a_wire_shape_and_differ_in_the_string() {
+        let rate = serde_json::to_value(Rate(2 * MIB)).unwrap();
+        let size = serde_json::to_value(Size(2 * MIB)).unwrap();
+        assert_eq!(rate["bytes"], 2 * MIB);
+        assert_eq!(size["bytes"], 2 * MIB);
+        assert_eq!(rate["human"], "2.00 MiB/s");
+        assert_eq!(size["human"], "2.00 MiB");
+    }
+
+    /// A report written before `Rate` existed carried the same object, so it
+    /// still reads back and `--baseline` still compares the same field. A bare
+    /// integer parses too, for a threshold written by hand.
+    #[test]
+    fn a_rate_reads_back_from_an_older_report_and_from_a_bare_integer() {
+        let object: Rate = serde_json::from_str(r#"{"bytes":1048576,"human":"1.00 MiB"}"#).unwrap();
+        assert_eq!(object, Rate(MIB));
+        let bare: Rate = serde_json::from_str("1048576").unwrap();
+        assert_eq!(bare, Rate(MIB));
+        assert_eq!(Rate(MIB).to_string(), "1.00 MiB/s");
     }
 
     #[test]

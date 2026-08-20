@@ -448,17 +448,27 @@ pub fn text(report: &Report) -> Vec<String> {
 
     if !report.sources.is_empty() {
         out.push(String::new());
-        out.push("Sources".to_string());
+        // A seeding run's rows are the peers that pulled from it, not sources
+        // it pulled from, and calling them sources would read as backwards.
+        let (heading, row, verb) = match report.kind {
+            Kind::Seed => ("Peers", "  peer", "    sent"),
+            _ => ("Sources", "  source", "    served"),
+        };
+        out.push(heading.to_string());
         for source in &report.sources {
-            out.push(field("  source", &source.label));
+            out.push(field(row, &source.label));
+            // A peer makes no requests this process counts, so a run of rows
+            // reading "over 0 requests" is noise rather than information.
+            let requests = match source.requests {
+                0 => String::new(),
+                count => format!(" over {count} requests ({} failed)", source.errors),
+            };
             out.push(field(
-                "    served",
+                verb,
                 format!(
-                    "{} at {} over {} requests ({} failed)",
+                    "{} at {}{requests}",
                     format_size(source.bytes.0),
                     format_rate(source.rate.0),
-                    source.requests,
-                    source.errors
                 ),
             ));
             if let Some(connections) = source.connections {
@@ -608,7 +618,7 @@ mod tests {
     use super::*;
     use crate::bench::report::{Build, ConcurrencyStep, Environment, SourceSummary, Threshold};
     use crate::time::Timestamp;
-    use crate::units::{Millis, Size};
+    use crate::units::{Millis, Rate, Size};
 
     fn report() -> Report {
         let mut report = Report::new(
@@ -631,8 +641,8 @@ mod tests {
         report.target.total = Some(Size(4096));
         report.summary.bytes = Size(10 * 1024 * 1024);
         report.summary.duration = Millis(10_000);
-        report.summary.sustained_rate = Size(1024 * 1024);
-        report.summary.peak_rate = Size(2 * 1024 * 1024);
+        report.summary.sustained_rate = Rate(1024 * 1024);
+        report.summary.peak_rate = Rate(2 * 1024 * 1024);
         report.summary.requests = 40;
         report.summary.errors.record("timeout", None);
         report.summary.latency.first_byte = Percentiles {
@@ -649,14 +659,14 @@ mod tests {
             elapsed: Millis(1000),
             bytes: Size(1024),
             cumulative_bytes: Size(1024),
-            rate: Size(1024),
+            rate: Rate(1024),
             requests: 4,
             concurrency: 8,
             ..Default::default()
         });
         report.concurrency_curve.push(ConcurrencyStep {
             concurrency: 8,
-            rate: Size(1024 * 1024),
+            rate: Rate(1024 * 1024),
             requests: 40,
             ..Default::default()
         });
@@ -665,7 +675,7 @@ mod tests {
             label: "https://mirror.example/pub/".into(),
             kind: "web_seed".into(),
             bytes: Size(10 * 1024 * 1024),
-            rate: Size(1024 * 1024),
+            rate: Rate(1024 * 1024),
             requests: 40,
             errors: 1,
             ..Default::default()
@@ -677,7 +687,7 @@ mod tests {
     fn json_is_a_single_document_that_reads_back() {
         let rendered = render(&report(), Format::Json).unwrap();
         let back: Report = serde_json::from_str(&rendered).unwrap();
-        assert_eq!(back.summary.sustained_rate, Size(1024 * 1024));
+        assert_eq!(back.summary.sustained_rate, Rate(1024 * 1024));
         assert_eq!(back.environment.build.version, "0.1.0");
     }
 
@@ -785,8 +795,8 @@ mod tests {
     fn text_reports_a_threshold_and_says_which_way_it_went() {
         let mut report = report();
         report.threshold = Some(Threshold {
-            fail_under: Size(2 * 1024 * 1024),
-            observed: Size(1024 * 1024),
+            fail_under: Rate(2 * 1024 * 1024),
+            observed: Rate(1024 * 1024),
             met: false,
         });
         let rendered = render(&report, Format::Text).unwrap();

@@ -55,7 +55,7 @@ pub fn run(
         BenchCommand::Webseed(args) => webseed(args, global, renderer, env),
         BenchCommand::Leech(args) => leech(args, global, renderer, env),
         BenchCommand::Disk(args) => disk(args, global, renderer, env),
-        BenchCommand::Seed(args) => unbuilt(Kind::Seed, args),
+        BenchCommand::Seed(args) => seed(args, global, renderer, env),
         BenchCommand::Swarm(args) => unbuilt(Kind::Swarm, args),
         BenchCommand::Probe(args) => unbuilt(Kind::Probe, args),
     }
@@ -162,7 +162,8 @@ fn parameters(shared: &BenchShared) -> Result<Parameters> {
         metrics_interval: Millis::from(interval),
         concurrency: shared.concurrency.max(1),
         concurrency_sweep: sweep(shared.concurrency_sweep.as_deref())?,
-        target_rate: rate(shared.target_rate.as_deref(), "target-rate")?.map(Size),
+        target_rate: rate(shared.target_rate.as_deref(), "target-rate")?
+            .map(bit_cli_core::units::Rate),
         fail_under: rate(shared.report.fail_under.as_deref(), "fail-under")?.map(Size),
         ceiling: rate(shared.ceiling.as_deref(), "ceiling")?.map(Size),
         ..Default::default()
@@ -722,6 +723,419 @@ pub fn leech(
     emit(&report, &output, renderer, env, code)
 }
 
+/// Serve a payload and measure what the swarm pulls.
+///
+/// The same envelope `bench leech` fills, with every counter facing the other
+/// way. What is measured is `uploaded_bytes` per peer rather than
+/// `downloaded_bytes`, and the disk figures are reads rather than writes,
+/// because a seeder's storage cost is reading the payload back.
+///
+/// Three things a leech run has and this one does not. There is no source
+/// list, because a seeder has no HTTP sources: the rows are the peers. There
+/// is no pipeline depth, because the request window belongs to the side
+/// asking. And there is no piece verification inside the measured window: a
+/// seeder hash-checks the whole payload once on add and then serves it, so
+/// `--include-hash-check` is what puts that read into the report rather than
+/// leaving it before the clock starts.
+///
+/// See `TODO/bench.md`, T-090.
+pub fn seed(
+    args: &crate::cli::BenchSeedArgs,
+    global: &Global,
+    renderer: &mut Renderer,
+    env: &mut Env,
+) -> Result<ExitCode> {
+    let output = Output::resolve(&args.shared.report, global, env)?;
+    let parameters = parameters(&args.shared)?;
+    let run_for = Duration::from_millis(parameters.duration.0);
+    let warmup = Duration::from_millis(parameters.warmup.0);
+    let interval = Duration::from_millis(parameters.metrics_interval.0);
+    let init_timeout = swarm::duration_flag(&args.limits.init_timeout, "init-timeout")?;
+    let idle = swarm::optional_duration(&args.exit_when_idle, "exit-when-idle")?;
+
+    // A seeder serves what is on disk and creates nothing, so the allocation
+    // method never comes into it. Web seeds are the same: this measures a
+    // swarm pulling from this process.
+    let web_seeds = crate::cli::WebSeedArgs::default();
+    let setup = SessionSetup {
+        global,
+        trackers: &args.trackers,
+        limits: &args.limits,
+        web_seeds: &web_seeds,
+        listen_ports: swarm::port_range(&args.port)?,
+        no_dht: args.no_dht,
+        no_lsd: args.no_lsd,
+        allocation: bit_cli_core::alloc::Allocation::default(),
+    };
+    let mut engine_options = setup.engine_options(env)?;
+    if let Some(data) = &args.data {
+        engine_options.download_directory = env.resolve(data);
+    }
+    let directory = engine_options.download_directory.clone();
+
+    let mut report = Report::new(
+        Kind::Seed,
+        Environment::begin(
+            build(),
+            env.args.clone(),
+            env.cwd.display().to_string(),
+            global.trace.clone(),
+        ),
+    );
+    report.parameters = parameters.clone();
+    report.target = Target {
+        source: args.source.source.clone(),
+        ..Default::default()
+    };
+    if report.environment.build.debug_assertions {
+        report.note("this is a debug build: the numbers describe a debug build and nothing else");
+    }
+
+    let kind = SourceKind::classify(&args.source.source, env)?;
+    let meta = match &kind {
+        SourceKind::File(path) => Some(Metainfo::read(path)?),
+        _ => None,
+    };
+    let trackers = setup.tracker_list(meta.as_ref(), env)?;
+
+    if global.dry_run {
+        report.note("dry run: nothing was served");
+        if let Some(meta) = &meta {
+            let layout = meta.layout();
+            describe(&mut report, meta, &layout);
+        }
+        report.environment.finish();
+        return emit(&report, &output, renderer, env, ExitCode::Success);
+    }
+
+    // Refuse before the session starts, not after.
+    //
+    // Adding a torrent for seeding creates its storage, so a run pointed at
+    // the wrong directory would build the whole payload tree at full size and
+    // only then discover there is nothing in it. On a 40 GB torrent that is a
+    // 40 GB surprise. This costs one `exists` call and catches the common
+    // case; a torrent whose name the filesystem refuses is caught by the check
+    // after the add instead, which is still there.
+    if let Some(meta) = &meta {
+        let name = &meta.info().name;
+        if !name.is_empty() && !directory.join(name).exists() {
+            return Err(Error::usage(format!(
+                "{} is not in {}, so there is nothing to serve and nothing to measure",
+                name,
+                directory.display()
+            ))
+            .with("directory", directory.display().to_string())
+            .with("expected", directory.join(name).display().to_string())
+            .with("hint", "point --data at the directory holding the payload"));
+        }
+    }
+
+    let runtime = crate::swarm::runtime()?;
+    let outcome = runtime.block_on(async {
+        let engine = Arc::new(Engine::start(&engine_options).await?);
+        for warning in engine.warnings() {
+            renderer.warn(env, warning);
+        }
+        let add = bit_cli_core::engine::AddOptions {
+            // Seeding needs the payload that is already there read and
+            // hash-checked, which is what `overwrite` allows. Without it the
+            // add fails on the files that are the whole point.
+            overwrite: true,
+            trackers: trackers.clone(),
+            disable_trackers: trackers.as_ref().is_some_and(Vec::is_empty),
+            tracker_interval: swarm::optional_duration(
+                &args.trackers.tracker_interval,
+                "tracker-interval",
+            )?,
+            ..Default::default()
+        };
+
+        // The hash check happens between `add` and `wait_until_initialized`,
+        // so bracketing those two is how long it took. Its cost is normally
+        // not what a seeding benchmark is about, which is why it is reported
+        // separately rather than folded into the rate.
+        let check_began = std::time::Instant::now();
+        let before = engine.storage_counts();
+        let handle = engine.add(&args.source.source, &add).await?;
+        engine
+            .wait_until_initialized_within(&handle, init_timeout)
+            .await?;
+        let check_took = check_began.elapsed();
+        let check_disk = engine.storage_counts().since(&before);
+
+        let layout = Arc::new(engine.layout(&handle).ok_or_else(|| {
+            Error::source_resolution(format!(
+                "{}: the torrent has no metadata",
+                args.source.source
+            ))
+        })?);
+
+        // Serving nothing is not a slow seeder, it is a missing payload, and a
+        // rate taken from it would be zero for a reason the number cannot
+        // carry.
+        let start = engine.snapshot(&handle);
+        if start.progress_bytes == 0 {
+            return Err(Error::usage(format!(
+                "none of this torrent's payload is in {}, so there is nothing to serve and nothing to measure",
+                directory.display()
+            ))
+            .with("directory", directory.display().to_string())
+            .with("hint", "point --data at the directory holding the payload"));
+        }
+
+        let result = drive_seed(
+            &engine,
+            &handle,
+            &SeedOptions {
+                duration: run_for,
+                warmup,
+                interval,
+                idle,
+                partial: !start.finished,
+                hash_check: args.include_hash_check.then(|| HashCheck {
+                    took: check_took,
+                    read_bytes: check_disk.read_bytes,
+                    read_ops: check_disk.read_ops,
+                    pieces: layout.piece_count(),
+                }),
+                have: start.progress_bytes,
+            },
+            renderer,
+            env,
+        )
+        .await;
+        for note in engine.storage_notes() {
+            renderer.warn(env, note);
+        }
+        let snapshot = engine.snapshot(&handle);
+        let listen = engine.listen_addr().map(|a| a.to_string());
+        let layout = (*layout).clone();
+        Arc::try_unwrap(engine).ok().map(Engine::stop);
+        result.map(|outcome| (outcome, layout, snapshot, listen))
+    });
+
+    let (outcome, layout, snapshot, listen) = outcome?;
+    if let Some(meta) = &meta {
+        describe(&mut report, meta, &layout);
+    } else {
+        report.target.name = Some(layout.name.clone());
+        report.target.info_hash = Some(snapshot.info_hash.clone());
+        report.target.total = Some(Size(layout.total_length));
+        report.target.piece_length = Some(Size(u64::from(layout.piece_length)));
+        report.target.piece_count = Some(layout.piece_count());
+    }
+    // A seeder's endpoint is the address it listens on, which is what a
+    // leecher has to be given.
+    report.target.endpoints = listen.into_iter().collect();
+    report.series = outcome.series;
+    report.sources = outcome.sources;
+    report.summary = outcome.summary;
+    for note in outcome.notes {
+        renderer.warn(env, &note);
+        report.note(note);
+    }
+    for sample in &report.series {
+        report.environment.observe(&sample.process);
+    }
+    if let Some(ceiling) = parameters.ceiling {
+        report.summary.ceiling_share = report.summary.share_of(ceiling.0);
+    }
+
+    let met = report.apply_threshold(output.fail_under);
+    compare_against_baseline(&mut report, &output, renderer, env)?;
+    report.environment.finish();
+
+    let code = match (met, report.summary.bytes.0) {
+        (false, _) => ExitCode::ThresholdNotMet,
+        // Nobody pulled a byte. That is not a slow seeder and a caller has to
+        // be able to tell the two apart, so it takes the same code a leech run
+        // with no usable source takes.
+        (_, 0) => ExitCode::NoUsableSources,
+        _ => ExitCode::Success,
+    };
+    emit(&report, &output, renderer, env, code)
+}
+
+/// What a `bench seed` run was asked to do.
+struct SeedOptions {
+    duration: Duration,
+    warmup: Duration,
+    interval: Duration,
+    /// Stop when no peer has been connected for this long.
+    idle: Option<Duration>,
+    /// Whether the payload on disk is incomplete, so this is a partial seed.
+    partial: bool,
+    /// The hash check on add, when the caller asked for it in the report.
+    hash_check: Option<HashCheck>,
+    /// Bytes of the payload that are actually present.
+    have: u64,
+}
+
+/// What the hash check on add cost.
+///
+/// The read counters rather than the verification ones. `on_piece_completed`
+/// is what brackets a verification, and `librqbit` calls it when a piece the
+/// session just downloaded checks out, not when the initial check walks a
+/// payload that is already there. So the check shows up in this storage as a
+/// run of positioned reads and nothing else, and its wall time is what carries
+/// the SHA-1.
+struct HashCheck {
+    took: Duration,
+    read_bytes: u64,
+    read_ops: u64,
+    pieces: u32,
+}
+
+/// What a `bench seed` run produced.
+struct SeedOutcome {
+    series: Vec<bit_cli_core::bench::report::Sample>,
+    sources: Vec<bit_cli_core::bench::report::SourceSummary>,
+    summary: bit_cli_core::bench::report::Summary,
+    notes: Vec<String>,
+}
+
+/// Sample a seeding session until its deadline.
+async fn drive_seed(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    options: &SeedOptions,
+    renderer: &mut Renderer,
+    env: &mut Env,
+) -> Result<SeedOutcome> {
+    let recorder = recorder::Recorder::new(options.warmup, options.interval, 1);
+    let deadline = std::time::Instant::now() + options.duration;
+    let mut ticker = tokio::time::interval(options.interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticker.tick().await;
+
+    let mut counted: BTreeMap<String, Counted> = BTreeMap::new();
+    let mut labels: Vec<(usize, String, String)> = Vec::new();
+    let mut next_index = 0usize;
+    let mut storage = engine.storage_counts();
+    let mut notes = Vec::new();
+    let mut idle_since: Option<std::time::Instant> = Some(std::time::Instant::now());
+    let mut went_idle = false;
+
+    if options.partial {
+        notes.push(format!(
+            "only {} of the payload is present, so this is a partial seed and the rate is bounded by what the swarm can want",
+            bit_cli_core::units::format_size(options.have)
+        ));
+    }
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                notes.push("the run was interrupted before its deadline".to_string());
+                break;
+            }
+            _ = ticker.tick() => {}
+        }
+
+        // A seeder has no bridges of its own, so every peer in the snapshot is
+        // a swarm member and the filter is empty.
+        let peers = engine.peers(handle, &std::collections::HashSet::new());
+        for peer in &peers {
+            let entry = counted.entry(peer.addr.clone()).or_insert_with(|| {
+                let index = next_index;
+                next_index += 1;
+                labels.push((index, peer.addr.clone(), "peer".to_string()));
+                Counted {
+                    index,
+                    ..Default::default()
+                }
+            });
+            // The counter that faces the other way: what this process sent,
+            // not what it received.
+            let bytes = peer.uploaded_bytes.saturating_sub(entry.bytes);
+            entry.bytes = peer.uploaded_bytes;
+            recorder.observe_bulk(entry.index, bytes, 0);
+        }
+
+        let now = engine.storage_counts();
+        let disk = now.since(&storage);
+        storage = now;
+        recorder.observe_disk(&bit_cli_core::bench::report::Disk {
+            read_ops: disk.read_ops,
+            read_bytes: Size(disk.read_bytes),
+            read_time: Millis(disk.read_nanos / 1_000_000),
+            write_ops: disk.write_ops,
+            write_bytes: Size(disk.write_bytes),
+            write_time: Millis(disk.write_nanos / 1_000_000),
+        });
+
+        let snapshot = engine.snapshot(handle);
+        recorder.observe_peers(snapshot.peers.live);
+        let sample = recorder.sample();
+        renderer.event(env, "bench_sample", &sample)?;
+
+        match snapshot.peers.live {
+            0 => {
+                idle_since.get_or_insert_with(std::time::Instant::now);
+            }
+            _ => idle_since = None,
+        }
+        if let Some(limit) = options.idle
+            && let Some(since) = idle_since
+            && since.elapsed() >= limit
+        {
+            went_idle = true;
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+    }
+    recorder.stop();
+
+    if !recorder.measured_anything() {
+        notes.push(format!(
+            "the run ended after {}ms, inside the {}ms warmup, so the whole run is the measured window",
+            recorder.elapsed().as_millis(),
+            options.warmup.as_millis()
+        ));
+        recorder.collapse_warmup();
+    }
+    if went_idle {
+        notes.push(
+            "no peer was connected for --exit-when-idle, so the run stopped before its deadline"
+                .to_string(),
+        );
+    }
+
+    let mut summary = recorder.summary();
+    if let Some(check) = &options.hash_check {
+        let ms = check.took.as_millis().min(u128::from(u64::MAX)) as u64;
+        summary.hashing = Some(bit_cli_core::bench::report::Hashing {
+            pieces: u64::from(check.pieces),
+            bytes: Size(check.read_bytes),
+            total: Millis(ms),
+            rate: bit_cli_core::units::Rate(match ms {
+                0 => 0,
+                ms => check.read_bytes.saturating_mul(1000) / ms,
+            }),
+        });
+        notes.push(format!(
+            "the hash check on add read {} over {} reads in {}ms before the clock started; it is in summary.hashing and not in the rate",
+            bit_cli_core::units::format_size(check.read_bytes),
+            check.read_ops,
+            ms
+        ));
+    }
+    if counted.is_empty() {
+        notes.push(
+            "no peer connected, so nothing was measured. Give a leecher this run's listen address, or set --exit-when-idle to fail fast".to_string(),
+        );
+    }
+
+    Ok(SeedOutcome {
+        series: recorder.series(),
+        sources: recorder.sources(&labels),
+        summary,
+        notes,
+    })
+}
+
 /// Fill the target block from a torrent that was read locally.
 fn describe(report: &mut Report, meta: &Metainfo, layout: &Layout) {
     report.target.info_hash = Some(meta.info_hash().hex());
@@ -1238,7 +1652,7 @@ mod tests {
     #[test]
     fn the_subcommands_that_are_not_built_name_their_todo_entry() {
         let fixture = TorrentFixture::multi_file();
-        for subcommand in ["seed", "swarm", "probe"] {
+        for subcommand in ["swarm", "probe"] {
             let (mut env, captured) = crate::env::Env::test(
                 &[
                     "--json",
@@ -1937,5 +2351,53 @@ mod tests {
         );
         assert!(doc["disk_steps"].as_array().is_none_or(|s| s.is_empty()));
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    /// A seeding benchmark pointed at the wrong directory refuses before it
+    /// creates anything.
+    ///
+    /// Adding a torrent for seeding creates its storage, so without a check
+    /// first the run builds the whole payload tree at full size and only then
+    /// discovers there is nothing in it. On a 40 GB torrent that is a 40 GB
+    /// surprise, and it is how this test's own directory got a stray `album/`
+    /// in it. See `TODO/bench.md`, T-090.
+    #[test]
+    fn a_seed_benchmark_with_no_payload_refuses_without_creating_one() {
+        let fixture = TorrentFixture::multi_file();
+        let empty = fixture.dir().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "--json",
+                "bench",
+                "seed",
+                fixture.torrent.to_str().unwrap(),
+                "--data",
+                empty.to_str().unwrap(),
+                "--port",
+                "0",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--duration",
+                "1s",
+            ],
+            fixture.dir(),
+        );
+        let code = crate::run(&mut env);
+        assert_eq!(code, ExitCode::Usage, "stderr:\n{}", captured.err());
+        assert!(
+            !empty.join("album").exists(),
+            "the run created a payload tree it then refused to measure"
+        );
+        let doc = captured.json().unwrap();
+        assert!(
+            doc["context"]["expected"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with("album"),
+            "{doc}"
+        );
     }
 }

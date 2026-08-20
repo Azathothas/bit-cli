@@ -37,7 +37,7 @@ use crate::bench::report::{ConcurrencyStep, Costs, Disk, Sample, Summary};
 use crate::storage::{SafeStorageFactory, StorageCounts, StorageMetrics};
 use crate::sysinfo::Process;
 use crate::time::Timestamp;
-use crate::units::{Millis, Size};
+use crate::units::{Millis, Rate, Size};
 
 /// How the payload is spread over files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,8 +254,8 @@ pub fn run(
     outcome.summary = Summary {
         bytes: Size(total_bytes),
         duration: Millis::from(total_elapsed),
-        sustained_rate: Size(rate_of(total_bytes, total_elapsed)),
-        peak_rate: Size(peak_rate),
+        sustained_rate: Rate(rate_of(total_bytes, total_elapsed)),
+        peak_rate: Rate(peak_rate),
         requests: total_disk.write_ops,
         disk: Some(total_disk),
         best_concurrency: outcome
@@ -495,7 +495,7 @@ fn one_step(
                     concurrency: threads,
                     bytes: Size(delta.write_bytes),
                     cumulative_bytes: Size(cumulative),
-                    rate: Size(rate_of(delta.write_bytes, window)),
+                    rate: Rate(rate_of(delta.write_bytes, window)),
                     requests: delta.write_ops,
                     errors: 0,
                     process: Process::sample(),
@@ -592,7 +592,7 @@ fn one_step(
         files,
         bytes: Size(written),
         elapsed: Millis::from(elapsed),
-        rate: Size(rate_of(written, elapsed)),
+        rate: Rate(rate_of(written, elapsed)),
         total_write_time: Millis(total_write_time),
         write_ops: ops,
         mean_write_us: match ops {
