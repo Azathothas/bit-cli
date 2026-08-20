@@ -210,6 +210,55 @@ Nothing is trusted here. Every piece a `file:` source serves is hash-checked
 against the torrent that asked for it, so a wrong binding costs a failed source
 rather than a corrupt payload.
 
+### The same thing with nothing written by you
+
+Those three bindings are what the run can work out for itself, and it does:
+
+```bash
+bit-cli download c.torrent a.torrent b.torrent --dir out -j 1
+```
+
+Before the session starts, every pair of torrents in the invocation is compared
+by the piece hashes covering each file. Where the hashes prove two files are
+the same bytes, the later torrent gets a `file:` source pointing at the copy the
+earlier one wrote, as soon as the earlier one has finished. No path, no info
+hash, no flag.
+
+```
+torrent   finished over http from disk resumed  shared proven    hash
+payload_c     True 20.00 MiB 20.00 MiB 0.00 B        0 0.00 B    42ee6db050db50ce
+payload_a     True 0.00 B    16.00 MiB 3.00 MiB      1 16.00 MiB 42ee6db050db50ce
+payload_b     True 0.00 B    16.00 MiB 3.00 MiB      1 16.00 MiB 42ee6db050db50ce
+```
+
+```bash
+pwsh scripts/check-shared-files.ps1
+```
+
+That is the run above, measured: three info hashes, the shared file at a
+different path and index in each, 16 MiB fetched once over HTTP and read off
+the disk twice, one distinct hash across three output directories.
+
+`--json` reports it under `shared`, per torrent, naming the file, the torrent
+it came from, and how much of it the piece hashes proved:
+
+```json
+"shared": [{
+  "index": 0,
+  "path": "deep/nested/dirs/file.blob",
+  "from_info_hash": "a0f16220418c110ee3b5dba0a689c2c1b4791ca5",
+  "from_path": "out/payload_c/a/b/c/file.blob",
+  "pieces_compared": 16,
+  "bytes_proven": { "bytes": 16777216, "human": "16.00 MiB" }
+}]
+```
+
+Three things bound it. Only a piece-hash proof counts, never a matching length.
+Only a torrent that has already finished donates, so `-j 1` is what makes the
+order true and above it nothing is donated. And the source is checked per piece
+on the way in like any other, so a proof that was somehow wrong costs a retry
+rather than a payload. `--no-share-files` turns the whole thing off.
+
 ### Which files two torrents actually share
 
 ```bash

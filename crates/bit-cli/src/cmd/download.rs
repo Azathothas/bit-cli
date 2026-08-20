@@ -68,6 +68,10 @@ pub struct TorrentReport {
     /// Empty for the ordinary torrent. See `bit_cli_core::paths`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub renamed: Vec<Rename>,
+    /// Files read from another torrent in the same run rather than fetched.
+    /// Empty unless two torrents in one invocation hold the same file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shared: Vec<SharedFile>,
     /// The exit code this torrent's outcome produces.
     ///
     /// A run's code is the worst of its torrents'. Without this, a torrent
@@ -78,6 +82,32 @@ pub struct TorrentReport {
     pub code: ExitCode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// One file this torrent read from another torrent in the same run.
+///
+/// The proof is in the metadata: `pieces_compared` whole pieces of this file
+/// have the same SHA-1 in both torrents, so the bytes those pieces cover are
+/// the same. Nothing here is asserted by the caller, and the source is checked
+/// per piece on the way in like every other source. See
+/// `TODO/multi-source.md`, T-140.
+#[derive(Debug, Clone, Serialize)]
+pub struct SharedFile {
+    /// File index in this torrent.
+    pub index: usize,
+    /// This torrent's path for it.
+    pub path: String,
+    pub length: Size,
+    /// The source argument of the torrent it was read from.
+    pub from_source: String,
+    pub from_info_hash: String,
+    /// File index in that torrent.
+    pub from_index: usize,
+    /// Where it was read from on disk.
+    pub from_path: String,
+    /// Whole pieces whose hashes were compared, all of which agreed.
+    pub pieces_compared: u32,
+    pub bytes_proven: Size,
 }
 
 /// One forced re-dial: the peer state was thrown away and the peer list
@@ -169,7 +199,8 @@ pub fn run(
     // fifth argument fails before the first byte is fetched.
     let mut plans = Vec::with_capacity(args.sources.len());
     let mut known_hashes: HashSet<String> = HashSet::new();
-    for source in &args.sources {
+    let mut metas: Vec<Option<Metainfo>> = Vec::with_capacity(args.sources.len());
+    for (index, source) in args.sources.iter().enumerate() {
         let kind = Kind::classify(source, env)?;
         let meta = match &kind {
             Kind::File(path) => Some(Metainfo::read(path)?),
@@ -186,10 +217,48 @@ pub fn run(
         )?;
         let trackers = setup.tracker_list(meta.as_ref(), env)?;
         plans.push(Plan {
+            index,
             source: source.clone(),
             specs,
             trackers,
+            donations: Vec::new(),
         });
+        metas.push(meta);
+    }
+
+    // Two torrents in one run that hold the same file, proven by their piece
+    // hashes, are one fetch and one copy rather than two fetches. The proof is
+    // computed here, from metadata that is already read, and costs one pass
+    // per pair of torrents. Which of them can actually donate is decided when
+    // each starts, because it depends on the donor having finished. See
+    // `TODO/multi-source.md`, T-140.
+    if !args.no_share_files {
+        for (plan, donations) in plans.iter_mut().zip(share_plan(&metas)) {
+            plan.donations = donations;
+        }
+    }
+    let donor_files: SharedDonors = Arc::new(std::sync::Mutex::new(
+        std::collections::HashMap::with_capacity(plans.len()),
+    ));
+    for (index, meta) in metas.iter().enumerate() {
+        // A magnet has no metadata yet, so it can neither donate nor receive.
+        // Recording the source and hash of the ones that do keeps the report
+        // able to name the donor without carrying the metainfo around.
+        if let Some(meta) = meta {
+            let layout = meta.layout();
+            let mut map = donor_files.lock().expect("donor registry");
+            map.insert(
+                index,
+                DonorFiles {
+                    source: args.sources[index].clone(),
+                    info_hash: meta.info_hash().hex(),
+                    root: bit_cli_core::storage::payload_root(&directory, &layout),
+                    // Filled in when the torrent finishes. An empty list is
+                    // what says it has nothing to lend yet.
+                    disk_paths: Vec::new(),
+                },
+            );
+        }
     }
 
     // A binding for a torrent that is not in this invocation binds nothing,
@@ -298,6 +367,7 @@ pub fn run(
                 peers: peers.clone(),
                 redial_after,
                 max_redials: args.max_redials,
+                donors: donor_files.clone(),
             };
             workers.spawn(async move {
                 loop {
@@ -411,13 +481,104 @@ struct Options {
     max_redials: u32,
     /// Peers to dial before any are discovered, from `--peer`.
     peers: Vec<std::net::SocketAddr>,
+    /// Where each torrent in the run wrote its files, filled in as they
+    /// finish. See `TODO/multi-source.md`, T-140.
+    donors: SharedDonors,
 }
 
 /// One source and what was resolved for it before the session started.
 struct Plan {
+    /// Position in the run, which is the order the queue hands plans out in.
+    index: usize,
     source: String,
     specs: Vec<SourceSpec>,
     trackers: Option<Vec<String>>,
+    /// Files an earlier torrent in this run is proven to hold, computed from
+    /// the metadata before anything starts. See `TODO/multi-source.md`, T-140.
+    donations: Vec<Donation>,
+}
+
+/// One file this torrent could read from an earlier torrent in the run.
+///
+/// Only the donor's position is fixed here. Whether it can actually be read
+/// depends on that torrent having finished, which is known when this one
+/// starts and not before.
+#[derive(Debug, Clone)]
+struct Donation {
+    /// File index in the torrent that would read it.
+    index: usize,
+    /// Position of the donor in the run. Always lower than the receiver's:
+    /// a torrent can only read what an earlier one has already written.
+    donor: usize,
+    /// File index in the donor.
+    donor_index: usize,
+    length: u64,
+    pieces_compared: u32,
+    bytes_proven: u64,
+}
+
+/// What a finished torrent can lend to the ones after it.
+#[derive(Debug, Clone)]
+struct DonorFiles {
+    source: String,
+    info_hash: String,
+    /// Directory its payload landed in, subfolder included.
+    root: std::path::PathBuf,
+    /// One path per file index, relative to `root`, as planned. Empty until
+    /// the torrent finishes, which is what says it has nothing to lend yet:
+    /// a `file:` source over a half-written file serves bytes that are not
+    /// there.
+    disk_paths: Vec<String>,
+}
+
+/// Every torrent in the run that could donate, keyed by position.
+type SharedDonors = Arc<std::sync::Mutex<std::collections::HashMap<usize, DonorFiles>>>;
+
+/// Every file each torrent could take from an earlier one, proven from the
+/// metadata.
+///
+/// Proof only. [`bit_cli_core::equivalence::Evidence::Length`] says two files
+/// are the same size and nothing else, and reading a file on that basis is
+/// exactly the silent corruption the equivalence module exists to avoid. A
+/// piece-hash proof means the whole pieces inside both files have the same
+/// SHA-1, which is the same evidence a torrent gives about its own bytes.
+///
+/// The earliest torrent that holds the file donates it. That is the one most
+/// likely to have finished by the time a later one starts, and it makes the
+/// choice a function of the command line rather than of the order things
+/// happened to complete.
+fn share_plan(metas: &[Option<Metainfo>]) -> Vec<Vec<Donation>> {
+    let mut out: Vec<Vec<Donation>> = vec![Vec::new(); metas.len()];
+    for (index, meta) in metas.iter().enumerate() {
+        let Some(meta) = meta else { continue };
+        let layout = meta.layout();
+        let mut taken: HashSet<usize> = HashSet::new();
+        for (donor, other) in metas[..index].iter().enumerate() {
+            let Some(other) = other.as_ref() else {
+                continue;
+            };
+            let other_layout = other.layout();
+            for found in bit_cli_core::equivalence::matches(
+                &layout,
+                &meta.info().pieces,
+                &other_layout,
+                &other.info().pieces,
+            ) {
+                if !found.evidence.is_proof() || !taken.insert(found.index) {
+                    continue;
+                }
+                out[index].push(Donation {
+                    index: found.index,
+                    donor,
+                    donor_index: found.other_index,
+                    length: found.length,
+                    pieces_compared: found.pieces_compared,
+                    bytes_proven: found.bytes_proven,
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Fetch one source to completion.
@@ -457,6 +618,7 @@ async fn one(
                 sources: Vec::new(),
                 output_directory: options.directory.display().to_string(),
                 renamed: Vec::new(),
+                shared: Vec::new(),
                 code: error.code(),
                 error: Some(error.to_string()),
             }
@@ -556,11 +718,27 @@ async fn one_inner(
         ));
     }
 
+    // Files an earlier torrent in this run has already written, which this one
+    // is proven to hold too. These are sources like any other: scoped to one
+    // file, checked per piece on the way in, and reported with their own
+    // origin. See `TODO/multi-source.md`, T-140.
+    let (donated, shared) = donated_sources(plan, options, &layout);
+    for file in &shared {
+        let _ = tx
+            .send(Msg::Warn(format!(
+                "file {} ({}) is proven to be the file {} holds at index {}, reading it from {} rather than fetching it",
+                file.index, file.path, file.from_source, file.from_index, file.from_path
+            )))
+            .await;
+    }
+    let mut declared = plan.specs.clone();
+    declared.extend(donated);
+
     // The whole-run concurrency cap is shared out across the declared sources,
     // so `--web-seed-max-total 8` with four mirrors means two requests each
     // rather than eight each.
     let specs = apply_preference(
-        apply_max_total(&plan.specs, options.max_total),
+        apply_max_total(&declared, options.max_total),
         options.prefer,
     );
     let (sources, _set) = swarm::attach_sources(
@@ -598,7 +776,7 @@ async fn one_inner(
     }
     let (stopped, elapsed, redials) = outcome;
     let snapshot = engine.snapshot(&handle);
-    let report = finish(
+    let mut report = finish(
         plan,
         options,
         &snapshot,
@@ -609,6 +787,13 @@ async fn one_inner(
         resumed,
         renames(engine, &handle),
     );
+    report.shared = shared;
+    // A finished torrent can lend its files to the ones after it. An
+    // unfinished one cannot: its files are on disk but not all of their bytes
+    // are.
+    if report.finished {
+        publish_donor(engine, &handle, plan, options);
+    }
 
     let _ = tx
         .send(Msg::Event(
@@ -857,6 +1042,93 @@ fn renames(engine: &Engine, handle: &bit_cli_core::engine::Handle) -> Vec<Rename
         .unwrap_or_default()
 }
 
+/// A `file:` source per donation whose donor has finished, and the report rows
+/// that say where each came from.
+///
+/// A donation whose donor has not finished yet is silently nothing: under
+/// `-j 1` the donor ran first and this is decided; above that the two are in
+/// flight together and there is nothing to read. That is the honest behaviour
+/// either way, and it is why the entry prices attaching a source mid-run
+/// separately. See `TODO/multi-source.md`, T-140.
+fn donated_sources(
+    plan: &Plan,
+    options: &Options,
+    layout: &Layout,
+) -> (Vec<SourceSpec>, Vec<SharedFile>) {
+    use bit_cli_core::webseed::binding::Origin;
+    use bit_cli_core::webseed::composition::Mode;
+    use bit_cli_core::webseed::scope::Scope;
+
+    let mut specs = Vec::new();
+    let mut shared = Vec::new();
+    if plan.donations.is_empty() {
+        return (specs, shared);
+    }
+    let Ok(donors) = options.donors.lock() else {
+        return (specs, shared);
+    };
+    for donation in &plan.donations {
+        let Some(donor) = donors.get(&donation.donor) else {
+            continue;
+        };
+        let Some(relative) = donor.disk_paths.get(donation.donor_index) else {
+            continue;
+        };
+        let mut path = donor.root.clone();
+        for component in relative.split('/').filter(|part| !part.is_empty()) {
+            path.push(component);
+        }
+        // A donor that finished has the file. Checking anyway costs one stat
+        // and turns a source that would fail every request into no source.
+        if !path.is_file() {
+            continue;
+        }
+        let url = bit_cli_core::webseed::local::url_of(&path);
+        let Ok(scope) = Scope::parse(&format!("file:{}", donation.index)) else {
+            continue;
+        };
+        specs.push(
+            SourceSpec::new(url.clone(), Origin::SharedFile)
+                .with_scope(scope)
+                .with_mode(Mode::Exact),
+        );
+        shared.push(SharedFile {
+            index: donation.index,
+            path: layout
+                .file(donation.index)
+                .map(|file| file.display_path())
+                .unwrap_or_default(),
+            length: Size(donation.length),
+            from_source: donor.source.clone(),
+            from_info_hash: donor.info_hash.clone(),
+            from_index: donation.donor_index,
+            from_path: path.display().to_string(),
+            pieces_compared: donation.pieces_compared,
+            bytes_proven: Size(donation.bytes_proven),
+        });
+    }
+    (specs, shared)
+}
+
+/// Record where a finished torrent put its files, so the ones after it can
+/// read them.
+fn publish_donor(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    plan: &Plan,
+    options: &Options,
+) {
+    let Some(planned) = engine.path_plan(handle) else {
+        return;
+    };
+    let Ok(mut donors) = options.donors.lock() else {
+        return;
+    };
+    if let Some(entry) = donors.get_mut(&plan.index) {
+        entry.disk_paths = planned.disk_paths;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish(
     plan: &Plan,
@@ -901,6 +1173,7 @@ fn finish(
         sources: sources.iter().map(AttachedSource::report).collect(),
         output_directory: options.directory.display().to_string(),
         renamed,
+        shared: Vec::new(),
         code: stopped.code(),
         error: snapshot.error.clone(),
     }
@@ -1227,6 +1500,18 @@ fn lines(report: &DownloadReport) -> Vec<String> {
             out.push(field(
                 &format!("renamed [{}]", rename.index),
                 format!("{} -> {}", rename.torrent_path, rename.disk_path),
+            ));
+        }
+        for file in &torrent.shared {
+            out.push(field(
+                &format!("shared [{}]", file.index),
+                format!(
+                    "{} read from {} ({} proven over {} piece(s))",
+                    file.path,
+                    file.from_path,
+                    format_size(file.bytes_proven.0),
+                    file.pieces_compared,
+                ),
             ));
         }
         if let Some(error) = &torrent.error {
@@ -1877,6 +2162,127 @@ mod tests {
             [first.info_hash.clone(), second.info_hash.clone()],
             "torrents started out of order: {added:?}"
         );
+    }
+
+    /// One torrent's report, by its name.
+    ///
+    /// The list is sorted by source path and two fixtures live in two
+    /// temporary directories, so position says nothing about order.
+    fn by_name<'a>(report: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+        report["torrents"]
+            .as_array()
+            .expect("a torrent array")
+            .iter()
+            .find(|torrent| torrent["name"] == name)
+            .unwrap_or_else(|| panic!("no torrent named {name} in {report}"))
+    }
+
+    /// A file one torrent holds is read from it by the next, with no flag.
+    ///
+    /// The donor is complete on disk, so it finishes on its hash check with no
+    /// source at all. The receiver has everything except the shared file and
+    /// no source at all either, so the only way it can finish is by reading
+    /// the donor's copy. See `TODO/multi-source.md`, T-140.
+    #[test]
+    fn a_proven_shared_file_is_read_from_the_torrent_that_holds_it() {
+        let (donor, receiver) = TorrentFixture::sharing_pair();
+        let out = donor.dir().join("out");
+        donor.place(&out, &[]);
+        receiver.place(&out, &["extra-b.txt"]);
+
+        let report = run_json_code(
+            &[
+                "download",
+                donor.path_str(),
+                receiver.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "-j",
+                "1",
+                "--report-interval",
+                "100ms",
+                "--stop-after",
+                "20s",
+            ],
+            donor.dir(),
+            ExitCode::Success,
+        );
+
+        // Sorted by source path, and the two fixtures are in different temp
+        // directories, so the order of the two reports is not the order they
+        // ran in. Find it by name.
+        let taken = by_name(&report, "receiver");
+        assert_eq!(taken["finished"], true, "{taken}");
+        let shared = taken["shared"].as_array().expect("a shared array");
+        assert_eq!(shared.len(), 1, "{taken}");
+        assert_eq!(shared[0]["path"], "shared.bin", "{taken}");
+        assert_eq!(shared[0]["from_info_hash"], donor.info_hash, "{taken}");
+        assert_eq!(shared[0]["from_index"], 1, "{taken}");
+        // Four whole 1 KiB pieces lie entirely inside the 4 KiB file, and all
+        // four hashes agree. Nothing is asserted by the caller.
+        assert_eq!(shared[0]["pieces_compared"], 4, "{taken}");
+        assert_eq!(shared[0]["bytes_proven"]["bytes"], 4096, "{taken}");
+
+        // The whole shared file came from the donor's copy, and the rest was
+        // already on disk. No peer served anything: there was no swarm.
+        assert_eq!(taken["from_web_seeds"]["bytes"], 4096, "{taken}");
+        assert_eq!(taken["from_resume"]["bytes"], 2048, "{taken}");
+        assert_eq!(taken["from_peers"]["bytes"], 0, "{taken}");
+        assert_eq!(taken["sources"][0]["origin"], "shared_file", "{taken}");
+        assert_eq!(taken["sources"][0]["scope"], "file:1", "{taken}");
+
+        // Same bytes in both output directories.
+        let from_donor = std::fs::read(out.join("donor").join("shared.bin")).expect("donor file");
+        let landed = std::fs::read(out.join("receiver").join("shared.bin")).expect("receiver file");
+        assert_eq!(from_donor, landed);
+    }
+
+    /// `--no-share-files` turns it off, and then the same run cannot finish.
+    ///
+    /// A flag that does not move a number does not ship. The number here is
+    /// the receiver's completion: with sharing on it finishes from the donor's
+    /// copy, and with it off there is no source for the shared file at all.
+    #[test]
+    fn no_share_files_leaves_the_receiver_with_nothing_to_fetch_from() {
+        let (donor, receiver) = TorrentFixture::sharing_pair();
+        let out = donor.dir().join("out");
+        donor.place(&out, &[]);
+        receiver.place(&out, &["extra-b.txt"]);
+
+        let report = run_json_code(
+            &[
+                "download",
+                donor.path_str(),
+                receiver.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-torrent-web-seed",
+                "--no-share-files",
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "-j",
+                "1",
+                "--report-interval",
+                "100ms",
+                "--stop-after",
+                "2s",
+            ],
+            donor.dir(),
+            ExitCode::Timeout,
+        );
+        let taken = by_name(&report, "receiver");
+        assert_eq!(taken["finished"], false, "{taken}");
+        assert!(taken["shared"].is_null(), "{taken}");
+        assert_eq!(taken["from_web_seeds"]["bytes"], 0, "{taken}");
     }
 
     /// Bytes that were already on the disk are not charged to peers.

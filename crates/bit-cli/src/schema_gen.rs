@@ -376,6 +376,43 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         observe_events(&mut events, label, &out);
     }
 
+    // Two torrents in one run that hold the same file, which is the only way
+    // a `download` document carries `shared`. The donor is complete on disk
+    // and the receiver has everything except the shared file, so the run needs
+    // no source and no network. See `TODO/multi-source.md`, T-140.
+    let (donor, receiver) = TorrentFixture::sharing_pair();
+    let share_dir = donor.dir().join("out");
+    donor.place(&share_dir, &[]);
+    receiver.place(&share_dir, &["extra-b.txt"]);
+    let (_, out) = capture(
+        &[
+            "--json",
+            "download",
+            donor.path_str(),
+            receiver.path_str(),
+            "--dir",
+            share_dir.to_str().unwrap(),
+            "--no-torrent-web-seed",
+            "--no-tracker",
+            "--no-dht",
+            "--no-lsd",
+            "--port",
+            "0",
+            "-j",
+            "1",
+            "--report-interval",
+            "100ms",
+            "--stop-after",
+            "20s",
+        ],
+        donor.dir(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli download <TORRENT> <OTHER> --json, where both hold one file",
+        &out,
+    );
+
     // The download landed the payload, so verifying it is the `verify`
     // document rather than the `hash_mismatch` one the fixture directory
     // produces.

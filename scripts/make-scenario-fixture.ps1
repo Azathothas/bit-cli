@@ -16,7 +16,10 @@
 #   torrent_b.torrent   the same file.blob plus two different files, 512 KiB
 #                       pieces, so the piece boundaries do not line up
 #   torrent_c.torrent   the same file.blob plus a third set, 2 MiB pieces, and
-#                       a web seed already in its url-list
+#                       a web seed already in its url-list, from `-WebSeed`
+#
+# `-PieceLength` overrides all three piece lengths with one, which is what
+# makes the shared file provable from the metadata rather than only assertable.
 #
 # Torrents A, B, and C hold a bit-identical `file.blob` under three different
 # info hashes, which is scenario 2. Their piece lengths differ on purpose:
@@ -39,6 +42,14 @@ param(
     [int]$BlobSizeMiB = 64,
     [int]$OtherSizeMiB = 8,
     [int]$Partial = 70,
+    # One piece length for all three torrents instead of three different ones.
+    # The default is the three, because equivalence that only holds when the
+    # boundaries line up is not equivalence. T-140 needs the other case: the
+    # boundaries lining up is what lets the metadata prove the file is shared.
+    [string]$PieceLength = "",
+    # Torrent C's url-list entry. The default is a fixed port nothing is
+    # listening on, so a caller that wants it served has to say where.
+    [string]$WebSeed = "http://127.0.0.1:8080/",
     [string]$Root = ".tmp/scenario",
     [ValidateSet("debug", "release")]
     [string]$Profile = "release"
@@ -140,7 +151,9 @@ Copy-Item -LiteralPath $blob -Destination (Join-Path $Root "mirror/pub files/pay
 #
 # Three piece lengths on purpose. Equivalence that only holds when the piece
 # boundaries line up is not equivalence, and the fixture has to be able to tell
-# the difference.
+# the difference. `-PieceLength` gives all three the same one, which is the
+# other case: T-140 needs the boundaries to line up so the metadata can prove
+# the file is shared.
 
 $created = @()
 Push-Location $Root
@@ -148,10 +161,11 @@ try {
     foreach ($spec in @(
         @{ dir = "payload_a"; name = "payload_a"; piece = "1MiB";   out = "torrent_a.torrent"; seed = $null },
         @{ dir = "payload_b"; name = "payload_b"; piece = "512KiB"; out = "torrent_b.torrent"; seed = $null },
-        @{ dir = "payload_c"; name = "payload_c"; piece = "2MiB";   out = "torrent_c.torrent"; seed = "http://127.0.0.1:8080/" }
+        @{ dir = "payload_c"; name = "payload_c"; piece = "2MiB";   out = "torrent_c.torrent"; seed = $WebSeed }
     )) {
+        $piece = if ($PieceLength) { $PieceLength } else { $spec.piece }
         $arguments = @(
-            "create", $spec.dir, "--name", $spec.name, "--piece-length", $spec.piece,
+            "create", $spec.dir, "--name", $spec.name, "--piece-length", $piece,
             "--no-creation-date", "--output", $spec.out, "--force", "--json"
         )
         if ($spec.seed) { $arguments += @("--web-seed", $spec.seed) }

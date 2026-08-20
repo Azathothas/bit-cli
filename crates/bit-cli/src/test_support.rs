@@ -18,6 +18,10 @@ use crate::env::Env;
 pub struct TorrentFixture {
     /// Kept so the directory outlives the fixture.
     _temp: tempfile::TempDir,
+    /// The torrent `name`: the directory a multi-file torrent unpacks into.
+    pub name: String,
+    /// Whether it carries a `files` list.
+    pub multi_file: bool,
     /// The directory everything lives in.
     pub root: PathBuf,
     /// The `.torrent` path.
@@ -67,6 +71,57 @@ impl TorrentFixture {
         )
     }
 
+    /// Two torrents that hold the same file, provably.
+    ///
+    /// Different names, so they unpack into different directories and neither
+    /// finds the other's copy by accident. Same piece length, the shared file
+    /// first in both, and every file a whole number of pieces long, so the
+    /// shared file's pieces line up one to one and every one of them lies
+    /// entirely inside it. That is the case
+    /// [`bit_cli_core::equivalence`] can prove, and it is what
+    /// `TODO/multi-source.md` T-140 is about.
+    pub fn sharing_pair() -> (Self, Self) {
+        (
+            Self::build(
+                "donor",
+                true,
+                &[
+                    ("shared.bin", 4096usize, 0x5Au8),
+                    ("extra-a.txt", 1024, 0x11),
+                ],
+            ),
+            Self::build(
+                "receiver",
+                true,
+                &[
+                    ("shared.bin", 4096usize, 0x5Au8),
+                    ("extra-b.txt", 2048, 0x22),
+                ],
+            ),
+        )
+    }
+
+    /// Write this fixture's payload under `root`, in the layout the torrent
+    /// expects: a multi-file torrent unpacks into a directory named after
+    /// itself.
+    ///
+    /// `only` names the files to write, so a test can place everything except
+    /// the one it wants fetched.
+    pub fn place(&self, root: &Path, only: &[&str]) {
+        let base = match self.multi_file {
+            true => root.join(&self.name),
+            false => root.to_path_buf(),
+        };
+        for (path, bytes) in &self.files {
+            if !only.is_empty() && !only.contains(&path.as_str()) {
+                continue;
+            }
+            let target = base.join(path);
+            std::fs::create_dir_all(target.parent().expect("a parent")).expect("mkdir");
+            std::fs::write(&target, bytes).expect("write payload");
+        }
+    }
+
     fn build(name: &str, multi_file: bool, spec: &[(&str, usize, u8)]) -> Self {
         let temp = tempfile::tempdir().expect("temp dir");
         let root = temp.path().to_path_buf();
@@ -112,6 +167,8 @@ impl TorrentFixture {
 
         Self {
             _temp: temp,
+            name: name.to_string(),
+            multi_file,
             root,
             torrent,
             info_hash,
@@ -183,6 +240,8 @@ impl TorrentFixture {
 
         Self {
             _temp: temp,
+            name: "hostile".to_string(),
+            multi_file: true,
             root,
             torrent,
             info_hash: Metainfo::parse(&bytes).expect("parse").info_hash().hex(),

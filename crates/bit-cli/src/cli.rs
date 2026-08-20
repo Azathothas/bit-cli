@@ -609,6 +609,18 @@ pub struct DownloadArgs {
     #[arg(short = 'j', long, value_name = "N", default_value_t = 1)]
     pub max_concurrent_downloads: usize,
 
+    /// Do not read a file from another torrent in this run that is proven to
+    /// hold it.
+    ///
+    /// Two torrents in one invocation often share a file. When their piece
+    /// hashes prove the bytes are the same, the second one reads the first
+    /// one's copy instead of fetching it again. The proof is the same evidence
+    /// `bit-cli files --against` reports, and the copy is checked per piece on
+    /// the way in like any other source. This turns that off and fetches
+    /// everything.
+    #[arg(long)]
+    pub no_share_files: bool,
+
     /// Hash-check before starting.
     #[arg(short = 'V', long)]
     pub check_integrity: bool,
@@ -660,6 +672,7 @@ impl DownloadArgs {
             redial_after: None,
             max_redials: 10,
             max_concurrent_downloads: 1,
+            no_share_files: false,
             check_integrity: false,
             hash_check_only: false,
             r#continue: true,

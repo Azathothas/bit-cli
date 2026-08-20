@@ -438,8 +438,8 @@ Acceptance:  A hybrid run with `--max-peer-rate 10MiB/s --web-seed-speed-limit
 Category:    webseed
 Priority:    P1
 Effort:      L
-Status:      **layers 1 and 2 done**, layer 3 partial: the detection is done and
-             the automatic binding is [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own)
+Status:      **done**. Layers 1 and 2 closed here, and layer 3 closed under
+             [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own)
 
 Problem:     Scenario 2. Three torrents with different info hashes each contain
              a bit-identical `file.blob`. One is 60% done and stalled, one is
@@ -654,14 +654,16 @@ Layer 3:     **the detection is done, and the answer for this fixture is that
              all, and a file shorter than one piece can only ever be a
              candidate.
 
-             What is left of layer 3 is turning a proof into a source
-             automatically, which is a scheduling question rather than an
-             identity one: the donor torrent has to finish the file before the
-             others can read it. `-j 1` and an explicit binding do that today
-             and are what layer 2 closed. Doing it without the caller naming
-             the path needs the run to attach a source to a torrent that has
-             already started, which nothing in `cmd::download` can do yet. That
-             residue is [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own).
+             Layer 3 is turning a proof into a source automatically, which is
+             a scheduling question rather than an identity one: the donor
+             torrent has to finish the file before the others can read it.
+             `-j 1` and an explicit binding did that first, which is what layer
+             2 closed. Doing it with the caller naming nothing is
+             [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own),
+             which is done: the run computes the proofs before it starts and
+             gives each torrent a `file:` source per file an earlier one has
+             already written. Above `-j 1` nothing has finished yet and nothing
+             is donated, which is [T-143](#t-143-a-source-cannot-be-attached-to-a-torrent-that-has-already-started).
 
 ### T-140 A proven shared file is not turned into a source on its own
 
@@ -669,7 +671,7 @@ Source:      came out of closing T-133 layer 2
 Category:    webseed
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     `bit-cli files --against` proves two torrents hold the same file,
              and `--web-seed-for '<HASH>:file:N=file:///...'` uses one torrent's
@@ -701,9 +703,123 @@ Approach:    Two pieces, and only the second is hard.
 Acceptance:  Three torrents built from one payload **with the same piece
              length** and different surrounding files, added in one invocation
              with no `--web-seed-for` at all, and the report shows the shared
-             file's bytes fetched once and written into all three output
+             file's bytes fetched once, written into all three output
              directories, with all three hashing equal and the report naming
              which torrent donated it.
+
+**Done by the first piece, and the second is not needed for the acceptance.**
+
+`bit-cli download` with several torrents computes the equivalence between every
+pair before the session starts, keeps the proofs, and gives each torrent a
+`file:` source per proven file that an earlier torrent in the run has already
+written. No flag, no path, no info hash typed by anyone.
+`--no-share-files` turns it off.
+
+**The acceptance, 2026-08-20T17:03:27.094Z**, in
+`bench/shared-files-20260820T170327094Z.json`:
+
+```
+$ pwsh -NoProfile -File scripts/check-shared-files.ps1
+```
+
+```
+torrent   finished over http from disk resumed  shared proven    hash
+payload_c     True 20.00 MiB 20.00 MiB 0.00 B        0 0.00 B    42ee6db050db50ce
+payload_a     True 0.00 B    16.00 MiB 3.00 MiB      1 16.00 MiB 42ee6db050db50ce
+payload_b     True 0.00 B    16.00 MiB 3.00 MiB      1 16.00 MiB 42ee6db050db50ce
+
+shared file:  16.00 MiB, sha256 42ee6db050db50ce...
+over http:    20.00 MiB for the whole run
+distinct hashes across three output directories: 1
+```
+
+Three info hashes, one piece length, the shared file at a different path and a
+different index in each, one invocation, exit 0 in 511 ms. Torrent C fetched
+its 16 MiB shared file and its own 4 MiB extra from the mirror. A and B read
+the shared file off C's finished copy: **zero bytes over HTTP**, 16 MiB from a
+source, 3 MiB already on disk, and a `shared` row naming
+`a0f16220418c110ee3b5dba0a689c2c1b4791ca5` as the torrent it came from. One
+distinct hash across the three output directories.
+
+**Why the whole file is safe when only part of it is proven.** A proof covers
+the whole pieces lying entirely inside the file, and the donated source is
+scoped to the whole file. Those are the same set. A bridge advertises only the
+pieces its scope covers *in full*, and a piece lying entirely inside the file
+is exactly a piece the proof compared, so nothing the source can serve is
+unproven. The bytes at the ends of the file, in pieces shared with the file
+before or after it, are never offered. On top of that the source is checked per
+piece on the way in like every other source, so a proof that was somehow wrong
+costs a retry rather than a corrupt payload.
+
+**Four decisions worth naming.**
+
+- **Proof only.** `Evidence::Length` says two files are the same size, which is
+  what the `equivalence` module exists to stop anyone acting on. Only
+  `Evidence::PieceHashes` donates.
+- **The earliest torrent donates.** The entry suggested "the one that already
+  has the most of that file on disk". The first one given is what shipped: it
+  is the one most likely to have finished by the time a later one starts, and
+  it makes the choice a function of the command line rather than of the order
+  things happened to complete. Which files a torrent has on disk is not known
+  until its hash check has run, which is after the plan is needed.
+- **A donation is only a donation once the donor has finished.** A `file:`
+  source over a half-written file serves bytes that are not there. The donor
+  publishes its output paths when it completes, so under `-j 1` a later torrent
+  finds them and above `-j 1` it does not. That is the honest behaviour rather
+  than a race, and it is the residue below.
+- **It is on by default.** The acceptance says "no `--web-seed-for` at all",
+  and a flag the caller has to know about is the thing this entry exists to
+  remove. `--no-share-files` is there for a caller who wants every torrent
+  fetched independently.
+
+Two tests, no network and no ports:
+`a_proven_shared_file_is_read_from_the_torrent_that_holds_it` drives a donor
+complete on disk and a receiver missing only the shared file, and asserts the
+bytes, the pieces compared, the origin, and that both copies are identical.
+`no_share_files_leaves_the_receiver_with_nothing_to_fetch_from` is the same run
+with the flag, where the receiver cannot finish at all, which is what says the
+flag moves a number.
+
+**What is left, and it is the second piece.** Above `-j 1` the torrents are in
+flight together, so nothing has finished and nothing is donated: the run
+behaves exactly as it did before. Making that work needs `watch` to attach a
+source to a live torrent, which is the scheduling change this entry priced. It
+is recorded as [T-143](#t-143-a-source-cannot-be-attached-to-a-torrent-that-has-already-started)
+rather than left inside a closed item.
+
+`scripts/make-scenario-fixture.ps1` grew two parameters for this: `-PieceLength`
+gives all three torrents one piece length instead of three, which is what makes
+the shared file provable from the metadata, and `-WebSeed` puts a real URL in
+torrent C's url-list so the mirror can be on a port the OS chose.
+
+### T-143 A source cannot be attached to a torrent that has already started
+
+Source:      the residue of [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own)
+Category:    webseed
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     Sources attach in `cmd::download::one_inner` before `watch` runs,
+             and nothing can add one after that. So a source that becomes
+             usable during a run, which is what a donated file is above
+             `-j 1`, is not used at all.
+Relevance:   [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own)
+             works under `-j 1` and does nothing above it, which serialises a
+             run that did not have to be serialised. The same plumbing is what
+             [T-005](webseed.md) needs to re-scope a source mid-run, and what a
+             Metalink resolved after the start would need.
+Approach:    `swarm::attach_sources` builds the bridges, the bitfields, and the
+             accounting rows in one pass and returns them. Splitting it into
+             "attach one" and "attach these" is most of the work; the rest is
+             the report, which currently reads `sources` once at the end and
+             would have to tolerate a row that appeared partway through, and
+             the `source_added` event, which already carries everything a late
+             source would need to say.
+Acceptance:  Three torrents holding one file, added in one invocation with
+             `-j 3`, and the second and third read the file from the first as
+             soon as it finishes rather than fetching it. The same
+             `scripts/check-shared-files.ps1` with `-j 3` reports one fetch.
 
 ### T-134 v1 and v2 info hashes are not reconciled
 
@@ -1059,17 +1175,17 @@ optimisation that a cold run reproduces by reading the payload.
 | Scenario | Works today | Needs | Size |
 | --- | --- | --- | --- |
 | 1. DDL for one selected file, resumed | **Yes, in full.** Binding, resume, rename, selection, redirects, and a signature that expires mid-run, all run and recorded above | nothing | none |
-| 2. Three torrents, one shared file | **Yes, in one invocation.** `-j 1` with a `--web-seed-for` per torrent: C reads the CDN copy, A and B read what C wrote, one distinct hash across three info hashes. Run and recorded under T-133 | [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own), for the same thing with no path named | M |
+| 2. Three torrents, one shared file | **Yes, in one invocation, with nothing written by the caller.** `-j 1` and no flag at all: C fetches from the mirror, A and B read what C wrote off the disk, one distinct hash across three info hashes. Run and recorded under T-140 | [T-143](#t-143-a-source-cannot-be-attached-to-a-torrent-that-has-already-started), for the same thing above `-j 1` | M |
 | 3. DDL for one file, rest via swarm | **Yes, in full** | nothing | none |
 | 4. Remapping and encoding | **Yes, in full**, through `exact`, `prefix`, `template`, per-source headers, and the status overrides | nothing | none |
 | 5. All of it, with per-method control | Per-source caps, headers, auth, priority, and status policy: yes. Per-method caps and picker control: no | [T-132](#t-132-the-swarm-cannot-be-rate-limited-separately-from-http-sources), [T-134](#t-134-v1-and-v2-info-hashes-are-not-reconciled), [T-135](#t-135-source-selection-cannot-be-steered-by-method-or-by-priority-at-run-time), [T-136](#t-136-nothing-states-the-end-to-end-integrity-guarantee) | M to L |
 
 The honest summary: the addressing model was built for exactly this and it
-holds. Three of the five scenarios work in full and the fourth works as a
-two-step. What is genuinely missing is cross-torrent identity computed rather
-than asserted, and real control of which source answers a piece. Both were
-already known and already priced, by [T-002](webseed.md) and
-[T-003](webseed.md).
+holds. Four of the five scenarios work in full. Cross-torrent identity is now
+computed rather than asserted, under `-j 1`. What is genuinely missing is real
+control of which source answers a piece, which was already known and already
+priced by [T-002](webseed.md) and [T-003](webseed.md), and attaching a source
+to a torrent that has already started, which is [T-143](#t-143-a-source-cannot-be-attached-to-a-torrent-that-has-already-started).
 
 What none of this needs is a daemon, a database, or a state file. Every
 scenario as the operator wrote it is one invocation with several sources, which

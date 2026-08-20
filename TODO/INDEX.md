@@ -124,13 +124,14 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-130](multi-source.md) | P1 | webseed | **done** | A source cannot be told which statuses are worth retrying |
 | [T-131](multi-source.md) | P1 | bench | **done** | The loopback file server cannot simulate a signed URL |
 | [T-132](multi-source.md) | P1 | performance | open | The swarm cannot be rate limited separately from HTTP sources |
-| [T-133](multi-source.md) | P1 | webseed | partial | Two torrents holding the same file cannot share its bytes |
+| [T-133](multi-source.md) | P1 | webseed | **done** | Two torrents holding the same file cannot share its bytes |
 | [T-134](multi-source.md) | P2 | bep | open | v1 and v2 info hashes are not reconciled |
 | [T-135](multi-source.md) | P2 | performance | open | Source selection cannot be steered by method or by priority at run time |
 | [T-136](multi-source.md) | P2 | cli | open | Nothing states the end-to-end integrity guarantee |
 | [T-137](multi-source.md) | P2 | webseed | **done** | A cooled-down source never comes back |
 | [T-139](multi-source.md) | P1 | cli | **done** | A resumed download charges its existing bytes to the swarm |
-| [T-140](multi-source.md) | P2 | webseed | open | A proven shared file is not turned into a source on its own |
+| [T-140](multi-source.md) | P2 | webseed | **done** | A proven shared file is not turned into a source on its own |
+| [T-143](multi-source.md) | P2 | webseed | open | A source cannot be attached to a torrent that has already started |
 | [T-200](phase-c.md) | n/a | phase-c | deferred | Session daemon |
 | [T-201](phase-c.md) | n/a | phase-c | deferred | JSON-RPC and XML-RPC, with aria2 method parity |
 | [T-202](phase-c.md) | n/a | phase-c | deferred | Queue management across invocations |
@@ -144,7 +145,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-101 items: 91 to work through, and 10 deferred to Phase C. Fourteen were added by
+102 items: 92 to work through, and 10 deferred to Phase C. Fifteen were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -172,12 +173,15 @@ a blackholed address makes no request until the request timeout, so
 `--web-seed-connect-timeout` bounds nothing and the source is never retired.
 And `bit-cli peers` added its torrent paused, which in `librqbit` 9.0.0 means
 it never announced: every run of that command had reported an empty swarm.
+T-143 is what T-140 left behind: a source can only be attached before a
+torrent starts, so a file donated by another torrent in the same run is used
+under `-j 1` and not above it.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 2 | 1 | 0 | 8 |
-| P1 | 15 | 1 | 0 | 22 |
-| P2 | 23 | 1 | 1 | 7 |
+| P1 | 15 | 0 | 0 | 23 |
+| P2 | 23 | 1 | 1 | 8 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 
@@ -353,11 +357,12 @@ item eight is the operator's own list.
    control of the same length. Both commands are in the entry.
 8. [multi-source.md](multi-source.md), the operator's five scenarios about
    pointing several kinds of source at one payload. Read that file before
-   starting any of T-130 to T-137: its first part records which scenarios
+   starting any of T-130 to T-143: its first part records which scenarios
    already work, with the commands that were run and the output, so the work
    left is smaller than the list of entries suggests.
 
-   **Four of the five now work in full.** [T-131](multi-source.md),
+   **Four of the five work in full, and Scenario 2 now needs no flags at
+   all.** [T-131](multi-source.md),
    [T-130](multi-source.md), and [T-137](multi-source.md) are **done**, which
    closed Scenario 1 and Scenario 4. The file server signs, redirects, expires
    a signature, and falls over on a clock, and
@@ -393,12 +398,24 @@ item eight is the operator's own list.
    length-only candidates are not the same bytes at all. Against a pair built
    to line up, the whole 64 MiB is proven.
 
-   What is left is turning a proof into a source with no path named,
-   [T-140](multi-source.md), which is a scheduling change rather than an
-   identity one, and real control of which source answers a piece,
-   [T-135](multi-source.md), already priced by [T-002](webseed.md) and
-   [T-003](webseed.md).
+   [T-140](multi-source.md) closed the rest of layer 3, so **Scenario 2 needs
+   no flags at all**. `bit-cli download c.torrent a.torrent b.torrent -j 1`
+   compares every pair of torrents by the piece hashes covering each file
+   before the session starts, and gives each one a `file:` source per file an
+   earlier torrent has already written. Measured over three info hashes with
+   the shared file at a different path and index in each: 16 MiB fetched once
+   over HTTP, read off the disk twice, one distinct hash across three output
+   directories, in 511 ms.
+   `pwsh scripts/check-shared-files.ps1` is the acceptance.
+
+   Two things bound it and both are recorded. Above `-j 1` nothing has finished
+   yet, so nothing is donated: attaching a source to a torrent that has already
+   started is [T-143](multi-source.md). And real control of which source
+   answers a piece is [T-135](multi-source.md), already priced by
+   [T-002](webseed.md) and [T-003](webseed.md).
 
    `scripts/make-scenario-fixture.ps1` builds the payloads, the three
    torrents, the CDN copy, and the partial on-disk state the acceptances
-   start from.
+   start from. `-PieceLength` gives all three one piece length, which is what
+   makes the shared file provable from the metadata rather than only
+   assertable, and `-WebSeed` puts a real URL in torrent C's url-list.

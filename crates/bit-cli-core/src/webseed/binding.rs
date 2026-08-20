@@ -48,6 +48,9 @@ pub enum Origin {
     Config,
     /// A mirror listed in a Metalink.
     Metalink,
+    /// A file another torrent in the same run already holds, proven to be the
+    /// same bytes by its piece hashes.
+    SharedFile,
 }
 
 impl Origin {
@@ -61,6 +64,7 @@ impl Origin {
             Self::ListUrl => "list_url",
             Self::Config => "config",
             Self::Metalink => "metalink",
+            Self::SharedFile => "shared_file",
         }
     }
 

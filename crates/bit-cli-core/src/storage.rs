@@ -41,6 +41,7 @@ use librqbit::{ManagedTorrentShared, TorrentMetadata};
 use librqbit_core::lengths::ValidPieceIndex;
 
 use crate::alloc::Allocation;
+use crate::layout::Layout;
 use crate::paths::{PathPlan, plan};
 
 /// How many payload files stay open when no cap is given.
@@ -996,6 +997,28 @@ fn subfolder_for(metadata: &TorrentMetadata) -> Option<String> {
                 .map(|stem| stem.to_string_lossy().into_owned())
         })?;
     Some(crate::paths::plan_one(&name))
+}
+
+/// Where one torrent's files land under `directory`.
+///
+/// The same rule [`subfolder_for`] applies, from a [`Layout`] rather than from
+/// the session's own metadata: a multi-file torrent unpacks into a directory
+/// named after itself, a single-file one does not, and the name is planned
+/// like any other path component so a hostile one cannot escape.
+///
+/// This exists because a caller that wants to read a finished torrent's files
+/// has to know where they went, and recomputing the rule by hand is how the
+/// two drift apart. Joining [`crate::paths::plan`]'s `disk_paths` onto this
+/// gives the exact path each file was written to.
+///
+/// It holds only for the case `download` uses, where the session was given no
+/// per-torrent output folder. A caller that names one gets exactly that
+/// directory and no subfolder.
+pub fn payload_root(directory: &Path, layout: &Layout) -> PathBuf {
+    match layout.multi_file {
+        true => join_relative(directory, &crate::paths::plan_one(&layout.name)),
+        false => directory.to_path_buf(),
+    }
 }
 
 /// A payload file is already there and the run was not told it could use it.

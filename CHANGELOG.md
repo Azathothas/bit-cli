@@ -300,6 +300,18 @@ it, so the history starts here.
   a run over several torrents that share a file can say which one a binding
   means. A hash naming no torrent in the run is a usage error rather than a
   binding that quietly does nothing.
+- Two torrents in one invocation that hold the same file fetch it once, with no
+  binding written by the caller. Every pair is compared by the piece hashes
+  covering each file before the session starts, and where they prove two files
+  are the same bytes the later torrent reads the copy the earlier one wrote.
+  Only a proof counts, never a matching length; only a torrent that has already
+  finished donates, so `-j 1` is what makes the order true; and the copy is
+  checked per piece on the way in like any other source. Measured over three
+  info hashes with the file at a different path and index in each: 16 MiB
+  fetched once over HTTP, read off the disk twice, one distinct hash across
+  three output directories. `--no-share-files` turns it off, and
+  `pwsh scripts/check-shared-files.ps1` is the measurement. See
+  `TODO/multi-source.md` under T-140.
 - `--redial-after <DUR>` drops every peer connection and dials again when
   nothing has arrived for that long, which throws away the reconnect backoff
   instead of waiting it out. Measured against a 120 second outage: without it
