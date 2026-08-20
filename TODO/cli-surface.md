@@ -446,3 +446,42 @@ Approach:    Two honest options. Fix the link, which means finding which native
 Acceptance:  Either `Test (macos-latest)` passes, or the matrix does not
              include it and `README.md` says which platforms are tested.
 
+
+### T-146 CI built a Windows binary against the dynamic C runtime
+
+Source:      CI run 32405312793, 2026-08-20
+Category:    ci
+Priority:    P1
+Effort:      S
+Status:      partial: the cause is understood and the fix is pushed, the green
+             run is not recorded
+
+Problem:     `Build (x86_64-pc-windows-msvc)` failed its own static CRT check:
+
+             ```
+             check-static: the binary depends on the dynamic C runtime:
+             VCRUNTIME140.dll, api-ms-win-crt-math-l1-1-0.dll, ...
+             ```
+
+             `.cargo/config.toml` sets `-C target-feature=+crt-static` for all
+             three release targets, and it works locally. `ci.yml` sets
+             `RUSTFLAGS: -D warnings` at the workflow level, and the
+             `RUSTFLAGS` environment variable **replaces** the per-target
+             `rustflags` from `config.toml` rather than adding to them. So
+             every CI job built without `+crt-static`, and the one job that
+             checks caught it.
+Relevance:   A Windows binary that needs a Visual C++ redistributable fails to
+             start on a clean machine with a dialog box rather than an error a
+             script can read. `scripts/check-static.ps1` exists for exactly
+             this and did its job.
+Approach:    Repeat the flag where the variable is set. The build step now
+             carries `RUSTFLAGS: -D warnings -C target-feature=+crt-static`
+             with a comment saying why it cannot be inherited.
+Acceptance:  `Build (x86_64-pc-windows-msvc)` passes, and the run is named
+             here.
+
+**`release.yml` was never affected, which is the part worth knowing.** It sets
+no `RUSTFLAGS` at all, so `.cargo/config.toml` applies there and every
+published artifact has been statically linked. The defect was in the
+verification path rather than in the release path, and the verification path
+is where it was caught.

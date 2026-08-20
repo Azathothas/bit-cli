@@ -120,6 +120,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-118](cli-surface.md) | P2 | cli | open | The short-flag table is not checked in CI |
 | [T-144](cli-surface.md) | P1 | ci | open | The MSRV job fails: the tree needs a newer rustc than it claims |
 | [T-145](cli-surface.md) | P2 | ci | open | The macOS test job fails to link |
+| [T-146](cli-surface.md) | P1 | ci | partial | CI built a Windows binary against the dynamic C runtime |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | open | reference/ is not deleted at the end of Phase B |
@@ -147,7 +148,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-104 items: 94 to work through, and 10 deferred to Phase C. Seventeen were added by
+105 items: 95 to work through, and 10 deferred to Phase C. Eighteen were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -179,13 +180,15 @@ T-143 is what T-140 left behind: a source can only be attached before a
 torrent starts, so a file donated by another torrent in the same run is used
 under `-j 1` and not above it. T-144 and T-145 came from reading CI rather
 than the code: the MSRV job has been failing because the tree needs rustc
-1.88 and claims 1.85.1, and the macOS test job fails to link on a platform
-nothing ships to.
+1.88 and claims 1.85.1, the macOS test job fails to link on a platform nothing
+ships to, and T-146 is the one that mattered: a workflow-level `RUSTFLAGS`
+replaced the per-target rustflags that make the Windows build static, so CI
+built against the dynamic C runtime and its own check caught it.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 |
-| P1 | 8 | 1 | 0 | 30 |
+| P1 | 8 | 2 | 0 | 30 |
 | P2 | 24 | 1 | 1 | 8 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
