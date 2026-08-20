@@ -359,7 +359,10 @@ Closed:      All three flags are in, plus a fourth,
              six cases end to end and is the acceptance for this entry and for
              [T-130](#t-130-a-source-cannot-be-told-which-statuses-are-worth-retrying).
              It lands with T-130, because two of its six cases need that flag.
-             At 64 MiB, all six as described:
+             The script has since grown to nine: the last three are
+             [T-137](#t-137-a-cooled-down-source-never-comes-back)'s and use
+             `--down-for`, which was added there. At 64 MiB, all six as
+             described:
 
              ```
              case             exit downloaded hash    302 403 retries ok
@@ -954,10 +957,11 @@ exist.
 
 1. **[T-131](#t-131-the-loopback-file-server-cannot-simulate-a-signed-url)**,
    the signing and redirecting file server, is **done**. `--sign-redirect`,
-   `--require-sig`, `--redirect-chain`, and `--recover-after` are on
-   `crates/bit-cli-core/examples/loopback-fileserver.rs`, and
+   `--require-sig`, `--redirect-chain`, `--recover-after`, and `--down-for`
+   are on `crates/bit-cli-core/examples/loopback-fileserver.rs`, and
    `scripts/check-signed-source.ps1` drives all six cases Scenario 1 and 4
-   need.
+   need, plus the three [T-137](#t-137-a-cooled-down-source-never-comes-back)
+   added.
 2. **The fixture**, which exists: `scripts/make-scenario-fixture.ps1`. It
    builds one payload, three torrents with different piece lengths, different
    surrounding files, and three different info hashes, a CDN copy under an

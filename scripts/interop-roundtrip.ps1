@@ -388,14 +388,24 @@ function Invoke-Case {
             }
         }
 
-        # The seeder's own account of what it sent. It exits on its own once
-        # the client disconnects, and its last line is the report, so this is
-        # bit-cli's number rather than an inference from the file sizes.
+        # The seeder's own account of what it sent, so this is bit-cli's number
+        # rather than an inference from the file sizes.
+        #
+        # It is the object whose `kind` is `seed`, found by walking the stream
+        # backwards, not simply the last line: under `--jsonl` every run now
+        # ends with a `session_end` event, and before that it ended with the
+        # report. Reading the last line was right until it was not, which is
+        # what this comment exists to stop happening again.
         $seedReport = $null
         if ($seed) {
             if ($seed.Process.WaitForExit(30 * 1000)) {
-                $last = Get-Content $seed.Stdout -Tail 1 -ErrorAction SilentlyContinue
-                if ($last) { $seedReport = $last | ConvertFrom-Json }
+                $lines = @(Get-Content $seed.Stdout -ErrorAction SilentlyContinue)
+                for ($index = $lines.Count - 1; $index -ge 0 -and -not $seedReport; $index--) {
+                    if (-not $lines[$index].Trim()) { continue }
+                    $parsed = $null
+                    try { $parsed = $lines[$index] | ConvertFrom-Json } catch { continue }
+                    if ($parsed.kind -eq "seed") { $seedReport = $parsed }
+                }
             } else {
                 [void]$failures.Add("bit-cli seed did not exit after the client finished")
             }

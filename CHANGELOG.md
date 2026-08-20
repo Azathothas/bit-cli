@@ -115,6 +115,13 @@ it, so the history starts here.
 - `webseed probe` measures ranged-GET latency percentiles and throughput as
   concurrency rises.
 - `webseed fetch` pulls one named range from one named source and verifies it.
+- `files --against <TORRENT>` decides from the metadata alone whether two
+  torrents hold the same file, and says what the answer rests on:
+  `piece-hashes` when the pieces line up and their hashes agree, which proves
+  the bytes equal, and `length` when only the size matches, which proves
+  nothing. Two files can be compared by hash only where the pieces cover the
+  same bytes of each, so it needs the same piece length and the same offset
+  modulo it.
 - `trackers` announces and scrapes over HTTP and UDP directly, reporting each
   tracker's tier, interval, seeder and leecher counts, and failure reason.
 - `bench webseed` measures HTTP sources: latency percentiles for connection
@@ -142,8 +149,27 @@ it, so the history starts here.
   time, and open handle count, sampled on the metrics interval as well as at
   the end. All of it read through the platform's own interfaces, with no new
   dependency.
+- `bench seed` measures a seeder: what leaves, per peer, and what the disk cost
+  to send it. The same envelope `bench leech` fills with every counter facing
+  the other way, bytes sent rather than received and positioned reads rather
+  than writes. `--include-hash-check` reports what the check on add cost before
+  the clock started, and `--exit-when-idle` stops a run nobody is pulling from.
+  Measured on loopback: 738.25 MiB to three peers reading 772.83 MiB off the
+  disk, a read amplification of 1.047.
 - Latency percentiles come from a histogram rather than a sorted vector, so a
   six hour run costs the same memory as a six second one.
+- Rates in a report carry their unit. A field named `rate` used to serialize
+  `"human": "2.75 MiB"`; it now reads `2.75 MiB/s`, with the same integer
+  beside it and the same wire shape, so an older report still reads back and
+  `--baseline` still compares the same field.
+- `scripts/check-stall.ps1` runs one command hundreds of times and reports the
+  distribution rather than a mean, because a mean says nothing about a tail.
+  A bridge counts every time it lost its connection to the session, what it
+  waited to make another, and what ended the attempt before it, so a run that
+  was waiting and one that was slow no longer look the same.
+- `scripts/soak.ps1` samples a long-lived seeder every 30 seconds for as long
+  as it is given, under one of six workloads, and writes resident memory,
+  handles, threads, CPU, and TCP socket states to a CSV with the slope of each.
 - The warmup window is reported rather than dropped. A sample taken during
   warmup is marked and excluded from the summary, because "it was slow for the
   first three seconds" is itself a result.
@@ -257,6 +283,25 @@ it, so the history starts here.
   writes `bench/multi-torrent-<timestamp>.json`.
 - Concurrency costs about 22 MiB of peak RSS and twelve handles per torrent in
   flight. CPU is flat for the same bytes.
+- Sources start in the order they were given, so `-j 1` is a sequence a caller
+  can depend on: a torrent whose source is a file an earlier torrent writes can
+  name it. The plans are a queue taken by a fixed pool of workers rather than a
+  task per plan queuing on a semaphore, which is what made the order the
+  scheduler's before.
+- `--web-seed-for` may name one torrent by info hash, `<40 hex>:file:N=URL`, so
+  a run over several torrents that share a file can say which one a binding
+  means. A hash naming no torrent in the run is a usage error rather than a
+  binding that quietly does nothing.
+- `--redial-after <DUR>` drops every peer connection and dials again when
+  nothing has arrived for that long, which throws away the reconnect backoff
+  instead of waiting it out. Measured against a 120 second outage: without it
+  the run exits 9 with 17.00 MiB of 128 after 300 seconds of patience, with it
+  the run re-dials four times and completes byte for byte.
+- `--web-seed-cooldown` is honoured. A source that spends its error budget
+  sleeps for that long and then reconnects with the error run cleared. It is
+  zero by default, meaning the source does not come back, which keeps a run
+  against one dead mirror failing in half a minute rather than sitting on a
+  timer. A sleeping source reports `"state": "cooling"` rather than `failed`.
 
 ### Contract
 
@@ -267,7 +312,18 @@ it, so the history starts here.
 - Every JSON document carries `schema_version`, `generated_at`, and
   `bit_cli_version`.
 - `--jsonl` emits one event per line with a monotonic `seq` and an ISO 8601 UTC
-  millisecond timestamp.
+  millisecond timestamp, and every run ends with a `session_end` event carrying
+  the exit code, so a consumer can tell "finished" from "the pipe broke".
+- `docs/schema.md` lists every document `kind` and every event `type` with the
+  fields each carries, and it is generated from what the program writes rather
+  than written by hand: a test drives every command, flattens the JSON, and
+  fails when a report carries a field the document does not.
+- A resumed download no longer charges its existing bytes to the swarm.
+  `from_web_seeds`, `from_peers`, and `from_resume` partition the total.
+- `--log-file` writes and rotates. `--log-max-size` is the size a live log may
+  reach and `--log-max-files` is the count kept in total, the live one
+  included. It adds a destination rather than replacing stderr, so
+  `bit-cli ... --json | jq` behaves the same either way.
 - Nothing is TTY-gated. Terminal detection decides colour and progress
   rendering and nothing else.
 - Six-layer configuration precedence, and `config show` reports the origin of
@@ -308,8 +364,7 @@ it, so the history starts here.
 
 ### Not in this release
 
-`bench seed`, `bench probe`, `bench swarm`, Metalink resolution, BEP 52 v2 and
-hybrid creation, BEP 16 superseeding, `--log-file` rotation, and
-`-i/--input-file`. Each has an entry in `TODO/` with what closes it. Nothing is
-stubbed: a command that is not implemented says so and exits with a code a
-script can branch on.
+`bench probe`, `bench swarm`, Metalink resolution, BEP 52 v2 and hybrid
+creation, BEP 16 superseeding, and `-i/--input-file`. Each has an entry in
+`TODO/` with what closes it. Nothing is stubbed: a command that is not
+implemented says so and exits with a code a script can branch on.

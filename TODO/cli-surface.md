@@ -55,6 +55,15 @@ The one case with no event is a flag that `clap` refuses: before the arguments
 parse there is no format to emit one in, so a usage error ends the stream by
 ending it. That is stated in `run`.
 
+**It broke one reader, and that is worth knowing before adding another event.**
+`scripts/interop-roundtrip.ps1` read the seeder's report as the last line of
+its `--jsonl` stream, which was right until `session_end` became the last line.
+Both seeding cases then failed with "bit-cli seed served no peer" while the
+transfer had in fact succeeded: 490,012 bytes uploaded to `aria2/1.37.0`, in
+the stream, two lines up. The script now walks backwards for the object whose
+`kind` is `seed`. Anything else consuming this stream by position rather than
+by `type` or `kind` has the same fault.
+
 The audit the Approach asks for is `docs/schema.md`, built by
 [T-117](#t-117---schema-version-has-no-schema-behind-it). Fourteen event types
 are documented, not the eleven A3.10 lists: `source_cooling`, `peer_redial`,
