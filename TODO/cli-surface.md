@@ -372,3 +372,77 @@ Approach:    Generate the table from the `clap` command tree, compare it to the
              concept.
 Acceptance:  `docs/flags.md` exists and a test regenerates it and fails on
              drift.
+
+### T-144 The MSRV job fails: the tree needs a newer rustc than it claims
+
+Source:      CI run 32386960166, 2026-08-20
+Category:    ci
+Priority:    P1
+Effort:      S
+Status:      open
+
+Problem:     `ci.yml`'s `MSRV` job pins rustc 1.85.1 and runs
+             `cargo check --workspace --locked --all-features`. It fails:
+
+             ```
+             serde_with@3.21.0 requires rustc 1.88
+             serde_with_macros@3.21.0 requires rustc 1.88
+             where <compatible-ver> is the latest version supporting rustc 1.85.1
+             ```
+
+             So the minimum supported version the repository advertises is not
+             a version the repository builds on, and the job has been red
+             since the dependency moved.
+Relevance:   An MSRV nobody can build with is worse than none: it fails every
+             push, and a red job that is always red stops being read. It also
+             misleads anyone packaging this for a distribution with an older
+             toolchain.
+Approach:    Three ways, and the choice is the operator's rather than the
+             build's. Raise the MSRV to 1.88 and say so in `Cargo.toml` and the
+             README. Or pin `serde_with` back to the last release that builds
+             on 1.85.1, with `cargo update serde_with@3.21.0 --precise <ver>`,
+             and add a comment saying why the pin exists. Or drop the MSRV job
+             and the claim with it.
+
+             Raising it is the honest default: nothing here needs an old
+             toolchain, and pinning a dependency back to keep a number is the
+             tail wagging the dog.
+Acceptance:  The `MSRV` job passes, and the version it pins is the version
+             `Cargo.toml` and the README name.
+
+### T-145 The macOS test job fails to link
+
+Source:      CI run 32386960166, 2026-08-20
+Category:    ci
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `Test (macos-latest)` fails during linking, not compilation:
+
+             ```
+             error: linking with `cc` failed: exit status: 1
+             clang: error: linker command failed with exit code 1
+             ```
+
+             It happens for every test binary, `hostile_paths` and
+             `bit_cli_core` among them, on `aarch64-apple-darwin`. The linker
+             line carries `aws-lc-sys`, `ring`, and `network-interface` build
+             outputs, so the first thing to check is which of those three fails
+             to produce a library on that target.
+Relevance:   macOS is not a release target: decision 9 names
+             `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, and
+             `x86_64-pc-windows-msvc`. So this is not a shipped platform, and
+             the job is testing something nobody gets. It matters because a red
+             job trains everyone to ignore the light.
+Approach:    Two honest options. Fix the link, which means finding which native
+             dependency does not build for `aarch64-apple-darwin` and whether a
+             feature choice avoids it, `rust-tls` against `aws-lc-rs` being the
+             likeliest lever. Or take macOS out of the test matrix and say in
+             the README that it is untested, which is what decision 9 already
+             implies.
+
+             Do not leave it red either way.
+Acceptance:  Either `Test (macos-latest)` passes, or the matrix does not
+             include it and `README.md` says which platforms are tested.
+
