@@ -64,7 +64,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-023](peers.md) | P1 | peers | **done** | The listen port is chosen without checking both address families |
 | [T-024](peers.md) | P2 | peers | open | Per-peer choke and unchoke history is not reported |
 | [T-025](peers.md) | P3 | peers | open | PeerStatsFilterState is not exported, so the filter is built by JSON |
-| [T-138](peers.md) | P2 | peers | open | A peer that comes back waits out a backoff that grows by six |
+| [T-138](peers.md) | P2 | peers | **done** | A peer that comes back waits out a backoff that grows by six |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
 | [T-032](performance.md) | P1 | performance | open | The piece selector strategy is not implemented |
@@ -72,7 +72,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
 | [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
 | [T-036](performance.md) | P0 | paths | **done** | A multi-file torrent with one file lands without its directory |
-| [T-037](performance.md) | P1 | performance | open | A run stalls for minutes, roughly once in fifty |
+| [T-037](performance.md) | P1 | performance | **done** | A run stalls for minutes, roughly once in fifty |
 | [T-040](memory.md) | P0 | memory | open | Memory and descriptors grow without bound over a long run |
 | [T-041](memory.md) | P2 | memory | open | Per-source window cache is bounded but not measured |
 | [T-042](memory.md) | P1 | memory | **done** | Peak RSS is not captured in any report |
@@ -126,7 +126,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-134](multi-source.md) | P2 | bep | open | v1 and v2 info hashes are not reconciled |
 | [T-135](multi-source.md) | P2 | performance | open | Source selection cannot be steered by method or by priority at run time |
 | [T-136](multi-source.md) | P2 | cli | open | Nothing states the end-to-end integrity guarantee |
-| [T-137](multi-source.md) | P2 | webseed | open | A cooled-down source never comes back |
+| [T-137](multi-source.md) | P2 | webseed | **done** | A cooled-down source never comes back |
+| [T-139](multi-source.md) | P1 | cli | **done** | A resumed download charges its existing bytes to the swarm |
+| [T-140](multi-source.md) | P2 | webseed | open | A proven shared file is not turned into a source on its own |
 | [T-200](phase-c.md) | n/a | phase-c | deferred | Session daemon |
 | [T-201](phase-c.md) | n/a | phase-c | deferred | JSON-RPC and XML-RPC, with aria2 method parity |
 | [T-202](phase-c.md) | n/a | phase-c | deferred | Queue management across invocations |
