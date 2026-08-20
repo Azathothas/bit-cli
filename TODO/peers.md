@@ -134,7 +134,7 @@ Source:      https://github.com/ikatson/rqbit/issues/363 (open)
 Category:    peers
 Priority:    P0
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     Disabling and re-enabling a network adapter mid-download drops the
              rate to zero and it never recovers, even after the adapter is
@@ -153,6 +153,95 @@ Acceptance:  `bit-cli download <TORRENT> --stop-timeout 60s` through a
              two-minute adapter outage either recovers and completes, or exits
              9 within 60 seconds of the stall with `"stopped": "stalled"`.
              Whichever it does is recorded here with the timeline.
+
+**It does both, and which one depends on a number nobody had looked at.**
+
+The adapter is not the variable and cannot be touched here anyway: disabling
+one is a change to the machine. What the client sees is the same either way,
+every peer connection dying at once and nothing reachable for a while, so the
+outage is the seeder being killed and restarted on the same port.
+`pwsh -NoProfile -File scripts/check-peer-recovery.ps1` does that, twice:
+
+```
+scenario  stop-timeout exit stopped   downloaded hash    gave up after
+patient   120s            0 completed 128.00 MiB matches -
+impatient 20s             9 stalled   17.00 MiB  -       19.4s
+```
+
+`--stop-timeout 20s` against a 40 second outage exits 9 with `"stopped":
+"stalled"` **19.4 seconds after the cut**, which is the acceptance's second
+branch and inside the timeout it was given. Left alone for longer, the same
+download re-dials the peer and completes with the payload hashing equal, which
+is the first branch.
+
+**What decides which is `librqbit`'s peer reconnect backoff, and it is steep.**
+`torrent_state/live/peer/stats/atomic.rs:52`: 10 second minimum, **factor 6**,
+one hour maximum. So a peer that drops is retried at roughly 10s, 70s, 430s,
+and then 36 minutes. An outage that ends between two of those attempts waits
+for the next one, however long the network has been back.
+
+That is what makes the entry's own two-minute case look like "never recovers".
+Measured directly: a 120 second outage with `--stop-timeout 180s` had the
+seeder back at t+129s and the download still sat at 17.00 MiB until its stall
+timeout fired at t+189s, because the next attempt was not due until t+438s. The
+same shape with a 40 second outage is caught by the 70 second attempt and
+completes.
+
+So the report is accurate as an observation and wrong as a diagnosis. Nothing
+is stuck. The client is waiting, and the wait grows by six every time.
+
+**What `bit-cli` does about it.** The backoff is not reachable: it is built in
+`pub(crate)` code from constants, `SessionOptions` does not carry it, and
+`add_peer_if_not_seen` is `pub(crate)` and refuses a peer it has already seen,
+so there is no public route to force a re-dial either. What is reachable is
+saying so, and `--stop-timeout` already does: a run that cannot continue exits
+9 and names the stall, which is what lets an unattended caller retry rather
+than wait. `README.md` now states the interaction under "Seeding for days",
+because a `--stop-timeout` shorter than the next backoff attempt turns a
+recoverable outage into a failure, and that is a choice a caller has to make
+deliberately rather than discover.
+
+The residue, forcing a re-dial rather than waiting out the backoff, is
+[T-138](#t-138-a-peer-that-comes-back-waits-out-a-backoff-that-grows-by-six).
+
+### T-138 A peer that comes back waits out a backoff that grows by six
+
+Source:      came out of closing T-021
+Category:    peers
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `librqbit`'s peer reconnect backoff is 10 seconds minimum with a
+             factor of 6, so attempts land at about 10s, 70s, 430s, and then
+             36 minutes. A peer that comes back one second after an attempt
+             fails is not tried again for six times as long as the last wait.
+             On a swarm of one peer, which is what `--peer` builds and what a
+             private tracker often is, that is the difference between a
+             download finishing and a download timing out.
+Relevance:   [T-021](#t-021-a-temporary-network-drop-stops-the-download-permanently)
+             measured it: a 120 second outage with the peer back at t+129s left
+             the run at 17 of 128 MiB until its stall timeout fired, because
+             the next attempt was due at t+438s.
+Approach:    Three, none of them free.
+
+             1. **Re-add the torrent on a stall.** `bit-cli` already knows the
+                source, the output directory, and the peer list. On a stall it
+                could remove the torrent from the session and add it again,
+                which resets peer state and re-dials `initial_peers`. The hash
+                check on add makes it safe and is what makes it expensive: a
+                full read of the payload every time. Bounded by only doing it
+                once per stall and by a cap on how many times.
+             2. **A second session.** Heavier, same shape, no advantage.
+             3. **Reach the backoff.** It is four constants in `pub(crate)`
+                code. Making it configurable is the small change upstream and
+                the one that fixes it properly, and it is the same fork
+                question [T-002](webseed.md) priced.
+Acceptance:  A 120 second outage with `--stop-timeout 300s` completes, and the
+             report says how long the run waited and how many times it
+             re-dialled. Today the same run exits 9 at t+189s with 17.00 MiB
+             of 128, recorded under
+             [T-021](#t-021-a-temporary-network-drop-stops-the-download-permanently).
 
 ### T-022 Peer connections churn on IPv6-only swarms
 

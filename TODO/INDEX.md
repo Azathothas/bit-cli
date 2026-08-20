@@ -59,13 +59,14 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-017](disk-io.md) | P1 | disk-io | **done** | Concurrent receive paths contend on the payload file |
 | [T-018](disk-io.md) | P2 | disk-io | open | The write path issues one operation per 16 KiB block |
 | [T-020](peers.md) | P0 | peers | open | Connections accumulate in CLOSE_WAIT until TCP is unusable |
-| [T-021](peers.md) | P0 | peers | open | A temporary network drop stops the download permanently |
+| [T-021](peers.md) | P0 | peers | **done** | A temporary network drop stops the download permanently |
 | [T-022](peers.md) | P1 | peers | open | Peer connections churn on IPv6-only swarms |
 | [T-023](peers.md) | P1 | peers | **done** | The listen port is chosen without checking both address families |
 | [T-024](peers.md) | P2 | peers | open | Per-peer choke and unchoke history is not reported |
 | [T-025](peers.md) | P3 | peers | open | PeerStatsFilterState is not exported, so the filter is built by JSON |
+| [T-138](peers.md) | P2 | peers | open | A peer that comes back waits out a backoff that grows by six |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
-| [T-031](performance.md) | P1 | performance | open | The rate limit did not apply to the session |
+| [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
 | [T-032](performance.md) | P1 | performance | open | The piece selector strategy is not implemented |
 | [T-033](performance.md) | P2 | performance | open | --split, -x, and -k do not reach the fetch path |
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
@@ -139,7 +140,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-96 items: 86 to work through, and 10 deferred to Phase C. Nine were added by
+97 items: 87 to work through, and 10 deferred to Phase C. Ten were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -160,9 +161,9 @@ scenarios work, with the commands that were run, and what the rest need.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
-| P0 | 3 | 1 | 0 | 7 |
-| P1 | 18 | 2 | 0 | 15 |
-| P2 | 23 | 1 | 1 | 5 |
+| P0 | 2 | 1 | 0 | 8 |
+| P1 | 17 | 2 | 0 | 16 |
+| P2 | 24 | 1 | 1 | 5 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 
@@ -264,9 +265,27 @@ item eight is the operator's own list.
    measurement. It found `--web-seed-speed-limit` accepted and ignored, which
    is T-035, now a token bucket per source.
 7. The long-run failures. [T-017](disk-io.md) and [T-030](performance.md) are
-   **done**; [T-020](peers.md), [T-021](peers.md), and [T-040](memory.md) are
-   where the open P0 work is. Measure before theorising: that is what closed
-   the first two, and both times the answer was not what the entry predicted.
+   **done**, and so are [T-021](peers.md) and [T-031](performance.md).
+   [T-020](peers.md) and [T-040](memory.md) are the two open P0s left. Measure
+   before theorising: every one of these closed that way, and every time the
+   answer was not what the entry predicted.
+
+   [T-021](peers.md) does both things its acceptance allows, and which one
+   depends on a number nobody had looked at. `librqbit` retries a dropped peer
+   at 10s, then 70s, then 430s: a factor of six. An outage that ends between
+   two attempts waits for the next one however long the network has been back,
+   which is what makes the report read as "never recovers". Measured, a 40
+   second outage is caught by the 70 second attempt and the download completes;
+   a 120 second one is not, and the run sits until `--stop-timeout` fires. The
+   residue is [T-138](peers.md).
+
+   [T-020](peers.md) was two defects. One is fixed: `librqbit`'s accept loop
+   panicked when its pending handshake-check set filled and a check failed,
+   which killed the listener while the process kept reporting itself as
+   seeding. 3000 connections that closed before handshaking did it in 79
+   seconds. The other is open: those same connections strand a socket about
+   half the time, accumulating linearly, released by later traffic and never
+   by time. `--max-handles` bounds it with a loud exit 16.
 
    [T-017](disk-io.md) rules the disk out rather than in. `bit-cli bench disk`
    writes the same bytes through the same storage from N threads with no

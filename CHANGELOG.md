@@ -44,6 +44,17 @@ it, so the history starts here.
 - `--web-seed-speed-limit` and a binding table's `rate_limit` are enforced. They
   parsed and were never applied, so a source told to stay under 24 MiB/s ran at
   116. A token bucket per source now paces requests before they go out.
+- `--max-download-rate` and `--max-upload-rate` are measured and hold. A 4MiB/s
+  cap sustains 4.10 MiB/s against 223.39 MiB/s uncapped, and the seeder side
+  caps a downloader that asked for no cap at 4.01 MiB/s.
+  `pwsh scripts/check-rate-limit.ps1` is the measurement. See
+  `TODO/performance.md` under T-031.
+- A download recovers from every peer going away and coming back, and how long
+  it takes is now written down. A dropped peer is retried at about 10 seconds,
+  then 70, then 430, so an outage ending between two attempts waits for the
+  next one. `--stop-timeout` set shorter than that turns a recoverable outage
+  into exit 9. `pwsh scripts/check-peer-recovery.ps1` drives both. See
+  `TODO/peers.md` under T-021.
 - A seeder no longer goes deaf under a burst of connections that close before
   they handshake. `librqbit`'s accept loop is a `tokio::select!` whose two
   branches can both be disabled at once, and when they are it panics, killing

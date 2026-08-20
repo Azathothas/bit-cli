@@ -1,0 +1,119 @@
+{
+  "kind": "check-peer-recovery",
+  "schema_version": "1",
+  "generated_at": "2026-08-20T11:50:49.867Z",
+  "host": {
+    "machine": "AJAM",
+    "os": "Microsoft Windows NT 10.0.26200.0",
+    "cpus": 20
+  },
+  "parameters": {
+    "payload_size": "128MiB",
+    "payload_bytes": 134217728,
+    "rate": "2MiB/s",
+    "cut_after_seconds": 8,
+    "outage_seconds": 40,
+    "stop_timeout": 20,
+    "patient_timeout": 120,
+    "port": 64910,
+    "profile": "release"
+  },
+  "payload_sha256": "17b6bf3a53e2527888334c63ab2b8c3eba5a96a26e84da9f68b49b9528d4c2a2",
+  "scenarios": [
+    {
+      "scenario": "patient",
+      "stop_timeout_s": 120,
+      "exit_code": 0,
+      "stopped": "completed",
+      "downloaded_bytes": 134217728,
+      "downloaded_human": "128.00 MiB",
+      "cut_at_ms": 9038,
+      "exited_at_ms": null,
+      "gave_up_after_ms": null,
+      "elapsed_ms": 174189,
+      "sha256": "17b6bf3a53e2527888334c63ab2b8c3eba5a96a26e84da9f68b49b9528d4c2a2",
+      "hash_matches": true,
+      "timeline": [
+        {
+          "at": "2026-08-20T11:47:23.747Z",
+          "t_ms": 12,
+          "event": "download started"
+        },
+        {
+          "at": "2026-08-20T11:47:31.765Z",
+          "t_ms": 8028,
+          "event": "cutting the seeder"
+        },
+        {
+          "at": "2026-08-20T11:48:13.201Z",
+          "t_ms": 49463,
+          "event": "outage over, the download is still running"
+        },
+        {
+          "at": "2026-08-20T11:48:13.986Z",
+          "t_ms": 50248,
+          "event": "the seeder is back on the same port"
+        },
+        {
+          "at": "2026-08-20T11:50:17.929Z",
+          "t_ms": 174189,
+          "event": "the download ended, exit 0"
+        }
+      ]
+    },
+    {
+      "scenario": "impatient",
+      "stop_timeout_s": 20,
+      "exit_code": 9,
+      "stopped": "stalled",
+      "downloaded_bytes": 17825792,
+      "downloaded_human": "17.00 MiB",
+      "cut_at_ms": 9024,
+      "exited_at_ms": 28438,
+      "gave_up_after_ms": 19414,
+      "elapsed_ms": 29211,
+      "sha256": "4d5c70a22a15f4e1d6caf70841db45499ed9aae4a3487371be985fac6791e714",
+      "hash_matches": false,
+      "timeline": [
+        {
+          "at": "2026-08-20T11:50:19.503Z",
+          "t_ms": 8,
+          "event": "download started"
+        },
+        {
+          "at": "2026-08-20T11:50:27.507Z",
+          "t_ms": 8012,
+          "event": "cutting the seeder"
+        },
+        {
+          "at": "2026-08-20T11:50:47.933Z",
+          "t_ms": 28438,
+          "event": "the download exited 9 during the outage"
+        },
+        {
+          "at": "2026-08-20T11:50:48.706Z",
+          "t_ms": 29211,
+          "event": "the seeder is back on the same port"
+        },
+        {
+          "at": "2026-08-20T11:50:48.707Z",
+          "t_ms": 29211,
+          "event": "the download ended, exit 9"
+        }
+      ]
+    }
+  ],
+  "verdict": "the download re-dialled and completed after a 40s outage, and gave up in 19.4s when told to be less patient",
+  "failures": [],
+  "commands": [
+    "bit-cli download C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\peer-recovery\\movie.torrent --dir C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\peer-recovery\\out-patient --peer 127.0.0.1:64910 --no-dht --no-lsd --no-tracker --no-web-seed --port 0 --max-download-rate 2MiB/s --stop-timeout 120s --report-interval 2s --json",
+    "bit-cli download C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\peer-recovery\\movie.torrent --dir C:\\Users\\AjamX\\Downloads\\TEMP\\kist\\.tmp\\peer-recovery\\out-impatient --peer 127.0.0.1:64910 --no-dht --no-lsd --no-tracker --no-web-seed --port 0 --max-download-rate 2MiB/s --stop-timeout 20s --report-interval 2s --json"
+  ],
+  "notes": [
+    "The outage is the seeder being killed and restarted on the same port. Disabling a network adapter is a change to the machine and is not done here; what the client sees is the same either way, every peer connection dying at once and nothing reachable for a while.",
+    "The port is chosen once by the OS on a socket that is then closed, because the peer has to come back at the address the client already knows and --port 0 would move it.",
+    "The transfer is held open with --max-download-rate so the outage lands in the middle of it. That cap is measured and holding in TODO/performance.md under T-031.",
+    "gave_up_after_ms is measured from the cut, polled every 500ms, so it is when the run decided rather than when this script noticed.",
+    "The impatient scenario is allowed 15s of slack over --stop-timeout, because the stall clock starts at the last progress rather than at the cut and the report interval quantises when it is checked."
+  ]
+}

@@ -147,7 +147,7 @@ Source:      https://github.com/ikatson/rqbit/issues/391 (closed, 2025-06-10)
 Category:    performance
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `SessionOptions::ratelimits` was reported not to take effect.
 Relevance:   `--max-download-rate` and `--max-upload-rate` go straight into
@@ -160,6 +160,42 @@ Approach:    The issue is closed upstream, which suggests the pinned 9.0.0
 Acceptance:  `bit-cli download <TORRENT> --max-download-rate 1MiB/s` sustains
              within 10 percent of 1 MiB/s over 60 seconds, and the same run
              uncapped is meaningfully faster. Both numbers recorded here.
+Closed:      Both caps hold, and the pinned 9.0.0 does carry the fix.
+             `pwsh -NoProfile -File scripts/check-rate-limit.ps1` is the
+             measurement: one seeder, one 128 MiB payload, three paired runs
+             alternating order, peers only.
+
+             ```
+             run mode     exit wall  bytes      rate
+               1 capped      0 31.2s 128.00 MiB 4.10 MiB/s
+               1 uncapped    0 0.6s  128.00 MiB 220.31 MiB/s
+               2 uncapped    0 0.6s  128.00 MiB 229.39 MiB/s
+               2 capped      0 31.2s 128.00 MiB 4.10 MiB/s
+               3 capped      0 31.2s 128.00 MiB 4.10 MiB/s
+               3 uncapped    0 0.6s  128.00 MiB 223.39 MiB/s
+
+             with the seeder capped at 4MiB/s and the downloader uncapped: 4.01 MiB/s
+             ```
+
+             `--max-download-rate 4MiB/s` sustains 4.10 MiB/s, 2.5% over the
+             cap and inside the 10% the acceptance asks for, against 223.39
+             MiB/s uncapped, which is 54 times faster. The other direction is
+             the same `LimitsConfig` field seen from the other end: with the
+             seeder started under `--max-upload-rate 4MiB/s` and the
+             downloader uncapped, the transfer comes out at 4.01 MiB/s.
+
+             The rate is computed from the wall clock and the bytes the report
+             says landed rather than from the report's own mean, so the
+             limiter is not measured by the thing it limits. Each run gets a
+             fresh output directory, because reusing one lets the hash check
+             on add find the payload already there and report the disk.
+
+             What this does **not** cover is `--max-overall-download-rate` and
+             `--max-overall-upload-rate` across several torrents in one
+             invocation, and the asymmetry that
+             [T-132](multi-source.md) is about: a session cap applies to peers
+             and to HTTP sources together, because a source reaches the
+             session as a peer.
 
 ### T-032 The piece selector strategy is not implemented
 

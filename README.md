@@ -566,6 +566,30 @@ as seeding. Measured, 3000 connections that closed before handshaking did it in
 79 seconds. `bit-cli` removes the branch that carries it, and the same flood
 now finishes in 8.8 seconds with the listener alive.
 
+## Downloading through an outage
+
+A download whose peers all go away recovers when they come back, but not
+immediately. A dropped peer is retried at about 10 seconds, then 70, then 430,
+a factor of six each time, so an outage that ends between two attempts waits
+for the next one however long the network has been back.
+
+That matters for `--stop-timeout`, which is how long with no progress a run
+waits before giving up with exit 9 and `"stopped": "stalled"`. Set shorter than
+the next retry, it turns a recoverable outage into a failure. Measured: a 40
+second outage is caught by the 70 second attempt and the download completes
+byte for byte; a 120 second outage is not, and a run given 180 seconds of
+patience still exits 9 because the next attempt was not due for another four
+minutes.
+
+```bash
+pwsh scripts/check-peer-recovery.ps1
+```
+
+So pick `--stop-timeout` deliberately. For an unattended run that a supervisor
+retries, short is right: fail in seconds and start again. For one that has to
+finish on its own, leave it off or set it past ten minutes. The numbers are in
+`TODO/peers.md` under T-021.
+
 ## Fetch one piece from one mirror
 
 ```bash
