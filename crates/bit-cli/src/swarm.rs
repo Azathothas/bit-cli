@@ -324,6 +324,28 @@ impl AttachedSource {
         self.statuses.iter().flat_map(|s| s.local_ports()).collect()
     }
 
+    /// Reconnects across every connection, the milliseconds spent waiting to
+    /// make them, and what ended the attempt before each one.
+    ///
+    /// Summed rather than maxed: each connection waits on its own backoff, and
+    /// what a run lost is what all of them lost. A source that served the
+    /// whole payload without a break reports zero, which is what makes a
+    /// non-zero number worth reading. See `TODO/performance.md`, T-037.
+    pub fn reconnects(&self) -> (u64, u64, BTreeMap<&'static str, u64>) {
+        let mut count = 0;
+        let mut waited = 0;
+        let mut reasons: BTreeMap<&'static str, u64> = BTreeMap::new();
+        for status in &self.statuses {
+            let (one, ms) = status.reconnects();
+            count += one;
+            waited += ms;
+            for (reason, times) in status.reconnect_reasons() {
+                *reasons.entry(reason).or_default() += times;
+            }
+        }
+        (count, waited, reasons)
+    }
+
     /// The request pipeline across every connection.
     ///
     /// The depths are summed rather than maxed: each connection is its own
@@ -368,6 +390,21 @@ pub struct SourceReport {
     /// by the code as a string because JSON object keys are strings.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub retries_by_status: BTreeMap<String, u64>,
+    /// How many times the connection to the session ended and was made again,
+    /// across every connection this source is presented over.
+    ///
+    /// A bridge waits between attempts on a delay that doubles from one second
+    /// to thirty, and `reconnect_wait_ms` is what that cost. A stalled run and
+    /// a slow one look the same in the byte counts and different here. See
+    /// `TODO/performance.md`, T-037.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub reconnects: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub reconnect_wait_ms: u64,
+    /// Those reconnects by what ended the attempt before each one:
+    /// `disconnected`, `link`, `stalled`, or `cooldown`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub reconnect_reasons: BTreeMap<String, u64>,
     /// How many times this source spent its error budget.
     ///
     /// One with `--web-seed-cooldown` at zero is the source being retired.
@@ -396,6 +433,7 @@ impl AttachedSource {
         let served = self.served_bytes();
         let (http_bytes, http_requests) = self.http();
         let (retries, retries_by_status) = self.retries();
+        let (reconnects, reconnect_wait_ms, reconnect_reasons) = self.reconnects();
         SourceReport {
             index: self.index,
             url: self.url.clone(),
@@ -413,6 +451,12 @@ impl AttachedSource {
             retries_by_status: retries_by_status
                 .into_iter()
                 .map(|(code, count)| (code.to_string(), count))
+                .collect(),
+            reconnects,
+            reconnect_wait_ms,
+            reconnect_reasons: reconnect_reasons
+                .into_iter()
+                .map(|(reason, count)| (reason.to_string(), count))
                 .collect(),
             cooldowns: self.fetcher.stats().cooldowns(),
             cooldown_until: self

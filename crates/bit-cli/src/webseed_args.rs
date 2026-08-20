@@ -30,6 +30,47 @@ use crate::env::Env;
 /// legitimate setting.
 const MAX_CONNECTIONS: usize = 32;
 
+/// Split an optional `<INFOHASH>:` qualifier off the front of a selector.
+///
+/// A binding applies to every torrent in the invocation, which is wrong when
+/// the same file sits at a different index in each. `-j 2` over two torrents
+/// that share a file needs to say which one it means, and the info hash is the
+/// only name a torrent has before its metadata is read.
+///
+/// The rule is mechanical: exactly forty hexadecimal characters followed by a
+/// colon is an info hash, anything else is part of the selector. No scope
+/// keyword is forty hex characters, so the only thing that could collide is a
+/// torrent whose file path begins that way, and `file:N` selects that file
+/// instead. See `TODO/multi-source.md`, T-133.
+fn split_torrent(selector: &str) -> (Option<&str>, &str) {
+    let Some((head, rest)) = selector.split_once(':') else {
+        return (None, selector);
+    };
+    match head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit()) {
+        true => (Some(head), rest),
+        false => (None, selector),
+    }
+}
+
+/// Every info hash a `--web-seed-for` binding names, with the binding it came
+/// from.
+///
+/// [`collect`] runs once per torrent and drops the bindings that are not for
+/// that one, so a hash naming no torrent in the invocation would be silently
+/// ignored. The caller checks this against the torrents it is about to add and
+/// fails instead, because a typo in a forty character hash is the likeliest
+/// mistake this flag has.
+pub fn qualified_torrents(args: &WebSeedArgs) -> Vec<(String, String)> {
+    args.web_seed_for
+        .iter()
+        .filter_map(|binding| {
+            let selector = binding.split_once('=')?.0;
+            let hash = split_torrent(selector).0?;
+            Some((binding.clone(), hash.to_ascii_lowercase()))
+        })
+        .collect()
+}
+
 /// Parse one of the two status policy flags.
 fn status_set(value: &Option<String>, flag: &str) -> Result<StatusSet> {
     match value {
@@ -221,6 +262,18 @@ pub fn collect(
             Error::usage(format!("--web-seed-for `{binding}` is not `SELECTOR=URL`"))
                 .with("value", binding.clone())
         })?;
+        let (wanted, selector) = split_torrent(selector);
+        if let Some(wanted) = wanted {
+            let Some(meta) = meta else {
+                return Err(Error::usage(format!(
+                    "--web-seed-for `{binding}` names a torrent by info hash, and this source's info hash is not known until its metadata resolves. Pass the .torrent, or drop the `{wanted}:` prefix to bind every torrent in the invocation."
+                ))
+                .with("value", binding.clone()));
+            };
+            if !meta.info_hash().hex().eq_ignore_ascii_case(wanted) {
+                continue;
+            }
+        }
         let scope =
             Scope::parse(selector).with_context(|| format!("--web-seed-for `{binding}`"))?;
         specs.push(shared.spec(url.to_string(), Origin::CommandLine, scope, shared.mode));
@@ -246,7 +299,9 @@ pub fn collect(
     for path in &args.web_seed_config {
         let path = env.resolve(path);
         let table = Table::load(&path)?;
-        specs.extend(table.into_specs(Origin::Config)?);
+        specs.extend(
+            table.into_specs(Origin::Config, meta.map(|m| m.info_hash().hex()).as_deref())?,
+        );
     }
 
     if specs.is_empty() && args.web_seed_only {
@@ -544,5 +599,120 @@ mod tests {
         .unwrap();
         let origins: Vec<Origin> = specs.iter().map(|s| s.origin).collect();
         assert_eq!(origins, [Origin::CommandLine, Origin::File]);
+    }
+
+    /// A binding may name one torrent, and one that names a different one is
+    /// dropped for this torrent rather than applied to it.
+    ///
+    /// Without this, `-j 2` over two torrents that share a file cannot say
+    /// which one a binding means, and the shared file is at a different index
+    /// in each. See `TODO/multi-source.md`, T-133.
+    #[test]
+    fn a_binding_qualified_by_info_hash_applies_to_that_torrent_alone() {
+        let fixture = crate::test_support::TorrentFixture::single_file();
+        let meta = Metainfo::read(&std::path::PathBuf::from(fixture.path_str())).unwrap();
+        let mine = &fixture.info_hash;
+        let other = "0000000000000000000000000000000000000000";
+
+        let specs = collect(
+            &args(&[
+                "--web-seed-for",
+                &format!("{mine}:file:0=https://mine.example.com/blob"),
+                "--web-seed-for",
+                &format!("{other}:file:0=https://other.example.com/blob"),
+                "--no-torrent-web-seed",
+            ]),
+            Some(&meta),
+            &env(),
+            no_network,
+        )
+        .unwrap();
+
+        let urls: Vec<&str> = specs.iter().map(|s| s.url.as_str()).collect();
+        assert_eq!(urls, ["https://mine.example.com/blob"]);
+        assert_eq!(specs[0].scope.text(), "file:0");
+    }
+
+    /// An unqualified binding still applies to every torrent, which is what a
+    /// single torrent run has always done.
+    #[test]
+    fn an_unqualified_binding_still_applies_to_every_torrent() {
+        let fixture = crate::test_support::TorrentFixture::single_file();
+        let meta = Metainfo::read(&std::path::PathBuf::from(fixture.path_str())).unwrap();
+        let specs = collect(
+            &args(&[
+                "--web-seed-for",
+                "file:0=https://any.example.com/blob",
+                "--no-torrent-web-seed",
+            ]),
+            Some(&meta),
+            &env(),
+            no_network,
+        )
+        .unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].scope.text(), "file:0");
+    }
+
+    /// A qualified binding needs the metadata. A magnet does not have it yet,
+    /// so it is a usage error rather than a binding that silently does
+    /// nothing.
+    #[test]
+    fn a_qualified_binding_without_metadata_is_a_usage_error() {
+        let hash = "0102030405060708090a0b0c0d0e0f1011121314";
+        let error = collect(
+            &args(&[
+                "--web-seed-for",
+                &format!("{hash}:file:0=https://cdn.example.com/blob"),
+            ]),
+            None,
+            &env(),
+            no_network,
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("info hash"), "{text}");
+    }
+
+    /// The qualifier is exactly forty hexadecimal characters and a colon.
+    /// Anything else is part of the selector, so a path that happens to start
+    /// with a colon-separated word is unaffected.
+    #[test]
+    fn only_forty_hex_characters_are_read_as_an_info_hash() {
+        assert_eq!(
+            split_torrent("0102030405060708090a0b0c0d0e0f1011121314:file:0"),
+            (Some("0102030405060708090a0b0c0d0e0f1011121314"), "file:0")
+        );
+        assert_eq!(split_torrent("file:0"), (None, "file:0"));
+        assert_eq!(split_torrent("piece:0-511"), (None, "piece:0-511"));
+        assert_eq!(split_torrent("a/b.iso"), (None, "a/b.iso"));
+        // Thirty-nine characters, so not a hash.
+        assert_eq!(
+            split_torrent("0102030405060708090a0b0c0d0e0f101112131:x"),
+            (None, "0102030405060708090a0b0c0d0e0f101112131:x")
+        );
+        // Forty characters, one of them not hex.
+        assert_eq!(
+            split_torrent("0102030405060708090a0b0c0d0e0f101112131z:x"),
+            (None, "0102030405060708090a0b0c0d0e0f101112131z:x")
+        );
+    }
+
+    /// The hashes a run has to check against the torrents it is adding.
+    #[test]
+    fn qualified_torrents_lists_every_hash_a_binding_names() {
+        let hash = "0102030405060708090A0B0C0D0E0F1011121314";
+        let parsed = qualified_torrents(&args(&[
+            "--web-seed-for",
+            &format!("{hash}:file:0=https://a.example.com/x"),
+            "--web-seed-for",
+            "file:1=https://b.example.com/y",
+        ]));
+        assert_eq!(parsed.len(), 1, "only the qualified one: {parsed:?}");
+        assert_eq!(
+            parsed[0].1,
+            hash.to_ascii_lowercase(),
+            "normalised to lower case"
+        );
     }
 }

@@ -416,7 +416,7 @@ Source:      the [T-030](#t-030-throughput-collapses-with-several-torrents-at-on
 Category:    performance
 Priority:    P1
 Effort:      M
-Status:      open, not reproducible on demand
+Status:      **done**, by the acceptance's second branch
 
 Problem:     One `-j 2` run of four 128 MiB torrents took 274,546 ms where the
              same command usually takes about 3,200 ms. It completed, and every
@@ -462,3 +462,75 @@ Acceptance:  Either a deliberate reproduction with the log showing where the
              in `--json` plus a run of at least two hundred invocations with
              none over five times the median. The report and the command go
              here either way.
+
+**The second branch, and the tail is 1.25 times the median over four hundred
+invocations.**
+
+**The instrument first.** A bridge now counts every time its connection to the
+session ended and it made another, what it waited to do so, and what ended the
+attempt before it. `BridgeStatus::record_reconnect` charges one reconnect to a
+reason, and `SourceReport` carries `reconnects`, `reconnect_wait_ms`, and
+`reconnect_reasons` per source, summed across the connections that source is
+presented over. The reasons are the `BridgeError` variants rather than their
+text, so a report groups by what happened: `disconnected`, `link`, `stalled`,
+`cooldown`.
+
+That is the number the entry was missing. A stalled run and a slow one look the
+same in the byte counts, and different here: the backoff is `RECONNECT_BASE`
+1 second doubling to `RECONNECT_MAX` 30, so the delays are 1, 2, 4, 8, 16, 30,
+30, and thirteen consecutive failures is **271 seconds**. The entry said nine,
+which is 61 seconds, and the arithmetic is in
+`the_reconnect_backoff_doubles_to_a_thirty_second_ceiling`. Thirteen is the
+number that matches the 274,546 ms run.
+
+**The measurement.** `scripts/check-stall.ps1` runs one fixed command N times
+and reports the distribution rather than a mean, because a mean says nothing
+about a tail: T-037's run was 85 times the median and no average over the same
+sixty runs would have shown it. The shape is the one the stall was seen in,
+four 128 MiB torrents at `-j 2` off a loopback file server.
+
+Two sweeps of 200, differing only in `--web-seed-connections`:
+
+| connections | median | p95 | p99 | slowest | max/median | reconnects |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1494 ms | 2050 ms | 2581 ms | 2972 ms | 1.99 | 0 |
+| 4 | 957 ms | 1077 ms | 1145 ms | 1201 ms | **1.25** | 0 |
+
+```
+$ pwsh -NoProfile -File scripts/check-stall.ps1 -Runs 200 -PayloadSize 128MiB
+```
+
+The second row is the exact shape `scripts/check-multi-torrent.ps1` runs, which
+is where the stall was seen, four connections per source being that script's
+default. `bench/stall-20260820T134721637Z.json` is that run.
+
+**Zero reconnects in 400 invocations.** Not one bridge lost its connection to
+the session in 1600 torrent-runs. That is what makes the counter worth having:
+a healthy run reports nothing, so a future run reporting anything is anomalous
+by construction rather than by comparison with a baseline nobody wrote down.
+
+Three things this settles and one it does not.
+
+- **The median moved, and that is expected.** The entry's "about 3,200 ms" was
+  measured before [T-030](#t-030-throughput-collapses-with-several-torrents-at-once)
+  and [T-036](#t-036-a-multi-file-torrent-with-one-file-lands-without-its-directory)
+  were fixed. The same command now runs in 957 ms at four connections. The
+  ratio is what the acceptance asks for and it does not depend on the baseline.
+- **The reconnect loop is not what a healthy run does.** The hypothesis in the
+  Approach was that a run of link failures at the doubling backoff explains the
+  274 seconds. It remains the only mechanism in the code that produces exactly
+  that shape, and it is now reported, so the next occurrence names itself.
+- **The 8,144 ms run in the earlier sixty-run sweep** was attributed to the
+  same backoff at three failures. Three failures is 1 + 2 + 4 = 7 seconds, which
+  fits.
+- **What this does not do is reproduce it.** 400 invocations produced no run
+  over twice the median. The acceptance's first branch stays unreached, and
+  what closes this entry is the second, which asks for the instrument and the
+  distribution rather than the reproduction.
+
+Point three of the Approach, a bound on the loop, is not implemented and is not
+needed by this acceptance. A bridge that has reconnected many times without
+serving a byte is bounded today by `--web-seed-max-errors` on the fetch side
+and by `--timeout` or `--stop-timeout` on the run. If the counters ever show a
+run of link failures in the wild, that is when the bound gets written, against
+a number rather than a guess.

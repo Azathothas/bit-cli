@@ -348,6 +348,16 @@ pub struct WebSeedArgs {
     pub web_seed_exact: Vec<String>,
 
     /// Bind a scope selector to a source, as SELECTOR=URL.
+    ///
+    /// The selector may name one torrent: prefix it with that torrent's info
+    /// hash and a colon, as `<40 hex>:file:0=URL`. Without a prefix the
+    /// binding applies to every torrent in the invocation, which is what a
+    /// single torrent run wants and wrong when the same file sits at a
+    /// different index in two of them.
+    ///
+    /// Exactly forty hexadecimal characters followed by a colon is read as an
+    /// info hash. A hash naming no torrent in the run is a usage error rather
+    /// than a binding that quietly does nothing.
     #[arg(long = "web-seed-for", value_name = "SEL=URL")]
     pub web_seed_for: Vec<String>,
 
@@ -584,6 +594,10 @@ pub struct DownloadArgs {
     pub max_redials: u32,
 
     /// Sources fetched in parallel within this one invocation.
+    ///
+    /// Sources start in the order they were given, so `-j 1` is a sequence: a
+    /// torrent whose source is a file an earlier torrent writes can name it,
+    /// and the earlier one will have finished.
     #[arg(short = 'j', long, value_name = "N", default_value_t = 1)]
     pub max_concurrent_downloads: usize,
 

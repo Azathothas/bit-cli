@@ -129,6 +129,19 @@ pub struct BridgeStatus {
     /// which with the depth above bounds throughput at depth over service
     /// time.
     service_nanos: AtomicU64,
+    /// How many times the connection to the session ended and was made again.
+    ///
+    /// A bridge that reconnects is not serving, and it waits between attempts
+    /// on a delay that doubles from one second to thirty. Nothing in the
+    /// report said so, which is why a run that spent four and a half minutes
+    /// waiting looked identical to one that was slow. See
+    /// `TODO/performance.md`, T-037.
+    reconnects: AtomicU64,
+    /// Milliseconds spent asleep between those attempts. This is the number
+    /// that says where a stalled run's time went.
+    reconnect_wait_ms: AtomicU64,
+    /// Those reconnects by why the last attempt ended, newest count last.
+    reconnect_reasons: Mutex<std::collections::BTreeMap<&'static str, u64>>,
 }
 
 impl Default for BridgeStatus {
@@ -144,6 +157,9 @@ impl Default for BridgeStatus {
             peak_in_flight: AtomicU64::new(0),
             requests: AtomicU64::new(0),
             service_nanos: AtomicU64::new(0),
+            reconnects: AtomicU64::new(0),
+            reconnect_wait_ms: AtomicU64::new(0),
+            reconnect_reasons: Mutex::new(std::collections::BTreeMap::new()),
         }
     }
 }
@@ -226,6 +242,38 @@ impl BridgeStatus {
     /// disconnected is still not a swarm member.
     pub fn local_ports(&self) -> Vec<u16> {
         self.ports.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// How many times this bridge reconnected, and how long it waited to.
+    ///
+    /// A stalled run and a slow one look the same in the byte counts. They do
+    /// not look the same here: a bridge that spent four minutes asleep between
+    /// attempts says so. See `TODO/performance.md`, T-037.
+    pub fn reconnects(&self) -> (u64, u64) {
+        (
+            self.reconnects.load(Ordering::Relaxed),
+            self.reconnect_wait_ms.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Those reconnects by why the attempt before each one ended.
+    pub fn reconnect_reasons(&self) -> std::collections::BTreeMap<&'static str, u64> {
+        self.reconnect_reasons
+            .lock()
+            .map(|reasons| reasons.clone())
+            .unwrap_or_default()
+    }
+
+    /// Charge one reconnect to a reason, with the wait that preceded it.
+    fn record_reconnect(&self, reason: &'static str, waited: Duration) {
+        self.reconnects.fetch_add(1, Ordering::Relaxed);
+        self.reconnect_wait_ms.fetch_add(
+            waited.as_millis().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+        if let Ok(mut reasons) = self.reconnect_reasons.lock() {
+            *reasons.entry(reason).or_default() += 1;
+        }
     }
 
     fn set_state(&self, state: BridgeState) {
@@ -400,6 +448,15 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
         let outcome = serve(&params, &fetcher, &status).await;
         status.set_local_port(0);
         status.reset_in_flight();
+        // Named before the reason string is moved into the error slot, and
+        // taken from the variant rather than the text, so a report groups by
+        // what happened rather than by how it was worded.
+        let ended = match &outcome {
+            Ok(()) => "disconnected",
+            Err(BridgeError::Source(_)) => "source",
+            Err(BridgeError::Link(_)) => "link",
+            Err(BridgeError::Stalled(_)) => "stalled",
+        };
         match outcome {
             Ok(()) => delay = RECONNECT_BASE,
             Err(BridgeError::Source(reason)) => {
@@ -426,6 +483,7 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
                             status.set_state(BridgeState::Cooling);
                             tokio::time::sleep(remaining).await;
                             fetcher.stats().end_cooldown(deadline);
+                            status.record_reconnect("cooldown", remaining);
                             // The mirror has had its time. Dial straight away
                             // rather than adding the link backoff on top of a
                             // wait the caller already chose.
@@ -441,6 +499,7 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
         }
         status.set_state(BridgeState::Connecting);
         tokio::time::sleep(delay).await;
+        status.record_reconnect(ended, delay);
         delay = (delay * 2).min(RECONNECT_MAX);
     }
 }
@@ -1022,5 +1081,51 @@ mod tests {
         status.add_served(512);
         assert_eq!(status.served_bytes(), 1536);
         assert_eq!(status.blocks(), 2);
+    }
+
+    /// A bridge that spent its run waiting says so.
+    ///
+    /// T-037 is a run that took 274 seconds where the same command usually
+    /// takes 3.2, with only 5.2 seconds of CPU behind it. Nothing in the
+    /// report distinguished that from a slow mirror. The reconnect counters
+    /// do: the wait is charged where it was spent and grouped by what ended
+    /// the attempt before it. See `TODO/performance.md`, T-037.
+    #[test]
+    fn reconnects_are_counted_with_the_wait_they_cost_and_why() {
+        let status = BridgeStatus::default();
+        assert_eq!(status.reconnects(), (0, 0));
+        assert!(status.reconnect_reasons().is_empty());
+
+        status.record_reconnect("link", Duration::from_millis(1000));
+        status.record_reconnect("link", Duration::from_millis(2000));
+        status.record_reconnect("disconnected", Duration::from_millis(1000));
+
+        let (count, waited) = status.reconnects();
+        assert_eq!(count, 3);
+        assert_eq!(waited, 4000);
+        let reasons = status.reconnect_reasons();
+        assert_eq!(reasons.get("link"), Some(&2));
+        assert_eq!(reasons.get("disconnected"), Some(&1));
+        assert_eq!(reasons.len(), 2, "only reasons that happened: {reasons:?}");
+    }
+
+    /// The backoff the run loop uses, checked as arithmetic rather than by
+    /// waiting it out.
+    ///
+    /// It starts at one second, doubles, and stops at thirty. That is what
+    /// sets the price of a stall: thirteen consecutive failures is 271
+    /// seconds, which is the shape of the run T-037 recorded.
+    #[test]
+    fn the_reconnect_backoff_doubles_to_a_thirty_second_ceiling() {
+        let mut delay = RECONNECT_BASE;
+        let mut waited = Duration::ZERO;
+        let mut steps = Vec::new();
+        for _ in 0..13 {
+            steps.push(delay.as_secs());
+            waited += delay;
+            delay = (delay * 2).min(RECONNECT_MAX);
+        }
+        assert_eq!(steps, vec![1, 2, 4, 8, 16, 30, 30, 30, 30, 30, 30, 30, 30]);
+        assert_eq!(waited.as_secs(), 271);
     }
 }

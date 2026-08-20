@@ -95,6 +95,15 @@ pub struct Defaults {
 pub struct Entry {
     /// Base URL, or the template when `mode` is `template`.
     pub url: String,
+    /// Info hash of the one torrent this source is for. Absent means every
+    /// torrent in the invocation, which is the default and what a single
+    /// torrent run wants.
+    ///
+    /// The same file sits at a different index in two different torrents, so a
+    /// run over both needs to say which one a binding means. See
+    /// `TODO/multi-source.md`, T-133.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torrent: Option<String>,
     /// Scope selector. Defaults to the whole torrent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
@@ -192,17 +201,35 @@ impl Table {
     ///
     /// Every entry is validated here rather than at first use, so a typo in
     /// entry nine is reported before entry one issues a request.
-    pub fn into_specs(self, origin: Origin) -> Result<Vec<SourceSpec>> {
+    /// Turn every entry into a spec, keeping only those that apply to this
+    /// torrent.
+    ///
+    /// `torrent` is the info hash of the torrent the specs are for, or `None`
+    /// when it is not known yet. An entry with no `torrent` field applies to
+    /// every torrent; one that names a hash applies to that torrent alone, and
+    /// naming a hash at all is an error when the caller does not yet know
+    /// which torrent it has. See `TODO/multi-source.md`, T-133.
+    pub fn into_specs(self, origin: Origin, torrent: Option<&str>) -> Result<Vec<SourceSpec>> {
         let defaults = self.default;
-        self.source
-            .into_iter()
-            .enumerate()
-            .map(|(index, entry)| {
+        let mut specs = Vec::new();
+        for (index, entry) in self.source.into_iter().enumerate() {
+            if let Some(wanted) = entry.torrent.as_deref() {
+                let Some(have) = torrent else {
+                    return Err(Error::config(format!(
+                        "source {index} in the binding table names torrent {wanted}, and this source's info hash is not known until its metadata resolves"
+                    )));
+                };
+                if !have.eq_ignore_ascii_case(wanted) {
+                    continue;
+                }
+            }
+            specs.push(
                 entry
                     .into_spec(&defaults, origin)
-                    .with_context(|| format!("source {index} in the binding table is invalid"))
-            })
-            .collect()
+                    .with_context(|| format!("source {index} in the binding table is invalid"))?,
+            );
+        }
+        Ok(specs)
     }
 }
 
@@ -384,7 +411,7 @@ headers    = { X-Region = "apac" }
     #[test]
     fn a_toml_table_parses_into_specs() {
         let table = Table::parse(TOML, false).unwrap();
-        let specs = table.into_specs(Origin::Config).unwrap();
+        let specs = table.into_specs(Origin::Config, None).unwrap();
         assert_eq!(specs.len(), 3);
 
         assert_eq!(specs[0].url, "https://mirror-a.example.com/pub/");
@@ -414,7 +441,7 @@ headers    = { X-Region = "apac" }
     fn defaults_reach_every_entry() {
         let specs = Table::parse(TOML, false)
             .unwrap()
-            .into_specs(Origin::Config)
+            .into_specs(Origin::Config, None)
             .unwrap();
         for spec in &specs {
             assert_eq!(spec.user_agent.as_deref(), Some("bit-cli/0.1.0"));
@@ -434,11 +461,11 @@ headers    = { X-Region = "apac" }
         }"#;
         let from_json = Table::parse(json, true)
             .unwrap()
-            .into_specs(Origin::Config)
+            .into_specs(Origin::Config, None)
             .unwrap();
         let from_toml = Table::parse(TOML, false)
             .unwrap()
-            .into_specs(Origin::Config)
+            .into_specs(Origin::Config, None)
             .unwrap();
         assert_eq!(from_json, from_toml);
     }
@@ -461,7 +488,7 @@ url = "https://e.com/"
 "#;
         let specs = Table::parse(toml, false)
             .unwrap()
-            .into_specs(Origin::Config)
+            .into_specs(Origin::Config, None)
             .unwrap();
         assert_eq!(specs[0].limits.concurrency, 2);
     }
@@ -479,7 +506,7 @@ url = "https://e.com/"
         let toml = "[[source]]\nurl = \"https://e.com/\"\nchunk_size = \"4 potatoes\"\n";
         let err = Table::parse(toml, false)
             .unwrap()
-            .into_specs(Origin::Config)
+            .into_specs(Origin::Config, None)
             .unwrap_err();
         assert_eq!(err.code(), crate::exit::ExitCode::Config);
         assert!(err.to_string().contains("chunk_size"), "{err}");
@@ -491,7 +518,7 @@ url = "https://e.com/"
         assert!(
             Table::parse(toml, false)
                 .unwrap()
-                .into_specs(Origin::Config)
+                .into_specs(Origin::Config, None)
                 .is_err()
         );
     }
@@ -503,7 +530,7 @@ url = "https://e.com/"
             assert!(
                 Table::parse(&toml, false)
                     .unwrap()
-                    .into_specs(Origin::Config)
+                    .into_specs(Origin::Config, None)
                     .is_err(),
                 "{bad} should be refused"
             );
@@ -522,7 +549,7 @@ headers = { X-Region = "apac" }
 "#;
         let specs = Table::parse(toml, false)
             .unwrap()
-            .into_specs(Origin::Config)
+            .into_specs(Origin::Config, None)
             .unwrap();
         assert_eq!(specs[0].headers["X-Region"], "apac");
         assert_eq!(specs[0].headers["X-Trace"], "on");
@@ -533,7 +560,7 @@ headers = { X-Region = "apac" }
         assert!(
             Table::parse("", false)
                 .unwrap()
-                .into_specs(Origin::Config)
+                .into_specs(Origin::Config, None)
                 .unwrap()
                 .is_empty()
         );
@@ -582,8 +609,8 @@ headers = { X-Region = "apac" }
         let rendered = toml::to_string(&table).unwrap();
         let back = Table::parse(&rendered, false).unwrap();
         assert_eq!(
-            back.into_specs(Origin::Config).unwrap(),
-            table.into_specs(Origin::Config).unwrap()
+            back.into_specs(Origin::Config, None).unwrap(),
+            table.into_specs(Origin::Config, None).unwrap()
         );
     }
 }

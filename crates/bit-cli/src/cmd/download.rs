@@ -160,12 +160,16 @@ pub fn run(
     // Every source is classified before the session starts, so a typo in the
     // fifth argument fails before the first byte is fetched.
     let mut plans = Vec::with_capacity(args.sources.len());
+    let mut known_hashes: HashSet<String> = HashSet::new();
     for source in &args.sources {
         let kind = Kind::classify(source, env)?;
         let meta = match &kind {
             Kind::File(path) => Some(Metainfo::read(path)?),
             _ => None,
         };
+        if let Some(meta) = &meta {
+            known_hashes.insert(meta.info_hash().hex().to_ascii_lowercase());
+        }
         let specs = webseed_args::collect(
             &args.web_seeds,
             meta.as_ref(),
@@ -178,6 +182,21 @@ pub fn run(
             specs,
             trackers,
         });
+    }
+
+    // A binding for a torrent that is not in this invocation binds nothing,
+    // and `collect` drops it per torrent without knowing that. A mistyped
+    // forty character hash would otherwise be a run that quietly used no
+    // source at all.
+    for (binding, hash) in webseed_args::qualified_torrents(&args.web_seeds) {
+        if !known_hashes.contains(&hash) {
+            let known: Vec<String> = known_hashes.iter().cloned().collect();
+            return Err(Error::usage(format!(
+                "--web-seed-for `{binding}` names info hash {hash}, which is not one of the torrents in this run"
+            ))
+            .with("value", binding)
+            .with("torrents", known.join(", ")));
+        }
     }
 
     let init_timeout = swarm::duration_flag(&args.limits.init_timeout, "init-timeout")?;
@@ -231,12 +250,22 @@ pub fn run(
         )?;
 
         let (tx, mut rx) = mpsc::channel::<Msg>(256);
-        let permits = Arc::new(tokio::sync::Semaphore::new(concurrency));
+        // A queue of plans taken in order by a fixed pool of workers, rather
+        // than one task per plan queuing on a semaphore. Two reasons. The
+        // order torrents start in is then the order they were given, which is
+        // what makes `-j 1` a sequence a caller can depend on: a torrent whose
+        // source is a file an earlier torrent writes needs the earlier one to
+        // go first. And a hundred sources no longer spawn a hundred tasks that
+        // do nothing but wait.
+        let queue = Arc::new(tokio::sync::Mutex::new(
+            plans.into_iter().collect::<std::collections::VecDeque<_>>(),
+        ));
+        let workers_wanted = concurrency.min(queue.lock().await.len().max(1));
         let mut workers = tokio::task::JoinSet::new();
-        for plan in plans {
+        for _ in 0..workers_wanted {
             let engine = engine.clone();
             let tx = tx.clone();
-            let permits = permits.clone();
+            let queue = queue.clone();
             let options = Options {
                 // Existing data is hash-checked on add, and the check is what
                 // makes resuming safe. All four of these flags mean "look at
@@ -263,9 +292,16 @@ pub fn run(
                 max_redials: args.max_redials,
             };
             workers.spawn(async move {
-                let _permit = permits.acquire().await;
-                let report = one(&engine, plan, options, &tx).await;
-                let _ = tx.send(Msg::Done(Box::new(report))).await;
+                loop {
+                    // The lock is held only to take the next plan, never
+                    // across the download, so one slow torrent does not hold
+                    // the queue.
+                    let Some(plan) = queue.lock().await.pop_front() else {
+                        break;
+                    };
+                    let report = one(&engine, plan, options.clone(), &tx).await;
+                    let _ = tx.send(Msg::Done(Box::new(report))).await;
+                }
             });
         }
         drop(tx);
@@ -1185,6 +1221,37 @@ fn lines(report: &DownloadReport) -> Vec<String> {
                 };
                 out.push(field("  retries", format!("{}{detail}", source.retries)));
             }
+            // Same rule: absent when the source never lost its connection,
+            // which is the healthy case. When it is there it is the line that
+            // says a run was waiting rather than working.
+            if source.reconnects > 0 {
+                let by_reason: Vec<String> = source
+                    .reconnect_reasons
+                    .iter()
+                    .map(|(reason, count)| format!("{count} {reason}"))
+                    .collect();
+                out.push(field(
+                    "  reconnects",
+                    format!(
+                        "{} in {} ({})",
+                        source.reconnects,
+                        bit_cli_core::units::format_duration(Duration::from_millis(
+                            source.reconnect_wait_ms
+                        )),
+                        by_reason.join(", ")
+                    ),
+                ));
+            }
+            if source.cooldowns > 0 {
+                let left = match source.cooldown_remaining_ms {
+                    Some(ms) => format!(
+                        ", {} left",
+                        bit_cli_core::units::format_duration(Duration::from_millis(ms))
+                    ),
+                    None => String::new(),
+                };
+                out.push(field("  cooldowns", format!("{}{left}", source.cooldowns)));
+            }
             if let Some(error) = &source.error {
                 out.push(field("  error", error));
             }
@@ -1724,6 +1791,56 @@ mod tests {
             report["torrents"][0]["redials"].is_null(),
             "an empty array is not serialised: {}",
             report["torrents"][0]
+        );
+    }
+
+    /// `-j 1` runs the sources in the order they were given.
+    ///
+    /// A torrent whose source is a file an earlier torrent writes needs the
+    /// earlier one to have finished, which only holds if the order is the
+    /// caller's rather than the scheduler's. Before the plans became a queue
+    /// taken by a fixed pool, every plan was its own task queuing on a
+    /// semaphore, and which task reached the semaphore first was up to the
+    /// runtime. See `TODO/multi-source.md`, T-133.
+    #[test]
+    fn sources_start_in_the_order_they_were_given() {
+        let first = TorrentFixture::single_file();
+        let second = TorrentFixture::multi_file();
+        let out = first.dir().join("out");
+
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "--jsonl",
+                "download",
+                first.path_str(),
+                second.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "-j",
+                "1",
+                "--report-interval",
+                "200ms",
+                "--stop-after",
+                "1s",
+            ],
+            first.dir(),
+        );
+        let _ = crate::run(&mut env);
+        let events = captured.jsonl().expect("stdout was not ndjson");
+        let added: Vec<String> = events
+            .iter()
+            .filter(|event| event["type"] == "torrent_added")
+            .filter_map(|event| event["info_hash"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(
+            added,
+            [first.info_hash.clone(), second.info_hash.clone()],
+            "torrents started out of order: {added:?}"
         );
     }
 }
