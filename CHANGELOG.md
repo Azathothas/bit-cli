@@ -152,6 +152,13 @@ it, so the history starts here.
   request pipeline, piece verification, and the disk. All three are measured
   rather than modelled, and all three appear per interval as well as in the
   summary.
+- `bench probe` answers what comes before "how fast": one exchange with one
+  target, no payload, and the same environment every other bench report
+  carries. A `HOST:PORT` gets a BitTorrent handshake and a short listen, so the
+  report names the peer id, the client, the reserved bytes and what they claim,
+  the extended handshake, and the messages it volunteered. An `http(s)` URL
+  gets one ranged GET for a single byte, with the redirect chain hop by hop and
+  the TLS version and cipher. An unreachable target exits 6.
 - `bench disk` measures the disk on its own: a payload written through the same
   storage a download writes through, from N threads, with no session and no
   network. `--layout shared|handles|split` decides whether the threads share

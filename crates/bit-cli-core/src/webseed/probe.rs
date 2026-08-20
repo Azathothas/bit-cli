@@ -58,7 +58,7 @@ impl RangeSupport {
 }
 
 /// What TLS was negotiated, when the source is HTTPS.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TlsReport {
     /// `TLSv1.3` or `TLSv1.2`.
     pub version: String,

@@ -272,6 +272,104 @@ pub fn text(report: &Report) -> Vec<String> {
         ));
     }
 
+    // A probe has no throughput, so its findings are the report. Rendered
+    // before the summary, which for a probe carries only the deadline and
+    // whether the one exchange failed.
+    if let Some(probe) = &report.probe {
+        out.push(String::new());
+        out.push("Probe".to_string());
+        out.push(field("  target", &probe.target));
+        out.push(field("  kind", &probe.kind));
+        out.push(field(
+            "  reachable",
+            match probe.reachable {
+                true => "yes",
+                false => "no",
+            },
+        ));
+        if let Some(connect) = probe.connect {
+            out.push(field("  connect", format_duration_ms(connect.0)));
+        }
+        if let Some(first) = probe.first_response {
+            out.push(field("  first response", format_duration_ms(first.0)));
+        }
+        if let Some(error) = &probe.error {
+            out.push(field("  error", error));
+        }
+        if let Some(peer) = &probe.peer {
+            out.push(field("  peer id", &peer.peer_id));
+            if let Some(client) = &peer.client {
+                out.push(field("  client", client));
+            }
+            out.push(field("  reserved", &peer.reserved));
+            out.push(field(
+                "  extensions",
+                match peer.extensions.is_empty() {
+                    true => "none claimed".to_string(),
+                    false => peer.extensions.join(", "),
+                },
+            ));
+            out.push(field(
+                "  info hash",
+                match peer.info_hash_matches {
+                    true => "echoed",
+                    false => "not echoed: it answered about a different torrent",
+                },
+            ));
+            if let Some(extended) = &peer.extended {
+                if let Some(client) = &extended.client {
+                    out.push(field("  says it is", client));
+                }
+                if let Some(queue) = extended.request_queue {
+                    out.push(field("  request queue", queue));
+                }
+                if !extended.extensions.is_empty() {
+                    out.push(field(
+                        "  extension messages",
+                        extended.extensions.join(", "),
+                    ));
+                }
+                if let Some(upload_only) = extended.upload_only {
+                    out.push(field("  upload only", upload_only));
+                }
+            }
+            if !peer.messages.is_empty() {
+                out.push(field("  messages", peer.messages.join(", ")));
+            }
+            if let Some(pieces) = peer.pieces_advertised {
+                out.push(field("  pieces advertised", pieces));
+            }
+        }
+        if let Some(http) = &probe.http {
+            out.push(field("  status", http.status));
+            out.push(field(
+                "  ranges",
+                match http.range_support {
+                    true => "supported",
+                    false => "not answered with 206",
+                },
+            ));
+            if let Some(length) = http.entity_length.or(http.content_length) {
+                out.push(field("  length", format_size(length)));
+            }
+            if let Some(server) = &http.server {
+                out.push(field("  server", server));
+            }
+            out.push(field("  http", &http.http_version));
+            for hop in &http.redirects {
+                out.push(field("  redirect", hop));
+            }
+            if let Some(resolved) = &http.resolved_url {
+                out.push(field("  resolved to", resolved));
+            }
+            if let Some(tls) = &http.tls {
+                out.push(field(
+                    "  tls",
+                    format!("{} with {}", tls.version, tls.cipher_suite),
+                ));
+            }
+        }
+    }
     out.push(String::new());
     out.push("Summary".to_string());
     let summary = &report.summary;

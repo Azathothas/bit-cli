@@ -27,7 +27,7 @@ Approach:    Build in this order, because each reuses the last:
              3. `bench leech`, which is `download` plus the time series.
                 **Done.**
              4. `bench seed`, which is `seed` plus the time series.
-             5. `bench probe`, a one-shot reachability check.
+             5. `bench probe`, a one-shot reachability check. **Done.**
              6. `bench swarm`, the synthetic load generator, which is the
                 largest and should come last. See [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator).
 
@@ -225,6 +225,78 @@ is the test.
 Still open: `probe` and `swarm` refuse with exit 1 naming this entry, the same
 as before. `bench swarm` is [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator)
 and is the largest of the three.
+
+
+`bench probe` is built, which is step 5. It answers the question that comes
+before "how fast": is the thing there, and what does it speak. It moves no
+payload, so its report carries the environment and the facts and no time
+series.
+
+A target is a peer address or an HTTP endpoint, decided from the address
+itself. Against a live `bit-cli seed` on loopback:
+
+```
+$ bit-cli bench probe 127.0.0.1:51999 --for pb.torrent --format text
+
+Probe
+  target               127.0.0.1:51999
+  kind                 peer
+  reachable            yes
+  connect              1ms
+  first response       0ms
+  peer id              -rQ9000-1%ba%01%06%ad0%b4xM%f5%d0%7f
+  client               rqbit 9000
+  reserved             0000000000100000
+  extensions           extension-protocol
+  info hash            echoed
+  says it is           bit-cli 0.1.0
+  extension messages   ut_metadata, ut_pex
+  messages             extended, bitfield, unchoke
+  pieces advertised    10
+```
+
+Two things that output says which are worth reading twice. The wire peer id is
+`librqbit`'s `-rQ9000-` while the extended handshake says `bit-cli 0.1.0`,
+because the session is handed a client name and picks its own peer id. And the
+reserved bytes claim BEP 10 and nothing else: no DHT bit, no fast extension.
+Both are facts about what `bit-cli` puts on the wire, and neither was visible
+from inside the tool before this.
+
+Against an HTTP endpoint it is a one-byte ranged `GET`, redirects followed by
+hand and reported hop by hop, with the TLS version and cipher when the scheme
+is `https`:
+
+```
+$ bit-cli bench probe http://127.0.0.1:64341/pb/payload/blob.bin --format text
+  status               206
+  ranges               supported
+  length               292.97 KiB
+  http                 HTTP/1.1
+```
+
+`--for <SOURCE>` names the torrent a peer is asked about, as a `.torrent`, a
+magnet, or an info hash. Without it the handshake carries a zero info hash, a
+peer is entitled to hang up on it, and the report says so in a note rather
+than leaving the reader to wonder.
+
+A probe ends when the peer goes quiet rather than when the deadline expires.
+A peer volunteers its greeting in one burst, and waiting out `--timeout` after
+that made every probe cost ten seconds: 8.736s before, 0.546s after, for the
+same three messages.
+
+An unreachable target exits 6, `no_usable_sources`, which is what a script
+branches on. Four tests cover it, all on loopback: a real seeder read off the
+wire, an HTTP endpoint that answers a range, a port nothing listens on, and a
+target that is neither.
+
+**Building it found one thing in the fixtures.** `test_support::FileServer`
+matched `Range: bytes=` exactly, and every HTTP client writes header names in
+lower case, so it had never matched a range in its life: every ranged request
+was answered with the whole file and a `200`. Small fixtures still verified,
+which is what hid it. It now matches the name case insensitively, and the
+probe's `range_support` is the assertion that would have caught it.
+
+`bench swarm` is what is left, and it is [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator).
 
 ### T-091 Bench reports do not capture their environment
 

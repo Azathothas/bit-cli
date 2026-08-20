@@ -1355,7 +1355,7 @@ pub enum BenchCommand {
     /// Synthetic peer load against a target.
     Swarm(BenchArgs),
     /// One-shot capability and reachability probe.
-    Probe(BenchArgs),
+    Probe(BenchProbeArgs),
 }
 
 /// Flags shared by every `bench` subcommand.
@@ -1444,6 +1444,35 @@ pub enum ReportFormat {
     Text,
 }
 
+/// `bit-cli bench probe`.
+///
+/// One exchange with one target, which is either a peer address or an HTTP
+/// endpoint. It moves no payload and has no time series, so it takes only the
+/// report flags and a deadline rather than the shared benchmark set.
+#[derive(Debug, Args)]
+pub struct BenchProbeArgs {
+    /// `HOST:PORT` for a peer, or an `http(s)://` URL for a mirror.
+    #[arg(value_name = "TARGET")]
+    pub target: String,
+
+    /// The torrent to ask a peer about, as a `.torrent`, a magnet, or an info
+    /// hash.
+    ///
+    /// A BitTorrent handshake names a torrent, and a peer that does not have
+    /// the one it was asked about is entitled to hang up. Without this the
+    /// probe sends a zero info hash, which reaches the handshake and usually
+    /// no further.
+    #[arg(long = "for", value_name = "SOURCE")]
+    pub source: Option<String>,
+
+    /// How long to wait for each step, and how long to listen after the
+    /// handshake.
+    #[arg(long, value_name = "DUR", default_value = "10s")]
+    pub timeout: String,
+
+    #[command(flatten)]
+    pub report: ReportArgs,
+}
 /// A generic `bench` target.
 #[derive(Debug, Args)]
 pub struct BenchArgs {

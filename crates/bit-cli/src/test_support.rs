@@ -330,9 +330,18 @@ impl FileServer {
                     let Some(path) = start.split_whitespace().nth(1) else {
                         return;
                     };
+                    // Header names are case insensitive, and every HTTP client
+                    // this is pointed at writes them lower case, so matching
+                    // `Range:` exactly matched nothing: every ranged request
+                    // was answered with the whole file and a 200. Small
+                    // fixtures still verified, which is what hid it.
                     let range = text
                         .lines()
-                        .find_map(|line| line.strip_prefix("Range: bytes="))
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.trim().eq_ignore_ascii_case("range").then_some(value)
+                        })
+                        .and_then(|value| value.trim().strip_prefix("bytes="))
                         .and_then(|spec| spec.split_once('-'))
                         .map(|(a, b)| (a.to_string(), b.to_string()));
 

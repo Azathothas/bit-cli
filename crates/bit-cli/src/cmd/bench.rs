@@ -57,8 +57,129 @@ pub fn run(
         BenchCommand::Disk(args) => disk(args, global, renderer, env),
         BenchCommand::Seed(args) => seed(args, global, renderer, env),
         BenchCommand::Swarm(args) => unbuilt(Kind::Swarm, args),
-        BenchCommand::Probe(args) => unbuilt(Kind::Probe, args),
+        BenchCommand::Probe(args) => probe(args, global, renderer, env),
     }
+}
+
+/// `bit-cli bench probe`: one exchange with one target.
+///
+/// This is the question that comes before "how fast": is the thing there, and
+/// what does it speak. It moves no payload and runs for one exchange, so the
+/// report carries the environment and the facts and no time series.
+///
+/// See `TODO/bench.md`, T-090, step 5.
+fn probe(
+    args: &crate::cli::BenchProbeArgs,
+    global: &Global,
+    renderer: &mut Renderer,
+    env: &mut Env,
+) -> Result<ExitCode> {
+    use bit_cli_core::bench::probe as engine;
+
+    let output = Output::resolve(&args.report, global, env)?;
+    let timeout = parse_duration(&args.timeout)
+        .map_err(|e| Error::usage(format!("--timeout: {e}")).with("value", args.timeout.clone()))?;
+    let target = engine::classify(&args.target)?;
+
+    let mut report = Report::new(
+        Kind::Probe,
+        Environment::begin(
+            build(),
+            env.args.clone(),
+            env.cwd.display().to_string(),
+            global.trace.clone(),
+        ),
+    );
+    report.parameters.duration = Millis::from(timeout);
+    report.target = Target {
+        source: args.target.clone(),
+        endpoints: vec![args.target.clone()],
+        ..Default::default()
+    };
+
+    // A handshake names a torrent. Without one the probe still reaches the
+    // handshake and usually no further, which is worth saying in the report
+    // rather than leaving as a mystery in the peer's own logs.
+    let mut info_hash = [0u8; 20];
+    if let Some(source) = &args.source {
+        let kind = SourceKind::classify(source, env)?;
+        let resolved = match &kind {
+            SourceKind::File(path) => Some(Metainfo::read(path)?.info_hash()),
+            _ => kind.info_hash(),
+        };
+        match resolved {
+            Some(hash) => {
+                info_hash = hash.0;
+                report.target.info_hash = Some(hash.hex());
+            }
+            None => {
+                return Err(Error::source_resolution(format!(
+                    "{source}: --for needs a torrent, a magnet, or an info hash, and this carries none"
+                ))
+                .with("value", source.clone()));
+            }
+        }
+    } else if matches!(target, engine::Probe::Peer(_)) {
+        report.note(
+            "no --for, so the handshake names a zero info hash: a peer is entitled to hang up on it",
+        );
+    }
+
+    if global.dry_run {
+        report.note("dry run: nothing was contacted");
+        report.environment.finish();
+        return emit(&report, &output, renderer, env, ExitCode::Success);
+    }
+
+    let runtime = crate::swarm::runtime()?;
+    let found = runtime.block_on(engine::run(
+        &target,
+        &args.target,
+        info_hash,
+        peer_id(),
+        timeout,
+    ));
+
+    if let Some(error) = &found.error {
+        renderer.warn(env, format!("{}: {error}", args.target));
+    }
+    report.summary.duration = found.elapsed;
+    report.summary.requests = 1;
+    if !found.reachable {
+        report.summary.errors.total = 1;
+    }
+    let reachable = found.reachable;
+    report.probe = Some(found);
+    report.environment.finish();
+
+    // Exit 6 when the target did not answer. A probe that reports a
+    // failure is doing its job, and a script needs the code to branch on.
+    let code = match reachable {
+        true => ExitCode::Success,
+        false => ExitCode::NoUsableSources,
+    };
+    emit(&report, &output, renderer, env, code)
+}
+
+/// A peer id for one probe.
+///
+/// `-BC` then four version digits, per BEP 20, then twelve bytes that differ
+/// between runs. A probe that reused one id would look to a tracker-backed
+/// peer like the same client reconnecting.
+fn peer_id() -> [u8; 20] {
+    let mut out = *b"-BC0100-000000000000";
+    let mut state = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x2026_0820)
+        | 1;
+    for slot in out[8..].iter_mut() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        *slot = b"0123456789abcdefghijklmnopqrstuvwxyz"[(state >> 24) as usize % 36];
+    }
+    out
 }
 
 /// A subcommand that is not built yet.
@@ -1649,10 +1770,14 @@ mod tests {
         assert!(error.contains("no web seed sources"), "{error}");
     }
 
+    /// `swarm` is the last one left, and it says which entry closes it rather
+    /// than pretending to work. `probe` was on this list until T-090 step 5,
+    /// which is why this is one case rather than a loop.
     #[test]
     fn the_subcommands_that_are_not_built_name_their_todo_entry() {
         let fixture = TorrentFixture::multi_file();
-        for subcommand in ["swarm", "probe"] {
+        {
+            let subcommand = "swarm";
             let (mut env, captured) = crate::env::Env::test(
                 &[
                     "--json",
@@ -2399,5 +2524,156 @@ mod tests {
                 .ends_with("album"),
             "{doc}"
         );
+    }
+
+    /// A peer probe says what the peer is and what it holds.
+    ///
+    /// The seeder is a real one on a thread, so every field comes off the
+    /// wire: the reserved bytes it set, the peer id it chose, the extended
+    /// handshake it sent, and the bitfield it advertised. See
+    /// `TODO/bench.md`, T-090, step 5.
+    #[test]
+    fn a_peer_probe_reads_the_handshake_and_what_follows_it() {
+        let fixture = TorrentFixture::multi_file();
+        let data = fixture.dir().join("served");
+        fixture.place(&data, &[]);
+        let port = crate::test_support::free_port();
+
+        let seeder = {
+            let torrent = fixture.path_str().to_string();
+            let data = data.to_str().expect("utf-8 path").to_string();
+            let cwd = fixture.dir();
+            std::thread::spawn(move || {
+                let (mut env, _) = Env::test(
+                    &[
+                        "seed",
+                        &torrent,
+                        "--data",
+                        &data,
+                        "--port",
+                        &port.to_string(),
+                        "--no-dht",
+                        "--no-lsd",
+                        "--no-tracker",
+                        "--stop-after",
+                        "10s",
+                    ],
+                    cwd,
+                );
+                crate::run(&mut env)
+            })
+        };
+
+        // The seeder has to be listening before the probe dials it, and how
+        // long that takes is the machine's business. Retry rather than sleep a
+        // guessed amount.
+        let mut found = serde_json::Value::Null;
+        for _ in 0..40 {
+            let report = report(
+                &[
+                    "bench",
+                    "probe",
+                    &format!("127.0.0.1:{port}"),
+                    "--for",
+                    fixture.path_str(),
+                    "--timeout",
+                    "5s",
+                ],
+                ExitCode::Success,
+            );
+            if report["probe"]["reachable"] == true {
+                found = report;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = seeder.join();
+
+        let probe = &found["probe"];
+        assert_eq!(probe["kind"], "peer", "{found}");
+        assert_eq!(probe["reachable"], true, "{found}");
+        let peer = &probe["peer"];
+        assert_eq!(peer["info_hash_matches"], true, "{probe}");
+        assert!(
+            peer["peer_id"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with('-'),
+            "{probe}"
+        );
+        // Every BitTorrent client sets the BEP 10 bit, and this one advertises
+        // its pieces and unchokes as soon as it has said hello.
+        assert!(
+            peer["extensions"]
+                .as_array()
+                .expect("extensions")
+                .iter()
+                .any(|name| name == "extension-protocol"),
+            "{probe}"
+        );
+        assert_eq!(peer["extended"]["client"], "bit-cli 0.1.0", "{probe}");
+        assert_eq!(peer["pieces_advertised"], 2, "{probe}");
+        assert!(
+            peer["messages"]
+                .as_array()
+                .expect("messages")
+                .iter()
+                .any(|kind| kind == "bitfield"),
+            "{probe}"
+        );
+    }
+
+    /// An HTTP probe says whether the endpoint answers a range.
+    #[test]
+    fn an_http_probe_reads_the_status_and_the_range_support() {
+        let fixture = TorrentFixture::multi_file();
+        let server = FileServer::start(fixture.dir());
+        let url = format!("{}payload/notes.nfo", server.base);
+
+        let found = report(
+            &["bench", "probe", &url, "--timeout", "5s"],
+            ExitCode::Success,
+        );
+        let probe = &found["probe"];
+        assert_eq!(probe["kind"], "http", "{found}");
+        assert_eq!(probe["reachable"], true, "{found}");
+        assert_eq!(probe["http"]["status"], 206, "{probe}");
+        assert_eq!(probe["http"]["range_support"], true, "{probe}");
+        assert_eq!(probe["http"]["entity_length"], 500, "{probe}");
+    }
+
+    /// A target nothing is listening on exits 6 and says so.
+    #[test]
+    fn an_unreachable_peer_exits_no_usable_sources() {
+        let port = crate::test_support::free_port();
+        let found = report(
+            &[
+                "bench",
+                "probe",
+                &format!("127.0.0.1:{port}"),
+                "--timeout",
+                "2s",
+            ],
+            ExitCode::NoUsableSources,
+        );
+        assert_eq!(found["probe"]["reachable"], false, "{found}");
+        assert!(found["probe"]["error"].is_string(), "{found}");
+        // No --for, so the report says what the handshake named.
+        assert!(
+            found["notes"]
+                .as_array()
+                .expect("notes")
+                .iter()
+                .any(|note| note.as_str().unwrap_or_default().contains("zero info hash")),
+            "{found}"
+        );
+    }
+
+    /// A target that is neither an address nor a URL is a usage error.
+    #[test]
+    fn a_target_that_is_neither_an_address_nor_a_url_is_refused() {
+        let (mut env, captured) = Env::test(&["bench", "probe", "mirror.example.com"], ".");
+        assert_eq!(crate::run(&mut env), ExitCode::Usage);
+        assert!(captured.err().contains("HOST:PORT"), "{}", captured.err());
     }
 }

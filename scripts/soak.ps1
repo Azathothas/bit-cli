@@ -238,27 +238,61 @@ $leechFailed = 0
 $churnRuns = 0
 $churnProcess = $null
 
+$script:LoadErrors = 0
+
+# Start a process, and treat a failure to start as load rather than as the end
+# of the run.
+#
+# A six hour soak that dies at hour two has measured two hours, and the reasons
+# it dies are not the reasons it is running: a redirected output file that the
+# previous process has not finished releasing, a directory removal racing the
+# next creation, a machine briefly out of handles. Windows releases a process
+# handle some time after `HasExited` goes true, so restarting a leecher into
+# the same output file is exactly that race, and it fired once here at 2.2
+# hours into a six hour run under a parallel `cargo build`.
+#
+# So: three attempts with a short wait, and then a counted failure. The count
+# is in the summary, because a run with a hundred of them is measuring
+# something else.
+function Start-Counted($block, $what) {
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try { return & $block }
+        catch {
+            if ($attempt -eq 3) {
+                $script:LoadErrors++
+                Write-Step "  could not start $what after 3 attempts: $($_.Exception.Message)"
+                return $null
+            }
+            Start-Sleep -Milliseconds (200 * $attempt)
+        }
+    }
+}
+
 function Start-Leech($slot) {
-    $out = Join-Path $Root "leech-$slot"
-    if (Test-Path $out) { Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue }
-    New-Item -ItemType Directory -Force -Path $out | Out-Null
-    Start-Process -FilePath $bitCli -WorkingDirectory $Root -NoNewWindow -PassThru -ArgumentList @(
-        "download", $torrent, "--dir", $out,
-        "--peer", "127.0.0.1:$port",
-        "--no-dht", "--no-lsd", "--no-tracker",
-        "--allow-overwrite", "--stop-after", "120s", "--json"
-    ) -RedirectStandardOutput (Join-Path $Root "leech-$slot.out") `
-        -RedirectStandardError (Join-Path $Root "leech-$slot.err")
+    Start-Counted {
+        $out = Join-Path $Root "leech-$slot"
+        if (Test-Path $out) { Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue }
+        New-Item -ItemType Directory -Force -Path $out | Out-Null
+        Start-Process -FilePath $bitCli -WorkingDirectory $Root -NoNewWindow -PassThru -ArgumentList @(
+            "download", $torrent, "--dir", $out,
+            "--peer", "127.0.0.1:$port",
+            "--no-dht", "--no-lsd", "--no-tracker",
+            "--allow-overwrite", "--stop-after", "120s", "--json"
+        ) -RedirectStandardOutput (Join-Path $Root "leech-$slot.out") `
+            -RedirectStandardError (Join-Path $Root "leech-$slot.err")
+    } "leecher $slot"
 }
 
 function Start-Churn {
-    Start-Process -FilePath $churnExe -WorkingDirectory $Root -NoNewWindow -PassThru -ArgumentList @(
-        "--peer", "127.0.0.1:$port",
-        "--connections", "$ChurnConnections",
-        "--concurrency", "$ChurnConcurrency",
-        "--no-handshake"
-    ) -RedirectStandardOutput (Join-Path $Root "churn.out") `
-        -RedirectStandardError (Join-Path $Root "churn.err")
+    Start-Counted {
+        Start-Process -FilePath $churnExe -WorkingDirectory $Root -NoNewWindow -PassThru -ArgumentList @(
+            "--peer", "127.0.0.1:$port",
+            "--connections", "$ChurnConnections",
+            "--concurrency", "$ChurnConcurrency",
+            "--no-handshake"
+        ) -RedirectStandardOutput (Join-Path $Root "churn.out") `
+            -RedirectStandardError (Join-Path $Root "churn.err")
+    } "churn"
 }
 
 # ---------------------------------------------------------------------------
@@ -438,6 +472,9 @@ function Write-SoakSummary([bool]$Complete) {
             churn_runs              = $churnRuns
             churn_connections_total = $churnRuns * $ChurnConnections
             progress_events         = $script:SelfEvents
+            # Samples or process starts that failed and were carried past
+            # rather than ending the run.
+            load_errors             = $script:LoadErrors
         }
         slopes           = $summarySlopes
         rss_mib_per_hour = $summaryRss
@@ -493,70 +530,83 @@ $seedDied = $false
 while ((Get-Date) -lt $endAt) {
     if ($seed.HasExited) { $seedDied = $true; break }
 
-    # Top up the load before sampling, so a sample never lands in the gap
-    # between one leecher exiting and the next starting.
-    if ($wantLeech) {
-        for ($slot = 0; $slot -lt $Leechers; $slot++) {
-            $running = $leechSlots[$slot]
-            if ($running -and $running.HasExited) {
-                if ($running.ExitCode -eq 0) { $leechDone++ } else { $leechFailed++ }
-                $leechSlots[$slot] = $null
-                $running = $null
+    # One sample is not the run. A transient failure here, a file still held
+    # by a process that has exited or a directory removal racing its own
+    # recreation, used to end a six hour soak at hour two: everything in this
+    # loop ran under `$ErrorActionPreference = 'Stop'` with a trap above it.
+    # It is counted and the loop carries on, and the count is in the summary,
+    # because a run with a hundred of them is measuring something else.
+    try {
+        # Top up the load before sampling, so a sample never lands in the gap
+        # between one leecher exiting and the next starting.
+        if ($wantLeech) {
+            for ($slot = 0; $slot -lt $Leechers; $slot++) {
+                $running = $leechSlots[$slot]
+                if ($running -and $running.HasExited) {
+                    if ($running.ExitCode -eq 0) { $leechDone++ } else { $leechFailed++ }
+                    $leechSlots[$slot] = $null
+                    $running = $null
+                }
+                if (-not $running) { $leechSlots[$slot] = Start-Leech $slot }
             }
-            if (-not $running) { $leechSlots[$slot] = Start-Leech $slot }
         }
+        if ($wantChurn -and (-not $churnProcess -or $churnProcess.HasExited)) {
+            if ($churnProcess) { $churnRuns++ }
+            $churnProcess = Start-Churn
+        }
+    
+        $seed.Refresh()
+        $states = @{}
+        foreach ($group in (Get-NetTCPConnection -OwningProcess $seed.Id -ErrorAction SilentlyContinue |
+                    Group-Object State)) {
+            $states[$group.Name] = $group.Count
+        }
+        $total = 0
+        foreach ($count in $states.Values) { $total += $count }
+        $named = 0
+        foreach ($key in @("Established", "Listen", "CloseWait", "TimeWait")) {
+            if ($states.ContainsKey($key)) { $named += $states[$key] }
+        }
+    
+        $row = [ordered]@{
+            sample           = $sample
+            iso              = Get-Timestamp
+            elapsed_s        = [int]($clock.Elapsed.TotalSeconds)
+            rss_bytes        = $seed.WorkingSet64
+            peak_rss_bytes   = $seed.PeakWorkingSet64
+            handles          = $seed.HandleCount
+            threads          = $seed.Threads.Count
+            cpu_ms           = [int64]$seed.TotalProcessorTime.TotalMilliseconds
+            tcp_total        = $total
+            tcp_established  = if ($states.ContainsKey("Established")) { $states["Established"] } else { 0 }
+            tcp_listen       = if ($states.ContainsKey("Listen")) { $states["Listen"] } else { 0 }
+            tcp_close_wait   = if ($states.ContainsKey("CloseWait")) { $states["CloseWait"] } else { 0 }
+            tcp_time_wait    = if ($states.ContainsKey("TimeWait")) { $states["TimeWait"] } else { 0 }
+            tcp_other        = $total - $named
+            leech_completed  = $leechDone
+            leech_failed     = $leechFailed
+            churn_runs       = $churnRuns
+        }
+        [void]$samples.Add($row)
+        Add-Content -Path $csvPath -Encoding utf8NoBOM -Value (($row.Values | ForEach-Object { "$_" }) -join ",")
+    
+        # Rewrite the report now rather than only when the window ends, so a run
+        # that is killed at hour four leaves four hours of slopes. See
+        # Write-SoakSummary.
+        Update-SelfReported
+        [void](Write-SoakSummary $false)
+    
+        if ($sample % 10 -eq 0) {
+            Write-Step ("  t+{0,6}s  rss {1,7:N1} MiB  handles {2,5}  sockets {3,5}  CW {4,5}  leech {5}" -f `
+                    $row.elapsed_s, ($row.rss_bytes / 1MB), $row.handles, $row.tcp_total, $row.tcp_close_wait, $leechDone)
+        }
+        $sample++
     }
-    if ($wantChurn -and (-not $churnProcess -or $churnProcess.HasExited)) {
-        if ($churnProcess) { $churnRuns++ }
-        $churnProcess = Start-Churn
+    catch {
+        $script:LoadErrors++
+        Write-Step "  sample $sample failed: $($_.Exception.Message)"
+        $sample++
     }
-
-    $seed.Refresh()
-    $states = @{}
-    foreach ($group in (Get-NetTCPConnection -OwningProcess $seed.Id -ErrorAction SilentlyContinue |
-                Group-Object State)) {
-        $states[$group.Name] = $group.Count
-    }
-    $total = 0
-    foreach ($count in $states.Values) { $total += $count }
-    $named = 0
-    foreach ($key in @("Established", "Listen", "CloseWait", "TimeWait")) {
-        if ($states.ContainsKey($key)) { $named += $states[$key] }
-    }
-
-    $row = [ordered]@{
-        sample           = $sample
-        iso              = Get-Timestamp
-        elapsed_s        = [int]($clock.Elapsed.TotalSeconds)
-        rss_bytes        = $seed.WorkingSet64
-        peak_rss_bytes   = $seed.PeakWorkingSet64
-        handles          = $seed.HandleCount
-        threads          = $seed.Threads.Count
-        cpu_ms           = [int64]$seed.TotalProcessorTime.TotalMilliseconds
-        tcp_total        = $total
-        tcp_established  = if ($states.ContainsKey("Established")) { $states["Established"] } else { 0 }
-        tcp_listen       = if ($states.ContainsKey("Listen")) { $states["Listen"] } else { 0 }
-        tcp_close_wait   = if ($states.ContainsKey("CloseWait")) { $states["CloseWait"] } else { 0 }
-        tcp_time_wait    = if ($states.ContainsKey("TimeWait")) { $states["TimeWait"] } else { 0 }
-        tcp_other        = $total - $named
-        leech_completed  = $leechDone
-        leech_failed     = $leechFailed
-        churn_runs       = $churnRuns
-    }
-    [void]$samples.Add($row)
-    Add-Content -Path $csvPath -Encoding utf8NoBOM -Value (($row.Values | ForEach-Object { "$_" }) -join ",")
-
-    # Rewrite the report now rather than only when the window ends, so a run
-    # that is killed at hour four leaves four hours of slopes. See
-    # Write-SoakSummary.
-    Update-SelfReported
-    [void](Write-SoakSummary $false)
-
-    if ($sample % 10 -eq 0) {
-        Write-Step ("  t+{0,6}s  rss {1,7:N1} MiB  handles {2,5}  sockets {3,5}  CW {4,5}  leech {5}" -f `
-                $row.elapsed_s, ($row.rss_bytes / 1MB), $row.handles, $row.tcp_total, $row.tcp_close_wait, $leechDone)
-    }
-    $sample++
 
     $nextAt = $endAt
     $due = (Get-Date).AddSeconds($SampleSeconds)
@@ -597,6 +647,9 @@ Write-Host ""
     }
 } | Format-Table -AutoSize | Out-String | Write-Host
 Write-Host "leech cycles: $leechDone completed, $leechFailed failed. churn bursts: $churnRuns."
+if ($script:LoadErrors -gt 0) {
+    Write-Host "load errors carried past: $script:LoadErrors"
+}
 if ($null -ne $script:SelfPeakRss) {
     Write-Host "self reported: peak RSS $([math]::Round($script:SelfPeakRss / 1MB, 2)) MiB, $script:SelfHandles handles, over $($script:SelfEvents) progress events"
 }

@@ -108,7 +108,87 @@ One residue in the harness itself: the summary JSON is written only when the
 sampling window ends, so a run that is killed early leaves the CSV and no
 summary. The numbers above were computed from the CSV by hand for that reason.
 Writing the summary on every sample, or on a signal, is a small change and
-would have saved that step.
+would have saved that step. **Done in the session below, and it was needed
+within the hour.**
+
+**Session of 2026-08-20, second run: the harness is fixed, an idle control is
+in, and the six hour run is still the thing that is missing.**
+
+Two runs were started together, `steady` and `idle`, so the load could be
+separated from the session's own timers. Neither reached six hours before the
+session ended, and what they did reach is recorded here because the summary is
+now written after every sample rather than only at the end. That change is the
+harness residue this entry named, and it paid for itself on the first run: the
+`steady` run died at 2.26 hours and its record survived.
+
+| series | steady, 2.26 h, 258 samples | idle, 2.55 h, 291 samples |
+| --- | --- | --- |
+| `rss_bytes` per hour | **+0.93 MiB**, r squared 0.65 | **+0.04 MiB**, r squared 0.01 |
+| `rss_bytes` first, last, max | 14.75, 18.23, 20.19 MiB | 13.14, 12.49, 13.67 MiB |
+| `handles` per hour | +2.09, r squared 0.015 | **0.00**, and 188 at every sample |
+| `tcp_close_wait` max | **0** | **0** |
+| leech cycles | 514 | none by design |
+
+**The idle control is the new fact.** A seeder with no tracker and nothing
+connecting holds 188 handles at every one of 291 samples over two and a half
+hours, and its resident memory does not move: 0.04 MiB an hour at an r squared
+of 0.01 is the sampler's own noise. So whatever the `steady` run is doing, it
+is the load doing it and not the session's timers, and this entry's report of
+descriptors climbing on their own does not reproduce at all.
+
+**The `steady` slope is still not a straight line.** 0.93 MiB an hour at an r
+squared of 0.65, with a maximum of 20.19 MiB against a last reading of 18.23,
+is a series that rises and falls rather than one that climbs. Two and a half
+hours cannot separate a settling curve from a leak, which is exactly what the
+six hour run is for and why this stays open.
+
+Both runs also shared the machine with a full `cargo build --release` and the
+test suite, several times over. That is worth knowing when reading the RSS
+series: the leech cycles compete with whatever else is running.
+
+**One harness defect, found the hard way.** The first `steady` run ended at
+2.26 hours with `ScriptHalted`. `Start-Process` for the next leecher threw,
+almost certainly on the redirected output file the previous leecher had not
+finished releasing, and with `$ErrorActionPreference = 'Stop'` and a trap above
+it that one throw ended a six hour run. Fixed two ways: starting a process
+retries three times before giving up, and the whole sampling body is inside a
+`try` that counts a failure and carries on. The count is `cycles.load_errors`
+in the summary, because a run with a hundred of them is measuring something
+else.
+
+**What the next session does.** Both commands, from a clean tree:
+
+```powershell
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Workload steady -PayloadMiB 16 -Root .tmp/soak-steady
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Workload idle -Root .tmp/soak-idle
+```
+
+Start them first, before anything else, and leave the machine as quiet as the
+rest of the work allows. `bench/soak-<timestamp>.json` is readable while the
+run is going: `complete` is `false` until the window ends, and the slopes in it
+are the slopes so far. When both are in, put the numbers in the table above,
+answer the one open question, and set the ceilings:
+
+```powershell
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Workload steady `
+  -RssCeilingMiBPerHour <answer> -HandleCeilingPerHour <answer> -CloseWaitCeilingPerHour 1
+```
+
+The question is only whether the `steady` RSS slope is linear, a settling
+curve, or an allocator holding pages. A slope that flattens after the first
+hour is the second; one that holds 0.9 MiB an hour to hour six is the first and
+names a leak worth chasing.
+
+Runs recorded so far, all partial, all under `bench/`:
+`soak-20260820T132757504Z` (steady, 1.76 h, the first),
+`soak-20260820T155246381Z` (steady, 2.26 h, killed by the harness defect above),
+`soak-20260820T155309362Z` (idle, 2.55 h, the control), and
+`soak-20260820T181505020Z` (steady, restarted at 18:15 UTC and still running
+when the session ended, so its files are not committed).
+
+The restarted run is the one to look for: if `.tmp/soak-steady` and its
+bench files are still on the machine, read the JSON before starting another,
+because a run that reached five hours is worth more than a fresh one.
 
 ### T-041 Per-source window cache is bounded but not measured
 

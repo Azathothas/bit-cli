@@ -19,6 +19,7 @@
 //! receive paths write into it at once.
 
 pub mod disk;
+pub mod probe;
 pub mod recorder;
 pub mod render;
 pub mod report;

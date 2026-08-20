@@ -640,6 +640,10 @@ pub struct Report {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub sources: Vec<SourceSummary>,
     pub summary: Summary,
+    /// What a `bench probe` found. Present only for that subcommand, which
+    /// measures reachability and capability rather than throughput.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe: Option<crate::bench::probe::ProbeReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold: Option<Threshold>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -664,6 +668,7 @@ impl Report {
             disk_steps: Vec::new(),
             sources: Vec::new(),
             summary: Summary::default(),
+            probe: None,
             threshold: None,
             baseline: None,
             notes: Vec::new(),

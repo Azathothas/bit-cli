@@ -865,23 +865,23 @@ fn offset_of(params: &BridgeParams, piece: u32, begin: u32) -> u64 {
 /// Buffered bytes live outside the read future, which keeps [`Framer::fill`]
 /// cancel-safe and usable directly in a `select!`.
 #[derive(Default)]
-struct Framer {
+pub(crate) struct Framer {
     buf: Vec<u8>,
 }
 
 impl Framer {
     /// Bytes received but not yet consumed.
-    fn buffered(&self) -> &[u8] {
+    pub(crate) fn buffered(&self) -> &[u8] {
         &self.buf
     }
 
     /// Drop the first `n` buffered bytes.
-    fn consume(&mut self, n: usize) {
+    pub(crate) fn consume(&mut self, n: usize) {
         self.buf.drain(..n);
     }
 
     /// Read whatever is available. Zero means end of stream.
-    async fn fill(
+    pub(crate) async fn fill(
         &mut self,
         read: &mut (impl tokio::io::AsyncRead + Unpin),
     ) -> std::io::Result<usize> {
@@ -892,7 +892,7 @@ impl Framer {
     }
 
     /// Take one complete length-prefixed frame, if the buffer holds one.
-    fn take_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
+    pub(crate) fn take_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
         let Some(prefix) = self.buf.get(..4) else {
             return Ok(None);
         };

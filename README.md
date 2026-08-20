@@ -430,7 +430,7 @@ bit-cli create <PATH>           Create a .torrent
 bit-cli edit <TORRENT>          Rewrite metainfo fields, writing a new file
 bit-cli magnet <SOURCE>         Convert a torrent to a magnet URI
 bit-cli seed <SOURCE>           Seed existing data in the foreground
-bit-cli bench <SUBCOMMAND>      leech | webseed. Measure a target and write a report
+bit-cli bench <SUBCOMMAND>      leech | seed | webseed | disk | probe. Measure and report
 bit-cli config show             Print the resolved configuration with the origin of every value
 bit-cli completions <SHELL>     bash | zsh | fish | powershell | elvish | nushell
 bit-cli man                     Generate a man page
@@ -653,6 +653,44 @@ The results are in `TODO/webseed.md` under T-001 and `TODO/bench.md` under
 T-090, with the committed reports under `bench/`. In one line: one source is
 one peer, one peer is one serial receive path, and that path is what bounds
 the download.
+
+## Asking what something is
+
+```bash
+bit-cli bench probe 127.0.0.1:51413 --for album.torrent
+bit-cli bench probe https://mirror.example.com/pub/album/disc%201/a.flac
+```
+
+The question before "how fast": is it there, and what does it speak. One
+exchange, no payload, and the report carries the same environment every other
+`bench` report does.
+
+A peer address gets a BitTorrent handshake and then a short listen:
+
+```
+Probe
+  target               127.0.0.1:51999
+  kind                 peer
+  reachable            yes
+  connect              1ms
+  peer id              -rQ9000-1%ba%01%06%ad0%b4xM%f5%d0%7f
+  client               rqbit 9000
+  reserved             0000000000100000
+  extensions           extension-protocol
+  info hash            echoed
+  says it is           bit-cli 0.1.0
+  extension messages   ut_metadata, ut_pex
+  messages             extended, bitfield, unchoke
+  pieces advertised    10
+```
+
+An HTTP endpoint gets one ranged `GET` for a single byte, with the redirect
+chain hop by hop and the TLS version and cipher when the scheme is `https`.
+
+`--for` names the torrent a peer is asked about, because a handshake names a
+torrent and a peer is entitled to hang up on one it does not have. Without it
+the report says the handshake carried a zero info hash. An unreachable target
+exits 6.
 
 ## Measuring the disk on its own
 

@@ -75,7 +75,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
 | [T-036](performance.md) | P0 | paths | **done** | A multi-file torrent with one file lands without its directory |
 | [T-037](performance.md) | P1 | performance | **done** | A run stalls for minutes, roughly once in fifty |
-| [T-040](memory.md) | P0 | memory | open | Memory and descriptors grow without bound over a long run |
+| [T-040](memory.md) | P0 | memory | partial | Memory and descriptors grow without bound over a long run |
 | [T-041](memory.md) | P2 | memory | open | Per-source window cache is bounded but not measured |
 | [T-042](memory.md) | P1 | memory | **done** | Peak RSS is not captured in any report |
 | [T-050](dht.md) | P2 | dht | open | The DHT cache costs disk I/O even when nothing is running |
@@ -179,7 +179,7 @@ under `-j 1` and not above it.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
-| P0 | 2 | 1 | 0 | 8 |
+| P0 | 1 | 2 | 0 | 8 |
 | P1 | 7 | 1 | 0 | 30 |
 | P2 | 23 | 1 | 1 | 8 |
 | P3 | 10 | 0 | 0 | 0 |
@@ -217,7 +217,11 @@ item eight is the operator's own list.
    disk, all three measured rather than modelled. `--fail-under` exits 14 and
    `--baseline` prints a delta per metric. `bench seed` measures a seeder with
    every counter facing the other way: bytes sent per peer, and positioned
-   reads rather than writes. `probe` and `swarm` are still unbuilt and say so.
+   reads rather than writes. `bench probe` is a one-shot reachability and
+   capability check against a peer address or an HTTP endpoint: the handshake,
+   the reserved bytes, the extended handshake, and what the peer volunteers,
+   or the status, the range support, and the TLS parameters. `swarm` is the
+   one still unbuilt, and it says so.
 4. [T-001](webseed.md) is **done**, and so is [T-006](webseed.md).
    `scripts/bench-webseed.ps1` takes the number in four stages so the cost is
    attributed rather than asserted, and it was run twice: on loopback and
@@ -285,8 +289,9 @@ item eight is the operator's own list.
    is T-035, now a token bucket per source.
 7. The long-run failures. [T-017](disk-io.md), [T-030](performance.md),
    [T-021](peers.md), [T-031](performance.md), [T-037](performance.md), and
-   [T-138](peers.md) are **done**. [T-020](peers.md) and [T-040](memory.md)
-   are the two open P0s left. Measure before theorising: every one of these
+   [T-138](peers.md) are **done**. [T-020](peers.md) is the one open P0 left,
+   and [T-040](memory.md) is partial: it needs six hours of wall clock and
+   nothing else. Measure before theorising: every one of these
    closed that way, and every time the answer was not what the entry
    predicted.
 
@@ -310,6 +315,10 @@ item eight is the operator's own list.
    seconds. The other is open: those same connections strand a socket about
    half the time, accumulating linearly, released by later traffic and never
    by time. `--max-handles` bounds it with a loud exit 16.
+
+   What the soak adds: `CLOSE_WAIT` was zero at every sample of a 2.26 hour
+   `steady` run and of a 2.55 hour `idle` one, so this needs the churn shape
+   and does not appear under a deployment-shaped load.
 
    [T-017](disk-io.md) rules the disk out rather than in. `bit-cli bench disk`
    writes the same bytes through the same storage from N threads with no
@@ -346,15 +355,21 @@ item eight is the operator's own list.
    and in every `progress` event. [T-011](disk-io.md) removed one of the two
    things [T-040](memory.md) names: descriptors are now bounded by a flag.
 
-   [T-040](memory.md) is the last open P0 besides [T-020](peers.md)'s residue,
-   and it now has a harness and a partial run. `scripts/soak.ps1` samples a
-   long-lived seeder under one of six workloads and writes the three series to
-   `bench/soak-<timestamp>.csv`. Over **1.76 hours and 398 leech cycles** of
-   the `steady` workload: handles flat (+0.77/hour at an r squared of 0.004),
-   `CLOSE_WAIT` zero at all 200 samples, CPU flat at under 0.5% of one core,
-   and resident memory rising **0.58 MiB an hour at an r squared of 0.63**.
-   What is left is the six hour run the acceptance asks for, and an `idle`
-   control of the same length. Both commands are in the entry.
+   [T-040](memory.md) is **partial** and is the first thing to start, because
+   it is six hours of wall clock that nothing else has to wait for.
+   `scripts/soak.ps1` samples a long-lived seeder under one of six workloads,
+   writes the three series to `bench/soak-<timestamp>.csv`, and rewrites
+   `bench/soak-<timestamp>.json` after every sample, so a run that is killed
+   still leaves its slopes. Three partial runs are recorded in the entry. The
+   `idle` control is the useful new one: **188 handles at every one of 291
+   samples over 2.55 hours**, resident memory flat at 0.04 MiB an hour, and
+   `CLOSE_WAIT` zero. So the descriptors half of this entry does not reproduce
+   at all, and whatever the `steady` load does is the load. Under `steady`,
+   over 2.26 hours: `CLOSE_WAIT` zero at all 258 samples, handles noise, and
+   resident memory **0.93 MiB an hour at an r squared of 0.65** with a maximum
+   above its last reading, which is a series that rises and falls rather than
+   one that climbs. Six hours is what separates a settling curve from a leak.
+   Both commands are in the entry.
 8. [multi-source.md](multi-source.md), the operator's five scenarios about
    pointing several kinds of source at one payload. Read that file before
    starting any of T-130 to T-143: its first part records which scenarios

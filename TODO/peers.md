@@ -128,6 +128,14 @@ Status stays **open**: the stranding is not fixed, and `scripts/check-close-wait
 the script does assert, and what will now fail the run, is the listener
 surviving, so defect one cannot come back unnoticed.
 
+
+**What the soak adds, 2026-08-20.** `CLOSE_WAIT` was **zero at every one of
+258 samples** over a 2.26 hour `steady` run and at every one of 291 samples
+over a 2.55 hour `idle` one, with handles flat in both. So this needs the
+churn shape: connections that close before they handshake. A seeder under a
+deployment-shaped load, with real downloads and a tracker announcing, strands
+nothing. See [T-040](memory.md) for the runs.
+
 ### T-021 A temporary network drop stops the download permanently
 
 Source:      https://github.com/ikatson/rqbit/issues/363 (open)
