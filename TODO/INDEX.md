@@ -118,6 +118,13 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-120](licensing.md) | P1 | licensing | open | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | open | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | open | reference/ is not deleted at the end of Phase B |
+| [T-130](multi-source.md) | P1 | webseed | open | A source cannot be told which statuses are worth retrying |
+| [T-131](multi-source.md) | P1 | bench | open | The loopback file server cannot simulate a signed URL |
+| [T-132](multi-source.md) | P1 | performance | open | The swarm cannot be rate limited separately from HTTP sources |
+| [T-133](multi-source.md) | P1 | webseed | open | Two torrents holding the same file cannot share its bytes |
+| [T-134](multi-source.md) | P2 | bep | open | v1 and v2 info hashes are not reconciled |
+| [T-135](multi-source.md) | P2 | performance | open | Source selection cannot be steered by method or by priority at run time |
+| [T-136](multi-source.md) | P2 | cli | open | Nothing states the end-to-end integrity guarantee |
 | [T-200](phase-c.md) | n/a | phase-c | deferred | Session daemon |
 | [T-201](phase-c.md) | n/a | phase-c | deferred | JSON-RPC and XML-RPC, with aria2 method parity |
 | [T-202](phase-c.md) | n/a | phase-c | deferred | Queue management across invocations |
@@ -131,7 +138,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-88 items: 78 to work through, and 10 deferred to Phase C. Eight were added by
+95 items: 85 to work through, and 10 deferred to Phase C. Eight were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -143,11 +150,16 @@ one file lands without its directory, and a run stalls for minutes roughly
 once in fifty. T-035 came out of building the T-003 acceptance, which needed a
 slow mirror and found that the flag for one did nothing.
 
+T-130 through T-136 came from the operator rather than from the triage: five
+scenarios about pointing several kinds of source at one payload.
+[multi-source.md](multi-source.md) records which of the five already work,
+with the commands that were run, and what the rest need.
+
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 3 | 1 | 0 | 7 |
-| P1 | 17 | 1 | 0 | 13 |
-| P2 | 19 | 1 | 1 | 5 |
+| P1 | 21 | 1 | 0 | 13 |
+| P2 | 22 | 1 | 1 | 5 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 
@@ -159,7 +171,8 @@ block it and what would unblock it.
 ## Start here
 
 What is settled and what is next, in the order that unblocks the most. The
-first six are done or mostly done; item seven is where the open P0 work is.
+first six are done or mostly done, item seven is where the open P0 work is, and
+item eight is the operator's own list.
 
 1. [T-084](create-seed.md) is **done**. `bit-cli create`, `verify`, and `seed`
    round trip byte for byte through `aria2c` 1.37.0 for v1, `--private`, and
@@ -282,3 +295,19 @@ first six are done or mostly done; item seven is where the open P0 work is.
    descriptors are now bounded by a flag. The multi-torrent measurement gives
    [T-040](memory.md) its first numbers: about 22 MiB of peak RSS and twelve
    handles per concurrent torrent, with CPU flat.
+8. [multi-source.md](multi-source.md), the operator's five scenarios about
+   pointing several kinds of source at one payload. Read that file before
+   starting any of T-130 to T-136: its first part records which scenarios
+   already work, with the commands that were run and the output, so the work
+   left is smaller than the list of entries suggests.
+
+   Two of the five work today with no change at all. A third needs one flag,
+   [T-130](multi-source.md), which is also what the fourth needs. What is
+   genuinely missing is cross-torrent identity,
+   [T-133](multi-source.md), and real control of which source answers a piece,
+   [T-135](multi-source.md), and both were already priced by
+   [T-002](webseed.md) and [T-003](webseed.md).
+
+   `scripts/make-scenario-fixture.ps1` builds everything the acceptances need
+   except the signing file server, which is [T-131](multi-source.md) and is the
+   first thing to build because three other entries wait on it.
