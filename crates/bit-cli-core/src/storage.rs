@@ -27,11 +27,14 @@
 //! the cap open, closing the least recently opened when it needs another, so
 //! one process seeding many large torrents does not run out of descriptors.
 
+use std::cell::Cell;
 use std::collections::{BTreeSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::IoSlice;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::Instant;
 
 use librqbit::storage::{BoxStorageFactory, StorageFactory, StorageFactoryExt, TorrentStorage};
 use librqbit::{ManagedTorrentShared, TorrentMetadata};
@@ -48,6 +51,173 @@ use crate::paths::{PathPlan, plan};
 /// lowers it.
 pub const DEFAULT_MAX_OPEN_FILES: usize = 128;
 
+/// What storage did, readable while a run is going.
+///
+/// Plain counters under relaxed ordering, so reading them never stops the run
+/// and a sampler can diff two reads to get an interval. They cost two
+/// `Instant::now()` calls per positioned read or write, which is about 50 ns
+/// on this machine against the 95 us a 16 KiB block takes end to end. That is
+/// the price of `bench leech` being able to say where the time went instead of
+/// guessing, so it is paid on every run rather than behind a flag: a counter
+/// that is only on when someone is measuring measures a different program.
+#[derive(Debug, Default)]
+pub struct StorageMetrics {
+    pub read_ops: AtomicU64,
+    pub read_bytes: AtomicU64,
+    pub read_nanos: AtomicU64,
+    pub write_ops: AtomicU64,
+    pub write_bytes: AtomicU64,
+    pub write_nanos: AtomicU64,
+    /// Pieces the session read back and checked against their hash.
+    pub verify_pieces: AtomicU64,
+    /// Bytes read back during those checks.
+    pub verify_bytes: AtomicU64,
+    /// Wall time from the first read of a check to the moment the session
+    /// declared the piece complete. That covers the read and the SHA-1, which
+    /// together are the whole cost of verifying a piece.
+    pub verify_nanos: AtomicU64,
+}
+
+/// One reading of [`StorageMetrics`], for the report and for interval deltas.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StorageCounts {
+    pub read_ops: u64,
+    pub read_bytes: u64,
+    pub read_nanos: u64,
+    pub write_ops: u64,
+    pub write_bytes: u64,
+    pub write_nanos: u64,
+    pub verify_pieces: u64,
+    pub verify_bytes: u64,
+    pub verify_nanos: u64,
+}
+
+impl StorageCounts {
+    /// What happened between an earlier reading and this one.
+    pub fn since(&self, earlier: &Self) -> Self {
+        Self {
+            read_ops: self.read_ops.saturating_sub(earlier.read_ops),
+            read_bytes: self.read_bytes.saturating_sub(earlier.read_bytes),
+            read_nanos: self.read_nanos.saturating_sub(earlier.read_nanos),
+            write_ops: self.write_ops.saturating_sub(earlier.write_ops),
+            write_bytes: self.write_bytes.saturating_sub(earlier.write_bytes),
+            write_nanos: self.write_nanos.saturating_sub(earlier.write_nanos),
+            verify_pieces: self.verify_pieces.saturating_sub(earlier.verify_pieces),
+            verify_bytes: self.verify_bytes.saturating_sub(earlier.verify_bytes),
+            verify_nanos: self.verify_nanos.saturating_sub(earlier.verify_nanos),
+        }
+    }
+}
+
+impl StorageMetrics {
+    /// Read every counter.
+    pub fn read(&self) -> StorageCounts {
+        let get = |v: &AtomicU64| v.load(Ordering::Relaxed);
+        StorageCounts {
+            read_ops: get(&self.read_ops),
+            read_bytes: get(&self.read_bytes),
+            read_nanos: get(&self.read_nanos),
+            write_ops: get(&self.write_ops),
+            write_bytes: get(&self.write_bytes),
+            write_nanos: get(&self.write_nanos),
+            verify_pieces: get(&self.verify_pieces),
+            verify_bytes: get(&self.verify_bytes),
+            verify_nanos: get(&self.verify_nanos),
+        }
+    }
+
+    fn add_read(&self, bytes: u64, elapsed: std::time::Duration) {
+        self.read_ops.fetch_add(1, Ordering::Relaxed);
+        self.read_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.read_nanos.fetch_add(
+            elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    fn add_write(&self, bytes: u64, elapsed: std::time::Duration) {
+        self.write_ops.fetch_add(1, Ordering::Relaxed);
+        self.write_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.write_nanos.fetch_add(
+            elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    fn add_verification(&self, bytes: u64, elapsed: std::time::Duration) {
+        self.verify_pieces.fetch_add(1, Ordering::Relaxed);
+        self.verify_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.verify_nanos.fetch_add(
+            elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+    }
+}
+
+/// The read run this thread is in the middle of, if any.
+///
+/// A piece check is a synchronous run of positioned reads walking the piece
+/// from its start, followed by the session declaring the piece complete, all
+/// on one thread with nothing awaited in between. So the cost of a check is
+/// the wall time between the first of those reads and that declaration, and
+/// this is what carries it: where the run started, how much it has read, and
+/// where the next contiguous read would be.
+///
+/// A read that does not continue the run starts a new one, and any write
+/// abandons it, because neither belongs to a check. That is what keeps the
+/// hash check on add, which reads the whole torrent and never declares
+/// anything, from being charged to the first piece of the download.
+struct ReadRun {
+    started: Instant,
+    bytes: u64,
+    file_id: usize,
+    end: u64,
+}
+
+thread_local! {
+    static READ_RUN: Cell<Option<ReadRun>> = const { Cell::new(None) };
+}
+
+/// Note a positioned read against this thread's run, opening one if the read
+/// does not continue the last.
+fn note_read(started: Instant, file_id: usize, offset: u64, len: u64) {
+    READ_RUN.with(|cell| {
+        let run = match cell.take() {
+            // A piece that spans a file boundary continues at offset zero of
+            // the next file, which is as contiguous as reading on in the same
+            // one.
+            Some(run)
+                if (run.file_id == file_id && run.end == offset)
+                    || (run.file_id + 1 == file_id && offset == 0) =>
+            {
+                ReadRun {
+                    started: run.started,
+                    bytes: run.bytes + len,
+                    file_id,
+                    end: offset + len,
+                }
+            }
+            _ => ReadRun {
+                started,
+                bytes: len,
+                file_id,
+                end: offset + len,
+            },
+        };
+        cell.set(Some(run));
+    });
+}
+
+/// Abandon this thread's read run. A write is never part of a piece check.
+fn end_read_run() {
+    READ_RUN.with(|cell| cell.set(None));
+}
+
+/// Close this thread's read run and report what it read and how long it took.
+fn take_read_run() -> Option<(u64, std::time::Duration)> {
+    READ_RUN.with(|cell| cell.take().map(|run| (run.bytes, run.started.elapsed())))
+}
+
 /// Builds a [`SafeStorage`] for one torrent.
 ///
 /// One factory per `add`, because the output directory is per-torrent. The
@@ -62,6 +232,7 @@ pub struct SafeStorageFactory {
     max_open_files: usize,
     plan: Arc<OnceLock<PathPlan>>,
     notes: Arc<Mutex<Vec<String>>>,
+    metrics: Arc<StorageMetrics>,
 }
 
 impl SafeStorageFactory {
@@ -85,7 +256,17 @@ impl SafeStorageFactory {
             max_open_files: DEFAULT_MAX_OPEN_FILES,
             plan: Arc::new(OnceLock::new()),
             notes: Arc::new(Mutex::new(Vec::new())),
+            metrics: Arc::new(StorageMetrics::default()),
         }
+    }
+
+    /// Count this torrent's reads and writes into a shared set of counters.
+    ///
+    /// One set per session rather than one per torrent, so a run with several
+    /// torrents reports what the run cost rather than what one of them did.
+    pub fn with_metrics(mut self, metrics: Arc<StorageMetrics>) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     /// How space is reserved for each file.
@@ -185,6 +366,7 @@ impl StorageFactory for SafeStorageFactory {
             files: Vec::new(),
             open: Mutex::new(OpenSet::new(self.max_open_files)),
             notes: self.notes.clone(),
+            metrics: self.metrics.clone(),
         })
     }
 
@@ -205,6 +387,7 @@ pub struct SafeStorage {
     files: Vec<Slot>,
     open: Mutex<OpenSet>,
     notes: Arc<Mutex<Vec<String>>>,
+    metrics: Arc<StorageMetrics>,
 }
 
 /// Which files are open, in the order they were opened.
@@ -524,15 +707,28 @@ impl TorrentStorage for SafeStorage {
     }
 
     fn pread_exact(&self, file_id: usize, offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
-        self.with(file_id, Intent::Read, "read", |file| {
+        let len = buf.len() as u64;
+        let started = Instant::now();
+        let outcome = self.with(file_id, Intent::Read, "read", |file| {
             pread_exact(file, offset, buf)
-        })
+        });
+        if outcome.is_ok() {
+            self.metrics.add_read(len, started.elapsed());
+            note_read(started, file_id, offset, len);
+        }
+        outcome
     }
 
     fn pwrite_all(&self, file_id: usize, offset: u64, buf: &[u8]) -> anyhow::Result<()> {
-        self.with(file_id, Intent::Write, "write to", |file| {
+        end_read_run();
+        let started = Instant::now();
+        let outcome = self.with(file_id, Intent::Write, "write to", |file| {
             pwrite_all(file, offset, buf)
-        })
+        });
+        if outcome.is_ok() {
+            self.metrics.add_write(buf.len() as u64, started.elapsed());
+        }
+        outcome
     }
 
     fn pwrite_all_vectored(
@@ -541,7 +737,9 @@ impl TorrentStorage for SafeStorage {
         offset: u64,
         bufs: [IoSlice<'_>; 2],
     ) -> anyhow::Result<usize> {
-        self.with(file_id, Intent::Write, "write to", |file| {
+        end_read_run();
+        let started = Instant::now();
+        let outcome = self.with(file_id, Intent::Write, "write to", |file| {
             let mut at = offset;
             let mut written = 0;
             for slice in bufs {
@@ -553,7 +751,11 @@ impl TorrentStorage for SafeStorage {
                 written += slice.len();
             }
             Ok(written)
-        })
+        });
+        if let Ok(written) = outcome {
+            self.metrics.add_write(written as u64, started.elapsed());
+        }
+        outcome
     }
 
     fn remove_file(&self, file_id: usize, _filename: &Path) -> anyhow::Result<()> {
@@ -655,10 +857,17 @@ impl TorrentStorage for SafeStorage {
             files,
             open: Mutex::new(open),
             notes: self.notes.clone(),
+            metrics: self.metrics.clone(),
         }))
     }
 
     fn on_piece_completed(&self, _piece: ValidPieceIndex) -> anyhow::Result<()> {
+        // The session calls this straight after a piece's hash checked out,
+        // on the same thread that did the reading, so whatever read run this
+        // thread is in the middle of is that check and this is where it ends.
+        if let Some((bytes, elapsed)) = take_read_run() {
+            self.metrics.add_verification(bytes, elapsed);
+        }
         Ok(())
     }
 }
@@ -984,6 +1193,7 @@ mod tests {
             files: Vec::new(),
             open: Mutex::new(OpenSet::new(DEFAULT_MAX_OPEN_FILES)),
             notes: Arc::new(Mutex::new(Vec::new())),
+            metrics: Arc::new(StorageMetrics::default()),
         }
     }
 
@@ -1007,6 +1217,7 @@ mod tests {
             files: Vec::new(),
             open: Mutex::new(OpenSet::new(cap)),
             notes: Arc::new(Mutex::new(Vec::new())),
+            metrics: Arc::new(StorageMetrics::default()),
         };
         storage.files = disk_paths
             .iter()

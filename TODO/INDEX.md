@@ -47,6 +47,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-005](webseed.md) | P3 | webseed | open | A source restricted mid-run cannot be re-scoped |
 | [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
 | [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
+| [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
+| [T-009](webseed.md) | P1 | webseed | open | A source cannot be attached over more than one connection |
 | [T-010](disk-io.md) | P1 | disk-io | **done** | pwrite takes a read lock where it needs a write lock |
 | [T-011](disk-io.md) | P1 | disk-io | **done** | No file handle pool, so long runs exhaust descriptors |
 | [T-012](disk-io.md) | P2 | disk-io | **done** | Preallocation is not implemented |
@@ -54,6 +56,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-014](disk-io.md) | P2 | disk-io | **done** | Adding a torrent can fail with "File exists (os error 17)" |
 | [T-015](disk-io.md) | P1 | disk-io | **done** | Hash checking can hang at 0 percent |
 | [T-016](disk-io.md) | P2 | disk-io | blocked | fastresume is not used when adding a torrent |
+| [T-017](disk-io.md) | P1 | disk-io | open | Concurrent receive paths contend on the payload file |
 | [T-020](peers.md) | P0 | peers | open | Connections accumulate in CLOSE_WAIT until TCP is unusable |
 | [T-021](peers.md) | P0 | peers | open | A temporary network drop stops the download permanently |
 | [T-022](peers.md) | P1 | peers | open | Peer connections churn on IPv6-only swarms |
@@ -124,15 +127,19 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-81 items: 71 to work through, and 10 deferred to Phase C. T-007 was added
-by the T-001 measurement: a stalling source takes 24 seconds to give up.
+84 items: 74 to work through, and 10 deferred to Phase C. Four were added by
+measurements rather than by the triage. T-007 came out of T-001: a stalling
+source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
+T-090's `bench leech` runs: a duplicate block request is fetched twice, a
+source cannot be attached over more than one connection, and concurrent
+receive paths contend on the payload file.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 4 | 1 | 0 | 5 |
-| P1 | 18 | 1 | 0 | 8 |
+| P1 | 20 | 1 | 0 | 8 |
 | P2 | 18 | 1 | 1 | 5 |
-| P3 | 9 | 0 | 0 | 0 |
+| P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 
 `blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
@@ -160,23 +167,34 @@ The P0 list, in the order that unblocks the most:
    machine it was taken on, the exact command line, and what the process cost
    in memory, CPU, and handles. `bench webseed` measures HTTP sources with
    latency percentiles, a concurrency curve, per-source attribution, and error
-   counts by class and by HTTP status. `--fail-under` exits 14 and `--baseline`
-   prints a delta per metric. `leech`, `seed`, `probe`, and `swarm` are still
-   unbuilt and say so.
+   counts by class and by HTTP status. `bench leech` measures a download and
+   splits its cost between the request pipeline, piece verification, and the
+   disk, all three measured rather than modelled. `--fail-under` exits 14 and
+   `--baseline` prints a delta per metric. `seed`, `probe`, and `swarm` are
+   still unbuilt and say so.
 4. [T-001](webseed.md) is **done**, and so is [T-006](webseed.md).
    `scripts/bench-webseed.ps1` takes the number in four stages so the cost is
    attributed rather than asserted, and it was run twice: on loopback and
-   against a real mirror.
+   against a real mirror. `scripts/bench-leech.ps1` then took it apart.
 
-   **The loopback bridge costs about five sixths of the available throughput,
-   at both ends of the range measured.** It reaches 15.13% of `bit-cli`'s own
-   HTTP path on loopback and 19.22% against the Arch Linux mirror, across a
-   24-fold difference in available bandwidth. A share that stays roughly
-   constant as the network slows is a pipeline-depth limit, not a per-byte
-   cost, so the request depth is the first thing to test and
-   [T-090](bench.md)'s `bench leech` is what separates it from hashing and
-   disk. Against the mirror the download path reaches 8.82 MiB/s, which does
-   **not** saturate a gigabit link; the loopback number alone said it did.
+   **The bridge costs about five sixths of the available throughput, and the
+   reason is that one source is one peer.** A block arriving from a peer is
+   written, and at a piece boundary the whole piece is read back and hashed,
+   inline on that connection's own task before the next block from that peer
+   is processed. One bridge reaches 21.55% of `bit-cli`'s own HTTP path on
+   loopback; the same source attached over four bridges reaches 39.54%, which
+   is 1.84x.
+
+   Three things it is **not**. Not the requests in flight: the same 64
+   requests on one bridge reach 0.82x, slightly worse than 8 requests on the
+   same bridge. Not the request window: the bridge sees `librqbit`'s 128 block
+   window reached, but the run sits at 40% of what that peak would allow. Not
+   hashing: piece checks are 11% of a one-bridge run. The disk is the second
+   wall and it is what stops the sweep at four, recorded as
+   [T-017](disk-io.md).
+
+   The fix the measurement points at is [T-009](webseed.md),
+   `--web-seed-connections`, and it needs no upstream change.
 
    `bit-cli`'s HTTP path beats `curl` over a real network, at 156.71% of eight
    parallel `curl` slices. The failure matrix ran against all 468 web seeds in

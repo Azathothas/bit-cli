@@ -142,7 +142,7 @@ bit-cli create <PATH>           Create a .torrent
 bit-cli edit <TORRENT>          Rewrite metainfo fields, writing a new file
 bit-cli magnet <SOURCE>         Convert a torrent to a magnet URI
 bit-cli seed <SOURCE>           Seed existing data in the foreground
-bit-cli bench <SUBCOMMAND>      webseed. Measure a target and write a report
+bit-cli bench <SUBCOMMAND>      leech | webseed. Measure a target and write a report
 bit-cli config show             Print the resolved configuration with the origin of every value
 bit-cli completions <SHELL>     bash | zsh | fish | powershell | elvish | nushell
 bit-cli man                     Generate a man page
@@ -157,16 +157,16 @@ a bare info hash, and `-` for stdin.
 Every command runs in the foreground, does its work, and exits. There is no
 daemon and no stored session.
 
-Metalink as a source, and four of the five `bench` subcommands, parse but are
+Metalink as a source, and three of the five `bench` subcommands, parse but are
 not built yet. Each exits non-zero naming the `TODO/` entry that closes it,
 rather than pretending to work:
 
 ```bash
-bit-cli bench leech album.torrent
+bit-cli bench swarm album.torrent
 ```
 
 ```
-error: `bit-cli bench leech` is not implemented yet; see TODO/bench.md
+error: `bit-cli bench swarm` is not implemented yet; see TODO/bench.md
 ```
 
 ## Measuring a mirror
@@ -225,12 +225,65 @@ on different hardware. Every report carries the machine, the exact command
 line, and what the process cost, because two numbers from two machines are not
 comparable and nothing in the number itself says so.
 
+## Measuring a download
+
+`bench leech` downloads the target and reports what it cost. It is `download`
+with the clock running, so it takes the same source, tracker, and web seed
+flags, and it answers what a rate on its own cannot: whether the run was
+waiting on the network, on the hash, or on the disk.
+
+```bash
+bit-cli bench leech album.torrent \
+  --web-seed http://127.0.0.1:52466/ --web-seed-only \
+  --dir ./out --port 0 --warmup 0s --metrics-interval 250ms --format text
+```
+
+```
+Summary
+  measured over        5s
+  bytes                1.00 GiB
+  sustained            185.64 MiB/s
+  peak                 242.47 MiB/s
+  requests             65536 (0 failed)
+  peak peers           1
+  verification         1024 pieces, 1.56 GiB/s in 641ms
+  choke                0 choke, 0 unchoke, queue depth 128
+  disk read            1.00 GiB in 136ms over 16384 reads
+  disk write           1.00 GiB in 1s over 65536 writes
+  pipeline             24 blocks in flight on average, 128 at peak, 16.00 KiB block, 2092us to answer
+  window allows        956.02 MiB/s at that depth and that service time; 185.64 MiB/s was measured, 19.42% of it
+
+Sources
+  source               http://127.0.0.1:52466/
+    served             1.00 GiB at 185.64 MiB/s over 65536 requests (0 failed)
+```
+
+Three of those lines are measurements nothing else in the process can take.
+`verification` is the wall time of every piece read back and hashed, bracketed
+in `bit-cli`'s own storage. `disk read` and `disk write` are the positioned
+reads and writes underneath it. `pipeline` is the session's block request
+window seen from the other end of the loopback bridge, with `window allows`
+saying what that depth would sustain at the measured service time: close to
+the sustained rate means the window is the limit, far above it means something
+else is.
+
+The same three appear per interval under `series[].costs` in the JSON and as
+columns in `--format csv`, so the shape over time is visible and not just the
+total.
+
+`--fail-under` and `--baseline` work here exactly as they do on `bench
+webseed`.
+
 ### What the whole path costs
 
-`bench webseed` measures the HTTP fetch on its own. To measure what the torrent
-machinery adds on top of it, `scripts/bench-webseed.ps1` takes the same payload
-from the same server four ways in one session: `curl` on one connection, `curl`
-on N, `bit-cli bench webseed`, and `bit-cli download --web-seed-only`.
+`bench webseed` measures the HTTP fetch on its own. Two scripts measure what
+the torrent machinery adds on top of it, and both write a committed report to
+`bench/`.
+
+`scripts/bench-webseed.ps1` takes the same payload from the same server four
+ways in one session: `curl` on one connection, `curl` on N, `bit-cli bench
+webseed`, and `bit-cli download --web-seed-only`. Four stages rather than two
+because one ratio says "slower" without saying where.
 
 ```bash
 pwsh scripts/bench-webseed.ps1 -PayloadSize 256MiB -Runs 5
@@ -242,9 +295,19 @@ pwsh scripts/bench-webseed.ps1 `
   -TorrentUrl https://geo.mirror.pkgbuild.com/iso/2026.08.01/archlinux-2026.08.01-x86_64.iso.torrent
 ```
 
-Four stages rather than two because one ratio says "slower" without saying
-where. The results, and what they say about the loopback bridge, are in
-`TODO/webseed.md` under T-001, with the committed reports under `bench/`.
+`scripts/bench-leech.ps1` then divides that gap. It runs `bench webseed` and
+`bench leech` against the same payload, steps how many bridge connections the
+one source is attached over, and runs a control that puts the same total HTTP
+concurrency on a single connection so the two cannot be confused.
+
+```bash
+pwsh scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -BridgeSweep "1,2,4,8"
+```
+
+The results are in `TODO/webseed.md` under T-001 and `TODO/bench.md` under
+T-090, with the committed reports under `bench/`. In one line: one source is
+one peer, one peer is one serial receive path, and that path is what bounds
+the download.
 
 ## Fetch one piece from one mirror
 

@@ -187,6 +187,146 @@ impl TorrentFixture {
     }
 }
 
+/// A ranged HTTP server over a directory, on a thread, for the tests that
+/// need a real web seed rather than a stub.
+///
+/// It binds port zero and reports what it got, so tests running at once never
+/// race for a port. It speaks the little of HTTP/1.1 a web seed needs: `GET`,
+/// one `Range: bytes=a-b` header, `206` with `Content-Range`, `404` for a path
+/// that is not there. Nothing is kept alive between requests, which is slower
+/// than a real mirror and is exactly why throughput assertions do not belong
+/// against it.
+pub struct FileServer {
+    pub base: String,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl FileServer {
+    /// Serve `root` on loopback.
+    pub fn start(root: impl Into<PathBuf>) -> Self {
+        use std::io::{Read, Write};
+
+        let root = root.into();
+        let listener =
+            std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind loopback");
+        let port = listener.local_addr().expect("local addr").port();
+        listener
+            .set_nonblocking(true)
+            .expect("non-blocking listener");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = stop.clone();
+
+        std::thread::spawn(move || {
+            while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    continue;
+                };
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    // Headers end at the blank line. A web seed request has no
+                    // body, so that is the whole request.
+                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match stream.read(&mut buf) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => request.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&request).to_string();
+                    let mut lines = text.lines();
+                    let Some(start) = lines.next() else { return };
+                    let Some(path) = start.split_whitespace().nth(1) else {
+                        return;
+                    };
+                    let range = text
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Range: bytes="))
+                        .and_then(|spec| spec.split_once('-'))
+                        .map(|(a, b)| (a.to_string(), b.to_string()));
+
+                    let relative = percent_decode(path.trim_start_matches('/'));
+                    let mut target = root.clone();
+                    for part in relative.split('/').filter(|p| !p.is_empty()) {
+                        target.push(part);
+                    }
+                    let Ok(body) = std::fs::read(&target) else {
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                        return;
+                    };
+
+                    let total = body.len();
+                    let response = match range {
+                        None => format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+                        ),
+                        Some((from, to)) => {
+                            let from: usize = from.parse().unwrap_or(0);
+                            let to: usize = to.parse().unwrap_or(total.saturating_sub(1));
+                            let to = to.min(total.saturating_sub(1));
+                            let slice = body.get(from..=to).unwrap_or(&[]).to_vec();
+                            let head = format!(
+                                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {from}-{to}/{total}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+                                slice.len()
+                            );
+                            let _ = stream.write_all(head.as_bytes());
+                            let _ = stream.write_all(&slice);
+                            let _ = stream.flush();
+                            return;
+                        }
+                    };
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.write_all(&body);
+                    let _ = stream.flush();
+                });
+            }
+        });
+
+        Self {
+            base: format!("http://127.0.0.1:{port}/"),
+            stop,
+        }
+    }
+}
+
+impl Drop for FileServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Decode `%XX` escapes in a request path.
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or("");
+                match u8::from_str_radix(hex, 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    Err(_) => {
+                        out.push(bytes[index]);
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Run the binary in-process and require success, returning stdout.
 pub fn run_ok(args: &[&str], cwd: impl Into<PathBuf>) -> String {
     let (mut env, captured) = Env::test(args, cwd);

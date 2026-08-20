@@ -266,6 +266,8 @@ pub struct Engine {
     max_open_files: usize,
     /// What storage needed the caller to know, gathered across every torrent.
     storage_notes: Mutex<Vec<Arc<Mutex<Vec<String>>>>>,
+    /// What storage did, across every torrent in this session.
+    storage_metrics: Arc<crate::storage::StorageMetrics>,
 }
 
 impl Engine {
@@ -335,7 +337,17 @@ impl Engine {
             allocation: options.allocation,
             max_open_files: options.max_open_files,
             storage_notes: Mutex::new(Vec::new()),
+            storage_metrics: Arc::new(crate::storage::StorageMetrics::default()),
         })
+    }
+
+    /// What this session's storage has done so far: reads, writes, and the
+    /// piece checks that read a piece back and hash it.
+    ///
+    /// Read it twice and diff to get an interval. See
+    /// [`crate::storage::StorageCounts::since`].
+    pub fn storage_counts(&self) -> crate::storage::StorageCounts {
+        self.storage_metrics.read()
     }
 
     /// Non-fatal problems found while starting.
@@ -461,7 +473,8 @@ impl Engine {
         };
         let storage = SafeStorageFactory::new(output_folder, options.overwrite, subfolder)
             .with_allocation(self.allocation)
-            .with_max_open_files(self.max_open_files);
+            .with_max_open_files(self.max_open_files)
+            .with_metrics(self.storage_metrics.clone());
         let plan = storage.plan_handle();
         if let Ok(mut notes) = self.storage_notes.lock() {
             notes.push(storage.notes_handle());

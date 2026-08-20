@@ -122,6 +122,13 @@ pub const CSV_COLUMNS: &[&str] = &[
     "peers",
     "pieces_verified",
     "queue_depth",
+    "verify_ms",
+    "verify_bytes",
+    "disk_read_ms",
+    "disk_read_bytes",
+    "disk_write_ms",
+    "disk_write_bytes",
+    "mean_service_us",
 ];
 
 /// The time series as a table.
@@ -135,6 +142,7 @@ fn csv(report: &Report) -> String {
 
 fn csv_row(sample: &Sample) -> String {
     let optional = |value: Option<u64>| value.map(|v| v.to_string()).unwrap_or_default();
+    let costs = sample.costs.clone().unwrap_or_default();
     [
         sample.at.iso(),
         sample.elapsed.0.to_string(),
@@ -160,6 +168,13 @@ fn csv_row(sample: &Sample) -> String {
         optional(sample.peers.map(u64::from)),
         optional(sample.pieces_verified),
         optional(sample.queue_depth),
+        costs.verify.0.to_string(),
+        costs.verify_bytes.0.to_string(),
+        costs.disk_read.0.to_string(),
+        costs.disk_read_bytes.0.to_string(),
+        costs.disk_write.0.to_string(),
+        costs.disk_write_bytes.0.to_string(),
+        optional(costs.mean_service_us),
     ]
     .join(",")
 }
@@ -313,6 +328,52 @@ pub fn text(report: &Report) -> Vec<String> {
             format!(
                 "{} choke, {} unchoke, queue depth {}",
                 choke.choke_events, choke.unchoke_events, choke.peak_queue_depth
+            ),
+        ));
+    }
+    if let Some(disk) = &summary.disk {
+        out.push(field(
+            "  disk read",
+            format!(
+                "{} in {} over {} reads",
+                format_size(disk.read_bytes.0),
+                format_duration_ms(disk.read_time.0),
+                disk.read_ops
+            ),
+        ));
+        out.push(field(
+            "  disk write",
+            format!(
+                "{} in {} over {} writes",
+                format_size(disk.write_bytes.0),
+                format_duration_ms(disk.write_time.0),
+                disk.write_ops
+            ),
+        ));
+    }
+    if let Some(pipeline) = &summary.pipeline {
+        out.push(field(
+            "  pipeline",
+            format!(
+                "{} blocks in flight on average, {} at peak, {} block, {}us to answer",
+                pipeline.mean_in_flight,
+                pipeline.peak_in_flight,
+                format_size(pipeline.block_size.0),
+                pipeline.mean_service_us
+            ),
+        ));
+        out.push(field(
+            "  window allows",
+            format!(
+                "{} at that depth and that service time; {} was measured, {} of it",
+                format_rate(pipeline.window_ceiling.0),
+                format_rate(summary.sustained_rate.0),
+                match pipeline.window_ceiling.0 {
+                    0 => "n/a".to_string(),
+                    ceiling => crate::units::format_percent(
+                        summary.sustained_rate.0 as f64 / ceiling as f64
+                    ),
+                },
             ),
         ));
     }

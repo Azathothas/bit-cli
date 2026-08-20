@@ -49,6 +49,10 @@ it, so the history starts here.
 - `bench webseed` measures HTTP sources: latency percentiles for connection
   establishment, first byte, and completion; a concurrency curve; per-source
   attribution; and error counts by class and by HTTP status.
+- `bench leech` measures a download and splits its cost three ways: the block
+  request pipeline, piece verification, and the disk. All three are measured
+  rather than modelled, and all three appear per interval as well as in the
+  summary.
 
 ### Measurement
 
@@ -78,6 +82,20 @@ it, so the history starts here.
   naming the reason.
 - `--target-rate` paces the run against its own totals rather than per worker,
   so the target is the aggregate.
+- Storage counts its positioned reads and writes, their bytes, and their time,
+  and brackets every piece check: a check is a run of reads walking the piece
+  from its start followed by the session declaring it complete, all on one
+  thread, so the wall time between them is the whole cost of the check with the
+  SHA-1 included. Two `Instant::now()` calls per operation, always on, because
+  a counter that is only on when someone is measuring measures a different
+  program.
+- The loopback bridge counts the blocks the session has asked for and not yet
+  been given, the deepest that ever got, and the time to answer each one. That
+  is the session's own request window seen from the other end, and it is what
+  says whether the window is what bounds a run.
+- `bench leech` refuses to run against an output directory that already holds
+  the complete payload. That run finishes without fetching anything and would
+  report the hash checker's rate as a download rate.
 
 ### Paths
 

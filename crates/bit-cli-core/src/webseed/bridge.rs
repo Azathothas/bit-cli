@@ -77,6 +77,9 @@ const RECONNECT_BASE: Duration = Duration::from_secs(1);
 /// Longest delay between reconnection attempts.
 const RECONNECT_MAX: Duration = Duration::from_secs(30);
 
+/// How many loopback ports a bridge remembers having connected from.
+const MAX_REMEMBERED_PORTS: usize = 64;
+
 /// BitTorrent message id for the BEP 10 extension protocol.
 const MSGID_EXTENDED: u8 = 20;
 
@@ -105,6 +108,21 @@ pub struct BridgeStatus {
     served_bytes: AtomicU64,
     blocks: AtomicU64,
     local_port: AtomicU16,
+    /// Every loopback port this bridge has connected from.
+    ports: Mutex<Vec<u16>>,
+    /// Blocks the session has asked for and not yet been given.
+    ///
+    /// This is the session's request window seen from the other end, and it
+    /// is the number that says whether the pipeline is deep enough to keep
+    /// the link busy. `bench leech` samples it.
+    in_flight: AtomicU64,
+    peak_in_flight: AtomicU64,
+    requests: AtomicU64,
+    /// Total time from a request arriving to its block going out, over every
+    /// block served. Divided by [`Self::blocks`] it is the mean service time,
+    /// which with the depth above bounds throughput at depth over service
+    /// time.
+    service_nanos: AtomicU64,
 }
 
 impl Default for BridgeStatus {
@@ -115,6 +133,51 @@ impl Default for BridgeStatus {
             served_bytes: AtomicU64::new(0),
             blocks: AtomicU64::new(0),
             local_port: AtomicU16::new(0),
+            ports: Mutex::new(Vec::new()),
+            in_flight: AtomicU64::new(0),
+            peak_in_flight: AtomicU64::new(0),
+            requests: AtomicU64::new(0),
+            service_nanos: AtomicU64::new(0),
+        }
+    }
+}
+
+/// What one bridge's request pipeline is doing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BridgePipeline {
+    /// Blocks requested and not yet served.
+    pub in_flight: u64,
+    /// The most that were ever outstanding at once.
+    pub peak_in_flight: u64,
+    /// Blocks the session asked for.
+    pub requests: u64,
+    /// Blocks served.
+    pub blocks: u64,
+    /// Total request-to-answer time across those blocks.
+    pub service_nanos: u64,
+}
+
+impl BridgePipeline {
+    /// Mean time to answer one block, in microseconds. `None` when nothing
+    /// has been served.
+    pub fn mean_service_us(&self) -> Option<u64> {
+        match self.blocks {
+            0 => None,
+            blocks => Some(self.service_nanos / blocks / 1000),
+        }
+    }
+
+    /// What happened between an earlier reading and this one.
+    ///
+    /// The two gauges are levels rather than counts, so they are taken from
+    /// the later reading rather than subtracted.
+    pub fn since(&self, earlier: &Self) -> Self {
+        Self {
+            in_flight: self.in_flight,
+            peak_in_flight: self.peak_in_flight,
+            requests: self.requests.saturating_sub(earlier.requests),
+            blocks: self.blocks.saturating_sub(earlier.blocks),
+            service_nanos: self.service_nanos.saturating_sub(earlier.service_nanos),
         }
     }
 }
@@ -140,14 +203,23 @@ impl BridgeStatus {
         self.blocks.load(Ordering::Relaxed)
     }
 
-    /// The loopback port this bridge is connected from, once it has one.
-    ///
-    /// This is what tells a bridge apart from a real peer in the peer list.
+    /// The loopback port this bridge is connected from right now, if it is
+    /// connected.
     pub fn local_port(&self) -> Option<u16> {
         match self.local_port.load(Ordering::Relaxed) {
             0 => None,
             port => Some(port),
         }
+    }
+
+    /// Every loopback port this bridge has connected from, newest last.
+    ///
+    /// This is what tells a bridge apart from a real peer in the peer list,
+    /// and it has to be the history rather than the current port: the session
+    /// keeps a dead peer's row after the connection closes, and a bridge that
+    /// disconnected is still not a swarm member.
+    pub fn local_ports(&self) -> Vec<u16> {
+        self.ports.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn set_state(&self, state: BridgeState) {
@@ -160,11 +232,64 @@ impl BridgeStatus {
 
     fn set_local_port(&self, port: u16) {
         self.local_port.store(port, Ordering::Relaxed);
+        if port == 0 {
+            return;
+        }
+        let mut ports = self.ports.lock().unwrap_or_else(|e| e.into_inner());
+        if ports.last() == Some(&port) {
+            return;
+        }
+        // A run that reconnects for hours would otherwise keep one port per
+        // attempt. The cap is generous against the number of dead peer rows a
+        // session holds and small enough to be free.
+        if ports.len() >= MAX_REMEMBERED_PORTS {
+            ports.remove(0);
+        }
+        ports.push(port);
     }
 
     fn add_served(&self, bytes: u64) {
         self.served_bytes.fetch_add(bytes, Ordering::Relaxed);
         self.blocks.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Everything the request pipeline is doing right now.
+    pub fn pipeline(&self) -> BridgePipeline {
+        BridgePipeline {
+            in_flight: self.in_flight.load(Ordering::Relaxed),
+            peak_in_flight: self.peak_in_flight.load(Ordering::Relaxed),
+            requests: self.requests.load(Ordering::Relaxed),
+            blocks: self.blocks.load(Ordering::Relaxed),
+            service_nanos: self.service_nanos.load(Ordering::Relaxed),
+        }
+    }
+
+    /// The session asked for a block.
+    fn request_received(&self) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        let now = self.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+        self.peak_in_flight.fetch_max(now, Ordering::Relaxed);
+    }
+
+    /// A requested block is no longer outstanding, whether it was served, was
+    /// cancelled, or failed.
+    fn request_settled(&self, elapsed: Duration) {
+        self.in_flight
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                Some(n.saturating_sub(1))
+            })
+            .ok();
+        self.service_nanos.fetch_add(
+            elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Drop every outstanding request. Called when the connection ends: the
+    /// session will ask again on the next one, and counting the old requests
+    /// as still in flight would report a depth that no longer exists.
+    fn reset_in_flight(&self) {
+        self.in_flight.store(0, Ordering::Relaxed);
     }
 }
 
@@ -254,6 +379,7 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
         status.set_state(BridgeState::Connecting);
         let outcome = serve(&params, &fetcher, &status).await;
         status.set_local_port(0);
+        status.reset_in_flight();
         match outcome {
             Ok(()) => delay = RECONNECT_BASE,
             Err(BridgeError::Source(reason)) => {
@@ -328,6 +454,7 @@ async fn serve(
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .insert(key);
+                    status.request_received();
                     tasks.spawn(serve_block(
                         key,
                         offset_of(params, request.index, request.begin),
@@ -513,6 +640,25 @@ async fn serve_block(
     limiter: Arc<Semaphore>,
     fetcher: Arc<Fetcher>,
     status: Arc<BridgeStatus>,
+    pending: Arc<Mutex<HashSet<BlockKey>>>,
+    out: mpsc::Sender<Vec<u8>>,
+) -> Result<(), String> {
+    // The clock starts when the request was taken off the wire, not when this
+    // task gets a permit: time spent waiting for the concurrency limit is
+    // time the session was waiting, and hiding it would report a pipeline
+    // that answers faster than it does.
+    let started = std::time::Instant::now();
+    let outcome = fetch_and_send(key, offset, limiter, fetcher, &status, pending, out).await;
+    status.request_settled(started.elapsed());
+    outcome
+}
+
+async fn fetch_and_send(
+    key: BlockKey,
+    offset: u64,
+    limiter: Arc<Semaphore>,
+    fetcher: Arc<Fetcher>,
+    status: &BridgeStatus,
     pending: Arc<Mutex<HashSet<BlockKey>>>,
     out: mpsc::Sender<Vec<u8>>,
 ) -> Result<(), String> {

@@ -1440,3 +1440,111 @@ async fn a_hash_check_that_has_not_finished_names_the_phase_it_is_in() {
     engine.wait_until_initialized(&handle).await.unwrap();
     engine.stop().await;
 }
+
+/// Storage counts what a download actually did on disk.
+///
+/// The three numbers `bench leech` separates cost from throughput all come
+/// from here: the piece checks, the writes underneath them, and the reads the
+/// checks perform. Nothing else in the process can report them, because the
+/// session does the hashing and only storage sees the I/O it takes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_download_reports_its_reads_writes_and_piece_checks() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let data = content(512 * 1024, 31);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    let (base, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&base)],
+    )
+    .await;
+    assert!(
+        wait_for(Duration::from_secs(60), || run.finished()).await,
+        "did not complete: {:?}",
+        run.reasons()
+    );
+
+    let counts = run.engine.storage_counts();
+    let pieces = run.layout.piece_count() as u64;
+
+    assert_eq!(
+        counts.verify_pieces, pieces,
+        "every piece is read back and hashed once"
+    );
+    assert_eq!(
+        counts.verify_bytes,
+        data.len() as u64,
+        "a check reads exactly the piece it is checking"
+    );
+    assert!(
+        counts.verify_nanos > 0,
+        "a check that read {} bytes took no time",
+        counts.verify_bytes
+    );
+    assert_eq!(
+        counts.write_bytes,
+        data.len() as u64,
+        "the payload is written once"
+    );
+    assert!(counts.write_ops >= pieces, "{} writes", counts.write_ops);
+    assert!(
+        counts.read_bytes >= counts.verify_bytes,
+        "the checks' reads are part of the reads"
+    );
+    run.engine.stop().await;
+}
+
+/// The bridge reports the session's request window from the other end.
+///
+/// A peer answers a bounded number of block requests at a time, and that
+/// bound is what caps throughput when the link is faster than the pipeline.
+/// The bridge is the only place `bit-cli` can see it, because it is the thing
+/// being asked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_bridge_reports_how_many_blocks_the_session_keeps_outstanding() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let data = content(2 * 1024 * 1024, 11);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    let (base, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&base)],
+    )
+    .await;
+    assert!(
+        wait_for(Duration::from_secs(60), || run.finished()).await,
+        "did not complete: {:?}",
+        run.reasons()
+    );
+
+    let pipeline = run.statuses[0].pipeline();
+    assert!(pipeline.requests > 0, "the session asked for nothing");
+    assert_eq!(
+        pipeline.blocks, pipeline.requests,
+        "every request was answered"
+    );
+    assert!(
+        pipeline.peak_in_flight > 1,
+        "the session pipelined nothing: peak depth {}",
+        pipeline.peak_in_flight
+    );
+    assert_eq!(
+        pipeline.in_flight, 0,
+        "nothing is outstanding once the transfer is done"
+    );
+    assert!(
+        pipeline.mean_service_us().is_some_and(|us| us > 0),
+        "blocks were answered in no measurable time"
+    );
+    run.engine.stop().await;
+}

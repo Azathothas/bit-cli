@@ -16,13 +16,16 @@
 //! Nothing is display-only. The text summary is a rendering of the same report
 //! the JSON carries, never a source of its own.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bit_cli_core::ExitCode;
 use bit_cli_core::bench::render::{self, Format};
 use bit_cli_core::bench::report::{Build, Environment, Kind, Parameters, Report, Target};
 use bit_cli_core::bench::{recorder, webseed as bench_webseed};
+use bit_cli_core::engine::Engine;
 use bit_cli_core::error::{Error, Result};
 use bit_cli_core::layout::Layout;
 use bit_cli_core::torrent::Metainfo;
@@ -33,6 +36,7 @@ use crate::cli::{BenchArgs, BenchCommand, BenchShared, BenchWebseedArgs, Global,
 use crate::env::Env;
 use crate::output::Renderer;
 use crate::source::{Kind as SourceKind, load_local};
+use crate::swarm::{self, AttachedSource, SessionSetup};
 use crate::webseed_args;
 
 /// The triple this binary was built for.
@@ -47,7 +51,7 @@ pub fn run(
 ) -> Result<ExitCode> {
     match command {
         BenchCommand::Webseed(args) => webseed(args, global, renderer, env),
-        BenchCommand::Leech(args) => unbuilt(Kind::Leech, args),
+        BenchCommand::Leech(args) => leech(args, global, renderer, env),
         BenchCommand::Seed(args) => unbuilt(Kind::Seed, args),
         BenchCommand::Swarm(args) => unbuilt(Kind::Swarm, args),
         BenchCommand::Probe(args) => unbuilt(Kind::Probe, args),
@@ -362,6 +366,439 @@ pub fn webseed(
     emit(&report, &output, renderer, env, code)
 }
 
+/// `bit-cli bench leech`: download a target and measure what it cost.
+///
+/// The same fetch `download` runs, with the clock and the counters on. Three
+/// numbers separate where the time went, which a rate on its own cannot:
+///
+/// - the block request pipeline, from how many blocks the session had
+///   outstanding and how long each took to answer;
+/// - verification, from the wall time of every piece read back and hashed;
+/// - the disk, from the positioned reads and writes underneath both.
+pub fn leech(
+    args: &crate::cli::BenchLeechArgs,
+    global: &Global,
+    renderer: &mut Renderer,
+    env: &mut Env,
+) -> Result<ExitCode> {
+    let output = Output::resolve(&args.shared, global, env)?;
+    let parameters = parameters(&args.shared)?;
+    let run_for = Duration::from_millis(parameters.duration.0);
+    let warmup = Duration::from_millis(parameters.warmup.0);
+    let interval = Duration::from_millis(parameters.metrics_interval.0);
+    let init_timeout = swarm::duration_flag(&args.limits.init_timeout, "init-timeout")?;
+
+    let setup = SessionSetup {
+        global,
+        trackers: &args.trackers,
+        limits: &args.limits,
+        web_seeds: &args.web_seeds,
+        listen_ports: swarm::port_range(&args.port)?,
+        no_dht: false,
+        no_lsd: false,
+        allocation: super::download::allocation_of(args.file_allocation),
+    };
+    let engine_options = setup.engine_options(env)?;
+    let directory = engine_options.download_directory.clone();
+
+    let mut report = Report::new(
+        Kind::Leech,
+        Environment::begin(
+            build(),
+            env.args.clone(),
+            env.cwd.display().to_string(),
+            global.trace.clone(),
+        ),
+    );
+    report.parameters = parameters.clone();
+    report.target = Target {
+        source: args.source.source.clone(),
+        ..Default::default()
+    };
+    if report.environment.build.debug_assertions {
+        report.note("this is a debug build: the numbers describe a debug build and nothing else");
+    }
+
+    let kind = SourceKind::classify(&args.source.source, env)?;
+    let meta = match &kind {
+        SourceKind::File(path) => Some(Metainfo::read(path)?),
+        _ => None,
+    };
+    let specs = webseed_args::collect(
+        &args.web_seeds,
+        meta.as_ref(),
+        env,
+        webseed_args::no_network,
+    )?;
+    let trackers = setup.tracker_list(meta.as_ref(), env)?;
+
+    if global.dry_run {
+        report.note("dry run: nothing was downloaded");
+        report.target.endpoints = specs.iter().map(|spec| spec.url.clone()).collect();
+        if let Some(meta) = &meta {
+            let layout = meta.layout();
+            describe(&mut report, meta, &layout);
+        }
+        report.environment.finish();
+        return emit(&report, &output, renderer, env, ExitCode::Success);
+    }
+
+    let runtime = crate::swarm::runtime()?;
+    let outcome = runtime.block_on(async {
+        let engine = Arc::new(Engine::start(&engine_options).await?);
+        for warning in engine.warnings() {
+            renderer.warn(env, warning);
+        }
+        let add = bit_cli_core::engine::AddOptions {
+            overwrite: !args.keep_existing,
+            trackers: trackers.clone(),
+            disable_trackers: trackers.as_ref().is_some_and(Vec::is_empty),
+            ..Default::default()
+        };
+        let handle = engine.add(&args.source.source, &add).await?;
+        engine
+            .wait_until_initialized_within(&handle, init_timeout)
+            .await?;
+        let layout = Arc::new(engine.layout(&handle).ok_or_else(|| {
+            Error::source_resolution(format!(
+                "{}: the torrent has no metadata",
+                args.source.source
+            ))
+        })?);
+
+        // A payload already sitting in the output directory hash-checks clean
+        // on add and the torrent is finished before a single byte is fetched.
+        // A rate taken from that run describes the hash checker, so the run
+        // refuses rather than reporting one. This is the failure a benchmark
+        // script hits when its own cleanup silently did not happen.
+        if engine.snapshot(&handle).finished {
+            return Err(Error::usage(format!(
+                "the payload is already complete in {}, so there is nothing to download and nothing to measure",
+                directory.display()
+            ))
+            .with("directory", directory.display().to_string())
+            .with(
+                "hint",
+                "remove it, or point --dir at a directory that does not hold this torrent",
+            ));
+        }
+
+        let (sources, _set) = swarm::attach_sources(
+            &engine,
+            &handle,
+            &layout,
+            &specs,
+            &swarm::AttachOptions {
+                require: args.web_seeds.web_seed_require,
+                peers_available: !args.web_seeds.web_seed_only,
+                cache_windows: super::download::cache_windows(&specs),
+                trace: global.trace.iter().any(|t| t == "http"),
+                verify: bit_cli_core::webseed::fetch::Verify::Piece,
+            },
+        )
+        .await?;
+
+        let result = drive_leech(
+            &engine,
+            &handle,
+            &sources,
+            &LeechOptions {
+                duration: run_for,
+                warmup,
+                interval,
+                stop_on_complete: !args.run_full_duration,
+            },
+            renderer,
+            env,
+        )
+        .await;
+        for source in &sources {
+            source.stop();
+        }
+        for note in engine.storage_notes() {
+            renderer.warn(env, note);
+        }
+        let snapshot = engine.snapshot(&handle);
+        let layout = (*layout).clone();
+        Arc::try_unwrap(engine).ok().map(Engine::stop);
+        result.map(|outcome| (outcome, layout, snapshot))
+    });
+
+    let (outcome, layout, snapshot) = outcome?;
+    if let Some(meta) = &meta {
+        describe(&mut report, meta, &layout);
+    } else {
+        report.target.name = Some(layout.name.clone());
+        report.target.info_hash = Some(snapshot.info_hash.clone());
+        report.target.total = Some(Size(layout.total_length));
+        report.target.piece_length = Some(Size(u64::from(layout.piece_length)));
+        report.target.piece_count = Some(layout.piece_count());
+    }
+    report.target.endpoints = outcome.endpoints;
+    report.series = outcome.series;
+    report.sources = outcome.sources;
+    report.summary = outcome.summary;
+    for note in outcome.notes {
+        renderer.warn(env, &note);
+        report.note(note);
+    }
+    for sample in &report.series {
+        report.environment.observe(&sample.process);
+    }
+    if let Some(ceiling) = parameters.ceiling {
+        report.summary.ceiling_share = report.summary.share_of(ceiling.0);
+    }
+    if !snapshot.finished {
+        report.note(format!(
+            "the torrent did not complete: {} of {} arrived",
+            bit_cli_core::units::format_size(snapshot.progress_bytes),
+            bit_cli_core::units::format_size(snapshot.total_bytes)
+        ));
+    }
+
+    let met = report.apply_threshold(output.fail_under);
+    compare_against_baseline(&mut report, &output, renderer, env)?;
+    report.environment.finish();
+    let _ = env.note(format!("payload written to {}", directory.display()));
+
+    let code = match (met, report.summary.bytes.0) {
+        (false, _) => ExitCode::ThresholdNotMet,
+        // Nothing arrived at all is not a slow swarm, it is no swarm, and a
+        // caller has to be able to tell those apart.
+        (_, 0) => ExitCode::NoUsableSources,
+        _ => ExitCode::Success,
+    };
+    emit(&report, &output, renderer, env, code)
+}
+
+/// Fill the target block from a torrent that was read locally.
+fn describe(report: &mut Report, meta: &Metainfo, layout: &Layout) {
+    report.target.info_hash = Some(meta.info_hash().hex());
+    report.target.name = Some(layout.name.clone());
+    report.target.total = Some(Size(layout.total_length));
+    report.target.piece_length = Some(Size(u64::from(layout.piece_length)));
+    report.target.piece_count = Some(layout.piece_count());
+}
+
+/// What a `bench leech` run was asked to do.
+struct LeechOptions {
+    duration: Duration,
+    warmup: Duration,
+    interval: Duration,
+    stop_on_complete: bool,
+}
+
+/// What a `bench leech` run produced.
+struct LeechOutcome {
+    series: Vec<bit_cli_core::bench::report::Sample>,
+    summary: bit_cli_core::bench::report::Summary,
+    sources: Vec<bit_cli_core::bench::report::SourceSummary>,
+    endpoints: Vec<String>,
+    notes: Vec<String>,
+}
+
+/// Everything one source has been counted for so far.
+///
+/// Peers and bridges both arrive as rows in the session's peer list, because
+/// that is where the session counts what it received. Deltas are kept per
+/// address: a bridge that reconnects gets a new loopback port and a new row,
+/// and treating it as the same address would report a negative delta.
+#[derive(Default)]
+struct Counted {
+    index: usize,
+    bytes: u64,
+    chunks: u64,
+}
+
+/// Run the download with the clock on.
+#[allow(clippy::too_many_lines)]
+async fn drive_leech(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    sources: &[AttachedSource],
+    options: &LeechOptions,
+    renderer: &mut Renderer,
+    env: &mut Env,
+) -> Result<LeechOutcome> {
+    let recorder = recorder::Recorder::new(options.warmup, options.interval, sources.len().max(1));
+    let deadline = std::time::Instant::now() + options.duration;
+    let mut ticker = tokio::time::interval(options.interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticker.tick().await;
+
+    let mut counted: BTreeMap<String, Counted> = BTreeMap::new();
+    let mut labels: Vec<(usize, String, String)> = sources
+        .iter()
+        .map(|source| (source.index, source.url.clone(), "web_seed".to_string()))
+        .collect();
+    // Peers are numbered after the declared sources, so a source keeps the
+    // index the caller gave it whether or not any peer ever connects.
+    let mut next_index = sources.iter().map(|s| s.index + 1).max().unwrap_or(0);
+    let mut storage = engine.storage_counts();
+    let mut notes = Vec::new();
+    let mut completed = false;
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                notes.push("the run was interrupted before its deadline".to_string());
+                break;
+            }
+            _ = ticker.tick() => {}
+        }
+
+        let bridge_ports = swarm::bridge_ports(sources);
+        let by_port: BTreeMap<u16, (usize, String)> = sources
+            .iter()
+            .flat_map(|source| {
+                source
+                    .status
+                    .local_ports()
+                    .into_iter()
+                    .map(|port| (port, (source.index, source.url.clone())))
+            })
+            .collect();
+
+        for peer in engine.peers(handle, &bridge_ports) {
+            let port = peer
+                .addr
+                .rsplit_once(':')
+                .and_then(|(_, port)| port.parse::<u16>().ok());
+            let entry = counted.entry(peer.addr.clone()).or_insert_with(|| {
+                let (index, label, kind) = match port.and_then(|port| by_port.get(&port)) {
+                    Some((index, url)) => (*index, url.clone(), "web_seed"),
+                    None => {
+                        let index = next_index;
+                        next_index += 1;
+                        (index, peer.addr.clone(), "peer")
+                    }
+                };
+                if !labels.iter().any(|(i, _, _)| *i == index) {
+                    labels.push((index, label, kind.to_string()));
+                }
+                Counted {
+                    index,
+                    ..Default::default()
+                }
+            });
+            let bytes = peer.downloaded_bytes.saturating_sub(entry.bytes);
+            let chunks = u64::from(peer.chunks).saturating_sub(entry.chunks);
+            entry.bytes = peer.downloaded_bytes;
+            entry.chunks = u64::from(peer.chunks);
+            recorder.observe_bulk(entry.index, bytes, chunks);
+        }
+
+        let now = engine.storage_counts();
+        let disk = now.since(&storage);
+        storage = now;
+        recorder.observe_disk(&bit_cli_core::bench::report::Disk {
+            read_ops: disk.read_ops,
+            read_bytes: Size(disk.read_bytes),
+            read_time: Millis(disk.read_nanos / 1_000_000),
+            write_ops: disk.write_ops,
+            write_bytes: Size(disk.write_bytes),
+            write_time: Millis(disk.write_nanos / 1_000_000),
+        });
+        recorder.observe_hashing(
+            disk.verify_pieces,
+            disk.verify_bytes,
+            Duration::from_nanos(disk.verify_nanos),
+        );
+
+        if let Some(pipeline) = pipeline(sources) {
+            recorder.live.in_flight.store(
+                pipeline.mean_in_flight,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            recorder.observe_pipeline(pipeline);
+        }
+
+        let snapshot = engine.snapshot(handle);
+        recorder.observe_peers(snapshot.peers.live);
+        let sample = recorder.sample();
+        renderer.event(env, "bench_sample", &sample)?;
+
+        for source in sources {
+            if source.status.state() == bit_cli_core::webseed::BridgeState::Failed {
+                let note = format!(
+                    "{} is unusable: {}",
+                    source.url,
+                    source
+                        .status
+                        .error()
+                        .unwrap_or_else(|| "no reason given".into())
+                );
+                if !notes.contains(&note) {
+                    notes.push(note);
+                }
+            }
+        }
+
+        if snapshot.finished && options.stop_on_complete {
+            completed = true;
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+    }
+    recorder.stop();
+
+    if !recorder.measured_anything() {
+        notes.push(format!(
+            "the run ended after {}ms, inside the {}ms warmup, so the whole run is the measured window",
+            recorder.elapsed().as_millis(),
+            options.warmup.as_millis()
+        ));
+        recorder.collapse_warmup();
+    }
+    if completed {
+        notes.push("the torrent completed before the deadline, so the measured window is the transfer rather than --duration".to_string());
+    }
+
+    Ok(LeechOutcome {
+        series: recorder.series(),
+        sources: recorder.sources(&labels),
+        summary: recorder.summary(),
+        endpoints: sources.iter().map(|s| s.url.clone()).collect(),
+        notes,
+    })
+}
+
+/// Add up what every bridge's request pipeline is doing.
+///
+/// The peaks are summed rather than maxed: each bridge is its own peer with
+/// its own request window, and what bounds the run is the total the session
+/// keeps outstanding across all of them.
+fn pipeline(sources: &[AttachedSource]) -> Option<bit_cli_core::bench::report::Pipeline> {
+    if sources.is_empty() {
+        return None;
+    }
+    let mut total = bit_cli_core::webseed::bridge::BridgePipeline::default();
+    let mut served = 0u64;
+    for source in sources {
+        let one = source.status.pipeline();
+        total.in_flight += one.in_flight;
+        total.peak_in_flight += one.peak_in_flight;
+        total.requests += one.requests;
+        total.blocks += one.blocks;
+        total.service_nanos += one.service_nanos;
+        served += source.status.served_bytes();
+    }
+    Some(bit_cli_core::bench::report::Pipeline {
+        peak_in_flight: total.peak_in_flight,
+        mean_in_flight: total.in_flight,
+        requests: total.requests,
+        blocks: total.blocks,
+        mean_service_us: total.mean_service_us().unwrap_or(0),
+        block_size: Size(match total.blocks {
+            0 => 0,
+            blocks => served / blocks,
+        }),
+        ..Default::default()
+    })
+}
+
 /// Read `--baseline` and fold the comparison into the report.
 fn compare_against_baseline(
     report: &mut Report,
@@ -465,7 +902,7 @@ pub use recorder::Observation;
 #[cfg(test)]
 mod tests {
     use crate::env::Env;
-    use crate::test_support::{TorrentFixture, run_err, run_ok};
+    use crate::test_support::{FileServer, TorrentFixture, run_err, run_ok};
     use bit_cli_core::ExitCode;
 
     /// Run `bench` with no global format flag and read the report off stdout.
@@ -641,7 +1078,7 @@ mod tests {
     #[test]
     fn the_subcommands_that_are_not_built_name_their_todo_entry() {
         let fixture = TorrentFixture::multi_file();
-        for subcommand in ["leech", "seed", "swarm", "probe"] {
+        for subcommand in ["seed", "swarm", "probe"] {
             let (mut env, captured) = crate::env::Env::test(
                 &[
                     "--json",
@@ -911,5 +1348,202 @@ mod tests {
         );
         assert_eq!(crate::run(&mut env), ExitCode::Usage);
         assert!(captured.err().contains('x'), "{}", captured.err());
+    }
+
+    /// A dry run resolves the target and stops. It is what CI calls to check
+    /// that a benchmark would run before spending the time on it.
+    #[test]
+    fn a_leech_dry_run_describes_the_target_without_downloading() {
+        let fixture = TorrentFixture::single_file();
+        let doc = report(
+            &[
+                "bench",
+                "leech",
+                fixture.path_str(),
+                "--web-seed",
+                "http://127.0.0.1:9/",
+                "--dry-run",
+            ],
+            ExitCode::Success,
+        );
+        assert_eq!(doc["kind"], "leech");
+        assert_eq!(doc["target"]["info_hash"], fixture.info_hash);
+        assert_eq!(doc["target"]["piece_count"], 3);
+        assert_eq!(doc["summary"]["bytes"]["bytes"], 0);
+        assert!(
+            doc["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|note| note.as_str().unwrap().contains("dry run")),
+            "{}",
+            doc["notes"]
+        );
+        assert!(
+            environment_is_complete(&doc["environment"]),
+            "{}",
+            doc["environment"]
+        );
+    }
+
+    fn environment_is_complete(environment: &serde_json::Value) -> bool {
+        !environment["host"]["cpu"]["model"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty()
+            && environment["host"]["memory_total"]["bytes"]
+                .as_u64()
+                .unwrap_or_default()
+                > 0
+            && environment["started_at"]["iso"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with('Z')
+    }
+
+    /// The whole thing, against a real HTTP server on loopback: the payload
+    /// arrives, and the report says what it cost in verification, in disk, and
+    /// in pipeline depth.
+    #[test]
+    fn a_leech_measures_the_transfer_the_hashing_and_the_disk() {
+        let fixture = TorrentFixture::single_file();
+        let server = FileServer::start(fixture.payload_dir());
+        let out = fixture.dir().join("out");
+        let doc = report(
+            &[
+                "bench",
+                "leech",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed",
+                &server.base,
+                "--web-seed-only",
+                "--port",
+                "0",
+                "--duration",
+                "60s",
+                "--warmup",
+                "0s",
+                "--metrics-interval",
+                "100ms",
+            ],
+            ExitCode::Success,
+        );
+
+        let total = fixture.files[0].1.len() as u64;
+        assert_eq!(doc["summary"]["bytes"]["bytes"].as_u64().unwrap(), total);
+        assert_eq!(
+            std::fs::read(out.join("payload.bin")).unwrap(),
+            fixture.files[0].1,
+            "the payload on disk is the payload in the torrent"
+        );
+
+        let hashing = &doc["summary"]["hashing"];
+        assert_eq!(hashing["pieces"].as_u64().unwrap(), 3);
+        assert_eq!(hashing["bytes"]["bytes"].as_u64().unwrap(), total);
+
+        let disk = &doc["summary"]["disk"];
+        assert_eq!(disk["write_bytes"]["bytes"].as_u64().unwrap(), total);
+        assert!(disk["read_bytes"]["bytes"].as_u64().unwrap() >= total);
+
+        let pipeline = &doc["summary"]["pipeline"];
+        assert!(pipeline["blocks"].as_u64().unwrap() > 0);
+        // Not equal: near the end the session re-asks for a block it already
+        // has outstanding, and the second answer is dropped rather than sent
+        // twice. See TODO/webseed.md, T-008.
+        assert!(
+            pipeline["requests"].as_u64().unwrap() >= pipeline["blocks"].as_u64().unwrap(),
+            "more blocks than requests: {pipeline}"
+        );
+        assert!(pipeline["peak_in_flight"].as_u64().unwrap() >= 1);
+
+        let sources = doc["sources"].as_array().unwrap();
+        assert_eq!(
+            sources.len(),
+            1,
+            "one source served everything: {sources:?}"
+        );
+        assert_eq!(sources[0]["kind"], "web_seed");
+        assert_eq!(sources[0]["label"], server.base);
+        assert_eq!(sources[0]["bytes"]["bytes"].as_u64().unwrap(), total);
+
+        assert!(
+            !doc["series"].as_array().unwrap().is_empty(),
+            "a run with no time series is not a benchmark"
+        );
+    }
+
+    /// `--fail-under` is what makes a benchmark a CI gate, so it has to work
+    /// the same on every subcommand.
+    #[test]
+    fn a_leech_below_the_threshold_exits_fourteen() {
+        let fixture = TorrentFixture::single_file();
+        let server = FileServer::start(fixture.payload_dir());
+        let out = fixture.dir().join("out");
+        let doc = report(
+            &[
+                "bench",
+                "leech",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed",
+                &server.base,
+                "--web-seed-only",
+                "--port",
+                "0",
+                "--duration",
+                "60s",
+                "--warmup",
+                "0s",
+                "--metrics-interval",
+                "100ms",
+                "--fail-under",
+                "100GiB/s",
+            ],
+            ExitCode::ThresholdNotMet,
+        );
+        assert_eq!(doc["threshold"]["met"], false);
+        assert_eq!(
+            doc["threshold"]["fail_under"]["bytes"].as_u64().unwrap(),
+            100 * 1024 * 1024 * 1024
+        );
+    }
+
+    /// A benchmark that finds the payload already there measures the hash
+    /// checker, not the transfer. It has to say so rather than report a rate.
+    #[test]
+    fn a_leech_onto_a_complete_payload_refuses_rather_than_reporting_a_rate() {
+        let fixture = TorrentFixture::single_file();
+        let server = FileServer::start(fixture.payload_dir());
+        let out = fixture.dir().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("payload.bin"), &fixture.files[0].1).unwrap();
+
+        let stderr = run_err(
+            &[
+                "bench",
+                "leech",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed",
+                &server.base,
+                "--web-seed-only",
+                "--port",
+                "0",
+                "--duration",
+                "30s",
+                "--warmup",
+                "0s",
+            ],
+            fixture.dir(),
+            ExitCode::Usage,
+        );
+        assert!(
+            stderr.contains("already complete"),
+            "the reason has to name what happened: {stderr}"
+        );
     }
 }

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use hdrhistogram::Histogram;
 
 use crate::bench::report::{
-    ConcurrencyStep, Errors, Latencies, Percentiles, Sample, Stalls, Summary,
+    ConcurrencyStep, Costs, Disk, Errors, Latencies, Percentiles, Pipeline, Sample, Stalls, Summary,
 };
 use crate::sysinfo::Process;
 use crate::time::Timestamp;
@@ -155,6 +155,12 @@ struct Window {
 }
 
 impl Window {
+    /// Fold in bytes and requests that carry no timing of their own.
+    fn add(&mut self, bytes: u64, requests: u64) {
+        self.bytes += bytes;
+        self.requests += requests;
+    }
+
     fn record(&mut self, observation: &Observation) {
         self.bytes += observation.bytes;
         self.requests += 1;
@@ -176,9 +182,13 @@ impl Window {
 
 /// Per-source counters, kept apart so one slow mirror is visible rather than
 /// averaged away.
+///
+/// Both windows are kept, the measured one and the whole run, so a run that
+/// collapses its warmup still has a per-source breakdown to report.
 #[derive(Debug, Default)]
 struct PerSource {
     window: Window,
+    total: Window,
 }
 
 /// Live counters a progress reporter can read without stopping the run.
@@ -257,6 +267,17 @@ struct State {
     choke_events: u64,
     unchoke_events: u64,
     peak_queue_depth: u64,
+    /// Reads and writes over the measured window.
+    disk: Disk,
+    /// Reads and writes since the last sample.
+    disk_interval: Disk,
+    /// Verification since the last sample.
+    verify_interval: (u64, u64),
+    /// The block pipeline over the measured window, when one is being
+    /// measured.
+    pipeline: Option<Pipeline>,
+    /// Mean block service time to report on the next sample.
+    service_us: Option<u64>,
 }
 
 impl Recorder {
@@ -291,6 +312,11 @@ impl Recorder {
                 choke_events: 0,
                 unchoke_events: 0,
                 peak_queue_depth: 0,
+                disk: Disk::default(),
+                disk_interval: Disk::default(),
+                verify_interval: (0, 0),
+                pipeline: None,
+                service_us: None,
             }),
         }
     }
@@ -323,13 +349,14 @@ impl Recorder {
         let mut state = self.lock();
         state.current.record(&observation);
         state.total.record(&observation);
+        let index = observation.source;
+        if state.sources.len() <= index {
+            state.sources.resize_with(index + 1, PerSource::default);
+        }
+        state.sources[index].total.record(&observation);
         if !in_warmup {
             state.measured.record(&observation);
             state.step.record(&observation);
-            let index = observation.source;
-            if state.sources.len() <= index {
-                state.sources.resize_with(index + 1, PerSource::default);
-            }
             state.sources[index].window.record(&observation);
         }
     }
@@ -374,12 +401,74 @@ impl Recorder {
         }
     }
 
+    /// Note bytes that arrived without a request of their own to time.
+    ///
+    /// A download counts what a peer or a source delivered over an interval
+    /// rather than one request at a time, because the session does the
+    /// requesting and does not hand out per-request timings. The bytes and the
+    /// request count are exact; there is no latency to record, so none is
+    /// invented.
+    pub fn observe_bulk(&self, source: usize, bytes: u64, requests: u64) {
+        if bytes == 0 && requests == 0 {
+            return;
+        }
+        self.live.bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.live.requests.fetch_add(requests, Ordering::Relaxed);
+        let in_warmup = self.in_warmup();
+        let mut state = self.lock();
+        state.current.add(bytes, requests);
+        state.total.add(bytes, requests);
+        if state.sources.len() <= source {
+            state.sources.resize_with(source + 1, PerSource::default);
+        }
+        state.sources[source].total.add(bytes, requests);
+        if !in_warmup {
+            state.measured.add(bytes, requests);
+            state.step.add(bytes, requests);
+            state.sources[source].window.add(bytes, requests);
+        }
+    }
+
     /// Note pieces verified and what it cost.
     pub fn observe_hashing(&self, pieces: u64, bytes: u64, elapsed: Duration) {
         let mut state = self.lock();
         state.pieces_verified += pieces;
         state.hashed_bytes += bytes;
         state.hashing += elapsed;
+        state.verify_interval.0 += elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+        state.verify_interval.1 += bytes;
+    }
+
+    /// Note what storage did over one interval.
+    pub fn observe_disk(&self, disk: &Disk) {
+        let mut state = self.lock();
+        state.disk.read_ops += disk.read_ops;
+        state.disk.read_bytes = Size(state.disk.read_bytes.0 + disk.read_bytes.0);
+        state.disk.read_time = Millis(state.disk.read_time.0 + disk.read_time.0);
+        state.disk.write_ops += disk.write_ops;
+        state.disk.write_bytes = Size(state.disk.write_bytes.0 + disk.write_bytes.0);
+        state.disk.write_time = Millis(state.disk.write_time.0 + disk.write_time.0);
+        state.disk_interval.read_ops += disk.read_ops;
+        state.disk_interval.read_bytes = Size(state.disk_interval.read_bytes.0 + disk.read_bytes.0);
+        state.disk_interval.read_time = Millis(state.disk_interval.read_time.0 + disk.read_time.0);
+        state.disk_interval.write_ops += disk.write_ops;
+        state.disk_interval.write_bytes =
+            Size(state.disk_interval.write_bytes.0 + disk.write_bytes.0);
+        state.disk_interval.write_time =
+            Millis(state.disk_interval.write_time.0 + disk.write_time.0);
+    }
+
+    /// Note where the block request pipeline is.
+    ///
+    /// `in_flight` is a level rather than a count, so it is sampled into the
+    /// series and averaged over the measured window. The totals replace rather
+    /// than accumulate, because the caller reads them from counters that only
+    /// ever grow.
+    pub fn observe_pipeline(&self, pipeline: Pipeline) {
+        let mut state = self.lock();
+        state.peak_queue_depth = state.peak_queue_depth.max(pipeline.peak_in_flight);
+        state.service_us = (pipeline.mean_service_us > 0).then_some(pipeline.mean_service_us);
+        state.pipeline = Some(pipeline);
     }
 
     /// Note the peer count, for the peak.
@@ -429,6 +518,20 @@ impl Recorder {
             .saturating_sub(state.pieces_at_last_sample);
         state.pieces_at_last_sample = state.pieces_verified;
 
+        let depth = self.live.in_flight.load(Ordering::Relaxed);
+        let disk = std::mem::take(&mut state.disk_interval);
+        let (verify_ms, verify_bytes) = std::mem::take(&mut state.verify_interval);
+        let costs = Costs {
+            verify: Millis(verify_ms),
+            verify_bytes: Size(verify_bytes),
+            disk_read: disk.read_time,
+            disk_read_bytes: disk.read_bytes,
+            disk_write: disk.write_time,
+            disk_write_bytes: disk.write_bytes,
+            mean_service_us: state.service_us,
+        };
+        let costs = (costs != Costs::default()).then_some(costs);
+
         let sample = Sample {
             at: Timestamp::now(),
             elapsed: Millis(elapsed.as_millis().min(u128::from(u64::MAX)) as u64),
@@ -443,10 +546,34 @@ impl Recorder {
             process,
             peers: state.peak_peers,
             pieces_verified: (pieces > 0).then_some(pieces),
-            queue_depth: Some(self.live.in_flight.load(Ordering::Relaxed)),
+            queue_depth: Some(depth),
+            costs,
         };
         state.samples.push(sample.clone());
         sample
+    }
+
+    /// Whether the measured window ever opened.
+    pub fn measured_anything(&self) -> bool {
+        self.lock().measured_from.is_some()
+    }
+
+    /// Measure the whole run, warmup included.
+    ///
+    /// For a run that ended before the warmup window closed, which is what a
+    /// download faster than its own warmup does. Reporting zero bytes because
+    /// the transfer beat the clock is worse than reporting the transfer, so
+    /// the caller collapses the window and says so in a note.
+    pub fn collapse_warmup(&self) {
+        let mut state = self.lock();
+        state.measured_from = Some(self.started);
+        state.measured = std::mem::take(&mut state.total);
+        for source in &mut state.sources {
+            source.window = std::mem::take(&mut source.total);
+        }
+        for sample in &mut state.samples {
+            sample.warmup = false;
+        }
     }
 
     /// Close the measured window. Call once, when the run stops.
@@ -516,6 +643,11 @@ impl Recorder {
                     unchoke_events: state.unchoke_events,
                     peak_queue_depth: state.peak_queue_depth,
                 }),
+            disk: (!state.disk.is_empty()).then(|| state.disk.clone()),
+            pipeline: state
+                .pipeline
+                .clone()
+                .map(|pipeline| pipeline.derive(Duration::from_millis(duration_ms))),
             peak_peers: state.peak_peers,
             best_concurrency: None,
         }

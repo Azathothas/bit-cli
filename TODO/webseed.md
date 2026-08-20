@@ -181,6 +181,92 @@ Three candidates for where the rest goes, in the order worth checking:
 already carries a hashing series and a queue-depth series that nothing
 populates yet. That is the next thing to build, and this is the reason.
 
+## The measurement `bench leech` took
+
+`bench leech` is built and the three were separated. **None of the three
+candidates above is the answer.** The answer is that one source is one peer,
+and one peer is one serial receive path.
+
+`scripts/bench-leech.ps1` takes the same payload from the same loopback server
+two ways, five runs per step, and steps the number of bridge connections the
+one source is attached over. Run 2026-08-20T04:06:06.879Z, release build,
+1 GiB payload, 1024 pieces, medians. Report:
+`bench/leech-20260820T040606879Z.json`.
+
+```
+$ pwsh -NoProfile -File scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -BridgeSweep "1,2,4,8"
+```
+
+| Stage | Median | Slowest | Fastest | Share of fetch | Against 1 bridge |
+| --- | --- | --- | --- | --- | --- |
+| `bench webseed`, no bridge | 855.90 MiB/s | | | 100.00% | |
+| `bench leech`, 1 bridge | 184.40 MiB/s | 169.73 MiB/s | 204.27 MiB/s | 21.55% | 1.00x |
+| `bench leech`, 2 bridges | 314.69 MiB/s | 313.53 MiB/s | 340.20 MiB/s | 36.77% | **1.71x** |
+| `bench leech`, 4 bridges | 338.40 MiB/s | 313.53 MiB/s | 372.23 MiB/s | 39.54% | **1.84x** |
+| `bench leech`, 8 bridges | 292.07 MiB/s | 213.20 MiB/s | 340.09 MiB/s | 34.12% | 1.58x |
+| control: 1 bridge, 64 requests in flight | 150.37 MiB/s | 126.33 MiB/s | 169.54 MiB/s | 17.57% | 0.82x |
+
+### It is not the requests in flight
+
+The control is the row that settles it. Every extra bridge is an extra peer
+and also an extra set of HTTP requests in flight, so the sweep on its own
+cannot say which of the two the gain came from. The control holds the HTTP
+concurrency at what the widest step used, 64 requests, and puts all of it on
+one bridge. It reaches 0.82x, slightly **worse** than the same bridge at 8.
+Four bridges carrying the same 64 requests between them reach 1.84x.
+
+So the gain is the receive paths. `--web-seed-concurrency` does not buy it and
+neither would a deeper request window.
+
+### It is not the request window either
+
+The bridge now reports the session's window from the other end. `librqbit`'s
+`DEFAULT_PEER_REQUEST_WINDOW` is 128 blocks and the bridge sees exactly that
+as its peak per connection, so the window is real and is reached. But the mean
+depth is far below it, and what the peak would allow is far above what is
+measured: at eight bridges the peak reaches 1024 blocks, which at the measured
+21,937 us service time would sustain 729.36 MiB/s, and the run reached
+292.07 MiB/s, 40.04% of it. A pipeline that is the limit runs at its ceiling.
+This one does not.
+
+### It is not hashing
+
+At one bridge, 1 GiB of piece checks costs 613 ms out of a 5.5 second run,
+about 11%. Every piece is read back from disk and hashed, so that figure is
+the read and the SHA-1 together. It is real and it is not five sixths of
+anything.
+
+### The disk is the second wall, and it is what caps the sweep
+
+The same 1 GiB of writes costs 1,137 ms at one receive path and 14,036 ms
+totalled across eight. Per path that is 20% of the run at one bridge and 50%
+of the available path time at eight. That is why eight bridges are slower than
+four: the paths stop being independent once they contend for the payload file.
+
+Recorded as its own item, [T-017](disk-io.md), with the two candidate causes
+and what would separate them.
+
+### What it means
+
+A block arriving from a peer is written, and at a piece boundary the whole
+piece is read back and hashed, inline on that connection's own task before the
+next block from that peer is processed. So one peer's throughput is bounded by
+block size over per-block processing time, whatever the link underneath can
+do. The bridge inherits that bound because it presents one source as one peer.
+
+The fix follows from the measurement and is
+[T-009](#t-009-a-source-cannot-be-attached-over-more-than-one-connection):
+attach one source over several bridge connections. Two is worth 1.71x and four
+1.84x on this machine, with no extra HTTP traffic, because the session's picker
+divides the pieces between them: the per-source rows in the report add up to
+the payload rather than to N copies of it.
+
+Two limits on the number worth stating. It is loopback, so the wire costs
+nothing and the receive path is a larger share of the total than it would be
+against a real mirror. And the knee moved between four and eight across
+repeated sweeps on this machine, so "several is better than one" is solid and
+"four exactly" is not.
+
 ## The failure cases
 
 Both ran against the loopback file server's new `--stall-after` and `--status`
@@ -231,6 +317,68 @@ Acceptance:  The stall case in `bench/webseed-<timestamp>.json` ends in under
              three times `--web-seed-timeout`, and this file records the before
              and after.
 
+### T-008 A duplicate block request is fetched twice
+
+Source:      the [T-090](bench.md) `bench leech` measurement
+Category:    webseed
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     The bridge keeps a set of the blocks the session is waiting on.
+             A `request` for a block already in that set inserts nothing new,
+             and a second fetch task is spawned for it anyway. The first to
+             finish removes the key and sends the block; the second finds the
+             key gone and drops what it fetched. So the block was fetched
+             twice and served once.
+Relevance:   It is small and it is real. On a 3,000 byte torrent the bridge
+             answered 3 blocks for 5 requests; on a 2 MiB one it answered 128
+             for 128, so it is the tail of a transfer rather than the body of
+             it. The window cache absorbs most of the wasted fetch, which is
+             why it has not shown up as traffic.
+Approach:    Skipping the second spawn is one line, and it is not obviously
+             safe: `librqbit` counts its own outstanding requests per block,
+             and a peer that answers one `piece` message for two `request`
+             messages may leave an entry to time out rather than clear. What
+             settles it is reading `remove_inflight_request` in
+             `librqbit`'s `torrent_state/live/mod.rs` and then measuring
+             `pipeline.requests` against `pipeline.blocks` on a long run with
+             and without the guard.
+Acceptance:  `summary.pipeline.requests` equals `summary.pipeline.blocks` on a
+             `bench leech` run of a torrent with more than a thousand pieces,
+             and the run still completes.
+
+### T-009 A source cannot be attached over more than one connection
+
+Source:      the [T-090](bench.md) `bench leech` measurement
+Category:    webseed
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     One `--web-seed` is one binding, one bridge, one peer, and one
+             serial receive path. That path is what bounds the download, and
+             the same source attached twice on the command line goes 1.71x
+             faster for it. There is no flag that says so, and repeating a URL
+             to get a second connection is a trick rather than an interface.
+Relevance:   It is the largest measured win available on the web seed path and
+             it needs no fork: 21.55% of the no-bridge fetch rate at one
+             connection against 39.54% at four, on the same source over the
+             same server in the same session.
+Approach:    `--web-seed-connections <N>`, defaulting to 1, expanding one
+             binding into N bridges that share the source's scope, its
+             concurrency budget, and its window cache. Three things have to be
+             right: the per-source accounting stays one row rather than N, the
+             concurrency budget is divided rather than multiplied so a mirror
+             is not hit N times harder, and the default stays 1 until the
+             number is confirmed against a real mirror rather than loopback.
+Acceptance:  `bench leech` against the loopback server with
+             `--web-seed-connections 4` reaches within 5% of the same run with
+             the URL repeated four times, reports one source row, and the
+             report records both. Then the same against a real mirror, with
+             the number recorded here, because loopback flatters the receive
+             path.
+
 ### T-002 Measure Candidate A-prime, the in-process virtual peer
 
 Source:      PROMPT.md section 2.5, `superseedr/src/networking/web_seed_worker.rs`
@@ -256,6 +404,16 @@ Acceptance:  This file states, with the `librqbit` types named, whether an
              in-process virtual peer is reachable through the public API. If it
              is, T-001's benchmark runs against it too.
 
+What [T-090](bench.md) measured changes what this entry is worth. The loopback
+hop and the second copy are not where the throughput goes: the per-peer serial
+receive path is, and an in-process virtual peer would still be one peer with
+one of those. So removing the socket buys the framing and a copy, which
+`bench leech` puts at a small share, and not the five sixths this entry was
+written to chase. It is still worth answering, because the answer also decides
+what Candidate B and Candidate C would cost, but it is no longer the cheapest
+large win. [T-009](#t-009-a-source-cannot-be-attached-over-more-than-one-connection)
+is, and it needs no upstream change at all.
+
 ### T-003 The piece picker cannot be told to prefer HTTP
 
 Source:      `--prefer-web-seed`, PROMPT.md A3.4
@@ -280,6 +438,19 @@ Approach:    What ships now: the flag doubles each source's in-flight request
 Acceptance:  A hybrid run with one fast local mirror and one slow peer, run
              twice, shows a measurable shift in the peer/web-seed byte split
              with the flag on. Both splits are recorded here with the commands.
+
+[T-090](bench.md) measured what the current implementation is worth and the
+answer is nothing: one bridge at 64 requests in flight reaches 0.82x the same
+bridge at 8. Doubling a source's in-flight budget does not make it answer
+sooner, because the budget is not what bounds it. So the flag as it ships
+changes a number that does not move the outcome, which is worse than a flag
+that does nothing and says so.
+
+What would give `--prefer-web-seed` a real effect without reaching the picker
+is [T-009](#t-009-a-source-cannot-be-attached-over-more-than-one-connection):
+give the preferred source more receive paths than the swarm gets. That is a
+measured lever rather than a hoped-for one, and it is the shape this flag
+should take when T-009 lands.
 
 ---
 

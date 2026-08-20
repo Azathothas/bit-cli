@@ -25,6 +25,7 @@ Approach:    Build in this order, because each reuses the last:
              2. `bench webseed`, which is `webseed probe` plus the envelope,
                 `--baseline`, and `--fail-under`. **Done.**
              3. `bench leech`, which is `download` plus the time series.
+                **Done.**
              4. `bench seed`, which is `seed` plus the time series.
              5. `bench probe`, a one-shot reachability check.
              6. `bench swarm`, the synthetic load generator, which is the
@@ -58,9 +59,69 @@ carries: choke and unchoke events, request queue depth, and piece verification
 have fields and a recorder path, and `bench leech` and `bench seed` are what
 will populate them.
 
-Still open: `leech`, `seed`, `probe`, and `swarm` refuse with exit 1 naming
-this entry, the same as before. Each is its own slice of work on the envelope
-that now exists.
+`bench leech` is built. It is `download` with the clock and the counters on,
+and it answers the question a rate on its own cannot: whether a slow download
+was waiting on the network, on the hash, or on the disk. Three measurements
+make that possible, and all three are taken from `bit-cli`'s own code rather
+than modelled:
+
+- **Verification.** `bit_cli_core::storage::SafeStorage` brackets each piece
+  check. A check is a run of positioned reads walking the piece from its
+  start, followed by the session declaring the piece complete, all on one
+  thread with nothing awaited in between, so the wall time between the first
+  of those reads and that declaration is the whole cost of the check, the
+  SHA-1 included. It lands in `summary.hashing`.
+- **The disk.** The same storage counts positioned reads and writes, their
+  bytes, and their time. It lands in `summary.disk`. Two `Instant::now()`
+  calls per operation, always on: a counter that is only on when someone is
+  measuring measures a different program.
+- **The request pipeline.** `BridgeStatus` counts the blocks the session has
+  asked for and not yet been given, the deepest that ever got, and the total
+  time from a request arriving to its block going back out. It lands in
+  `summary.pipeline`, with `window_ceiling`: what a pipeline held at the peak
+  depth would sustain at the measured service time.
+
+Every one of those also appears per interval in `series[].costs`, and in the
+CSV columns, so the shape over time is visible and not just the total.
+
+Acceptance, 2026-08-20T04:06:06.879Z, release build, 1 GiB payload on the
+loopback file server, five runs per step, medians:
+
+```
+$ pwsh -NoProfile -File scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -BridgeSweep "1,2,4,8"
+```
+
+Report: `bench/leech-20260820T040606879Z.json`.
+
+| Stage | Median | Slowest | Fastest | Share of fetch |
+| --- | --- | --- | --- | --- |
+| `bench webseed`, no bridge | 855.90 MiB/s | | | 100.00% |
+| `bench leech`, 1 bridge | 184.40 MiB/s | 169.73 MiB/s | 204.27 MiB/s | 21.55% |
+| `bench leech`, 2 bridges | 314.69 MiB/s | 313.53 MiB/s | 340.20 MiB/s | 36.77% |
+| `bench leech`, 4 bridges | 338.40 MiB/s | 313.53 MiB/s | 372.23 MiB/s | 39.54% |
+| `bench leech`, 8 bridges | 292.07 MiB/s | 213.20 MiB/s | 340.09 MiB/s | 34.12% |
+| control: 1 bridge, 64 requests in flight | 150.37 MiB/s | 126.33 MiB/s | 169.54 MiB/s | 17.57% |
+
+What that says is written up under
+[T-001](webseed.md#the-measurement-bench-leech-took), because it is the
+answer to that entry's question. In one line: the cost is the per-peer serial
+receive path, not the request window, not hashing, and not the disk until
+several paths contend for it.
+
+`--fail-under` above the observed rate exits 14 on `leech` as it does on
+`webseed`, covered by
+`cmd::bench::tests::a_leech_below_the_threshold_exits_fourteen`.
+
+One refusal was added while building it. A payload already sitting in the
+output directory hash-checks clean on add, and the torrent is finished before
+a byte is fetched. A rate taken from that run describes the hash checker, so
+`bench leech` refuses it and names the directory. The benchmark script hit
+exactly this when its own cleanup silently failed, which is how it was found.
+
+Still open: `seed`, `probe`, and `swarm` refuse with exit 1 naming this entry,
+the same as before. Each is its own slice of work on the envelope that now
+exists. `bench seed` is next and reuses everything above except the pipeline
+counters, which face the other way.
 
 ### T-091 Bench reports do not capture their environment
 

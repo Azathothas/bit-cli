@@ -325,14 +325,17 @@ pub async fn attach_sources(
     Ok((attached, set))
 }
 
-/// Loopback ports the attached bridges are connected from.
+/// Loopback ports the attached bridges have connected from.
 ///
 /// This is what tells a bridge apart from a real peer in the peer list, so
-/// an HTTP source is never counted as a swarm member.
+/// an HTTP source is never counted as a swarm member. It is every port each
+/// bridge has used rather than the one it holds now: the session keeps a dead
+/// peer's row after the connection closes, and a bridge that reconnected is
+/// still not a swarm member under its old port.
 pub fn bridge_ports(sources: &[AttachedSource]) -> HashSet<u16> {
     sources
         .iter()
-        .filter_map(|s| s.status.local_port())
+        .flat_map(|s| s.status.local_ports())
         .collect()
 }
 

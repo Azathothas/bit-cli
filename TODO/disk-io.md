@@ -441,3 +441,48 @@ only `none` warned, so `quick` claimed to be a quick check and was a full one.
 Both `quick` and `none` warn now, naming what actually happens, and `--help`
 says the same. A flag whose values are all the same is worse than no flag; a
 flag that says so is not.
+
+---
+
+### T-017 Concurrent receive paths contend on the payload file
+
+Source:      the [T-090](bench.md) `bench leech` measurement
+Category:    disk-io
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     The same 1 GiB of payload writes costs 1,137 ms totalled across
+             one receive path and 14,036 ms totalled across eight. That is the
+             same bytes, the same file, the same block size, and twelve times
+             the time. Per path it is 20% of the run at one path and 50% of
+             the available path time at eight.
+Relevance:   It is what caps [T-009](webseed.md), and it is the first thing to
+             check for [T-030](performance.md), which is throughput collapsing
+             with several torrents at once. Several torrents is several
+             receive paths against several files, and this is several receive
+             paths against one.
+Approach:    Two candidate causes, and the measurement does not yet separate
+             them:
+
+             1. **The handle.** `SafeStorage` holds one `std::fs::File` per
+                payload file and every path writes through it. On Windows that
+                is a synchronous handle, and `seek_write` is `WriteFile` with
+                an `OVERLAPPED` offset against it. Whether concurrent
+                positioned writes to one synchronous handle serialise on the
+                file object is what has to be established, and the answer
+                differs between Windows and Linux.
+             2. **The session.** `librqbit` takes a per-torrent write lock on
+                every received chunk and runs the write under a
+                `block_in_place` semaphore of eight permits. Eight paths
+                against eight permits is exactly the shape of the measured
+                curve.
+
+             What separates them is a micro-benchmark that writes the same
+             bytes through `SafeStorage` from N threads with no session at
+             all. If the curve reproduces, it is the handle; if it does not,
+             it is the session. That benchmark belongs under `bench/` and does
+             not exist.
+Acceptance:  The micro-benchmark is committed and run on both platforms, this
+             entry records which cause it found, and the fix is measured
+             against `bench leech` at one, two, four, and eight bridges.

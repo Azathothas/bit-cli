@@ -1151,7 +1151,7 @@ pub enum SeedVerify {
 #[derive(Debug, Subcommand)]
 pub enum BenchCommand {
     /// Download from a target and measure.
-    Leech(BenchArgs),
+    Leech(BenchLeechArgs),
     /// Seed and measure what the swarm pulls.
     Seed(BenchArgs),
     /// Measure HTTP sources: latency percentiles, concurrency scaling, ranges.
@@ -1259,6 +1259,59 @@ pub struct BenchArgs {
     /// Synthetic piece size.
     #[arg(long, value_name = "SIZE", default_value = "1MiB")]
     pub piece_size: String,
+}
+
+/// `bit-cli bench leech`.
+///
+/// A download with the clock running, so it carries the same source, tracker,
+/// and limit flags `download` does. The payload has to land somewhere real:
+/// the point of the measurement is what a download costs, and one that never
+/// writes is measuring something else.
+#[derive(Debug, Args)]
+pub struct BenchLeechArgs {
+    #[command(flatten)]
+    pub source: SourceArgs,
+
+    #[command(flatten)]
+    pub web_seeds: WebSeedArgs,
+
+    #[command(flatten)]
+    pub trackers: TrackerArgs,
+
+    #[command(flatten)]
+    pub limits: LimitArgs,
+
+    #[command(flatten)]
+    pub shared: BenchShared,
+
+    /// Listen port, or a range as START-END. `0` asks the OS for a free one.
+    #[arg(long, value_name = "PORT")]
+    pub port: Vec<String>,
+
+    /// How disk space is allocated for the payload.
+    #[arg(long, value_name = "METHOD", default_value = "sparse")]
+    pub file_allocation: FileAllocation,
+
+    /// Overwrite whatever is already in the output directory.
+    ///
+    /// A benchmark run twice against the same directory would otherwise find
+    /// the payload already there, hash-check it, finish immediately, and
+    /// report a rate that is the hash checker's rather than the network's.
+    #[arg(long, default_value_t = true, overrides_with = "keep_existing")]
+    pub allow_overwrite: bool,
+
+    /// Keep what is already in the output directory and resume onto it.
+    #[arg(long, overrides_with = "allow_overwrite")]
+    pub keep_existing: bool,
+
+    /// Stop once the torrent completes, rather than running out `--duration`.
+    /// On by default.
+    #[arg(long, default_value_t = true, overrides_with = "run_full_duration")]
+    pub stop_on_complete: bool,
+
+    /// Keep running until `--duration` elapses even after the payload is in.
+    #[arg(long, overrides_with = "stop_on_complete")]
+    pub run_full_duration: bool,
 }
 
 /// `bit-cli bench webseed`.

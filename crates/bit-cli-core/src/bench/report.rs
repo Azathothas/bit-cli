@@ -322,6 +322,28 @@ pub struct Sample {
     /// Requests outstanding at the end of this interval.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue_depth: Option<u64>,
+    /// Where this interval's time went besides the wire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub costs: Option<Costs>,
+}
+
+/// What one interval spent off the wire.
+///
+/// Three numbers against the interval length answer the question a download
+/// benchmark exists to answer: was the run waiting on the network, on the
+/// hash, or on the disk.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Costs {
+    /// Time reading pieces back and hashing them.
+    pub verify: Millis,
+    pub verify_bytes: Size,
+    pub disk_read: Millis,
+    pub disk_read_bytes: Size,
+    pub disk_write: Millis,
+    pub disk_write_bytes: Size,
+    /// Mean time to answer one block request during this interval.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mean_service_us: Option<u64>,
 }
 
 /// One step of a concurrency sweep, so the knee is visible.
@@ -387,6 +409,90 @@ pub struct ChokeStats {
     pub peak_queue_depth: u64,
 }
 
+/// What the run cost in positioned reads and writes.
+///
+/// On a download the reads are the session reading each piece back to hash it,
+/// so `read_bytes` is close to the payload and is not a second copy of the
+/// wire traffic. `bytes_per_payload_byte` in the summary says which.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Disk {
+    pub read_ops: u64,
+    pub read_bytes: Size,
+    pub read_time: Millis,
+    pub write_ops: u64,
+    pub write_bytes: Size,
+    pub write_time: Millis,
+}
+
+impl Disk {
+    /// Whether anything touched the disk.
+    pub fn is_empty(&self) -> bool {
+        self.read_ops == 0 && self.write_ops == 0
+    }
+}
+
+/// How deep the block request pipeline ran.
+///
+/// A peer answers a bounded number of outstanding block requests at a time. If
+/// that bound is reached and stays reached, throughput is capped at the bound
+/// times the block size over the time to answer one, whatever the link can do.
+/// All of those numbers are here, so the cap can be read off the report rather
+/// than inferred from a rate.
+///
+/// `peak_in_flight` covers the whole run, warmup included, because a
+/// high-water mark cannot be narrowed to a window after the fact. Everything
+/// else covers the measured window.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pipeline {
+    /// The most blocks outstanding at once, across every source. This is the
+    /// session's request window whenever the run reached it.
+    pub peak_in_flight: u64,
+    /// Blocks outstanding on average, weighted by time.
+    ///
+    /// Total service time over the length of the window, which is Little's
+    /// law. A gauge read once per metrics interval answers a much worse
+    /// question, because the depth changes thousands of times between reads.
+    pub mean_in_flight: u64,
+    /// Blocks the session asked for, and blocks answered.
+    ///
+    /// They differ when the session asks again for a block it already has
+    /// outstanding: the second answer is dropped rather than sent twice. See
+    /// `TODO/webseed.md`, T-008.
+    pub requests: u64,
+    pub blocks: u64,
+    /// Mean time from a request arriving to its block going back out.
+    pub mean_service_us: u64,
+    /// Mean bytes per block answered.
+    pub block_size: Size,
+    /// What a pipeline held at `peak_in_flight` would sustain at this service
+    /// time. Arithmetic over two measured numbers rather than a measurement of
+    /// its own, which is why it is named for what it would allow. Read it
+    /// against `sustained_rate`: close together means the request window is
+    /// the limit, far apart means something else is.
+    pub window_ceiling: Size,
+}
+
+impl Pipeline {
+    /// Fill the two derived fields from the length of the measured window.
+    pub fn derive(mut self, window: std::time::Duration) -> Self {
+        let window_us = window.as_micros().min(u128::from(u64::MAX)) as u64;
+        self.mean_in_flight = match window_us {
+            0 => 0,
+            us => self.mean_service_us.saturating_mul(self.blocks) / us,
+        };
+        self.window_ceiling = Size(match self.mean_service_us {
+            0 => 0,
+            us => {
+                self.peak_in_flight
+                    .saturating_mul(self.block_size.0)
+                    .saturating_mul(1_000_000)
+                    / us
+            }
+        });
+        self
+    }
+}
+
 /// What the run adds up to, over the measured window.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Summary {
@@ -411,6 +517,13 @@ pub struct Summary {
     pub stalls: Option<Stalls>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub choke: Option<ChokeStats>,
+    /// What the run cost in reads and writes. Present when storage was used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk: Option<Disk>,
+    /// How deep the block request pipeline ran. Present when a source served
+    /// blocks through the peer protocol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<Pipeline>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_peers: Option<u32>,
     /// The concurrency that reached the highest sustained rate, when a sweep

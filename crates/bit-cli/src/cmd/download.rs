@@ -292,7 +292,7 @@ pub fn run(
 /// Two enums for one concept because the core does not depend on `clap` and
 /// the CLI does not define storage behaviour. The mapping is total, so a new
 /// method cannot be added on one side without the other failing to compile.
-fn allocation_of(method: crate::cli::FileAllocation) -> bit_cli_core::alloc::Allocation {
+pub(crate) fn allocation_of(method: crate::cli::FileAllocation) -> bit_cli_core::alloc::Allocation {
     use bit_cli_core::alloc::Allocation;
     match method {
         crate::cli::FileAllocation::None => Allocation::None,
@@ -729,7 +729,7 @@ fn apply_max_total(specs: &[SourceSpec], max_total: Option<usize>) -> Vec<Source
 /// Memory is `windows * chunk_size` per source, so the window count comes down
 /// as the chunk size goes up. Four windows of the default 4 MiB is 16 MiB per
 /// source, which is the budget a mirror gets before eviction starts.
-fn cache_windows(specs: &[SourceSpec]) -> usize {
+pub(crate) fn cache_windows(specs: &[SourceSpec]) -> usize {
     let largest = specs
         .iter()
         .map(|s| s.limits.chunk_size)
