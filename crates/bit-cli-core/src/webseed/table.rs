@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Context, Error, Result, from_io};
 use crate::units::{parse_rate, parse_size};
-use crate::webseed::binding::{Auth, Origin, SourceLimits, SourceSpec, Style};
+use crate::webseed::binding::{Auth, Origin, SourceLimits, SourceSpec, StatusSet, Style};
 use crate::webseed::composition::Mode;
 use crate::webseed::scope::Scope;
 
@@ -76,6 +76,10 @@ pub struct Defaults {
     pub max_errors: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_status: Option<StatusSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fatal_status: Option<StatusSet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -133,6 +137,13 @@ pub struct Entry {
     /// How long a cooled-down source stays out, in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown_ms: Option<u64>,
+    /// Statuses worth retrying that would otherwise retire the source, as
+    /// codes and inclusive ranges: `[403, 429]`, `["500-599"]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_status: Option<StatusSet>,
+    /// Statuses that retire the source that would otherwise be retried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fatal_status: Option<StatusSet>,
     /// User-Agent for this source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
@@ -249,7 +260,7 @@ impl Entry {
         let mut headers = defaults.headers.clone();
         headers.extend(self.headers);
 
-        Ok(SourceSpec {
+        let spec = SourceSpec {
             url: self.url,
             scope,
             mode,
@@ -284,9 +295,19 @@ impl Entry {
                     .or(defaults.cooldown_ms)
                     .unwrap_or(base.cooldown_ms),
                 rate_limit,
+                retry_status: self
+                    .retry_status
+                    .or_else(|| defaults.retry_status.clone())
+                    .unwrap_or_default(),
+                fatal_status: self
+                    .fatal_status
+                    .or_else(|| defaults.fatal_status.clone())
+                    .unwrap_or_default(),
             },
             origin,
-        })
+        };
+        spec.limits.check_status_policy()?;
+        Ok(spec)
     }
 }
 

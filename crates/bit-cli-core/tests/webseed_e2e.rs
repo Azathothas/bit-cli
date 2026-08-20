@@ -42,6 +42,11 @@ enum ServeMode {
     Hoffman,
     /// Redirect once, then serve properly from the new location.
     Redirect,
+    /// Answer 403 the first time each range is asked for and serve it on the
+    /// retry. It is what a signing CDN does when a signature expires: the
+    /// refusal is real, and the next request to the same URL succeeds because
+    /// it is redirected to a fresh signature.
+    ExpiringSignature,
 }
 
 /// Deterministic pseudorandom bytes, so fixtures have real piece hashes
@@ -71,6 +76,7 @@ async fn serve(root: PathBuf, mode: ServeMode) -> (String, Served) {
     let port = listener.local_addr().unwrap().port();
     let served: Served = Served::default();
     let counter = served.clone();
+    let refused: Refused = Refused::default();
     tokio::spawn(async move {
         loop {
             let Ok((stream, _)) = listener.accept().await else {
@@ -78,19 +84,27 @@ async fn serve(root: PathBuf, mode: ServeMode) -> (String, Served) {
             };
             let root = root.clone();
             let counter = counter.clone();
+            let refused = refused.clone();
             tokio::spawn(async move {
-                let _ = handle_request(stream, root, mode, counter).await;
+                let _ = handle_request(stream, root, mode, counter, refused).await;
             });
         }
     });
     (format!("http://127.0.0.1:{port}/"), served)
 }
 
+/// Ranges [`ServeMode::ExpiringSignature`] has already refused once.
+///
+/// Keyed by the target and the range, so the refusal follows the range rather
+/// than the connection and every distinct range is refused exactly once.
+type Refused = Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+
 async fn handle_request(
     mut stream: TcpStream,
     root: PathBuf,
     mode: ServeMode,
     served: Served,
+    refused: Refused,
 ) -> std::io::Result<()> {
     let mut request = Vec::new();
     let mut byte = [0u8; 1];
@@ -121,6 +135,13 @@ async fn handle_request(
     // is no `Range` header at all.
     if mode == ServeMode::Hoffman {
         return serve_hoffman(&mut stream, &root, &target, served).await;
+    }
+    if mode == ServeMode::ExpiringSignature {
+        let key = format!("{target} {range:?}");
+        let first_time = refused.lock().unwrap().insert(key);
+        if first_time {
+            return respond(&mut stream, 403, "Forbidden", None, b"").await;
+        }
     }
     if mode == ServeMode::Redirect && !target.starts_with("/moved/") {
         let head = format!(
@@ -358,6 +379,7 @@ struct Attached {
     engine: Engine,
     handle: bit_cli_core::engine::Handle,
     statuses: Vec<Arc<BridgeStatus>>,
+    fetchers: Vec<Arc<Fetcher>>,
     layout: Arc<Layout>,
 }
 
@@ -378,6 +400,17 @@ impl Attached {
 
     fn reasons(&self) -> Vec<String> {
         self.statuses.iter().filter_map(|s| s.error()).collect()
+    }
+
+    /// Retries across every source, and what status each was spent on.
+    fn retries_by_status(&self) -> std::collections::BTreeMap<u16, u64> {
+        let mut total = std::collections::BTreeMap::new();
+        for fetcher in &self.fetchers {
+            for (code, count) in fetcher.stats().retries_by_status() {
+                *total.entry(code).or_default() += count;
+            }
+        }
+        total
     }
 }
 
@@ -412,12 +445,14 @@ async fn attach(
     let peer_id = handle.shared().peer_id;
 
     let mut statuses = Vec::new();
+    let mut fetchers = Vec::new();
     for binding in &set.bindings {
         let params =
             BridgeParams::for_binding(target, handle.info_hash(), peer_id, &layout, binding, 4);
         let fetcher = Arc::new(
             Fetcher::new(binding.clone(), layout.clone(), info_hash.clone(), 4, false).unwrap(),
         );
+        fetchers.push(fetcher.clone());
         let status = Arc::new(BridgeStatus::default());
         statuses.push(status.clone());
         tokio::spawn(bridge::run(params, fetcher, status));
@@ -427,6 +462,7 @@ async fn attach(
         engine,
         handle,
         statuses,
+        fetchers,
         layout,
     }
 }
@@ -1545,6 +1581,110 @@ async fn the_bridge_reports_how_many_blocks_the_session_keeps_outstanding() {
     assert!(
         pipeline.mean_service_us().is_some_and(|us| us > 0),
         "blocks were answered in no measurable time"
+    );
+    run.engine.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_403_retires_a_source_when_the_caller_has_said_nothing() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let data = content(200 * 1024, 41);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    let (base, _) = serve(src.path().to_path_buf(), ServeMode::ExpiringSignature).await;
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&base)],
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(30), || run.failed()).await,
+        "403 is permanent by default, so the source has to give up"
+    );
+    assert!(!run.finished(), "nothing should have completed");
+    let reasons = run.reasons().join(" ");
+    assert!(
+        reasons.contains("403"),
+        "the reason names the status: {reasons}"
+    );
+    run.engine.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_403_the_caller_calls_retryable_completes_the_torrent() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let data = content(200 * 1024, 41);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    let (base, _) = serve(src.path().to_path_buf(), ServeMode::ExpiringSignature).await;
+    let mut spec = whole(&base);
+    spec.limits.retry_status = bit_cli_core::webseed::binding::StatusSet::parse("403").unwrap();
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![spec],
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(120), || run.finished()).await,
+        "did not complete: {:?}",
+        run.reasons()
+    );
+    assert_eq!(
+        std::fs::read(out.path().join("movie.bin")).unwrap(),
+        data,
+        "the payload has to be byte for byte the source"
+    );
+    // Every distinct range was refused once, so the retries are the proof the
+    // 403s happened rather than the server having quietly served them.
+    let by_status = run.retries_by_status();
+    assert!(
+        by_status.get(&403).copied().unwrap_or(0) > 0,
+        "no retry was charged to 403: {by_status:?}"
+    );
+    run.engine.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_404_the_caller_calls_retryable_is_still_bounded_by_the_retry_count() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let data = content(100 * 1024, 43);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    // A mirror that answers 404 forever. Calling it retryable does not make
+    // it recover, and the run has to end rather than loop.
+    let (base, _) = serve(src.path().to_path_buf(), ServeMode::NotFound).await;
+    let mut spec = whole(&base);
+    spec.limits.retry_status = bit_cli_core::webseed::binding::StatusSet::parse("404").unwrap();
+    spec.limits.retries = 1;
+    spec.limits.max_errors = 1;
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![spec],
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(60), || run.failed()).await,
+        "a source that never recovers has to retire even when its status is retryable"
+    );
+    assert!(!run.finished());
+    assert!(
+        run.retries_by_status().get(&404).copied().unwrap_or(0) > 0,
+        "the retry should have been charged to 404"
     );
     run.engine.stop().await;
 }

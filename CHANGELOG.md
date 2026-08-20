@@ -44,6 +44,23 @@ it, so the history starts here.
 - `--web-seed-speed-limit` and a binding table's `rate_limit` are enforced. They
   parsed and were never applied, so a source told to stay under 24 MiB/s ran at
   116. A token bucket per source now paces requests before they go out.
+- `--web-seed-retry-status` and `--web-seed-fatal-status` decide which HTTP
+  statuses retire a source, per source, as codes and inclusive ranges. A CDN
+  that signs its URLs answers 403 when a signature expires and the next request
+  to the stable URL succeeds, so `--web-seed-retry-status 403` is what makes
+  that survivable: in the recorded run, 22 signatures expired over 64 MiB and
+  the payload completed byte for byte, where the same run without the flag
+  downloaded nothing. The binding table takes `retry_status` and `fatal_status`
+  per source and in `[default]`. A code in both lists is a usage error. See
+  `TODO/multi-source.md` under T-130 and `scripts/check-signed-source.ps1`.
+- A source is no longer retired by one request that ran out of retries. A
+  transient failure reconnects the bridge instead, bounded by
+  `--web-seed-max-errors` consecutive failed requests. Before this, a mirror
+  that answered 503 for four seconds and then recovered was lost for the rest
+  of the run with no flag set, and `--web-seed-max-errors` could never be
+  reached.
+- `download` reports `retries` and `retries_by_status` per source, in the text
+  output and in `--json`.
 - `--peer <ADDR>` dials a peer whether or not a tracker or the DHT answers, and
   `download` takes `--no-dht` and `--no-lsd` as `seed` already did. Together
   they make a swarm of exactly the members named on the command line, which is

@@ -118,13 +118,14 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-120](licensing.md) | P1 | licensing | open | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | open | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | open | reference/ is not deleted at the end of Phase B |
-| [T-130](multi-source.md) | P1 | webseed | open | A source cannot be told which statuses are worth retrying |
-| [T-131](multi-source.md) | P1 | bench | open | The loopback file server cannot simulate a signed URL |
+| [T-130](multi-source.md) | P1 | webseed | **done** | A source cannot be told which statuses are worth retrying |
+| [T-131](multi-source.md) | P1 | bench | **done** | The loopback file server cannot simulate a signed URL |
 | [T-132](multi-source.md) | P1 | performance | open | The swarm cannot be rate limited separately from HTTP sources |
 | [T-133](multi-source.md) | P1 | webseed | open | Two torrents holding the same file cannot share its bytes |
 | [T-134](multi-source.md) | P2 | bep | open | v1 and v2 info hashes are not reconciled |
 | [T-135](multi-source.md) | P2 | performance | open | Source selection cannot be steered by method or by priority at run time |
 | [T-136](multi-source.md) | P2 | cli | open | Nothing states the end-to-end integrity guarantee |
+| [T-137](multi-source.md) | P2 | webseed | open | A cooled-down source never comes back |
 | [T-200](phase-c.md) | n/a | phase-c | deferred | Session daemon |
 | [T-201](phase-c.md) | n/a | phase-c | deferred | JSON-RPC and XML-RPC, with aria2 method parity |
 | [T-202](phase-c.md) | n/a | phase-c | deferred | Queue management across invocations |
@@ -138,7 +139,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-95 items: 85 to work through, and 10 deferred to Phase C. Eight were added by
+96 items: 86 to work through, and 10 deferred to Phase C. Nine were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -151,15 +152,17 @@ once in fifty. T-035 came out of building the T-003 acceptance, which needed a
 slow mirror and found that the flag for one did nothing.
 
 T-130 through T-136 came from the operator rather than from the triage: five
-scenarios about pointing several kinds of source at one payload.
-[multi-source.md](multi-source.md) records which of the five already work,
-with the commands that were run, and what the rest need.
+scenarios about pointing several kinds of source at one payload. T-137 came
+out of closing T-130: making `--web-seed-max-errors` reachable made
+`--web-seed-cooldown` reachable too, and it turned out to set a timer nothing
+waits out. [multi-source.md](multi-source.md) records which of the five
+scenarios work, with the commands that were run, and what the rest need.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 3 | 1 | 0 | 7 |
-| P1 | 21 | 1 | 0 | 13 |
-| P2 | 22 | 1 | 1 | 5 |
+| P1 | 19 | 1 | 0 | 15 |
+| P2 | 23 | 1 | 1 | 5 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 
@@ -297,17 +300,33 @@ item eight is the operator's own list.
    handles per concurrent torrent, with CPU flat.
 8. [multi-source.md](multi-source.md), the operator's five scenarios about
    pointing several kinds of source at one payload. Read that file before
-   starting any of T-130 to T-136: its first part records which scenarios
+   starting any of T-130 to T-137: its first part records which scenarios
    already work, with the commands that were run and the output, so the work
    left is smaller than the list of entries suggests.
 
-   Two of the five work today with no change at all. A third needs one flag,
-   [T-130](multi-source.md), which is also what the fourth needs. What is
-   genuinely missing is cross-torrent identity,
+   **Three of the five now work in full.** [T-131](multi-source.md) and
+   [T-130](multi-source.md) are **done**, which closed Scenario 1 and
+   Scenario 4. The file server signs, redirects, and expires a signature, and
+   `--web-seed-retry-status` and `--web-seed-fatal-status` decide which
+   statuses retire a source. `pwsh scripts/check-signed-source.ps1` drives six
+   cases and is the acceptance for both.
+
+   Closing them found two things the entries did not predict. A signature
+   never expires against `bit-cli` at a realistic window, because it
+   re-resolves the stable URL on every request; the sweep that establishes
+   that is under [T-131](multi-source.md). And the bridge retired a source on
+   the first request that ran out of retries, so a mirror that restarted
+   mid-download was lost with **no flag set at all** and
+   `--web-seed-max-errors` could never be reached. Both are written up under
+   their entries. [T-137](multi-source.md) came out of the second.
+
+   What is genuinely missing is cross-torrent identity,
    [T-133](multi-source.md), and real control of which source answers a piece,
    [T-135](multi-source.md), and both were already priced by
    [T-002](webseed.md) and [T-003](webseed.md).
+   [T-133](multi-source.md) layer 1, a `file:` source, is the next slice: it
+   needs no cross-torrent machinery and makes Scenario 2 a two-step.
 
-   `scripts/make-scenario-fixture.ps1` builds everything the acceptances need
-   except the signing file server, which is [T-131](multi-source.md) and is the
-   first thing to build because three other entries wait on it.
+   `scripts/make-scenario-fixture.ps1` builds the payloads, the three
+   torrents, the CDN copy, and the partial on-disk state the acceptances
+   start from.

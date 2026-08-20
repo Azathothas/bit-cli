@@ -60,13 +60,14 @@ INDEX  SIZE       SHARE   PIECES  PATH
 2      1.00 MiB   1.37%   72-72   readme.txt
 ```
 
-### Scenario 1 works today, up to the point the signature expires
+### Scenario 1 works today, in full
 
 One selected file out of a deep tree, 70% already on disk, accelerated by an
 arbitrary CDN URL whose name and path have nothing to do with the torrent's.
-Everything below was run; what is not below is what happens when the CDN starts
-answering 403, which is
-[T-130](#t-130-a-source-cannot-be-told-which-statuses-are-worth-retrying).
+Everything below was run. What happens when the CDN starts answering 403 is
+[T-130](#t-130-a-source-cannot-be-told-which-statuses-are-worth-retrying),
+which is now **done**: with `--web-seed-retry-status 403` a source whose
+signature expires 22 times over a 64 MiB payload completes it byte for byte.
 
 ```bash
 bit-cli download torrent_a.torrent --dir out \
@@ -196,7 +197,7 @@ range twice is visible as an amplification ratio rather than hidden.
 Category:    webseed
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `classify_status` in `webseed/fetch.rs:1192-1211` makes 401, 403,
              404, 410, and 416 permanent, and a permanent failure retires the
@@ -235,13 +236,69 @@ Acceptance:  The fixture below, driven end to end. A source that answers 403
              warning: web seed .../cdn/a3f1b2c4-signed-blob.dat is unusable:
                403 Forbidden, check --web-seed-auth and --web-seed-header
              ```
+Closed:      `--web-seed-retry-status` and `--web-seed-fatal-status` take codes
+             and inclusive ranges (`403`, `403,429`, `500-599`). The table
+             takes `retry_status` and `fatal_status` per source and in
+             `[default]`, as integers, as range strings, or as one string. A
+             code in both lists is a usage error rather than a precedence rule,
+             because there is no defensible answer and picking one silently
+             hides the mistake. `webseed list` prints both when they are set,
+             so the policy is checkable before any bytes move.
+
+             `bit-cli download --json` now carries `retries` and
+             `retries_by_status` per source, and the text output prints
+             `retries 22 (22 on 403)` when there were any.
+
+             Acceptance, `pwsh -NoProfile -File scripts/check-signed-source.ps1`
+             at 64 MiB. The pair that carries it is `expiring_default` and
+             `expiring_retry`: the same server, the same window, differing only
+             in the flag.
+
+             ```
+             expiring_default    1 0 B        -         1   1       0 yes
+             expiring_retry      0 64.00 MiB  matches  86  22      22 yes
+             ```
+
+             `fatal_override` and `recovering_503` are the other direction and
+             its control: `--status 503 --fail-after 4 --recover-after 8`
+             completes with no policy, because 503 is already transient, and
+             fails with `--web-seed-fatal-status 503`.
+
+**Two defects turned up while building the acceptance, and the second one is
+larger than this entry.**
+
+**One.** The bridge retired a source on the first request that ran out of its
+own retries, whatever the classification. `--web-seed-max-errors` could
+therefore never be reached: one exhausted request ended the source before a
+second error could be counted. `crates/bit-cli-core/src/webseed/bridge.rs`
+carried the reason for it as a comment, "the fetcher already retried what was
+worth retrying, so anything surfacing here means the source is done", and that
+is true of a permanent failure and false of a transient one.
+
+It showed up as the `recovering_503` control failing: a mirror that answers 503
+for four requests and then serves normally killed the source, with **no flag
+set at all**. That is not a status policy problem, it is the default path, and
+it means every mirror that restarted mid-download was lost.
+
+Fixed. A block failure now carries whether the source could still answer, and a
+transient one reconnects like a link failure instead of retiring. What bounds
+the loop is `--web-seed-max-errors` consecutive failed requests tripping the
+source's cooldown, which the bridge reads and retires on. Measured: the same
+control now completes 64 MiB with 6 retries.
+
+**Two.** `--web-seed-cooldown` sets a timer nothing waits out. A source whose
+budget runs out is retired for the rest of the run rather than sitting out the
+cooldown and coming back, so the flag moves no number. That is
+[T-137](#t-137-a-cooled-down-source-never-comes-back), open, with the
+trade-off named. The two doc comments that implied a source returns now say
+what happens instead.
 
 ### T-131 The loopback file server cannot simulate a signed URL
 
 Category:    bench
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `crates/bit-cli-core/examples/loopback-fileserver.rs` has
              `--ignore-range`, `--status`, `--stall-after`, `--fail-after`, and
@@ -270,6 +327,74 @@ Acceptance:  `--sign-redirect 2 --require-sig` serves a 64 MiB payload to
              signature expires mid-run, and the download completes with the
              right hash once [T-130](#t-130-a-source-cannot-be-told-which-statuses-are-worth-retrying)
              is in.
+Closed:      All three flags are in, plus a fourth,
+             `--recover-after <M>`, which ends a `--fail-after` window after M
+             requests so a status that recovers can be produced without a
+             clock. Eleven unit tests cover the routing and the signature
+             check, and `[[example]] test = true` in
+             `crates/bit-cli-core/Cargo.toml` puts them in
+             `cargo test --workspace`.
+
+             The signature is SplitMix64 over a per-process secret and the
+             window index, so it is unguessable from the URL and stable for
+             the length of its window. `exp` is unix milliseconds rather than
+             seconds, because a window can be shorter than a second and the
+             measurement below needs it to be.
+
+             The server on its own, checked with `curl` against a 1 MiB
+             payload under `--sign-redirect 2 --require-sig`:
+
+             ```
+             GET /blob.bin        -> 302 .../blob.bin?sig=cc11a1..&exp=1787216384041
+             GET /blob.bin?sig=.. -> 206  (immediately)
+             GET /blob.bin?sig=.. -> 403  (two seconds later, signature expired)
+             GET /blob.bin        -> 206  (the stable path, redirected to a fresh signature)
+             ```
+
+             That last pair is exactly what
+             [T-130](#t-130-a-source-cannot-be-told-which-statuses-are-worth-retrying)
+             describes: a real 403, and a stable URL that recovers.
+
+             `pwsh -NoProfile -File scripts/check-signed-source.ps1` drives all
+             six cases end to end and is the acceptance for this entry and for
+             [T-130](#t-130-a-source-cannot-be-told-which-statuses-are-worth-retrying).
+             It lands with T-130, because two of its six cases need that flag.
+             At 64 MiB, all six as described:
+
+             ```
+             case             exit downloaded hash    302 403 retries ok
+             redirects           0 64.00 MiB  matches 256   0       0 yes
+             too_many_hops       1 0 B        -        11   0       0 yes
+             expiring_default    1 0 B        -         1   1       0 yes
+             expiring_retry      0 64.00 MiB  matches  86  22      22 yes
+             fatal_override      1 4.00 MiB   -         0   0       0 yes
+             recovering_503      0 64.00 MiB  matches   0   0       6 yes
+             ```
+
+**The acceptance as written above cannot fire, and that is the finding.**
+`--sign-redirect 2 --require-sig` serves a 64 MiB payload with **zero** 403s,
+because `bit-cli` re-resolves the stable URL on every ranged request and the
+signature it is handed is a millisecond old when it uses it. A signature
+expires mid-run only when the window is shorter than the round trip from the
+`302` to the request that carries it. Measured, 64 MiB in 1 MiB chunks against
+`--sign-redirect W --require-sig`:
+
+| window | 302 | 206 | 403 | exit |
+| --- | --- | --- | --- | --- |
+| 2s | 64 | 64 | 0 | 0 |
+| 0.1s | 64 | 64 | 0 | 0 |
+| 0.01s | 26 | 19 | 7 | 1 |
+| 0.002s | 1 | 0 | 1 | 1 |
+
+So the entry's premise held for the wrong reason. The half it was written to
+test, "a CDN whose stable URL 302s to a freshly signed URL each time is handled
+by doing nothing", is now proven rather than asserted: the `redirects` case
+above answers 256 redirects for 64 requests, four hops each, and completes with
+the payload byte for byte. A client that pinned a resolved URL would show one
+redirect for the whole run.
+
+`scripts/check-signed-source.ps1` runs at `-Window 0.01` for that reason, and
+says so in the report's `notes`.
 
 ### T-132 The swarm cannot be rate limited separately from HTTP sources
 
@@ -432,16 +557,75 @@ Acceptance:  A run against a mirror serving one corrupt byte completes from
              the mismatch. `--verify-on-complete` on the finished payload exits
              0 and prints a hash per file.
 
+### T-137 A cooled-down source never comes back
+
+Category:    webseed
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `--web-seed-cooldown` and the table's `cooldown_ms` set a timer,
+             and nothing waits it out. `SourceStats::record_error` stores an
+             epoch millisecond deadline after `max_errors` consecutive failed
+             requests, `SourceStats::is_cooling_down` reads it, and the bridge
+             retires the source the moment it is true
+             (`crates/bit-cli-core/src/webseed/bridge.rs`, the
+             `BridgeError::Stalled` arm of `run`). So the flag changes nothing
+             a caller can measure: any positive value behaves the same as any
+             other.
+
+             It was found closing
+             [T-130](#t-130-a-source-cannot-be-told-which-statuses-are-worth-retrying),
+             which made `max_errors` reachable for the first time and so made
+             the cooldown reachable too.
+Relevance:   Rule 0.10: a flag that does not move a number does not ship.
+             Either it moves one or it goes. It also decides how long an
+             unattended run tolerates a mirror that is down: today the answer
+             is `retries` attempts times `max_errors` requests, about 17
+             seconds at the defaults, and then the source is gone for good.
+Approach:    Two options, and the choice is a trade-off rather than a bug fix.
+
+             1. **Honour it.** The bridge sleeps until
+                `stats.cooldown_until()` and reconnects, and the source's
+                consecutive-error count resets. `cooldown_ms` then means what
+                it says. The cost is that a run against one dead mirror with
+                `--web-seed-only` stops failing fast: it sits for the default
+                ten minutes instead of exiting in seconds, and only
+                `--timeout` or `--stop-timeout` ends it. That is the wrong
+                default for an unattended caller.
+             2. **Cut it.** Remove `--web-seed-cooldown` and `cooldown_ms`,
+                and let `--web-seed-max-errors` alone decide when a source is
+                out. Smaller surface, nothing lost that a caller can observe
+                today.
+
+             The likely answer is 1 with a default of zero, meaning "do not
+             come back", so fail-fast stays the default and a caller who wants
+             a mirror to be given another chance says how long to wait. That
+             needs the reported state to distinguish a cooling source from a
+             failed one, or `--web-seed-require` and the "every source failed"
+             stop condition in `crates/bit-cli/src/cmd/download.rs` will read
+             a sleeping source as a live one and wait out the deadline.
+Acceptance:  Two runs against `loopback-fileserver --status 503 --fail-after 4
+             --recover-after 200`, one with a cooldown shorter than the outage
+             and one with a cooldown longer than it. The first completes and
+             the second does not, and the report says which source cooled down
+             and for how long. Plus a run against a dead mirror with
+             `--web-seed-only` proving the fail-fast path still exits in
+             seconds.
+
 ---
 
 ## Part 3: the harness
 
-None of the acceptances above can run today. What has to be built, in the
-order it unblocks the most:
+What the acceptances need, in the order it unblocks the most. The first two
+exist.
 
 1. **[T-131](#t-131-the-loopback-file-server-cannot-simulate-a-signed-url)**,
-   the signing and redirecting file server. Everything in Scenario 1 and 4
-   needs it, it is a day's work, and it has no dependencies.
+   the signing and redirecting file server, is **done**. `--sign-redirect`,
+   `--require-sig`, `--redirect-chain`, and `--recover-after` are on
+   `crates/bit-cli-core/examples/loopback-fileserver.rs`, and
+   `scripts/check-signed-source.ps1` drives all six cases Scenario 1 and 4
+   need.
 2. **The fixture**, which exists: `scripts/make-scenario-fixture.ps1`. It
    builds one payload, three torrents with different piece lengths, different
    surrounding files, and three different info hashes, a CDN copy under an
@@ -535,17 +719,16 @@ optimisation that a cold run reproduces by reading the payload.
 
 | Scenario | Works today | Needs | Size |
 | --- | --- | --- | --- |
-| 1. DDL for one selected file, resumed | Binding, resume, rename, selection, redirects: **yes**, run and recorded above | [T-130](#t-130-a-source-cannot-be-told-which-statuses-are-worth-retrying) for a signature that expires mid-run | S |
+| 1. DDL for one selected file, resumed | **Yes, in full.** Binding, resume, rename, selection, redirects, and a signature that expires mid-run, all run and recorded above | nothing | none |
 | 2. Three torrents, one shared file | No | [T-133](#t-133-two-torrents-holding-the-same-file-cannot-share-its-bytes) | S for layer 1, L for 2 and 3 |
 | 3. DDL for one file, rest via swarm | **Yes, in full** | nothing | none |
-| 4. Remapping and encoding | **Yes**, through `exact`, `prefix`, `template`, and per-source headers | [T-130](#t-130-a-source-cannot-be-told-which-statuses-are-worth-retrying) for the status overrides | S |
-| 5. All of it, with per-method control | Per-source caps, headers, auth, priority: yes. Per-method caps and picker control: no | [T-132](#t-132-the-swarm-cannot-be-rate-limited-separately-from-http-sources), [T-134](#t-134-v1-and-v2-info-hashes-are-not-reconciled), [T-135](#t-135-source-selection-cannot-be-steered-by-method-or-by-priority-at-run-time), [T-136](#t-136-nothing-states-the-end-to-end-integrity-guarantee) | M to L |
+| 4. Remapping and encoding | **Yes, in full**, through `exact`, `prefix`, `template`, per-source headers, and the status overrides | nothing | none |
+| 5. All of it, with per-method control | Per-source caps, headers, auth, priority, and status policy: yes. Per-method caps and picker control: no | [T-132](#t-132-the-swarm-cannot-be-rate-limited-separately-from-http-sources), [T-134](#t-134-v1-and-v2-info-hashes-are-not-reconciled), [T-135](#t-135-source-selection-cannot-be-steered-by-method-or-by-priority-at-run-time), [T-136](#t-136-nothing-states-the-end-to-end-integrity-guarantee) | M to L |
 
 The honest summary: the addressing model was built for exactly this and it
-holds. Scenario 3 works with no changes at all, Scenario 1 and 4 work up to one
-small flag between them, and what is genuinely missing is cross-torrent
-identity and real control of which source answers a piece. Both of those were
-already known and already priced, by [T-002](webseed.md) and
+holds. Three of the five scenarios work in full. What is genuinely missing is
+cross-torrent identity and real control of which source answers a piece. Both
+of those were already known and already priced, by [T-002](webseed.md) and
 [T-003](webseed.md).
 
 What none of this needs is a daemon, a database, or a state file. Every

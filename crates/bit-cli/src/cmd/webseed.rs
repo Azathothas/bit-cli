@@ -41,6 +41,13 @@ pub struct SourceReport {
     pub files: Vec<usize>,
     pub whole_pieces: usize,
     pub partial_pieces: usize,
+    /// Statuses this source retries that would otherwise retire it, and the
+    /// ones that retire it that would otherwise be retried. Both are empty on
+    /// a source with no policy, which is almost all of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub retry_status: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fatal_status: Vec<String>,
     pub urls: Vec<UrlReport>,
 }
 
@@ -93,6 +100,8 @@ impl ListReport {
                     files: binding.scope.files.clone(),
                     whole_pieces: whole,
                     partial_pieces: binding.scope.pieces.len().saturating_sub(whole),
+                    retry_status: (&binding.spec.limits.retry_status).into(),
+                    fatal_status: (&binding.spec.limits.fatal_status).into(),
                     urls: binding
                         .file_urls
                         .iter()
@@ -167,6 +176,14 @@ impl ListReport {
                 ),
             ));
             out.push(field("  origin", source.origin));
+            // Printed only where a policy was set, because "retry statuses:
+            // none" on every source of every listing says nothing.
+            if !source.retry_status.is_empty() {
+                out.push(field("  retry status", source.retry_status.join(",")));
+            }
+            if !source.fatal_status.is_empty() {
+                out.push(field("  fatal status", source.fatal_status.join(",")));
+            }
             if source.urls.is_empty() {
                 out.push(field("  urls", "built per request from the template"));
                 continue;

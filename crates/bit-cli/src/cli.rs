@@ -426,17 +426,44 @@ pub struct WebSeedArgs {
     #[arg(long = "web-seed-connect-timeout", value_name = "DUR")]
     pub web_seed_connect_timeout: Option<String>,
 
-    /// Errors before a source is cooled down.
+    /// Consecutive failed requests before a source is retired.
+    ///
+    /// A request that fails transiently after its own `--web-seed-retries`
+    /// are spent drops the connection and reconnects, so a mirror that is
+    /// down for a moment is not lost. This is how many of those in a row it
+    /// takes before the source is out for the rest of the run. A success
+    /// resets the count.
     #[arg(long = "web-seed-max-errors", value_name = "N")]
     pub web_seed_max_errors: Option<u32>,
 
-    /// How long a failed source stays out.
+    /// Reserved for a cooled-down source coming back. Sets the timer only.
+    ///
+    /// A source that runs out of its `--web-seed-max-errors` budget is
+    /// retired for the rest of the run, so nothing waits this out today. See
+    /// TODO/multi-source.md, T-137.
     #[arg(long = "web-seed-cooldown", value_name = "DUR")]
     pub web_seed_cooldown: Option<String>,
 
     /// Per-request retries before counting an error.
     #[arg(long = "web-seed-retries", value_name = "N")]
     pub web_seed_retries: Option<u32>,
+
+    /// Statuses to retry that would otherwise retire the source.
+    ///
+    /// Codes and inclusive ranges: `403`, `403,429`, `500-599`. A CDN that
+    /// signs URLs answers 403 when a signature expires and the next request
+    /// to the stable URL is redirected to a fresh one, so `403` there is
+    /// transient. `--web-seed-retries`, `--web-seed-max-errors`, and
+    /// `--web-seed-cooldown` still bound it.
+    #[arg(long = "web-seed-retry-status", value_name = "CODES")]
+    pub web_seed_retry_status: Option<String>,
+
+    /// Statuses that retire the source, which would otherwise be retried.
+    ///
+    /// The other direction of `--web-seed-retry-status`, same spelling. A
+    /// code cannot be in both lists.
+    #[arg(long = "web-seed-fatal-status", value_name = "CODES")]
+    pub web_seed_fatal_status: Option<String>,
 
     /// User-Agent for web seed requests.
     #[arg(long = "web-seed-user-agent", value_name = "UA")]

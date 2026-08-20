@@ -1038,6 +1038,21 @@ fn lines(report: &DownloadReport) -> Vec<String> {
                 format!("{:?}", source.state).to_lowercase(),
             ));
             out.push(field("  served", &source.served_human));
+            // Only when there were any. A retry line reading zero on every
+            // healthy source is noise, and the absence of the line is the
+            // same information.
+            if source.retries > 0 {
+                let by_status: Vec<String> = source
+                    .retries_by_status
+                    .iter()
+                    .map(|(code, count)| format!("{count} on {code}"))
+                    .collect();
+                let detail = match by_status.is_empty() {
+                    true => String::new(),
+                    false => format!(" ({})", by_status.join(", ")),
+                };
+                out.push(field("  retries", format!("{}{detail}", source.retries)));
+            }
             if let Some(error) = &source.error {
                 out.push(field("  error", error));
             }

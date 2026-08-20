@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use bit_cli_core::error::{Context, Error, Result, from_io};
 use bit_cli_core::torrent::Metainfo;
 use bit_cli_core::units::{parse_duration_ms, parse_rate, parse_size};
-use bit_cli_core::webseed::binding::{Auth, Origin, SourceLimits, SourceSpec};
+use bit_cli_core::webseed::binding::{Auth, Origin, SourceLimits, SourceSpec, StatusSet};
 use bit_cli_core::webseed::table::{Table, parse_url_list};
 use bit_cli_core::webseed::{Mode, Scope};
 
@@ -29,6 +29,15 @@ use crate::env::Env;
 /// well past where the curve stops rising, so it bounds a typo rather than a
 /// legitimate setting.
 const MAX_CONNECTIONS: usize = 32;
+
+/// Parse one of the two status policy flags.
+fn status_set(value: &Option<String>, flag: &str) -> Result<StatusSet> {
+    match value {
+        None => Ok(StatusSet::default()),
+        Some(text) => StatusSet::parse(text)
+            .map_err(|e| Error::usage(format!("{flag}: {e}")).with("value", text.clone())),
+    }
+}
 
 /// Everything the flags say about how CLI-supplied sources behave.
 struct Shared {
@@ -90,7 +99,7 @@ impl Shared {
             headers.insert(name.trim().to_string(), value.trim().to_string());
         }
 
-        Ok(Self {
+        let shared = Self {
             mode: args.web_seed_mode.into(),
             template: args.web_seed_template.clone(),
             scope,
@@ -126,6 +135,8 @@ impl Shared {
                             .with("value", text.clone())
                     })?),
                 },
+                retry_status: status_set(&args.web_seed_retry_status, "--web-seed-retry-status")?,
+                fatal_status: status_set(&args.web_seed_fatal_status, "--web-seed-fatal-status")?,
             },
             headers,
             user_agent: args.web_seed_user_agent.clone(),
@@ -135,7 +146,9 @@ impl Shared {
             },
             priority: args.web_seed_priority.unwrap_or(0),
             style: args.web_seed_style.into(),
-        })
+        };
+        shared.limits.check_status_policy()?;
+        Ok(shared)
     }
 
     fn spec(&self, url: String, origin: Origin, scope: Scope, mode: Mode) -> SourceSpec {

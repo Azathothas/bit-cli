@@ -356,6 +356,10 @@ enum BridgeError {
     Source(String),
     /// The connection to the session failed. Reconnect later.
     Link(String),
+    /// One request failed in a way that could still recover: the mirror is
+    /// down, not wrong. Reconnect and let the source's own error budget decide
+    /// when it has had enough. See [`retryable_failure`].
+    Stalled(String),
 }
 
 /// Run a bridge until the source fails or the task is dropped.
@@ -364,6 +368,16 @@ enum BridgeError {
 /// looks exactly like one from here. A source failure is terminal: the bridge
 /// cannot retract a bitfield it has already sent, so staying connected while
 /// refusing requests would only make the session wait out request timeouts.
+///
+/// A request that failed transiently and ran out of its own retries is
+/// neither. The mirror answered, wrongly, and might answer correctly next
+/// time: a 503 during a restart, or a 403 from a signature the caller told
+/// `bit-cli` to retry. Those reconnect like a link failure, and what stops the
+/// loop is the source's own budget: `max_errors` consecutive failed requests
+/// trip its cooldown, and a cooling source's next fetch is permanent, which
+/// retires it. Without that, one four-second outage killed a mirror for the
+/// rest of the run and `--web-seed-max-errors` could never be reached. See
+/// `TODO/multi-source.md`, T-130.
 pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<BridgeStatus>) {
     if params.pieces.is_empty() {
         status.set_state(BridgeState::Idle);
@@ -388,6 +402,16 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
                 return;
             }
             Err(BridgeError::Link(reason)) => status.set_error(Some(reason)),
+            Err(BridgeError::Stalled(reason)) => {
+                // The cooldown is the budget running out. Retire here rather
+                // than on the next fetch, so the reported reason is the run of
+                // errors and not the cooldown that followed it.
+                status.set_error(Some(reason.clone()));
+                if fetcher.stats().is_cooling_down() {
+                    status.set_state(BridgeState::Failed);
+                    return;
+                }
+            }
         }
         status.set_state(BridgeState::Connecting);
         tokio::time::sleep(delay).await;
@@ -422,7 +446,7 @@ async fn serve(
     let pending: Arc<Mutex<HashSet<BlockKey>>> = Arc::default();
     let limiter = Arc::new(Semaphore::new(params.concurrency.max(1)));
     let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(64);
-    let mut tasks: JoinSet<Result<(), String>> = JoinSet::new();
+    let mut tasks: JoinSet<Result<(), BlockFailure>> = JoinSet::new();
     let mut keep_alive = tokio::time::interval(KEEP_ALIVE_INTERVAL);
     let served: HashSet<u32> = params.pieces.iter().copied().collect();
 
@@ -493,7 +517,7 @@ async fn serve(
             Some(finished) = tasks.join_next(), if !tasks.is_empty() => {
                 match finished {
                     Ok(Ok(())) => {}
-                    Ok(Err(reason)) => return Err(BridgeError::Source(reason)),
+                    Ok(Err(failure)) => return Err(retryable_failure(failure)),
                     Err(e) if e.is_panic() => {
                         return Err(BridgeError::Source(format!("bridge task panicked: {e}")));
                     }
@@ -634,6 +658,59 @@ fn serialize(message: &Message<'_>, payload: usize) -> Result<Vec<u8>, BridgeErr
 type BlockKey = (u32, u32, u32);
 
 /// Fetch one block over HTTP and queue it, unless the session cancelled it.
+/// Why one block could not be served, and whether the source is finished.
+///
+/// The fetcher has already spent this request's `retries` by the time an error
+/// gets here. What it has not spent is the source's error budget, so a failure
+/// that could recover is kept apart from one that cannot.
+struct BlockFailure {
+    reason: String,
+    /// Whether the source could still answer a later request.
+    recoverable: bool,
+}
+
+impl From<FetchError> for BlockFailure {
+    fn from(err: FetchError) -> Self {
+        let recoverable = err.is_retryable();
+        let reason = match err {
+            FetchError::Transient { reason, .. }
+            | FetchError::Permanent { reason, .. }
+            | FetchError::HashMismatch { reason } => reason,
+        };
+        Self {
+            reason,
+            recoverable,
+        }
+    }
+}
+
+impl BlockFailure {
+    /// A failure inside the bridge that has nothing to do with the source.
+    fn local(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            recoverable: false,
+        }
+    }
+}
+
+/// Turn a block failure into the reason a connection ended.
+fn retryable_failure(failure: BlockFailure) -> BridgeError {
+    match failure.recoverable {
+        true => BridgeError::Stalled(failure.reason),
+        false => BridgeError::Source(failure.reason),
+    }
+}
+
+/// The text inside a [`BridgeError`], whichever kind it is.
+fn reason_of(err: BridgeError) -> String {
+    match err {
+        BridgeError::Source(reason) | BridgeError::Link(reason) | BridgeError::Stalled(reason) => {
+            reason
+        }
+    }
+}
+
 async fn serve_block(
     key: BlockKey,
     offset: u64,
@@ -642,7 +719,7 @@ async fn serve_block(
     status: Arc<BridgeStatus>,
     pending: Arc<Mutex<HashSet<BlockKey>>>,
     out: mpsc::Sender<Vec<u8>>,
-) -> Result<(), String> {
+) -> Result<(), BlockFailure> {
     // The clock starts when the request was taken off the wire, not when this
     // task gets a permit: time spent waiting for the concurrency limit is
     // time the session was waiting, and hiding it would report a pipeline
@@ -661,16 +738,15 @@ async fn fetch_and_send(
     status: &BridgeStatus,
     pending: Arc<Mutex<HashSet<BlockKey>>>,
     out: mpsc::Sender<Vec<u8>>,
-) -> Result<(), String> {
+) -> Result<(), BlockFailure> {
     let (index, begin, length) = key;
-    let _permit = limiter.acquire().await.map_err(|e| e.to_string())?;
+    let _permit = limiter
+        .acquire()
+        .await
+        .map_err(|e| BlockFailure::local(e.to_string()))?;
     let block = match fetcher.read(offset, u64::from(length)).await {
         Ok(block) => block,
-        // The fetcher already retried what was worth retrying, so anything
-        // surfacing here means the source is done.
-        Err(FetchError::Transient { reason, .. })
-        | Err(FetchError::Permanent { reason, .. })
-        | Err(FetchError::HashMismatch { reason }) => return Err(reason),
+        Err(err) => return Err(BlockFailure::from(err)),
     };
 
     if !pending
@@ -682,9 +758,7 @@ async fn fetch_and_send(
     }
 
     let message = Message::Piece(Piece::from_data(index, begin, &block));
-    let buf = serialize(&message, block.len()).map_err(|e| match e {
-        BridgeError::Source(reason) | BridgeError::Link(reason) => reason,
-    })?;
+    let buf = serialize(&message, block.len()).map_err(|e| BlockFailure::local(reason_of(e)))?;
     status.add_served(block.len() as u64);
     let _ = out.send(buf).await;
     Ok(())

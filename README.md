@@ -133,6 +133,56 @@ file:3:byte:0-4MiB   a byte range within one file
 Selectors are checked against the metainfo before any request goes out. A
 selector matching nothing is an error, not a silent no-op.
 
+### Which failures are worth retrying
+
+Whether an HTTP status is worth retrying is a property of the server, not of
+the code. `bit-cli` retires a source on 401, 403, 404, 410, and 416, and
+retries the rest. Two flags move a code across that line, per source:
+
+```bash
+bit-cli download release.torrent \
+  --web-seed-for 'file:0=https://cdn.example.com/blobs/a3f1/payload.iso' \
+  --web-seed-retry-status 403
+```
+
+A CDN that signs its URLs answers 403 when a signature expires, and the next
+request to the stable URL is redirected to a fresh one and succeeds. Without
+the flag the first expiry ends the source. With it the run rides them out:
+
+```bash
+pwsh scripts/check-signed-source.ps1
+```
+
+That drives six cases against a loopback server that signs, redirects, and
+expires. The pair that matters is the same server and the same signature
+window run twice, differing only in the flag. In the recorded run, 22
+signatures expired over 64 MiB: without the flag the run downloaded nothing
+and exited 1, with it the payload completed byte for byte. The report is
+`bench/signed-source-20260820T093157813Z.json`. The count varies with timing;
+whether the run completes does not.
+
+`--web-seed-fatal-status` is the other direction, same spelling: a code it
+names retires the source even though the built-in classification would retry
+it. Both take codes and inclusive ranges (`403`, `403,429`, `500-599`). A code
+in both lists is a usage error, because there is no defensible answer.
+
+The retries are reported per source, in the text output and in `--json`:
+
+```
+source               http://127.0.0.1:57581/cdn/a3f1b2c4-signed-blob.dat
+  scope              file:0
+  state              active
+  served             64.00 MiB
+  retries            10 (10 on 403)
+```
+
+What bounds a retried source is `--web-seed-retries`, the attempts one request
+gets, and `--web-seed-max-errors`, the consecutive failed requests a source
+gets before it is retired for the rest of the run. A request that fails
+transiently after spending its retries drops the connection and reconnects, so
+a mirror that restarts mid-download is not lost. At the defaults that is four
+attempts per request and five requests, about 17 seconds of outage.
+
 ## Check the addressing before you download
 
 `webseed list` resolves every binding and prints the exact URL each file maps
@@ -675,6 +725,13 @@ scope      = "*"
 mode       = "prefix"
 priority   = 1
 rate_limit = "5MiB/s"
+
+[[source]]
+url          = "https://signed.example.com/blob"
+scope        = "file:1"
+mode         = "exact"
+retry_status = [403, 429]
+fatal_status = ["500-599"]
 ```
 
 ```bash

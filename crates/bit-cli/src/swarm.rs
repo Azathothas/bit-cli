@@ -302,6 +302,20 @@ impl AttachedSource {
         )
     }
 
+    /// Requests retried, and what status each retry was spent on.
+    ///
+    /// Separate from `error`, which names why a source stopped. These are the
+    /// failures it recovered from, which is the only place a status policy
+    /// shows its work: with `--web-seed-retry-status 403` a run that would
+    /// have died reports the 403s it rode out instead.
+    pub fn retries(&self) -> (u64, BTreeMap<u16, u64>) {
+        let stats = self.fetcher.stats();
+        (
+            stats.retries.load(std::sync::atomic::Ordering::Relaxed),
+            stats.retries_by_status(),
+        )
+    }
+
     /// Every loopback port this source's connections have dialled from.
     pub fn local_ports(&self) -> Vec<u16> {
         self.statuses.iter().flat_map(|s| s.local_ports()).collect()
@@ -345,6 +359,12 @@ pub struct SourceReport {
     /// Larger than `served_bytes` when a range was fetched more than once.
     pub http_bytes: u64,
     pub http_requests: u64,
+    /// Requests that failed and were tried again.
+    pub retries: u64,
+    /// Those retries broken down by the HTTP status that caused them, keyed
+    /// by the code as a string because JSON object keys are strings.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub retries_by_status: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -354,6 +374,7 @@ impl AttachedSource {
     pub fn report(&self) -> SourceReport {
         let served = self.served_bytes();
         let (http_bytes, http_requests) = self.http();
+        let (retries, retries_by_status) = self.retries();
         SourceReport {
             index: self.index,
             url: self.url.clone(),
@@ -367,6 +388,11 @@ impl AttachedSource {
             blocks: self.blocks(),
             http_bytes,
             http_requests,
+            retries,
+            retries_by_status: retries_by_status
+                .into_iter()
+                .map(|(code, count)| (code.to_string(), count))
+                .collect(),
             error: self.error(),
         }
     }

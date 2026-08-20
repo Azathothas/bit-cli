@@ -170,6 +170,164 @@ fn strip_prefix_ci<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
         .map(|_| &text[prefix.len()..])
 }
 
+/// A set of HTTP status codes, written as codes and inclusive ranges.
+///
+/// `403`, `403,429`, `500-599`, and any mixture. Empty means the caller has no
+/// opinion and the built-in classification stands.
+///
+/// It exists because whether a status is worth retrying is a property of the
+/// server, not of the code. A CDN that signs URLs answers `403` when a
+/// signature expires and the next request to the stable URL succeeds, so that
+/// `403` is transient. A mirror behind a proxy that answers `404` from one
+/// edge node while another has the file is the same shape. Neither is
+/// knowable from the code alone, so the caller says.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "StatusSetRepr", into = "Vec<String>")]
+pub struct StatusSet {
+    /// Inclusive `(low, high)` pairs, in the order they were written.
+    ranges: Vec<(u16, u16)>,
+}
+
+/// The lowest status an HTTP response can carry, and the highest.
+///
+/// A value outside this is a typo, not a status, and taking it silently would
+/// leave a caller believing a policy is in force that can never match.
+const STATUS_MIN: u16 = 100;
+const STATUS_MAX: u16 = 599;
+
+impl StatusSet {
+    /// Parse `403,429,500-599`.
+    pub fn parse(text: &str) -> Result<Self> {
+        let mut ranges = Vec::new();
+        for part in text.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            ranges.push(parse_status_range(part)?);
+        }
+        Ok(Self { ranges })
+    }
+
+    /// Whether the set names this status.
+    pub fn contains(&self, code: u16) -> bool {
+        self.ranges
+            .iter()
+            .any(|(lo, hi)| code >= *lo && code <= *hi)
+    }
+
+    /// Whether the caller named anything at all.
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    /// The first status named by both sets, if any.
+    ///
+    /// A code in both `retry_status` and `fatal_status` has no defensible
+    /// meaning, and picking one silently would hide the mistake, so the caller
+    /// is told instead.
+    pub fn overlap(&self, other: &Self) -> Option<u16> {
+        self.ranges
+            .iter()
+            .find_map(|(lo, hi)| (*lo..=*hi).find(|code| other.contains(*code)))
+    }
+
+    /// The canonical spelling, as `webseed list` prints it.
+    pub fn to_text(&self) -> String {
+        let parts: Vec<String> = self.into();
+        parts.join(",")
+    }
+}
+
+impl From<&StatusSet> for Vec<String> {
+    fn from(set: &StatusSet) -> Self {
+        set.ranges
+            .iter()
+            .map(|(lo, hi)| match lo == hi {
+                true => lo.to_string(),
+                false => format!("{lo}-{hi}"),
+            })
+            .collect()
+    }
+}
+
+impl From<StatusSet> for Vec<String> {
+    fn from(set: StatusSet) -> Self {
+        (&set).into()
+    }
+}
+
+/// One code or one inclusive range.
+fn parse_status_range(part: &str) -> Result<(u16, u16)> {
+    let code = |text: &str| -> Result<u16> {
+        let value: u16 = text.trim().parse().map_err(|_| {
+            Error::usage(format!("`{text}` is not an HTTP status code")).with("value", part)
+        })?;
+        match (STATUS_MIN..=STATUS_MAX).contains(&value) {
+            true => Ok(value),
+            false => Err(Error::usage(format!(
+                "{value} is not an HTTP status code; they run {STATUS_MIN} to {STATUS_MAX}"
+            ))
+            .with("value", part)),
+        }
+    };
+    // `split_once` rather than `split`, so `500-599-600` is refused rather
+    // than read as its first two parts.
+    match part.split_once('-') {
+        None => {
+            let one = code(part)?;
+            Ok((one, one))
+        }
+        Some((lo, hi)) => {
+            let (lo, hi) = (code(lo)?, code(hi)?);
+            match lo <= hi {
+                true => Ok((lo, hi)),
+                false => Err(Error::usage(format!(
+                    "the range {lo}-{hi} runs backwards; write it {hi}-{lo}"
+                ))
+                .with("value", part)),
+            }
+        }
+    }
+}
+
+/// How a status set is written in a table: one string, or a list of codes and
+/// range strings.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StatusSetRepr {
+    Text(String),
+    Items(Vec<StatusItem>),
+}
+
+/// One entry in a status list. TOML writes a bare code as an integer and a
+/// range has to be a string, so both are accepted.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StatusItem {
+    Code(u16),
+    Text(String),
+}
+
+impl TryFrom<StatusSetRepr> for StatusSet {
+    type Error = String;
+
+    fn try_from(repr: StatusSetRepr) -> std::result::Result<Self, String> {
+        let text = match repr {
+            StatusSetRepr::Text(text) => text,
+            StatusSetRepr::Items(items) => items
+                .into_iter()
+                .map(|item| match item {
+                    StatusItem::Code(code) => code.to_string(),
+                    StatusItem::Text(text) => text,
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        };
+        Self::parse(&text).map_err(|e| e.to_string())
+    }
+}
+
 /// Per-source tuning. Every field has a default so a binding table only has to
 /// name what it changes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,9 +358,21 @@ pub struct SourceLimits {
     /// Errors before the source is cooled down.
     pub max_errors: u32,
     /// How long a cooled-down source stays out, in milliseconds.
+    ///
+    /// Sets the timer that [`SourceStats::is_cooling_down`] reads. Nothing
+    /// waits it out: the bridge retires a source whose budget has run out
+    /// rather than sleeping on it. See `TODO/multi-source.md`, T-137.
+    ///
+    /// [`SourceStats::is_cooling_down`]: crate::webseed::fetch::SourceStats::is_cooling_down
     pub cooldown_ms: u64,
     /// Bytes per second cap, or `None` for unlimited.
     pub rate_limit: Option<u64>,
+    /// Statuses this source retries that it would otherwise retire on.
+    #[serde(default, skip_serializing_if = "StatusSet::is_empty")]
+    pub retry_status: StatusSet,
+    /// Statuses this source retires on that it would otherwise retry.
+    #[serde(default, skip_serializing_if = "StatusSet::is_empty")]
+    pub fatal_status: StatusSet,
 }
 
 impl Default for SourceLimits {
@@ -217,6 +387,8 @@ impl Default for SourceLimits {
             max_errors: 5,
             cooldown_ms: 600_000,
             rate_limit: None,
+            retry_status: StatusSet::default(),
+            fatal_status: StatusSet::default(),
         }
     }
 }
@@ -258,6 +430,32 @@ impl SourceLimits {
     /// How long a failed source stays out.
     pub fn cooldown(&self) -> Duration {
         Duration::from_millis(self.cooldown_ms)
+    }
+
+    /// Refuse a status policy that says two things about one code.
+    pub fn check_status_policy(&self) -> Result<()> {
+        match self.retry_status.overlap(&self.fatal_status) {
+            None => Ok(()),
+            Some(code) => Err(Error::usage(format!(
+                "status {code} is in both the retry list and the fatal list; it can be one or the other"
+            ))
+            .with("retry_status", self.retry_status.to_text())
+            .with("fatal_status", self.fatal_status.to_text())),
+        }
+    }
+
+    /// Whether a failure carrying this status should be retried.
+    ///
+    /// `None` leaves the built-in classification alone, which is what an empty
+    /// policy means and what almost every source runs with.
+    pub fn status_is_retryable(&self, code: u16) -> Option<bool> {
+        if self.fatal_status.contains(code) {
+            return Some(false);
+        }
+        if self.retry_status.contains(code) {
+            return Some(true);
+        }
+        None
     }
 }
 
@@ -1006,5 +1204,135 @@ mod tests {
             BindingSet::resolve(&layout, HASH, &[s])
                 .unwrap_or_else(|e| panic!("{selector} x exact failed: {e}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod status_policy_tests {
+    use super::*;
+
+    #[test]
+    fn a_set_reads_codes_and_inclusive_ranges() {
+        let set = StatusSet::parse("403,429,500-599").unwrap();
+        assert!(set.contains(403));
+        assert!(set.contains(429));
+        assert!(set.contains(500));
+        assert!(set.contains(599));
+        assert!(!set.contains(404));
+        assert!(!set.contains(499));
+        assert!(!set.contains(600));
+    }
+
+    #[test]
+    fn an_empty_set_names_nothing() {
+        let set = StatusSet::default();
+        assert!(set.is_empty());
+        assert!(!set.contains(403));
+        assert_eq!(StatusSet::parse("").unwrap(), set);
+        assert_eq!(StatusSet::parse(" , ").unwrap(), set);
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_status_is_refused_by_name() {
+        let err = StatusSet::parse("4o3").unwrap_err().to_string();
+        assert!(err.contains("not an HTTP status code"), "{err}");
+        let err = StatusSet::parse("42").unwrap_err().to_string();
+        assert!(err.contains("100 to 599"), "{err}");
+        let err = StatusSet::parse("600").unwrap_err().to_string();
+        assert!(err.contains("100 to 599"), "{err}");
+    }
+
+    #[test]
+    fn a_backwards_range_says_how_to_write_it() {
+        let err = StatusSet::parse("599-500").unwrap_err().to_string();
+        assert!(err.contains("500-599"), "{err}");
+    }
+
+    #[test]
+    fn a_range_with_three_ends_is_refused_rather_than_truncated() {
+        assert!(StatusSet::parse("500-599-600").is_err());
+    }
+
+    #[test]
+    fn a_set_round_trips_through_its_canonical_spelling() {
+        let set = StatusSet::parse(" 403 , 500-599 ").unwrap();
+        assert_eq!(set.to_text(), "403,500-599");
+        assert_eq!(StatusSet::parse(&set.to_text()).unwrap(), set);
+    }
+
+    #[test]
+    fn a_table_writes_a_status_list_as_integers_or_as_strings() {
+        #[derive(Deserialize)]
+        struct Holder {
+            codes: StatusSet,
+        }
+        let from_ints: Holder = toml::from_str("codes = [403, 429]").unwrap();
+        assert!(from_ints.codes.contains(403) && from_ints.codes.contains(429));
+        let mixed: Holder = toml::from_str(r#"codes = [403, "500-599"]"#).unwrap();
+        assert!(mixed.codes.contains(403) && mixed.codes.contains(503));
+        let text: Holder = toml::from_str(r#"codes = "403,500-599""#).unwrap();
+        assert_eq!(text.codes, mixed.codes);
+    }
+
+    #[test]
+    fn a_bad_status_in_a_table_fails_the_parse_rather_than_being_dropped() {
+        #[derive(Deserialize)]
+        struct Holder {
+            #[allow(dead_code)]
+            codes: StatusSet,
+        }
+        assert!(toml::from_str::<Holder>("codes = [42]").is_err());
+    }
+
+    #[test]
+    fn the_policy_says_nothing_about_a_status_neither_list_names() {
+        let limits = SourceLimits {
+            retry_status: StatusSet::parse("403").unwrap(),
+            ..SourceLimits::default()
+        };
+        assert_eq!(limits.status_is_retryable(403), Some(true));
+        assert_eq!(limits.status_is_retryable(404), None);
+    }
+
+    #[test]
+    fn a_fatal_status_overrides_the_default_the_other_way() {
+        let limits = SourceLimits {
+            fatal_status: StatusSet::parse("503").unwrap(),
+            ..SourceLimits::default()
+        };
+        assert_eq!(limits.status_is_retryable(503), Some(false));
+    }
+
+    #[test]
+    fn a_status_in_both_lists_is_a_usage_error_rather_than_a_precedence_rule() {
+        let limits = SourceLimits {
+            retry_status: StatusSet::parse("403,500-599").unwrap(),
+            fatal_status: StatusSet::parse("503").unwrap(),
+            ..SourceLimits::default()
+        };
+        let err = limits.check_status_policy().unwrap_err().to_string();
+        assert!(err.contains("503"), "{err}");
+        assert!(err.contains("one or the other"), "{err}");
+    }
+
+    #[test]
+    fn two_disjoint_lists_are_accepted() {
+        let limits = SourceLimits {
+            retry_status: StatusSet::parse("403,429").unwrap(),
+            fatal_status: StatusSet::parse("404,410").unwrap(),
+            ..SourceLimits::default()
+        };
+        limits.check_status_policy().unwrap();
+    }
+
+    #[test]
+    fn a_default_source_has_no_policy_and_serialises_without_the_fields() {
+        let limits = SourceLimits::default();
+        assert!(limits.retry_status.is_empty());
+        assert!(limits.fatal_status.is_empty());
+        assert_eq!(limits.status_is_retryable(403), None);
+        let json = serde_json::to_string(&limits).unwrap();
+        assert!(!json.contains("retry_status"), "{json}");
+        assert!(!json.contains("fatal_status"), "{json}");
     }
 }

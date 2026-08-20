@@ -226,6 +226,30 @@ pub struct SourceStats {
     pub retries: AtomicU64,
     /// Epoch milliseconds the source may be used again. Zero means now.
     cooldown_until_ms: AtomicU64,
+    /// Retries charged to each HTTP status.
+    ///
+    /// A plain `std::sync::Mutex` rather than an async one: it is taken only
+    /// when a request has already failed, never on the path a byte travels,
+    /// and it is never held across an await.
+    retries_by_status: std::sync::Mutex<std::collections::BTreeMap<u16, u64>>,
+}
+
+impl SourceStats {
+    /// Charge one retry to the status that caused it.
+    fn record_retry_status(&self, code: u16) {
+        if let Ok(mut by_status) = self.retries_by_status.lock() {
+            *by_status.entry(code).or_default() += 1;
+        }
+    }
+
+    /// Retries per HTTP status, highest count first is not the order: this is
+    /// by code, so two reports line up column for column.
+    pub fn retries_by_status(&self) -> std::collections::BTreeMap<u16, u64> {
+        self.retries_by_status
+            .lock()
+            .map(|by_status| by_status.clone())
+            .unwrap_or_default()
+    }
 }
 
 impl SourceStats {
@@ -668,7 +692,7 @@ impl Fetcher {
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
         if !status.is_success() {
-            let err = classify_status(url, status);
+            let err = self.reclassify(classify_status(url, status));
             self.record(
                 started_at,
                 url,
@@ -862,6 +886,32 @@ impl Fetcher {
         result
     }
 
+    /// Apply the source's status policy to a classified failure.
+    ///
+    /// Whether a status is worth retrying is a property of the server, not of
+    /// the code, and the built-in classification is only a good default. A
+    /// signing CDN's `403` recovers on the next request; a mirror that answers
+    /// `503` forever does not. `--web-seed-retry-status` and
+    /// `--web-seed-fatal-status` are how the caller says which they have.
+    ///
+    /// The reason text is kept exactly as it was, so the message a caller sees
+    /// still names the status and the fix. Only the retryability changes.
+    fn reclassify(&self, err: FetchError) -> FetchError {
+        let Some(code) = err.status() else {
+            return err;
+        };
+        let limits = &self.binding.spec.limits;
+        match (limits.status_is_retryable(code), err) {
+            (Some(true), FetchError::Permanent { reason, status }) => {
+                FetchError::Transient { reason, status }
+            }
+            (Some(false), FetchError::Transient { reason, status }) => {
+                FetchError::Permanent { reason, status }
+            }
+            (_, err) => err,
+        }
+    }
+
     /// One ranged GET with retries and backoff.
     async fn fetch_with_retry(
         &self,
@@ -882,6 +932,12 @@ impl Fetcher {
         for attempt in 0..=limits.retries {
             if attempt > 0 {
                 self.stats.retries.fetch_add(1, Ordering::Relaxed);
+                // Charged to the status of the failure being retried, so a
+                // report says what the retries were spent on rather than only
+                // how many there were.
+                if let Some(code) = last.as_ref().and_then(FetchError::status) {
+                    self.stats.record_retry_status(code);
+                }
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(16));
             }
@@ -962,7 +1018,9 @@ impl Fetcher {
             .map(str::to_string);
         let resolved = (response.url().as_str() != url).then(|| response.url().to_string());
 
-        if let Err(err) = check_status(url, &response, start, length) {
+        if let Err(err) =
+            check_status(url, &response, start, length).map_err(|e| self.reclassify(e))
+        {
             self.record(
                 started_at,
                 url,
@@ -1723,5 +1781,119 @@ mod tests {
         )
         .expect("fetcher");
         assert!(fetcher.rate.is_some(), "the cap did not reach the fetcher");
+    }
+
+    /// A fetcher whose source carries a status policy.
+    fn fetcher_with_policy(retry: &str, fatal: &str) -> Fetcher {
+        use crate::webseed::binding::{BindingSet, Origin, SourceSpec, StatusSet};
+
+        let layout = Arc::new(Layout::from_lengths(
+            "movie.bin",
+            false,
+            32 * 1024,
+            [("movie.bin".to_string(), 320 * 1024u64)],
+        ));
+        let mut spec = SourceSpec::new("https://cdn.example.com/movie.bin", Origin::CommandLine);
+        spec.limits.retry_status = StatusSet::parse(retry).unwrap();
+        spec.limits.fatal_status = StatusSet::parse(fatal).unwrap();
+        let hash = "0".repeat(40);
+        let set = BindingSet::resolve(&layout, &hash, &[spec]).unwrap();
+        Fetcher::new(set.bindings[0].clone(), layout, hash, 4, false).unwrap()
+    }
+
+    #[test]
+    fn a_403_a_signing_cdn_recovers_from_becomes_retryable() {
+        let fetcher = fetcher_with_policy("403", "");
+        let err = fetcher.reclassify(classify_status("u", StatusCode::FORBIDDEN));
+        assert!(err.is_retryable());
+        assert_eq!(err.status(), Some(403));
+    }
+
+    #[test]
+    fn the_reason_text_survives_the_reclassification() {
+        let fetcher = fetcher_with_policy("403", "");
+        let before = check_status_reason(403);
+        let after = fetcher.reclassify(classify_status("u", StatusCode::FORBIDDEN));
+        assert_eq!(reason_of(&after), before);
+    }
+
+    /// The reason `classify_status` gives a code, for comparison.
+    fn check_status_reason(code: u16) -> String {
+        reason_of(&classify_status(
+            "u",
+            StatusCode::from_u16(code).expect("status"),
+        ))
+    }
+
+    fn reason_of(err: &FetchError) -> String {
+        match err {
+            FetchError::Transient { reason, .. }
+            | FetchError::Permanent { reason, .. }
+            | FetchError::HashMismatch { reason } => reason.clone(),
+        }
+    }
+
+    #[test]
+    fn a_503_a_mirror_never_recovers_from_becomes_fatal() {
+        let fetcher = fetcher_with_policy("", "503");
+        let err = fetcher.reclassify(classify_status("u", StatusCode::SERVICE_UNAVAILABLE));
+        assert!(!err.is_retryable());
+        assert_eq!(err.status(), Some(503));
+    }
+
+    #[test]
+    fn a_status_no_policy_names_keeps_its_built_in_classification() {
+        let fetcher = fetcher_with_policy("403", "503");
+        assert!(
+            !fetcher
+                .reclassify(classify_status("u", StatusCode::NOT_FOUND))
+                .is_retryable()
+        );
+        assert!(
+            fetcher
+                .reclassify(classify_status("u", StatusCode::BAD_GATEWAY))
+                .is_retryable()
+        );
+    }
+
+    #[test]
+    fn a_source_with_no_policy_changes_nothing() {
+        let fetcher = fetcher_with_policy("", "");
+        for code in [401u16, 403, 404, 410, 416, 429, 500, 503] {
+            let status = StatusCode::from_u16(code).unwrap();
+            assert_eq!(
+                fetcher
+                    .reclassify(classify_status("u", status))
+                    .is_retryable(),
+                classify_status("u", status).is_retryable(),
+                "status {code} was reclassified with no policy set"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hash_mismatch_is_never_reclassified_because_it_carries_no_status() {
+        let fetcher = fetcher_with_policy("403,500-599", "");
+        let err = fetcher.reclassify(FetchError::HashMismatch {
+            reason: "piece 3".into(),
+        });
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn retries_are_charged_to_the_status_that_caused_them() {
+        let stats = SourceStats::default();
+        stats.record_retry_status(403);
+        stats.record_retry_status(403);
+        stats.record_retry_status(503);
+        let by_status = stats.retries_by_status();
+        assert_eq!(by_status[&403], 2);
+        assert_eq!(by_status[&503], 1);
+        assert_eq!(by_status.len(), 2);
+    }
+
+    #[test]
+    fn a_source_that_never_retried_reports_no_statuses() {
+        assert!(SourceStats::default().retries_by_status().is_empty());
     }
 }
