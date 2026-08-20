@@ -529,6 +529,15 @@ pub struct StopConditions {
     pub seed_time: Option<Duration>,
     /// Exit after this long with no connected peers.
     pub exit_when_idle: Option<Duration>,
+    /// Stop when the process holds more than this many handles.
+    ///
+    /// A long `seed` run leaks a socket for every peer that connects and
+    /// closes before it handshakes, which is upstream and measured in
+    /// `TODO/peers.md` under T-020. Nothing here closes those sockets. What
+    /// this does is bound them: a supervised deployment gets a loud exit and a
+    /// restart instead of a process that quietly runs the machine out of
+    /// descriptors.
+    pub max_handles: Option<u64>,
 }
 
 /// Why the watch loop stopped.
@@ -553,6 +562,8 @@ pub enum Stopped {
     Interrupted,
     /// The torrent failed.
     Failed,
+    /// `--max-handles` was exceeded.
+    HandleCeiling,
 }
 
 impl Stopped {
@@ -568,6 +579,7 @@ impl Stopped {
             Self::TooSlow => "too_slow",
             Self::Interrupted => "interrupted",
             Self::Failed => "failed",
+            Self::HandleCeiling => "handle_ceiling",
         }
     }
 
@@ -580,6 +592,10 @@ impl Stopped {
             Self::TooSlow => E::ThresholdNotMet,
             Self::Interrupted => E::Interrupted,
             Self::Failed => E::Generic,
+            // Not a threshold the caller set on the payload, and not a
+            // timeout. The run hit a resource ceiling, which is the same
+            // shape of failure as running out of them.
+            Self::HandleCeiling => E::ResourceCeiling,
         }
     }
 }
@@ -707,6 +723,13 @@ impl Progress {
             && since.elapsed() >= idle
         {
             return Some(Stopped::Idle);
+        }
+        // Sampled here rather than on its own timer, so the ceiling costs one
+        // reading per report interval and nothing between them.
+        if let Some(ceiling) = stop.max_handles
+            && bit_cli_core::sysinfo::Process::sample().open_handles > ceiling
+        {
+            return Some(Stopped::HandleCeiling);
         }
         if !seeding {
             return snapshot.finished.then_some(Stopped::Completed);
@@ -1019,6 +1042,7 @@ mod tests {
         assert_eq!(Stopped::Stalled.code(), E::Timeout);
         assert_eq!(Stopped::TooSlow.code(), E::ThresholdNotMet);
         assert_eq!(Stopped::Interrupted.code(), E::Interrupted);
+        assert_eq!(Stopped::HandleCeiling.code(), E::ResourceCeiling);
         // A finished seed exits zero however it was told to stop, because
         // being told to stop is not a failure.
         for reason in [Stopped::SeedRatio, Stopped::SeedTime, Stopped::Idle] {
@@ -1038,6 +1062,7 @@ mod tests {
             Stopped::TooSlow,
             Stopped::Interrupted,
             Stopped::Failed,
+            Stopped::HandleCeiling,
         ] {
             let name = reason.as_str();
             assert!(
@@ -1072,5 +1097,42 @@ mod tests {
         for key in vars.keys() {
             assert!(key.starts_with("BIT_CLI_"), "{key}");
         }
+    }
+
+    #[test]
+    fn a_handle_ceiling_the_process_is_already_over_stops_the_run() {
+        // Zero is under any real process's handle count, so this fires on the
+        // first sample without having to leak anything to get there.
+        let progress = Progress::new(1, vec![10]);
+        let snap = snapshot(0, 10);
+        let stop = StopConditions {
+            max_handles: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            progress.should_stop(&snap, &stop, false),
+            Some(Stopped::HandleCeiling)
+        );
+    }
+
+    #[test]
+    fn a_handle_ceiling_nothing_is_near_does_not_stop_the_run() {
+        let progress = Progress::new(1, vec![10]);
+        let snap = snapshot(0, 10);
+        let stop = StopConditions {
+            max_handles: Some(u64::MAX),
+            ..Default::default()
+        };
+        assert_eq!(progress.should_stop(&snap, &stop, false), None);
+    }
+
+    #[test]
+    fn no_handle_ceiling_means_the_process_is_never_sampled_against_one() {
+        let progress = Progress::new(1, vec![10]);
+        let snap = snapshot(0, 10);
+        assert_eq!(
+            progress.should_stop(&snap, &StopConditions::default(), false),
+            None
+        );
     }
 }

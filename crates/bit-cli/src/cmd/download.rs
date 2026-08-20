@@ -115,6 +115,7 @@ pub fn run(
         seed_ratio: args.limits.seed_ratio,
         seed_time: swarm::optional_duration(&args.limits.seed_time, "seed-time")?,
         exit_when_idle: None,
+        max_handles: args.limits.max_handles,
     };
 
     let setup = SessionSetup {

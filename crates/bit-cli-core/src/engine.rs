@@ -34,6 +34,29 @@ use crate::paths::PathPlan;
 use crate::storage::{PlanHandle, SafeStorageFactory};
 use crate::torrent::InfoHash;
 
+/// Incoming connections allowed to be mid-handshake-check at once.
+///
+/// `librqbit` defaults this to 256, and at exactly 256 its accept loop
+/// panics. The loop is a `tokio::select!` over two branches, both with
+/// preconditions: `accept` is enabled only while the pending set is under the
+/// cap, and draining the pending set is enabled only while it is not empty.
+/// A pending check that resolves to `Err` fails the second branch's pattern,
+/// which disables it for that iteration, and when the set is at the cap the
+/// first branch is already disabled. Every branch disabled is a panic, and the
+/// panic kills the accept task while the process carries on: the port stops
+/// answering and the run still reports itself as seeding.
+///
+/// A connection that closes before it handshakes is exactly the `Err` that
+/// triggers it, and enough of them at once fill the set. Measured, 3000 such
+/// connections at 64 at a time killed a seeder's listener in 79 seconds.
+///
+/// Raising the cap does not paper over the bug, it removes the branch that
+/// carries it: the first branch's precondition never goes false, so the pair
+/// can never both be disabled. What the cap was protecting against is still
+/// bounded, by the operating system's own limit on sockets and by
+/// `--max-peers` on what reaches the swarm. See `TODO/peers.md`, T-020.
+const PENDING_HANDSHAKE_CHECKS: usize = usize::MAX;
+
 /// How the session is configured for one run.
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
@@ -297,6 +320,7 @@ impl Engine {
             listen: Some(ListenerOptions {
                 listen_addr,
                 ipv4_only: options.ipv4_only,
+                max_pending_incoming_handshake_checks: PENDING_HANDSHAKE_CHECKS,
                 ..Default::default()
             }),
             ratelimits: LimitsConfig {

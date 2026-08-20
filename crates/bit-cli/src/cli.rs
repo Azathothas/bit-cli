@@ -691,6 +691,21 @@ pub struct LimitArgs {
     #[arg(long, value_name = "N", default_value_t = bit_cli_core::storage::DEFAULT_MAX_OPEN_FILES)]
     pub max_open_files: usize,
 
+    /// Stop when the process holds more than this many handles. Off by default.
+    ///
+    /// This is a backstop, not a tuning knob. A long `seed` run leaks a socket
+    /// for every peer that connects and closes before it handshakes, which is
+    /// upstream and measured in TODO/peers.md under T-020. Nothing here closes
+    /// those sockets, so a supervised deployment sets this and gets a loud
+    /// exit 16 and a restart instead of a process that quietly runs the
+    /// machine out of descriptors.
+    ///
+    /// Counted against the whole process, so it includes threads, sockets, and
+    /// payload files. Read `cost` in the report for a healthy baseline before
+    /// picking a number.
+    #[arg(long, value_name = "N")]
+    pub max_handles: Option<u64>,
+
     /// Stop seeding at this ratio. 0 means do not seed.
     #[arg(long, value_name = "RATIO")]
     pub seed_ratio: Option<f64>,

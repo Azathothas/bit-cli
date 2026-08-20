@@ -65,3 +65,10 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "ne
 [[example]]
 name = "loopback-fileserver"
 test = true
+
+# Same reason as above: the handshake bytes and the hex decoding are logic, and
+# a churn generator that sends a malformed handshake would measure the far
+# side refusing it rather than the far side leaking a socket.
+[[example]]
+name = "loopback-churn"
+test = true

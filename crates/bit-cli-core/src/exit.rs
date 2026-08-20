@@ -56,6 +56,8 @@ pub enum ExitCode {
     /// The edit would change the info hash. `bit-cli edit` only, without
     /// `--allow-new-infohash`.
     WouldChangeInfoHash = 15,
+    /// A resource ceiling the caller set was crossed: `--max-handles`.
+    ResourceCeiling = 16,
 }
 
 impl ExitCode {
@@ -84,6 +86,7 @@ impl ExitCode {
             Self::LintRefused => "lint_refused",
             Self::ThresholdNotMet => "threshold_not_met",
             Self::WouldChangeInfoHash => "would_change_infohash",
+            Self::ResourceCeiling => "resource_ceiling",
         }
     }
 
@@ -107,6 +110,7 @@ impl ExitCode {
             Self::LintRefused => "Lint refused a torrent at creation",
             Self::ThresholdNotMet => "Threshold not met",
             Self::WouldChangeInfoHash => "Would change the info hash",
+            Self::ResourceCeiling => "A resource ceiling was crossed",
         }
     }
 
@@ -129,6 +133,7 @@ impl ExitCode {
         Self::LintRefused,
         Self::ThresholdNotMet,
         Self::WouldChangeInfoHash,
+        Self::ResourceCeiling,
     ];
 }
 
@@ -172,7 +177,7 @@ mod tests {
 
     #[test]
     fn the_documented_range_is_covered() {
-        assert_eq!(ExitCode::ALL.len(), 16);
-        assert_eq!(ExitCode::WouldChangeInfoHash.code(), 15);
+        assert_eq!(ExitCode::ALL.len(), 17);
+        assert_eq!(ExitCode::ResourceCeiling.code(), 16);
     }
 }

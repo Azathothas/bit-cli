@@ -44,6 +44,21 @@ it, so the history starts here.
 - `--web-seed-speed-limit` and a binding table's `rate_limit` are enforced. They
   parsed and were never applied, so a source told to stay under 24 MiB/s ran at
   116. A token bucket per source now paces requests before they go out.
+- A seeder no longer goes deaf under a burst of connections that close before
+  they handshake. `librqbit`'s accept loop is a `tokio::select!` whose two
+  branches can both be disabled at once, and when they are it panics, killing
+  the listener while the process carries on reporting itself as seeding.
+  Measured, 3000 such connections did it in 79 seconds and 2411 of them then
+  failed to connect at all. `bit-cli` removes the branch that carries it, and
+  the same flood finishes in 8.8 seconds with the listener alive. See
+  `TODO/peers.md` under T-020.
+- `--max-handles <N>` stops a run that holds more than that many handles, with
+  `"stopped": "handle_ceiling"` and exit 16. Off by default. It is a backstop
+  for the socket that a connection closing before its handshake strands about
+  half the time, which is upstream and open: `pwsh scripts/check-close-wait.ps1`
+  measures it, and `--max-handles` turns an unbounded stranding inside a
+  `seed --seed-time 7d` into a loud exit a supervisor restarts.
+- Exit code 16, `resource_ceiling`, for a resource ceiling the caller set.
 - A source URL may be `file:`, so bytes already on the disk under another name
   are a source with a scope, a composition, a chunk size, a rate limit, and the
   same per-piece verification. `webseed list`, `webseed test`, `webseed probe`,

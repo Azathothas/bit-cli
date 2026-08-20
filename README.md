@@ -533,6 +533,39 @@ Concurrency costs about 22 MiB of peak RSS and twelve handles per torrent in
 flight, and no extra CPU for the same bytes. The full write-up is in
 `TODO/performance.md` under T-030.
 
+## Seeding for days
+
+A `seed` run with `--seed-time 7d` is a long-lived process, and one thing in it
+is not bounded. A peer that connects and closes before it sends a handshake
+strands a socket in `CLOSE_WAIT` about half the time. Time does not release it
+and ordinary traffic does, so a busy seeder clears what a burst left and an
+idle one keeps it. Measured: 4000 such connections stranded 2053 sockets, and
+100 ordinary connections then took that to 96.
+
+```bash
+pwsh scripts/check-close-wait.ps1
+```
+
+That is upstream and not fixed here. What `bit-cli` carries is a backstop:
+
+```bash
+bit-cli seed release.torrent --seed-time 7d --max-handles 4096
+```
+
+`--max-handles` is sampled once per `--report-interval` against the whole
+process. Over it, the run stops with `"stopped": "handle_ceiling"` and exit 16,
+which a supervisor restarts. It is off by default, because the right number
+depends on the deployment; read `cost` in a healthy run's report for a
+baseline. The numbers, the reproduction, and what closing it upstream would
+take are in `TODO/peers.md` under T-020.
+
+One thing that was in reach is fixed. `librqbit`'s accept loop panics when its
+pending handshake-check set fills and one of those checks fails, and the panic
+kills the listener while the process keeps running and keeps reporting itself
+as seeding. Measured, 3000 connections that closed before handshaking did it in
+79 seconds. `bit-cli` removes the branch that carries it, and the same flood
+now finishes in 8.8 seconds with the listener alive.
+
 ## Fetch one piece from one mirror
 
 ```bash
@@ -714,9 +747,11 @@ parsing any text.
 | 13 | A lint refused a torrent at creation |
 | 14 | Threshold not met |
 | 15 | Would change the info hash |
+| 16 | A resource ceiling was crossed |
 
-Codes 11 through 15 exist so a script can tell "your mirrors are
-misconfigured" from "the network is down" from "your server is slow".
+Codes 11 through 16 exist so a script can tell "your mirrors are
+misconfigured" from "the network is down" from "your server is slow" from "the
+process is out of handles".
 
 ## Configuration
 
