@@ -812,6 +812,22 @@ Nothing is TTY-gated. Terminal detection reaches exactly two decisions, colour
 and progress rendering, and never decides what the program does, computes, or
 reports. Anything you can read in the terminal is a field in `--json`.
 
+### Keeping a log
+
+```bash
+bit-cli download release.torrent \
+  --log-file /var/log/bit-cli.log --log-max-size 16MiB --log-max-files 5
+```
+
+The file rotates at `--log-max-size` into `.1`, `.2`, and so on.
+`--log-max-files` is the count in total, the live one included, so `5` leaves
+`bit-cli.log` plus four rotated. `--log-max-size 0` never rotates.
+
+It is a second destination, not a replacement: stderr still carries the logs,
+so `bit-cli ... --json | jq` behaves the same either way. Redirect stderr if
+you want only the file. The log file never carries colour escapes, whatever the
+terminal is.
+
 ### On Windows
 
 PowerShell surfaces the exit code in `$LASTEXITCODE`, not `$?`.

@@ -60,7 +60,7 @@ Source:      PROMPT.md A3.2
 Category:    cli
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     `--log-file`, `--log-max-size`, and `--log-max-files` all parse,
              and `--log-max-size` is even validated, but no file is opened.
@@ -72,6 +72,47 @@ Approach:    Append to the named file, rotate at `--log-max-size` by renaming
              which means retrying the rename with backoff.
 Acceptance:  A run with `--log-file x.log --log-max-size 1KiB --log-max-files 3`
              produces `x.log`, `x.log.1`, `x.log.2`, and no `x.log.3`.
+
+**Done, exactly as the acceptance states it.**
+
+```
+$ bit-cli download torrent_c.torrent --dir out --web-seed file:///.../ \
+    --web-seed-only --port 0 --allow-overwrite -vvv \
+    --log-file x.log --log-max-size 1KiB --log-max-files 3
+
+-rw-r--r--  258 x.log
+-rw-r--r-- 1022 x.log.1
+-rw-r--r-- 1002 x.log.2
+```
+
+`crates/bit-cli/src/logging.rs` holds a `Rotating` writer behind a mutex, given
+to `tracing_subscriber` as a second destination through `MakeWriterExt::and`.
+Four decisions in it, each for a reason a reader should not have to guess:
+
+- **It adds a destination rather than replacing stderr.** Ground rule 0.11 says
+  stderr carries the logs, and it should hold whatever else is set. A caller
+  who wants only the file redirects stderr, which is one shell operator against
+  a rule that would otherwise have an exception in it.
+- **`--log-max-files N` is N files in total**, the live one included, so `3`
+  leaves `x.log`, `.1`, and `.2`. `1` keeps no history and starts the live file
+  over rather than leaving a rotated copy the caller said it did not want.
+- **The size is seeded from the file that is already there.** Appending to a
+  full log rotates on the first write rather than after this process has
+  written a whole file's worth of its own.
+- **A rename that will not happen is skipped, not fatal.** Windows refuses to
+  rename a file another process has open, and a log file is exactly the file
+  someone is tailing. Five attempts with a doubling wait covers a reader
+  between reads; past that the log keeps growing, which is better than losing
+  a line or failing the run.
+
+Five tests in `logging::tests`, four of them driving the writer directly
+because a run producing exactly 1 KiB of log lines would be testing the log
+volume rather than the rotation:
+`rotation_keeps_the_live_file_and_max_files_minus_one_behind_it`,
+`a_zero_max_size_never_rotates`,
+`one_file_total_truncates_instead_of_keeping_a_copy`,
+`an_existing_full_log_rotates_on_the_next_write`, and
+`a_run_with_a_log_file_writes_to_it_and_still_writes_to_stderr`.
 
 ### T-113 Metalink is not implemented
 

@@ -92,14 +92,22 @@ pub struct Global {
     pub log_format: LogFormat,
 
     /// Append logs to a file. Rotates by size and count.
+    ///
+    /// A second destination, not a replacement: stderr still carries the logs,
+    /// so `bit-cli ... --json | jq` behaves the same either way. Redirect
+    /// stderr if you want only the file. The directory is created if it is not
+    /// there.
     #[arg(short = 'l', long, global = true, value_name = "PATH")]
     pub log_file: Option<PathBuf>,
 
-    /// Rotate the log at this size.
+    /// Rotate the log at this size. `0` never rotates.
     #[arg(long, global = true, value_name = "SIZE", default_value = "16MiB")]
     pub log_max_size: String,
 
-    /// Keep this many rotated logs.
+    /// Keep this many logs in total, the live one included.
+    ///
+    /// `--log-max-files 3` leaves `x.log`, `x.log.1`, and `x.log.2`. `1` keeps
+    /// no history and starts the live file over instead.
     #[arg(long, global = true, value_name = "N", default_value_t = 5)]
     pub log_max_files: u32,
 

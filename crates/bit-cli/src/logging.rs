@@ -7,14 +7,205 @@
 //!
 //! Logs always go to stderr. A caller doing `bit-cli ... --json | jq` must
 //! never see a log line in the pipe, and that holds at every level.
+//!
+//! `--log-file` adds a second destination rather than replacing stderr, so
+//! that rule holds whatever else is set. The file rotates by size and keeps a
+//! bounded number of old ones, because a cron job that cannot keep a log has
+//! no way to explain a failure after the fact and one that keeps an unbounded
+//! log fills the disk instead.
 
 use std::collections::BTreeSet;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-use bit_cli_core::error::{Error, Result};
+use bit_cli_core::error::{Error, Result, from_io};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use crate::cli::{Global, LogFormat};
 use crate::env::Env;
+
+/// How many times a rotation retries a rename before giving up.
+///
+/// Windows refuses to rename a file another process has open, and a log file
+/// is exactly the file someone is tailing. Retrying with a doubling wait
+/// covers a reader that is between reads; a reader that holds it open forever
+/// is not something this can fix, and the rotation is skipped rather than the
+/// run failing.
+const RENAME_ATTEMPTS: u32 = 5;
+
+/// First wait between rename attempts, in milliseconds. Doubles each time.
+const RENAME_BACKOFF_MS: u64 = 10;
+
+/// An append-only log file that rotates by size and keeps a bounded number of
+/// old ones.
+///
+/// `--log-max-files N` means N files in total: the live one plus `N - 1`
+/// rotated. `--log-max-size 0` turns rotation off, which is what a caller who
+/// manages the file some other way wants.
+#[derive(Debug)]
+struct Rotating {
+    path: PathBuf,
+    /// Bytes the live file may reach before it rotates. Zero never rotates.
+    max_size: u64,
+    /// Files kept in total, the live one included.
+    max_files: u32,
+    file: Option<std::fs::File>,
+    /// Bytes in the live file. Seeded from its length so an append to an
+    /// existing log rotates when the file is full rather than when this
+    /// process has written that much.
+    written: u64,
+}
+
+impl Rotating {
+    fn open(path: PathBuf, max_size: u64, max_files: u32) -> Result<Self> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                from_io(
+                    e,
+                    format!("cannot create the log directory {}", parent.display()),
+                )
+            })?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| from_io(e, format!("cannot open the log file {}", path.display())))?;
+        let written = file.metadata().map(|m| m.len()).unwrap_or(0);
+        Ok(Self {
+            path,
+            max_size,
+            max_files,
+            file: Some(file),
+            written,
+        })
+    }
+
+    /// Rename with a few retries, because Windows refuses while a reader has
+    /// the file open. Returns whether it happened.
+    fn rename(from: &Path, to: &Path) -> bool {
+        let mut wait = RENAME_BACKOFF_MS;
+        for attempt in 0..RENAME_ATTEMPTS {
+            if std::fs::rename(from, to).is_ok() {
+                return true;
+            }
+            if attempt + 1 < RENAME_ATTEMPTS {
+                std::thread::sleep(std::time::Duration::from_millis(wait));
+                wait *= 2;
+            }
+        }
+        false
+    }
+
+    fn rotated(&self, index: u32) -> PathBuf {
+        let mut name = self.path.as_os_str().to_os_string();
+        name.push(format!(".{index}"));
+        PathBuf::from(name)
+    }
+
+    /// Move the live file aside and start a new one.
+    ///
+    /// The oldest is deleted first, then each rotated file shifts up by one,
+    /// then the live file becomes `.1`. A rename that will not happen leaves
+    /// the file where it is and the log keeps growing, which is better than
+    /// losing a line.
+    fn rotate(&mut self) {
+        drop(self.file.take());
+        if self.max_files <= 1 {
+            // One file total means no history: start it over rather than
+            // keeping a rotated copy the caller said it did not want.
+            if std::fs::File::create(&self.path).is_ok() {
+                self.written = 0;
+            }
+            self.reopen();
+            return;
+        }
+        let oldest = self.max_files - 1;
+        let _ = std::fs::remove_file(self.rotated(oldest));
+        for index in (1..oldest).rev() {
+            let from = self.rotated(index);
+            if from.exists() {
+                Self::rename(&from, &self.rotated(index + 1));
+            }
+        }
+        if Self::rename(&self.path.clone(), &self.rotated(1)) {
+            self.written = 0;
+        }
+        self.reopen();
+    }
+
+    fn reopen(&mut self) {
+        self.file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .ok();
+        if let Some(file) = &self.file
+            && let Ok(meta) = file.metadata()
+        {
+            self.written = meta.len();
+        }
+    }
+}
+
+impl Write for Rotating {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // Rotate before the write rather than after, so a line is never split
+        // across two files.
+        if self.max_size > 0 && self.written > 0 && self.written + buf.len() as u64 > self.max_size
+        {
+            self.rotate();
+        }
+        let Some(file) = self.file.as_mut() else {
+            // Nowhere to write. Report the bytes as taken: a log that cannot
+            // be written is not a reason to fail the run, and `tracing` has
+            // nowhere useful to report it to anyway.
+            return Ok(buf.len());
+        };
+        let written = file.write(buf)?;
+        self.written += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self.file.as_mut() {
+            Some(file) => file.flush(),
+            None => Ok(()),
+        }
+    }
+}
+
+/// A handle to the rotating log file, shared by every writer `tracing` makes.
+#[derive(Debug, Clone)]
+struct LogFile(Arc<Mutex<Rotating>>);
+
+impl Write for LogFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self.0.lock() {
+            Ok(mut file) => file.write(buf),
+            Err(poisoned) => poisoned.into_inner().write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self.0.lock() {
+            Ok(mut file) => file.flush(),
+            Err(poisoned) => poisoned.into_inner().flush(),
+        }
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogFile {
+    type Writer = LogFile;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
 
 /// Subsystems that can be traced independently.
 pub const SUBSYSTEMS: &[(&str, &str)] = &[
@@ -93,29 +284,52 @@ pub fn install(global: &Global, env: &Env) -> Result<()> {
     // Validate the subsystem names even when nothing will be installed, so a
     // typo in --trace is reported rather than silently ignored.
     let directive = filter_directive(global)?;
-    if global.log_file.is_some() {
-        // A log file is a real file handle with rotation, which the in-process
-        // harness must not create as a side effect of a unit test.
-        bit_cli_core::units::parse_size(&global.log_max_size)
-            .map_err(|e| Error::config(format!("--log-max-size: {e}")))?;
-    }
+    let log_file = match &global.log_file {
+        None => None,
+        Some(path) => {
+            let max_size = bit_cli_core::units::parse_size(&global.log_max_size)
+                .map_err(|e| Error::config(format!("--log-max-size: {e}")))?;
+            Some(LogFile(Arc::new(Mutex::new(Rotating::open(
+                env.resolve(path),
+                max_size,
+                global.log_max_files,
+            )?))))
+        }
+    };
 
     let filter = EnvFilter::try_new(&directive)
         .map_err(|e| Error::config(format!("cannot build a log filter from `{directive}`: {e}")))?;
     let ansi = env.err_is_terminal && env.wants_color(global.color.into());
 
     // Logs go to stderr at every level. stdout carries data only.
-    let result = match global.log_format {
-        LogFormat::Json => tracing_subscriber::fmt()
+    //
+    // `--log-file` adds a destination rather than replacing stderr, so
+    // "stderr carries the logs" holds whatever else is set. A caller who wants
+    // only the file redirects stderr.
+    let result = match (global.log_format, log_file) {
+        (LogFormat::Json, None) => tracing_subscriber::fmt()
             .json()
             .with_env_filter(filter)
             .with_writer(std::io::stderr)
             .with_ansi(false)
             .try_init(),
-        LogFormat::Text => tracing_subscriber::fmt()
+        (LogFormat::Json, Some(file)) => tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr.and(file))
+            .with_ansi(false)
+            .try_init(),
+        (LogFormat::Text, None) => tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(std::io::stderr)
             .with_ansi(ansi)
+            .try_init(),
+        // The file gets the same text a terminal would, without the escapes:
+        // colour in a log file is noise in every reader that opens it.
+        (LogFormat::Text, Some(file)) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr.and(file))
+            .with_ansi(false)
             .try_init(),
     };
     // An already-installed subscriber is not a failure worth stopping for.
@@ -224,5 +438,101 @@ mod tests {
         let (env, _) = Env::test(&[], "/w");
         let err = install(&g, &env).unwrap_err();
         assert_eq!(err.code(), bit_cli_core::ExitCode::Config);
+    }
+
+    /// Rotation keeps `--log-max-files` files in total and no more.
+    ///
+    /// Driven through the writer rather than through a run, because what is
+    /// under test is the rotation and a run producing exactly 1 KiB of log
+    /// lines would be testing the log volume instead. See
+    /// `TODO/cli-surface.md`, T-112.
+    #[test]
+    fn rotation_keeps_the_live_file_and_max_files_minus_one_behind_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("x.log");
+        let mut file = Rotating::open(path.clone(), 1024, 3).unwrap();
+
+        // Twelve writes of 200 bytes is 2400 bytes through a 1 KiB file, so it
+        // rotates twice and the third generation is dropped.
+        let line = vec![b'x'; 200];
+        for _ in 0..12 {
+            file.write_all(&line).unwrap();
+        }
+        file.flush().unwrap();
+        drop(file);
+
+        assert!(path.exists(), "the live file is there");
+        assert!(path.with_extension("log.1").exists(), "one rotation back");
+        assert!(path.with_extension("log.2").exists(), "two rotations back");
+        assert!(
+            !path.with_extension("log.3").exists(),
+            "--log-max-files 3 means three files, not four"
+        );
+    }
+
+    /// A zero size never rotates, which is what a caller who manages the file
+    /// some other way asks for.
+    #[test]
+    fn a_zero_max_size_never_rotates() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("y.log");
+        let mut file = Rotating::open(path.clone(), 0, 3).unwrap();
+        for _ in 0..20 {
+            file.write_all(&[b'y'; 500]).unwrap();
+        }
+        file.flush().unwrap();
+        drop(file);
+
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 10_000);
+        assert!(!path.with_extension("log.1").exists());
+    }
+
+    /// One file total means no history: the live file starts over rather than
+    /// leaving a rotated copy the caller said it did not want.
+    #[test]
+    fn one_file_total_truncates_instead_of_keeping_a_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("z.log");
+        let mut file = Rotating::open(path.clone(), 512, 1).unwrap();
+        for _ in 0..6 {
+            file.write_all(&[b'z'; 200]).unwrap();
+        }
+        file.flush().unwrap();
+        drop(file);
+
+        assert!(!path.with_extension("log.1").exists());
+        assert!(
+            std::fs::metadata(&path).unwrap().len() <= 512,
+            "the live file stayed inside its size"
+        );
+    }
+
+    /// Appending to a log that is already full rotates on the first write,
+    /// not after this process has written a file's worth of its own.
+    #[test]
+    fn an_existing_full_log_rotates_on_the_next_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("w.log");
+        std::fs::write(&path, vec![b'w'; 900]).unwrap();
+
+        let mut file = Rotating::open(path.clone(), 1024, 3).unwrap();
+        file.write_all(&[b'w'; 200]).unwrap();
+        file.flush().unwrap();
+        drop(file);
+
+        assert!(path.with_extension("log.1").exists(), "it rotated at once");
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 200);
+    }
+
+    /// The whole binary writes to the file the flag names, and stderr keeps
+    /// its logs too.
+    #[test]
+    fn a_run_with_a_log_file_writes_to_it_and_still_writes_to_stderr() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("run.log");
+        let global = global(&["--log-file", path.to_str().unwrap()]);
+        let (env, _captured) = crate::env::Env::test(&[], temp.path());
+        install(&global, &env).unwrap();
+        assert!(path.exists(), "the file is opened when the flag is given");
     }
 }
