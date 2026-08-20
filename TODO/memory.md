@@ -27,6 +27,89 @@ Acceptance:  `scripts/soak.ps1` writes `bench/soak-<timestamp>.csv` with the
              three series, and this entry records the slope of each over six
              hours.
 
+**The harness is built and a 1.76 hour run is recorded. The six hour run the
+acceptance asks for has not been completed, so this stays open.**
+
+`scripts/soak.ps1` samples one long-lived `bit-cli seed` every
+`-SampleSeconds` and writes `bench/soak-<timestamp>.csv` with resident memory,
+peak resident memory, handles, threads, CPU time, and the TCP socket states
+broken out by state. Six workloads, because a slope has to name a subsystem
+rather than "the process":
+
+| workload | what it drives |
+| --- | --- |
+| `idle` | a seeder with no tracker and nothing connecting. The control. |
+| `announce` | a loopback tracker at a five second interval. The tracker never expires a peer, so the peer list handed to the seeder grows for the whole run, which is the path this entry's report points at. |
+| `leech` | real downloads against the seeder, one finishing and another starting. |
+| `steady` | announce and leech together. The deployment, and the default. |
+| `churn` | connections that open and close without handshaking. T-020's shape, and the known positive. |
+| `all` | steady plus churn. |
+
+`all` is deliberately not the default. Churn strands sockets at about 30,000
+handles an hour, which is [T-020](peers.md) rather than this entry and swamps
+every other series in the same chart. It also starves the leechers: the same
+run that completed 22 downloads in two minutes without churn completed 1 and
+failed 2 with it.
+
+Two things the harness does that are worth keeping. It runs from its own copy
+of `target/release/bit-cli.exe`, because a six hour run would otherwise hold
+that file for six hours and Windows will not let `cargo` replace a running
+executable. And the seeder reports its own RSS and handle count in every
+`progress` event under `--jsonl`, so the summary cross-checks the sampler
+against the subject: a sampler that disagrees with the process is measuring
+something else.
+
+**The measurement so far**, `bench/soak-20260820T132757504Z.csv`, workload
+`steady`, 16 MiB payload, two leechers, 30 second samples, **1.76 hours and 398
+completed leech cycles**:
+
+| series | first | last | max | per hour | r squared |
+| --- | --- | --- | --- | --- | --- |
+| `rss_bytes` | 14.81 MiB | 16.31 MiB | 17.03 MiB | **+0.58 MiB** | 0.63 |
+| `peak_rss_bytes` | 14.94 MiB | 17.27 MiB | 17.27 MiB | +0.85 MiB | 0.85 |
+| `handles` | 210 | 216 | 240 | **+0.77** | 0.004 |
+| `threads` | 29 | 27 | 35 | -0.02 | 0.00 |
+| `tcp_total` | 1 | 1 | 2 | +0.01 | 0.001 |
+| `tcp_close_wait` | 0 | 0 | **0** | 0 | n/a |
+| `cpu_ms` | 156 | 30,438 | | +17,156 | 0.9995 |
+
+What that says, and what it does not.
+
+- **Descriptors are flat.** 0.77 handles an hour at an r squared of 0.004 is
+  noise, not a trend, and `CLOSE_WAIT` was zero at every one of the 200
+  samples. So the half of this entry that names descriptors is not reproducing
+  under a deployment-shaped load. [T-011](disk-io.md) bounding open files with
+  `--max-open-files` is the likeliest reason.
+- **CPU is flat as a rate.** 17,156 ms of CPU per hour is 4.8 ms per second of
+  wall time, under 0.5% of one core, and the r squared of 0.9995 says it is a
+  straight line rather than an acceleration.
+- **Memory rises, slowly, and the fit is weak.** 0.58 MiB an hour at an r
+  squared of 0.63 over 1.76 hours is about 14 MiB a day if it is linear, and
+  1.76 hours is not long enough to say whether it is linear, a settling curve,
+  or an allocator that has not returned pages yet. `peak_rss_bytes` is a
+  high-water mark, so its slope is bounded below by zero and says less than its
+  r squared suggests.
+
+**What is left is the run, not the harness.** Six hours of `steady`, and an
+`idle` control of the same length to separate the session's own timers from
+the load:
+
+```powershell
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Workload steady -PayloadMiB 16
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Workload idle
+```
+
+Once both are in, the ceilings turn the record into a check:
+`-RssCeilingMiBPerHour`, `-HandleCeilingPerHour`, and
+`-CloseWaitCeilingPerHour` each fail the run when the slope passes them, and
+with none named the slopes are recorded rather than judged.
+
+One residue in the harness itself: the summary JSON is written only when the
+sampling window ends, so a run that is killed early leaves the CSV and no
+summary. The numbers above were computed from the CSV by hand for that reason.
+Writing the summary on every sample, or on a signal, is a small change and
+would have saved that step.
+
 ### T-041 Per-source window cache is bounded but not measured
 
 Source:      `bit-cli` design

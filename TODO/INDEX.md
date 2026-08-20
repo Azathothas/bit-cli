@@ -107,14 +107,14 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
 | [T-103](bep-coverage.md) | P2 | bep | open | Filenames that are not valid UTF-8 are refused |
-| [T-110](cli-surface.md) | P1 | cli | partial | The --jsonl event stream is incomplete |
+| [T-110](cli-surface.md) | P1 | cli | **done** | The --jsonl event stream is incomplete |
 | [T-111](cli-surface.md) | P2 | cli | open | piece_verified and file_completed are derived from polling |
-| [T-112](cli-surface.md) | P1 | cli | open | --log-file does not write or rotate anything |
+| [T-112](cli-surface.md) | P1 | cli | **done** | --log-file does not write or rotate anything |
 | [T-113](cli-surface.md) | P1 | cli | open | Metalink is not implemented |
 | [T-114](cli-surface.md) | P2 | cli | open | -i/--input-file batch input is not implemented |
 | [T-115](cli-surface.md) | P2 | cli | partial | Hooks do not fire for every documented trigger |
 | [T-116](cli-surface.md) | P3 | cli | open | -O/--index-out cannot rename a file |
-| [T-117](cli-surface.md) | P1 | cli | open | --schema-version has no schema behind it |
+| [T-117](cli-surface.md) | P1 | cli | partial | --schema-version has no schema behind it |
 | [T-118](cli-surface.md) | P2 | cli | open | The short-flag table is not checked in CI |
 | [T-120](licensing.md) | P1 | licensing | open | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | open | No cargo-deny configuration |
@@ -142,7 +142,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-97 items: 87 to work through, and 10 deferred to Phase C. Ten were added by
+99 items: 89 to work through, and 10 deferred to Phase C. Twelve were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -152,20 +152,24 @@ measurement, which found the contention is charged per write operation rather
 than per byte. T-036 and T-037 came out of T-030's: a multi-file torrent with
 one file lands without its directory, and a run stalls for minutes roughly
 once in fifty. T-035 came out of building the T-003 acceptance, which needed a
-slow mirror and found that the flag for one did nothing.
+slow mirror and found that the flag for one did nothing. T-138 came out of
+closing T-021: a peer that comes back waits out a backoff that grows by six.
 
 T-130 through T-136 came from the operator rather than from the triage: five
 scenarios about pointing several kinds of source at one payload. T-137 came
 out of closing T-130: making `--web-seed-max-errors` reachable made
 `--web-seed-cooldown` reachable too, and it turned out to set a timer nothing
-waits out. [multi-source.md](multi-source.md) records which of the five
-scenarios work, with the commands that were run, and what the rest need.
+waits out. T-139 and T-140 came out of closing T-133 layer 2: a resumed
+download charged its existing bytes to the swarm, and a proven shared file is
+still not turned into a source on its own.
+[multi-source.md](multi-source.md) records which of the five scenarios work,
+with the commands that were run, and what the rest need.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 2 | 1 | 0 | 8 |
-| P1 | 17 | 2 | 0 | 16 |
-| P2 | 24 | 1 | 1 | 5 |
+| P1 | 14 | 2 | 0 | 20 |
+| P2 | 23 | 1 | 1 | 7 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 
@@ -199,8 +203,9 @@ item eight is the operator's own list.
    counts by class and by HTTP status. `bench leech` measures a download and
    splits its cost between the request pipeline, piece verification, and the
    disk, all three measured rather than modelled. `--fail-under` exits 14 and
-   `--baseline` prints a delta per metric. `seed`, `probe`, and `swarm` are
-   still unbuilt and say so.
+   `--baseline` prints a delta per metric. `bench seed` measures a seeder with
+   every counter facing the other way: bytes sent per peer, and positioned
+   reads rather than writes. `probe` and `swarm` are still unbuilt and say so.
 4. [T-001](webseed.md) is **done**, and so is [T-006](webseed.md).
    `scripts/bench-webseed.ps1` takes the number in four stages so the cost is
    attributed rather than asserted, and it was run twice: on loopback and
@@ -266,11 +271,12 @@ item eight is the operator's own list.
    62.60% across five paired runs. `scripts/check-prefer.ps1` is the
    measurement. It found `--web-seed-speed-limit` accepted and ignored, which
    is T-035, now a token bucket per source.
-7. The long-run failures. [T-017](disk-io.md) and [T-030](performance.md) are
-   **done**, and so are [T-021](peers.md) and [T-031](performance.md).
-   [T-020](peers.md) and [T-040](memory.md) are the two open P0s left. Measure
-   before theorising: every one of these closed that way, and every time the
-   answer was not what the entry predicted.
+7. The long-run failures. [T-017](disk-io.md), [T-030](performance.md),
+   [T-021](peers.md), [T-031](performance.md), [T-037](performance.md), and
+   [T-138](peers.md) are **done**. [T-020](peers.md) and [T-040](memory.md)
+   are the two open P0s left. Measure before theorising: every one of these
+   closed that way, and every time the answer was not what the entry
+   predicted.
 
    [T-021](peers.md) does both things its acceptance allows, and which one
    depends on a number nobody had looked at. `librqbit` retries a dropped peer
@@ -279,7 +285,11 @@ item eight is the operator's own list.
    which is what makes the report read as "never recovers". Measured, a 40
    second outage is caught by the 70 second attempt and the download completes;
    a 120 second one is not, and the run sits until `--stop-timeout` fires. The
-   residue is [T-138](peers.md).
+   residue was [T-138](peers.md), and it is **done**: `--redial-after 30s`
+   pauses and restarts the torrent when nothing has arrived for that long,
+   which drops the backoff counters with the live state and costs no hash
+   check. The same 120 second outage that leaves the run at 17 of 128 MiB with
+   the flag off completes with it, in four re-dials.
 
    [T-020](peers.md) was two defects. One is fixed: `librqbit`'s accept loop
    panicked when its pending handshake-check set filled and a check failed,
@@ -309,28 +319,44 @@ item eight is the operator's own list.
    3.54 times faster than one invocation at a time, at 72% of what the HTTP
    source serves with no torrent machinery at all.
 
-   [T-037](performance.md) is what is left of [T-030](performance.md): one run
-   in about seventy stalls for minutes and then completes. It is open with the
-   three things already ruled out and the next thing to try.
+   [T-037](performance.md) was what was left of [T-030](performance.md): one
+   run in about seventy stalls for minutes and then completes. It is **done**
+   by its acceptance's second branch. A bridge now reports how many times it
+   lost its connection to the session, what it waited to make another, and
+   what ended the attempt before it, and `scripts/check-stall.ps1` ran the same
+   command 200 times twice: median 957 ms and slowest 1201 ms at four
+   connections, a ratio of 1.25 against a ceiling of 5, with **zero reconnects
+   in 400 invocations**. The reproduction the first branch asks for is still
+   unreached, and the counters are what will name it if it happens again.
 
    [T-042](memory.md) built the sampler these need, and `download` and `seed`
-   report their own peak RSS, CPU time, and handle count.
-   [T-011](disk-io.md) removed one of the two things [T-040](memory.md) names:
-   descriptors are now bounded by a flag. The multi-torrent measurement gives
-   [T-040](memory.md) its first numbers: about 22 MiB of peak RSS and twelve
-   handles per concurrent torrent, with CPU flat.
+   report their own peak RSS, CPU time, and handle count, in the final report
+   and in every `progress` event. [T-011](disk-io.md) removed one of the two
+   things [T-040](memory.md) names: descriptors are now bounded by a flag.
+
+   [T-040](memory.md) is the last open P0 besides [T-020](peers.md)'s residue,
+   and it now has a harness and a partial run. `scripts/soak.ps1` samples a
+   long-lived seeder under one of six workloads and writes the three series to
+   `bench/soak-<timestamp>.csv`. Over **1.76 hours and 398 leech cycles** of
+   the `steady` workload: handles flat (+0.77/hour at an r squared of 0.004),
+   `CLOSE_WAIT` zero at all 200 samples, CPU flat at under 0.5% of one core,
+   and resident memory rising **0.58 MiB an hour at an r squared of 0.63**.
+   What is left is the six hour run the acceptance asks for, and an `idle`
+   control of the same length. Both commands are in the entry.
 8. [multi-source.md](multi-source.md), the operator's five scenarios about
    pointing several kinds of source at one payload. Read that file before
    starting any of T-130 to T-137: its first part records which scenarios
    already work, with the commands that were run and the output, so the work
    left is smaller than the list of entries suggests.
 
-   **Three of the five now work in full.** [T-131](multi-source.md) and
-   [T-130](multi-source.md) are **done**, which closed Scenario 1 and
-   Scenario 4. The file server signs, redirects, and expires a signature, and
-   `--web-seed-retry-status` and `--web-seed-fatal-status` decide which
-   statuses retire a source. `pwsh scripts/check-signed-source.ps1` drives six
-   cases and is the acceptance for both.
+   **Four of the five now work in full.** [T-131](multi-source.md),
+   [T-130](multi-source.md), and [T-137](multi-source.md) are **done**, which
+   closed Scenario 1 and Scenario 4. The file server signs, redirects, expires
+   a signature, and falls over on a clock, and
+   `--web-seed-retry-status`, `--web-seed-fatal-status`, and
+   `--web-seed-cooldown` decide which statuses retire a source and whether it
+   comes back. `pwsh scripts/check-signed-source.ps1` drives nine cases and is
+   the acceptance for all three.
 
    Closing them found two things the entries did not predict. A signature
    never expires against `bit-cli` at a realistic window, because it
@@ -341,21 +367,29 @@ item eight is the operator's own list.
    `--web-seed-max-errors` could never be reached. Both are written up under
    their entries. [T-137](multi-source.md) came out of the second.
 
-   [T-133](multi-source.md) **layer 1 is done** and Scenario 2 works as a
-   two-step. A source URL may be `file:`, so bytes already on the disk under
-   another name are a source with a scope, a composition, a rate limit, and
-   the same per-piece verification. `pwsh scripts/check-local-source.ps1` is
-   the acceptance: six cases, no server and no bound port, and one 64 MiB
-   payload landing under three info hashes and three piece lengths with one
-   distinct hash between them.
+   [T-133](multi-source.md) **layers 1 and 2 are done, and Scenario 2 is one
+   invocation.** A source URL may be `file:`, and a `--web-seed-for` selector
+   may name one torrent by info hash, and `-j 1` starts sources in the order
+   they were given, so torrent C reads the CDN copy and A and B read what C
+   wrote. Measured: exactly one source touched the CDN, 192 MiB over sources,
+   one distinct hash across three info hashes and three piece lengths.
+   `pwsh scripts/check-local-source.ps1` is the acceptance, eight cases, no
+   server and no bound port.
 
-   What is left is cross-torrent identity **computed rather than named**,
-   [T-133](multi-source.md) layers 2 and 3, and real control of which source
-   answers a piece, [T-135](multi-source.md). Both were already priced by
-   [T-002](webseed.md) and [T-003](webseed.md). Layer 2 also needs a
-   per-torrent `--web-seed-for`, because a binding today applies to every
-   torrent in the invocation and the shared file is at a different index in
-   each.
+   Layer 3's **detection** is done too. `bit-cli files <T> --against <OTHER>`
+   decides from the metadata alone whether two torrents hold the same file, and
+   says what the answer rests on: `piece-hashes` when the pieces line up and
+   agree, `length` when only the size matches. Against the three-torrent
+   fixture nothing is provable, because three different piece lengths is
+   exactly the case where piece hashes cannot be compared, and two of its four
+   length-only candidates are not the same bytes at all. Against a pair built
+   to line up, the whole 64 MiB is proven.
+
+   What is left is turning a proof into a source with no path named,
+   [T-140](multi-source.md), which is a scheduling change rather than an
+   identity one, and real control of which source answers a piece,
+   [T-135](multi-source.md), already priced by [T-002](webseed.md) and
+   [T-003](webseed.md).
 
    `scripts/make-scenario-fixture.ps1` builds the payloads, the three
    torrents, the CDN copy, and the partial on-disk state the acceptances

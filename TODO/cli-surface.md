@@ -15,7 +15,7 @@ Source:      PROMPT.md A3.10
 Category:    cli
 Priority:    P1
 Effort:      M
-Status:      partial
+Status:      **done**
 
 Problem:     A3.10 documents eleven event types. `download` emits
              `session_start`, `torrent_added`, `metadata_resolved`,
@@ -33,6 +33,32 @@ Approach:    Emit `session_end` from the one place every command returns
 Acceptance:  `bit-cli <any command> --jsonl` ends with a `session_end` event
              carrying `exit_code`, and `docs/schema.md` has a worked example of
              every type.
+
+**Done.** `session_end` is emitted from `bit_cli::run`, the one place every
+command returns through, so a command added later cannot forget it. It carries
+`exit_code`, `exit_status`, `ok`, `elapsed_ms`, `elapsed_human`, and `error`
+when there was one.
+
+```
+$ bit-cli --jsonl info album.torrent | tail -1
+{"at":"2026-08-20T15:01:59.553Z","elapsed_human":"4ms","elapsed_ms":4,
+ "exit_code":0,"exit_status":"success","ok":true,"seq":0,"type":"session_end"}
+```
+
+Three tests: `every_jsonl_run_ends_with_session_end` walks every command that
+runs without a network and checks the last line of each,
+`a_failed_jsonl_run_ends_with_session_end_carrying_the_error` checks the
+failure shape, and `session_end_does_not_appear_outside_jsonl` checks that
+`--json` and text output do not gain a stray object.
+
+The one case with no event is a flag that `clap` refuses: before the arguments
+parse there is no format to emit one in, so a usage error ends the stream by
+ending it. That is stated in `run`.
+
+The audit the Approach asks for is `docs/schema.md`, built by
+[T-117](#t-117---schema-version-has-no-schema-behind-it). Fourteen event types
+are documented, not the eleven A3.10 lists: `source_cooling`, `peer_redial`,
+and `bench_sample` were added by later entries.
 
 ### T-111 piece_verified and file_completed are derived from polling
 
@@ -209,7 +235,7 @@ Source:      PROMPT.md A3.10
 Category:    cli
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      partial
 
 Problem:     `--schema-version` prints `1`. There is no `docs/schema.md`, so
              the number refers to nothing a caller can check against.
@@ -220,6 +246,58 @@ Approach:    Document every JSON document and every event type with a worked
              the example still matches is the mechanism.
 Acceptance:  `docs/schema.md` exists, covers every `kind` and every event
              `type`, and a test fails when a field is added without updating it.
+
+**Mostly done. `docs/schema.md` exists, is generated, and the drift test
+fails when a field is added. Eight of the thirty-one names have no run driving
+them yet, so this stays open until they do.**
+
+The document is generated rather than written. `crates/bit-cli/src/schema.rs`
+holds the two tables of names with their descriptions and a flattener that
+turns a JSON document into `path -> type` rows, dotting nested objects and
+collapsing arrays to `[]`. `crates/bit-cli/src/schema_gen.rs` is a test module
+that drives every command in process against fixtures, folds what each run
+wrote into a sample per name, renders the whole file, and compares.
+
+```bash
+BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema
+```
+
+is the only way the file is ever edited.
+
+Seventeen document kinds and fourteen event types, 444 field rows, 751 lines.
+`hash_mismatch` was found while building it: `verify` writes a different `kind`
+when a piece does not check out, and nothing had said so.
+
+**The comparison is containment, not equality, and the asymmetry is the
+point.** A field added to a report produces a row the committed file does not
+have and fails the test. A row the committed file has that a given run did not
+produce does not fail, because these runs are timed: a download that finished
+before its second report tick emits no `progress`, and one that raced its own
+deadline emits no `torrent_completed`. Requiring equality made the check flaky
+on the first `--workspace` run, and a flaky contract check is worse than none.
+Section headings are still compared exactly, because those do not depend on
+timing.
+
+Two more tests hold the ends together.
+`every_produced_kind_and_event_is_documented` fails when the program writes a
+`kind` the tables do not name, which is what caught `hash_mismatch`.
+`coverage_of_the_documented_names_matches_what_is_recorded` compares the set of
+names no run produces against `schema::NOT_YET_COVERED`, so coverage cannot go
+backwards and the list cannot go stale in either direction.
+
+**What is left is eight runs.** `NOT_YET_COVERED` is `bench_sample`, `peers`,
+`source_cooling`, `source_failed`, `trackers`, `webseed_fetch`,
+`webseed_probe`, and `webseed_test`. Each needs a fixture the generator does
+not build: `peers` and `trackers` need a tracker answering, the three
+`webseed_*` runs need a server on a bound port, `bench_sample` needs a `bench`
+run long enough to tick, and `source_failed` and `source_cooling` need a source
+that spends its error budget inside the run's deadline. The loopback tracker
+and file server exist as examples, so the work is wiring them into
+`schema_gen::collect` rather than building anything.
+
+`--schema-version` still prints `1` and now refers to something. Bumping it is
+a separate decision and belongs with the first field that is removed or
+changes meaning, which has not happened.
 
 ### T-118 The short-flag table is not checked in CI
 

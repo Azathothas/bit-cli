@@ -806,7 +806,15 @@ bit-cli info album.torrent --json | jq -r .info_hash
 ```
 
 `--jsonl` emits one event per line as things happen, each with a monotonic
-`seq` and an ISO 8601 UTC millisecond timestamp.
+`seq` and an ISO 8601 UTC millisecond timestamp. Every `--jsonl` run ends with
+a `session_end` event carrying the exit code, so a consumer can tell "finished"
+from "the pipe broke".
+
+`docs/schema.md` lists every document `kind` and every event `type` with the
+fields each one carries, and `bit-cli --schema-version` prints the version it
+describes. That file is generated from what the program actually writes: a test
+drives every command, flattens the JSON, and fails when a report carries a field
+the document does not.
 
 Nothing is TTY-gated. Terminal detection reaches exactly two decisions, colour
 and progress rendering, and never decides what the program does, computes, or

@@ -471,15 +471,24 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
                 // not the refusal that followed it.
                 status.set_error(Some(reason.clone()));
                 if fetcher.stats().budget_spent() {
-                    let deadline = fetcher.stats().cooldown_until();
-                    match (deadline, fetcher.stats().cooldown_remaining()) {
+                    // The deadline is read once and the wait derived from it,
+                    // rather than reading the deadline and the remaining time
+                    // separately. Connections sharing a source share one
+                    // `SourceStats`, so another one clearing the cooldown
+                    // between two reads would otherwise give this bridge a
+                    // deadline with no wait, or a wait with no deadline.
+                    let waiting = fetcher.stats().cooldown_until().and_then(|deadline| {
+                        let left = deadline.epoch_ms() - crate::time::Timestamp::now().epoch_ms();
+                        (left > 0).then(|| (deadline, Duration::from_millis(left as u64)))
+                    });
+                    match waiting {
                         // Nothing to wait for. `--web-seed-cooldown 0`, the
                         // default, means the source does not come back.
-                        (_, None) => {
+                        None => {
                             status.set_state(BridgeState::Failed);
                             return;
                         }
-                        (Some(deadline), Some(remaining)) => {
+                        Some((deadline, remaining)) => {
                             status.set_state(BridgeState::Cooling);
                             tokio::time::sleep(remaining).await;
                             fetcher.stats().end_cooldown(deadline);
@@ -489,9 +498,6 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
                             // wait the caller already chose.
                             delay = RECONNECT_BASE;
                             continue;
-                        }
-                        (None, Some(_)) => {
-                            unreachable!("cooldown_remaining is Some only when cooldown_until is")
                         }
                     }
                 }
