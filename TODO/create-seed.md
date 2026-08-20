@@ -11,7 +11,7 @@ Source:      found here, 2026-08-19, against the pinned `librqbit` 9.0.0
 Category:    create
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `create_torrent` appends one spurious piece hash when the payload
              is an exact multiple of the piece length. Its final flush tests
@@ -39,6 +39,31 @@ Acceptance:  A `.torrent` for a payload that is an exact multiple of the piece
              `total_length / piece_length` hashes. Covered by
              `webseed_e2e::a_bep_17_source_downloads_a_torrent` and friends,
              which use exactly-aligned payloads.
+
+**Done, as a differential test rather than a fix.** `bit-cli create` uses
+`bit_cli_core::torrent::create`, which writes one hash per piece, and
+`crates/bit-cli-core/tests/create_alignment.rs` proves both halves over the
+same bytes:
+
+- `bit_cli_writes_one_hash_per_piece_for_an_exactly_aligned_payload` builds a
+  327,680 byte payload at a 32,768 byte piece length and asserts the metainfo
+  carries exactly ten hashes and parses.
+- `librqbit_writes_one_hash_too_many_and_bit_cli_refuses_it` runs
+  `librqbit::create_torrent` over the same file and asserts `Metainfo::parse`
+  refuses the result naming the counts: eleven pieces declared where 327,680
+  bytes at 32,768 needs ten.
+
+The second test is the fixture rule 0.10 asks for: the failing input is
+generated rather than committed, because generating it is three lines and a
+committed `.torrent` says nothing about which version produced it. If
+`librqbit` fixes this, that test fails and this entry gets its answer.
+
+**The upstream report is what is left, and it needs the operator.** Filing it
+means posting to `github.com/ikatson/rqbit` from an account, which is not
+something this session does on its own. The report is written and ready: the
+function is `create_torrent_raw` in `librqbit-9.0.0/src/create_torrent_file.rs`,
+the condition is the final flush testing `remaining_piece_length > 0 && length
+> 0`, and the reproduction is the test above.
 
 ### T-081 BEP 52 v2 and hybrid torrents are not implemented
 
@@ -231,7 +256,7 @@ Source:      PROMPT.md A3.4a, section 3 matrix item 15
 Category:    create
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      partial: the job and a constant are in, the green run is not
 
 Problem:     Byte-identical output on repeat runs is tested. Byte-identical
              output between a Windows and a Linux build is not, and path
@@ -241,3 +266,27 @@ Relevance:   Reproducible builds of a torrent are what let two mirrors publish
 Approach:    A CI job that builds the same fixture on both platforms and
              compares the BLAKE3 of the `.torrent`.
 Acceptance:  `ci.yml` carries the job and it passes.
+
+**The job exists and a second, stronger check now runs beside it.**
+
+`ci.yml` carries `determinism`, which builds the same fixture on
+`ubuntu-latest` and `windows-latest` and uploads the SHA-256 of the
+`.torrent`, and `determinism-compare`, which fails when the two differ. That
+is the acceptance, and it holds only for the commit CI ran on.
+
+The stronger check is a constant.
+`cmd::create::tests::a_fixture_torrent_hashes_the_same_on_every_platform`
+builds the same fixture the job builds and asserts its SHA-1 is
+`069804535e172027dfd40388bc0b7a64d8e8770b`. The test suite runs on both
+platforms in CI, so both compare against one number rather than against each
+other, and a platform added later is checked by the same line. It also fails
+locally, where the job cannot run at all.
+
+The fixture is deliberately the job's: two files, one nested, sorted by path,
+`--no-creation-date --no-created-by --piece-length 16KiB`, and `--name
+fixture` so the temporary directory's own name cannot reach the metainfo. The
+last one is what makes the constant stable across runs on one machine as well
+as across platforms.
+
+What is left is the CI run itself, which needs a push. This closes when a
+green `determinism-compare` is recorded here with its run URL.

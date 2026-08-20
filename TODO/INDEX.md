@@ -94,12 +94,12 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-074](windows.md) | P1 | windows | **done** | A false hash-check pass on empty files |
 | [T-075](windows.md) | P2 | windows | open | PowerShell redirection encoding is not documented |
 | [T-076](windows.md) | P2 | windows | **done** | seed and verify do not report renamed paths |
-| [T-080](create-seed.md) | P1 | create | open | librqbit's create_torrent writes an extra piece hash |
+| [T-080](create-seed.md) | P1 | create | **done** | librqbit's create_torrent writes an extra piece hash |
 | [T-081](create-seed.md) | P1 | create | open | BEP 52 v2 and hybrid torrents are not implemented |
 | [T-082](create-seed.md) | P2 | seeding | open | BEP 16 superseeding is not implemented |
 | [T-083](create-seed.md) | P2 | seeding | open | Seeding does not report choke state or disconnect reasons |
 | [T-084](create-seed.md) | P0 | create | **done** | The create round trip has not been proven against another client |
-| [T-085](create-seed.md) | P1 | create | open | Creation determinism is not proven across platforms |
+| [T-085](create-seed.md) | P1 | create | partial | Creation determinism is not proven across platforms |
 | [T-090](bench.md) | P0 | bench | partial | bit-cli bench is not implemented |
 | [T-091](bench.md) | P0 | bench | **done** | Bench reports do not capture their environment |
 | [T-092](bench.md) | P1 | bench | open | bench swarm has no synthetic load generator |
@@ -180,7 +180,7 @@ under `-j 1` and not above it.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 2 | 1 | 0 | 8 |
-| P1 | 11 | 0 | 0 | 27 |
+| P1 | 9 | 1 | 0 | 28 |
 | P2 | 23 | 1 | 1 | 8 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |

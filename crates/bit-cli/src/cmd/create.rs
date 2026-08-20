@@ -720,4 +720,53 @@ mod tests {
             ExitCode::Usage,
         );
     }
+
+    /// The same input produces the same bytes on every platform, not only on
+    /// repeat runs of one.
+    ///
+    /// A path separator or an ordering rule that differs between Windows and
+    /// Linux produces two info hashes for one payload, and two mirrors
+    /// publishing the same file then publish two torrents. A repeat-run test
+    /// cannot catch that: both runs are on the same machine. A constant can,
+    /// because the test suite runs on both platforms in CI and both compare
+    /// against this same number.
+    ///
+    /// The fixture is the one `ci.yml`'s determinism job builds, so the two
+    /// checks are the same check. See `TODO/create-seed.md`, T-085.
+    #[test]
+    fn a_fixture_torrent_hashes_the_same_on_every_platform() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().join("fixture");
+        std::fs::create_dir_all(root.join("sub")).expect("mkdir");
+        std::fs::write(root.join("a.bin"), b"one").expect("write");
+        std::fs::write(root.join("sub").join("b.bin"), b"two").expect("write");
+
+        run_ok(
+            &[
+                "create",
+                root.to_str().unwrap(),
+                "--name",
+                "fixture",
+                "--no-creation-date",
+                "--no-created-by",
+                "--sort-by",
+                "path:ascending",
+                "--piece-length",
+                "16KiB",
+                "-o",
+                "fixture.torrent",
+            ],
+            temp.path(),
+        );
+
+        let bytes = std::fs::read(temp.path().join("fixture.torrent")).expect("read the torrent");
+        // SHA-1 because the crate already carries it for piece hashes. This is
+        // a file identity check, not a security property.
+        let digest = <sha1::Sha1 as sha1::Digest>::digest(&bytes);
+        assert_eq!(
+            format!("{digest:x}"),
+            "069804535e172027dfd40388bc0b7a64d8e8770b",
+            "the bytes this platform wrote differ from every other platform's"
+        );
+    }
 }
