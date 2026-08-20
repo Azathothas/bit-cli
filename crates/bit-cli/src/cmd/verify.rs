@@ -55,6 +55,13 @@ pub struct Report {
     pub have_share: String,
     pub bad_pieces: Vec<u32>,
     pub files: Vec<FileResult>,
+    /// Files whose on-disk path is not the path in the torrent, and why.
+    ///
+    /// The same array `download --json` reports, because this command reads
+    /// the files that command wrote. Absent when nothing changed, which is the
+    /// common case. See `bit_cli_core::paths`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub renamed: Vec<bit_cli_core::paths::Rename>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub per_piece: Vec<PieceResult>,
 }
@@ -78,6 +85,14 @@ impl Report {
         ];
         if !self.bad_pieces.is_empty() {
             out.push(field("failed pieces", summarize_indices(&self.bad_pieces)));
+        }
+        // A caller that does not know a file was renamed is looking in the
+        // wrong place, which reads as a missing file rather than as a rename.
+        for rename in &self.renamed {
+            out.push(field(
+                &format!("renamed [{}]", rename.index),
+                format!("{} -> {}", rename.torrent_path, rename.disk_path),
+            ));
         }
         for file in &self.files {
             if !file.present {
@@ -106,22 +121,50 @@ impl Report {
 struct PayloadReader<'a> {
     layout: &'a Layout,
     root: PathBuf,
+    /// Where each file was actually written.
+    ///
+    /// A download plans every torrent path before it opens anything, so a name
+    /// the filesystem refuses is written under a different one. Verifying the
+    /// result means looking where the bytes went, not where the torrent said
+    /// they would go: before this, a hostile torrent verified against paths
+    /// that do not exist and reported every file missing. See
+    /// `bit_cli_core::paths` and `TODO/windows.md`, T-076.
+    plan: bit_cli_core::paths::PathPlan,
     open: Vec<Option<Option<std::fs::File>>>,
 }
 
 impl<'a> PayloadReader<'a> {
     fn new(layout: &'a Layout, root: PathBuf) -> Self {
         let open = (0..layout.files.len()).map(|_| None).collect();
-        Self { layout, root, open }
+        let plan = bit_cli_core::paths::plan(
+            &layout
+                .files
+                .iter()
+                .map(|file| file.path.join("/"))
+                .collect::<Vec<_>>(),
+        );
+        Self {
+            layout,
+            root,
+            plan,
+            open,
+        }
+    }
+
+    /// The files whose on-disk path is not the path in the torrent.
+    fn renames(&self) -> Vec<bit_cli_core::paths::Rename> {
+        self.plan.renames.clone()
     }
 
     /// The on-disk path of one file.
     fn path_of(&self, index: usize) -> Option<PathBuf> {
-        let file = self.layout.file(index)?;
+        let relative = self.plan.disk_paths.get(index)?;
         let mut path = self.root.clone();
-        // A single-file torrent lays its one file down at the root under the
-        // torrent name, so the name is not repeated as a directory.
-        for component in &file.path {
+        // Components are pushed one at a time. Joining a whole string would
+        // hand the platform's path parser something it might read as a root,
+        // which the plan has already made impossible, but this is the line
+        // where it would matter.
+        for component in relative.split('/').filter(|c| !c.is_empty()) {
             path.push(component);
         }
         Some(path)
@@ -257,6 +300,7 @@ pub fn run(
         have_share: percent_of(have, layout.total_length),
         bad_pieces,
         files,
+        renamed: reader.renames(),
         per_piece,
     };
 
@@ -473,5 +517,77 @@ mod tests {
         assert_eq!(files[1]["expected"]["bytes"], 500);
         assert_eq!(files[1]["found"]["bytes"], 100);
         assert_eq!(files[1]["present"], true);
+    }
+    /// `verify` reads where the bytes went, not where the torrent said.
+    ///
+    /// A download plans every torrent path before it opens anything, so a name
+    /// the filesystem refuses is written under a different one. Verifying
+    /// against the torrent's own path meant looking at a file that does not
+    /// exist and reporting every one of them missing. The mapping is now
+    /// applied and reported, the same array `download --json` carries. See
+    /// `TODO/windows.md`, T-076.
+    #[test]
+    fn verify_reads_the_planned_paths_and_reports_the_mapping() {
+        let fixture = TorrentFixture::hostile();
+        let data = fixture.dir().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "verify",
+                "--json",
+                "--data",
+                data.to_str().unwrap(),
+                fixture.path_str(),
+            ],
+            fixture.dir(),
+        );
+        // Nothing is on disk, so the payload does not verify. What is under
+        // test is the mapping, which is reported either way.
+        assert_eq!(crate::run(&mut env), ExitCode::HashMismatch);
+        let doc: serde_json::Value = captured.json().expect("one JSON document");
+        let renamed = doc["context"]["report"]["renamed"]
+            .as_array()
+            .expect("a renamed array");
+
+        let pairs: Vec<(String, String)> = renamed
+            .iter()
+            .map(|entry| {
+                (
+                    entry["torrent_path"].as_str().unwrap().to_string(),
+                    entry["disk_path"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("C:/pwned.txt".to_string(), "C_/pwned.txt".to_string()),
+                ("CON.txt".to_string(), "CON_.txt".to_string()),
+                ("a<b.bin".to_string(), "a_b.bin".to_string()),
+                ("x .".to_string(), "x".to_string()),
+                ("readme".to_string(), "readme-1".to_string()),
+            ],
+            "the same mapping `download --json` reports"
+        );
+        assert_eq!(renamed[0]["reasons"][0], "escape");
+    }
+
+    /// The ordinary torrent carries no mapping at all, so a caller can test
+    /// for an empty array rather than comparing every path.
+    #[test]
+    fn an_ordinary_torrent_verifies_with_no_renames() {
+        let fixture = TorrentFixture::multi_file();
+        let doc = run_json(
+            &[
+                "verify",
+                "--data",
+                fixture.payload_dir().to_str().unwrap(),
+                fixture.path_str(),
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(doc["complete"], true);
+        assert!(doc.get("renamed").is_none());
     }
 }

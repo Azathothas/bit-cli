@@ -47,6 +47,14 @@ pub struct SeedReport {
     pub listen_addr: Option<String>,
     pub trackers: Vec<String>,
     pub peers: Vec<PeerSnapshot>,
+    /// Files whose on-disk path is not the path in the torrent, and why.
+    ///
+    /// The same array `download --json` reports, because a seeder serves the
+    /// files that command wrote. A caller seeding a payload whose paths were
+    /// rewritten cannot otherwise tell which file on disk is which file in the
+    /// torrent. See `bit_cli_core::paths` and `TODO/windows.md`, T-076.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub renamed: Vec<bit_cli_core::paths::Rename>,
     /// What this run cost: peak RSS, CPU time, and open handles.
     ///
     /// A seeder is the long-lived process, so its own high-water marks are
@@ -55,6 +63,22 @@ pub struct SeedReport {
     pub process: bit_cli_core::sysinfo::Process,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Where this torrent's files actually live, when that is not where the
+/// torrent said.
+///
+/// A seeder serves the files a download wrote, and a download rewrites a path
+/// the filesystem refuses. Without this the report names files the caller
+/// cannot find. See `TODO/windows.md`, T-076.
+fn renames(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+) -> Vec<bit_cli_core::paths::Rename> {
+    engine
+        .path_plan(handle)
+        .map(|plan| plan.renames)
+        .unwrap_or_default()
 }
 
 /// Run the command.
@@ -218,6 +242,7 @@ pub fn run(
                 engine.listen_addr().map(|a| a.to_string()),
                 tracker_list,
                 peers,
+                renames(&engine, &handle),
             ));
         }
 
@@ -276,6 +301,7 @@ pub fn run(
             engine.listen_addr().map(|a| a.to_string()),
             tracker_list,
             peers,
+            renames(&engine, &handle),
         );
         engine.stop().await;
         Ok::<_, Error>(report)
@@ -300,6 +326,7 @@ fn build(
     listen_addr: Option<String>,
     trackers: Vec<String>,
     peers: Vec<PeerSnapshot>,
+    renamed: Vec<bit_cli_core::paths::Rename>,
 ) -> SeedReport {
     let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
     let mean = match elapsed_ms {
@@ -326,6 +353,7 @@ fn build(
         listen_addr,
         trackers,
         peers,
+        renamed,
         process: bit_cli_core::sysinfo::Process::sample(),
         error: snapshot.error.clone(),
     }
@@ -425,6 +453,7 @@ mod tests {
             Some("0.0.0.0:6881".into()),
             vec!["udp://t.example:451".into()],
             vec![peer(2000), peer(0)],
+            Vec::new(),
         );
         assert_eq!(
             report.peers_served, 1,
@@ -444,6 +473,7 @@ mod tests {
             None,
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
         assert_eq!(report.ratio, "2.500");
     }
@@ -456,6 +486,7 @@ mod tests {
             Duration::from_secs(4),
             std::path::Path::new("/data"),
             None,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         );
@@ -473,6 +504,7 @@ mod tests {
             None,
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
         assert_eq!(report.mean_upload_rate.0, 0);
     }
@@ -487,6 +519,7 @@ mod tests {
             Some("0.0.0.0:6881".into()),
             vec!["udp://t.example:451".into()],
             vec![peer(2000)],
+            Vec::new(),
         );
         let text = lines(&report).join("\n");
         assert!(text.contains("2.000"), "{text}");
@@ -508,9 +541,63 @@ mod tests {
             None,
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
         assert!(report.process.peak_rss_bytes > 1024 * 1024);
         assert!(report.process.open_handles > 0);
         assert!(report.process.unavailable.is_empty());
+    }
+    /// A seeder reports where the payload actually lives.
+    ///
+    /// It serves the files a download wrote, and a download rewrites a path
+    /// the filesystem refuses. Without the mapping a caller cannot tell which
+    /// file on disk is which file in the torrent. The same array
+    /// `download --json` and `verify --json` carry. See `TODO/windows.md`,
+    /// T-076.
+    #[test]
+    fn a_seed_of_a_hostile_torrent_reports_every_renamed_path() {
+        let fixture = crate::test_support::TorrentFixture::hostile();
+        let data = fixture.dir().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+
+        let report = crate::test_support::run_json_code(
+            &[
+                "seed",
+                fixture.path_str(),
+                "--data",
+                data.to_str().unwrap(),
+                "--port",
+                "0",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--stop-after",
+                "3s",
+            ],
+            fixture.dir(),
+            // Nothing is on disk and nothing connects, so the run stops on its
+            // deadline. The mapping is reported either way, which is the point.
+            ExitCode::Timeout,
+        );
+        let renamed = report["renamed"].as_array().expect("a renamed array");
+        let pairs: Vec<(String, String)> = renamed
+            .iter()
+            .map(|entry| {
+                (
+                    entry["torrent_path"].as_str().unwrap().to_string(),
+                    entry["disk_path"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("C:/pwned.txt".to_string(), "C_/pwned.txt".to_string()),
+                ("CON.txt".to_string(), "CON_.txt".to_string()),
+                ("a<b.bin".to_string(), "a_b.bin".to_string()),
+                ("x .".to_string(), "x".to_string()),
+                ("readme".to_string(), "readme-1".to_string()),
+            ]
+        );
     }
 }

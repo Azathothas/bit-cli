@@ -220,7 +220,7 @@ Source:      found here, 2026-08-19, while closing T-071
 Category:    windows
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `bit-cli download --json` carries a `renamed` array naming every
              file whose on-disk path is not the path in the torrent. `seed` and
@@ -236,3 +236,35 @@ Approach:    `Engine::path_plan` already returns it. `SeedReport` and the
 Acceptance:  `bit-cli seed --json` and `bit-cli verify --json` over the hostile
              fixture both carry a `renamed` array equal to the one
              `bit-cli download --json` reports for the same torrent.
+
+Both carry it now, and both render it in text. `seed` reads it from
+`Engine::path_plan`, the same source `download` uses.
+
+**`verify` was worse than the entry said.** It did not go through the same
+storage at all: `PayloadReader::path_of` joined the torrent's own path
+components onto the data directory, so on a hostile torrent it read paths that
+do not exist and reported every file missing. On Windows a `C:` component would
+have sent it looking outside the data directory entirely, the same way the
+download path could before [T-071](#t-071-reserved-device-names-in-torrent-paths-are-not-sanitised)
+was fixed. It runs the plan now and reads where the bytes actually went.
+
+Acceptance:
+
+```
+$ cargo test -p bit-cli --lib renamed
+$ cargo test -p bit-cli --lib verify_reads_the_planned_paths_and_reports_the_mapping
+$ cargo test -p bit-cli --lib a_seed_of_a_hostile_torrent_reports_every_renamed_path
+```
+
+All three assert the same five pairs against the hostile fixture:
+
+```
+C:/pwned.txt  ->  C_/pwned.txt     escape
+CON.txt       ->  CON_.txt         reserved-name
+a<b.bin       ->  a_b.bin          illegal-character
+x .           ->  x                trailing-dot-or-space
+readme        ->  readme-1         case-collision
+```
+
+and the ordinary torrent carries no `renamed` key at all, so a caller can test
+for its absence rather than comparing every path.

@@ -83,7 +83,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-073](windows.md) | P1 | windows | open | Long paths are not tested |
 | [T-074](windows.md) | P1 | windows | **done** | A false hash-check pass on empty files |
 | [T-075](windows.md) | P2 | windows | open | PowerShell redirection encoding is not documented |
-| [T-076](windows.md) | P2 | windows | open | seed and verify do not report renamed paths |
+| [T-076](windows.md) | P2 | windows | **done** | seed and verify do not report renamed paths |
 | [T-080](create-seed.md) | P1 | create | open | librqbit's create_torrent writes an extra piece hash |
 | [T-081](create-seed.md) | P1 | create | open | BEP 52 v2 and hybrid torrents are not implemented |
 | [T-082](create-seed.md) | P2 | seeding | open | BEP 16 superseeding is not implemented |
@@ -127,13 +127,18 @@ S is under a day, M is a few days, L is a week, XL is longer.
 81 items: 71 to work through, and 10 deferred to Phase C. T-007 was added
 by the T-001 measurement: a stalling source takes 24 seconds to give up.
 
-| Priority | Open | Partial | Done |
-| --- | --- | --- | --- |
-| P0 | 4 | 1 | 5 |
-| P1 | 20 | 1 | 6 |
-| P2 | 21 | 1 | 3 |
-| P3 | 9 | 0 | 0 |
-| Phase C | 10 deferred | | |
+| Priority | Open | Partial | Blocked | Done |
+| --- | --- | --- | --- | --- |
+| P0 | 4 | 1 | 0 | 5 |
+| P1 | 19 | 1 | 0 | 7 |
+| P2 | 18 | 1 | 1 | 5 |
+| P3 | 9 | 0 | 0 | 0 |
+| Phase C | 10 deferred | | | |
+
+`blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
+`librqbit` 9.0.0 without turning on the session persistence that decision 7.4
+puts in Phase C. It stays here rather than moving, with the upstream lines that
+block it and what would unblock it.
 
 ## Start here
 
@@ -158,14 +163,25 @@ The P0 list, in the order that unblocks the most:
    counts by class and by HTTP status. `--fail-under` exits 14 and `--baseline`
    prints a delta per metric. `leech`, `seed`, `probe`, and `swarm` are still
    unbuilt and say so.
-4. [T-001](webseed.md) is **done**, and so is [T-006](webseed.md). The loopback
-   bridge reaches **6.41% of a `curl` ceiling** on loopback, which is
-   1.38 Gbit/s: enough to saturate a gigabit link with 38% to spare, and not
-   enough for ten gigabit. `scripts/bench-webseed.ps1` takes the number in four
-   stages so the cost is attributed rather than asserted. The failure matrix
-   ran against all 468 web seeds in the Arch Linux ISO torrent, and two defects
-   that had made `webseed test` unusable against any HTTPS mirror were found
-   and fixed there.
+4. [T-001](webseed.md) is **done**, and so is [T-006](webseed.md).
+   `scripts/bench-webseed.ps1` takes the number in four stages so the cost is
+   attributed rather than asserted, and it was run twice: on loopback and
+   against a real mirror.
+
+   **The loopback bridge costs about five sixths of the available throughput,
+   at both ends of the range measured.** It reaches 15.13% of `bit-cli`'s own
+   HTTP path on loopback and 19.22% against the Arch Linux mirror, across a
+   24-fold difference in available bandwidth. A share that stays roughly
+   constant as the network slows is a pipeline-depth limit, not a per-byte
+   cost, so the request depth is the first thing to test and
+   [T-090](bench.md)'s `bench leech` is what separates it from hashing and
+   disk. Against the mirror the download path reaches 8.82 MiB/s, which does
+   **not** saturate a gigabit link; the loopback number alone said it did.
+
+   `bit-cli`'s HTTP path beats `curl` over a real network, at 156.71% of eight
+   parallel `curl` slices. The failure matrix ran against all 468 web seeds in
+   the Arch torrent, and two defects that had made `webseed test` unusable
+   against any HTTPS mirror were found and fixed there.
 5. The disk I/O cluster: [T-010](disk-io.md), [T-011](disk-io.md),
    [T-012](disk-io.md), and [T-013](disk-io.md) are **done**. Payload files
    open when they are first touched and close on an LRU when

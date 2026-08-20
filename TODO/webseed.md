@@ -80,7 +80,9 @@ $ pwsh -NoProfile -File scripts/bench-webseed.ps1 -PayloadSize 256MiB -Runs 5
 | `bit-cli` download, bridge | 164.00 MiB/s | **6.41%** | 1561 ms | 2.24% |
 
 **Candidate A reaches 6.41% of the `curl` ceiling on loopback.** It reaches
-15.13% of bit-cli's own HTTP path with the bridge removed.
+15.13% of bit-cli's own HTTP path with the bridge removed. The mirror run
+below puts the same two ratios at 30.11% and 19.22%, and the second of those is
+the one that matters.
 
 The rest of the metrics the entry asks for:
 
@@ -94,40 +96,90 @@ The rest of the metrics the entry asks for:
 | Loopback bytes per payload byte | 1.000793 |
 | Time to first verified piece | 103 ms minimum, 108 ms median, 123 ms worst |
 
-## What the number does and does not say
+## The same measurement against a real mirror
 
-Loopback has no network cost, so this is the worst case for `bit-cli` and the
-best case for `curl`: every millisecond the bridge spends is a millisecond the
-wire is not spending. On a real link the wire is the bottleneck long before
-either of them is. 164.00 MiB/s is 1.38 Gbit/s, which saturates this machine's
-fastest interface (1.00 Gbit/s) with 38% to spare. It would not saturate
-10 Gbit/s.
+Loopback has no network cost, so it is the worst case for `bit-cli` and the
+best case for `curl`. The obvious reading of the table above is that the wire
+is the bottleneck long before the bridge is, and the mirror run says that
+reading is wrong.
 
-So the bridge is not a problem for a gigabit netdisk and is a problem for a
-ten gigabit one. That is the decision this number was taken to inform.
+Arch Linux ISO, 1.49 GiB, 3047 pieces, two runs per stage, release build,
+2026-08-20T01:18:04.998Z. Report: `bench/webseed-20260820T011804992Z.json`.
 
-The 1.000793 figure is the framing, and it is small: every block the bridge
-hands the session crosses loopback inside a BEP 3 `piece` message, which is
-four bytes of length prefix, one of message id, four of piece index, and four
-of offset, so thirteen bytes per 16 KiB block. 0.08% overhead. The cost is not
-the framing, it is the copy and the round trip: the same bytes are read from a
-socket, written to a second socket, read back, and only then verified.
+```
+$ pwsh -NoProfile -File scripts/bench-webseed.ps1 `
+    -Mirror https://geo.mirror.pkgbuild.com/iso/2026.08.01/ `
+    -TorrentUrl https://geo.mirror.pkgbuild.com/iso/2026.08.01/archlinux-2026.08.01-x86_64.iso.torrent `
+    -Runs 2
+```
 
-Where the remaining 85% goes is not decided by this measurement. Three
-candidates, in the order worth checking:
+| Stage | Rate | Share of ceiling | Wall, minimum | Spread |
+| --- | --- | --- | --- | --- |
+| `curl`, 1 connection | 33.55 MiB/s | 114.60% | 45,395 ms | 343.32% |
+| `curl`, 8 connections | 29.28 MiB/s | 100.00% | 52,024 ms | 42.77% |
+| `bit-cli` fetch, no bridge | 45.88 MiB/s | **156.71%** | n/a | n/a |
+| `bit-cli` download, bridge | 8.82 MiB/s | 30.11% | 172,757 ms | 10.63% |
 
-1. `librqbit`'s per-peer request pipeline depth. One peer is asked for a
-   bounded number of outstanding blocks, and the bridge is one peer.
+Peak RSS 43.07 MiB, 306 handles, first verified piece at 768 ms. Only the
+named mirror is used: the torrent's own `url-list` carries 468 entries and
+leaving them in would measure the internet rather than the mirror.
+
+Two things change here.
+
+**`bit-cli`'s HTTP path beats `curl` over a real network**, at 156.71% of the
+reference. Many small ranged requests over pooled connections adapt to a
+varying link; eight fixed slices do not, and the whole transfer waits for the
+slowest one. The `curl` single-connection spread of 343% is the same effect
+seen directly: 45 s on one run and 201 s on the next. So the reference stops
+being a ceiling over a real network, and the script says so rather than
+printing a percentage above a hundred and leaving it.
+
+**The bridge is a hard limiter, not a constant overhead.** On loopback the
+download path reached 164.00 MiB/s. Against a mirror that supplies 45.88 MiB/s
+to the same client on the same machine, it reaches 8.82 MiB/s: 19.22% of what
+`bit-cli`'s own fetch path gets. If the bridge were a fixed CPU cost it would
+disappear at these rates. It does not, which means the limit is latency
+sensitive, and the shape of that is a bounded number of requests in flight.
+
+## What the numbers say together
+
+| | loopback | mirror |
+| --- | --- | --- |
+| fetch, no bridge | 1.06 GiB/s | 45.88 MiB/s |
+| download, bridge | 164.00 MiB/s | 8.82 MiB/s |
+| bridge share of fetch | 15.13% | 19.22% |
+
+The share is roughly constant across a 24-fold difference in available
+bandwidth, which is what a pipeline-depth limit looks like and is not what a
+per-byte cost looks like. A per-byte cost would take a smaller share as the
+network got slower.
+
+So: **the bridge costs about five sixths of the available throughput, at both
+ends of the range measured.** 8.82 MiB/s is 0.07 Gbit/s, which does not
+saturate this machine's 1.00 Gbit/s interface. The loopback number alone would
+have said it did.
+
+The 1.000793 figure is the framing, and it is not the cost: every block the
+bridge hands the session crosses loopback inside a BEP 3 `piece` message, which
+is four bytes of length prefix, one of message id, four of piece index, and
+four of offset, so thirteen bytes per 16 KiB block. 0.08%.
+
+Three candidates for where the rest goes, in the order worth checking:
+
+1. **The request pipeline depth.** `librqbit` asks one peer for a bounded
+   number of outstanding blocks, and the bridge is one peer. A bound in blocks
+   caps throughput at depth times block size over round trip, which matches
+   both measurements. This is the first thing to test.
    [T-003](#t-003-the-piece-picker-cannot-be-told-to-prefer-http) already
-   doubles the source's in-flight budget for a different reason and could be
-   measured here.
-2. Piece verification. 256 MiB of SHA-1 is real work and the download stage
-   pays it while `fetch` does not. `bench leech` will separate it, because the
-   recorder already has a hashing series that nothing populates yet.
+   doubles the source's in-flight budget for a different reason, so the
+   experiment is cheap.
+2. Piece verification. 1.49 GiB of SHA-1 is real work and the download stage
+   pays it while `fetch` does not.
 3. The write to disk, which `fetch` also does not pay.
 
-`bench leech` ([T-090](bench.md)) is what separates those three, and it is the
-next thing to build for this reason.
+`bench leech` ([T-090](bench.md)) separates those three, because the recorder
+already carries a hashing series and a queue-depth series that nothing
+populates yet. That is the next thing to build, and this is the reason.
 
 ## The failure cases
 
