@@ -41,7 +41,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | ID | Priority | Category | Status | Item |
 | --- | --- | --- | --- | --- |
 | [T-001](webseed.md) | P0 | webseed | **done** | Measure the loopback bridge against a raw curl ceiling |
-| [T-002](webseed.md) | P1 | webseed | open | Measure Candidate A-prime, the in-process virtual peer |
+| [T-002](webseed.md) | P1 | webseed | **done** | Measure Candidate A-prime, the in-process virtual peer |
 | [T-003](webseed.md) | P1 | webseed | open | The piece picker cannot be told to prefer HTTP |
 | [T-004](webseed.md) | P2 | webseed | open | BEP 17 style is not auto-detected, only declared |
 | [T-005](webseed.md) | P3 | webseed | open | A source restricted mid-run cannot be re-scoped |
@@ -137,7 +137,7 @@ receive paths contend on the payload file.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 4 | 1 | 0 | 5 |
-| P1 | 20 | 1 | 0 | 8 |
+| P1 | 19 | 1 | 0 | 9 |
 | P2 | 18 | 1 | 1 | 5 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
@@ -195,6 +195,13 @@ The P0 list, in the order that unblocks the most:
 
    The fix the measurement points at is [T-009](webseed.md),
    `--web-seed-connections`, and it needs no upstream change.
+
+   [T-002](webseed.md) is **done** and the answer is no: `librqbit` 9.0.0 has
+   no public way to hand the session a peer that is not a socket. Every route
+   in takes a `SocketAddr`. What is worth knowing is that the machinery
+   underneath already takes an arbitrary byte stream, so an in-process peer
+   needs four visibility changes and no redesign. That entry names the five
+   file and line references a reader can check.
 
    `bit-cli`'s HTTP path beats `curl` over a real network, at 156.71% of eight
    parallel `curl` slices. The failure matrix ran against all 468 web seeds in

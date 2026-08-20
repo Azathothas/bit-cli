@@ -385,7 +385,7 @@ Source:      PROMPT.md section 2.5, `superseedr/src/networking/web_seed_worker.r
 Category:    webseed
 Priority:    P1
 Effort:      L
-Status:      open
+Status:      **done**
 
 Problem:     `superseedr` implements the same "a web seed is a peer"
              abstraction without a socket: the worker talks to the torrent
@@ -404,15 +404,79 @@ Acceptance:  This file states, with the `librqbit` types named, whether an
              in-process virtual peer is reachable through the public API. If it
              is, T-001's benchmark runs against it too.
 
-What [T-090](bench.md) measured changes what this entry is worth. The loopback
-hop and the second copy are not where the throughput goes: the per-peer serial
-receive path is, and an in-process virtual peer would still be one peer with
-one of those. So removing the socket buys the framing and a copy, which
-`bench leech` puts at a small share, and not the five sixths this entry was
-written to chase. It is still worth answering, because the answer also decides
-what Candidate B and Candidate C would cost, but it is no longer the cheapest
-large win. [T-009](#t-009-a-source-cannot-be-attached-over-more-than-one-connection)
-is, and it needs no upstream change at all.
+## The answer
+
+**No, not through `librqbit` 9.0.0's public API. But the machinery underneath
+already takes an arbitrary byte stream rather than a socket, so what stands in
+the way is four `pub(crate)` markers rather than a design that assumes TCP.**
+
+Read it for yourself:
+
+```
+$ cargo tree -p librqbit --depth 0
+$ grep -rn "pub(crate) fn add_incoming_peer" -A 4 ~/.cargo/registry/src/*/librqbit-9.0.0/src/torrent_state/live/mod.rs
+```
+
+The five places that decide it, all in `librqbit-9.0.0/src`:
+
+| Where | What it takes | Visibility |
+| --- | --- | --- |
+| `session.rs:281`, `AddTorrentOptions::initial_peers` | `Option<Vec<SocketAddr>>` | public |
+| `listen.rs:52`, `ListenerOptions` | `listen_addr: SocketAddr` | public, but the sockets it produces land in `ListenResult` (`listen.rs:15`), which is not |
+| `stream_connect.rs:129`, `StreamConnector` | `connect(&self, addr: SocketAddr)` | `pub(crate)` |
+| `torrent_state/live/mod.rs:722`, `add_peer_if_not_seen` | `SocketAddr` | `pub(crate)` |
+| `torrent_state/live/mod.rs:362`, `add_incoming_peer` | `CheckedIncomingConnection` | `pub(crate)` |
+
+Every public route in, an address. So a caller outside the crate has no way to
+say "here is a peer, talk to it over this".
+
+The last row is the interesting one. `CheckedIncomingConnection`
+(`session.rs:533`) is not a socket:
+
+```rust
+pub(crate) struct CheckedIncomingConnection {
+    pub kind: ConnectionKind,
+    pub addr: SocketAddr,
+    pub reader: BoxAsyncReadVectored,
+    pub writer: BoxAsyncWrite,
+    pub read_buf: ReadBuf,
+    pub handshake: Handshake,
+}
+```
+
+`BoxAsyncReadVectored` and `BoxAsyncWrite` (`type_aliases.rs:19` and `:20`) are
+`Box<dyn AsyncReadVectored + Unpin + Send>` and `Box<dyn AsyncWrite + Unpin +
+Send>`. A `tokio::io::duplex` pair satisfies both. The session would accept an
+in-process peer today if it could be handed one, and `AddIncomingPeerResult`
+(`live/mod.rs:175`) is already public, as is `TorrentStateLive` through
+`ManagedTorrent::live()`.
+
+What is not public is the way in: `add_incoming_peer` itself, the struct it
+takes, the two box aliases (`mod type_aliases` is private), and `ReadBuf` (`mod
+read_buf` is private, `read_buf.rs:17`). Four items and two module markers.
+
+So Candidate A-prime needs a fork, and it collapses into Candidate B exactly as
+this entry allowed for. It is a small fork, which is worth recording: it does
+not need a behaviour change upstream, only visibility.
+
+## What it is worth now
+
+Less than when this was written, and [T-090](bench.md) is why. The loopback hop
+and the second copy are not where the throughput goes. `bench leech` measured
+the per-peer serial receive path as the bound, and an in-process virtual peer
+is still one peer with one of those. The framing the socket costs was measured
+by [T-001](#t-001-measure-the-loopback-bridge-against-a-raw-curl-ceiling) at
+0.08% of payload bytes.
+
+So this is no longer the cheapest large win. It is a fork for a small gain.
+[T-009](#t-009-a-source-cannot-be-attached-over-more-than-one-connection) is
+the large one and it needs no fork at all.
+
+The finding is still load bearing for two other entries. Candidate B and
+Candidate C both start from "what would a fork cost", and the answer is now
+concrete rather than a guess: four visibility changes, no redesign. If the four
+ever become public upstream, this reopens as an ordinary piece of work rather
+than as a fork.
 
 ### T-003 The piece picker cannot be told to prefer HTTP
 
