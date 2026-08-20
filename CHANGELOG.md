@@ -77,8 +77,10 @@ it, so the history starts here.
   in neither BEP 17 nor BEP 19 and exists so the same 64 MiB is not fetched
   three times. `pwsh scripts/check-local-source.ps1` drives six cases with no
   server and no bound port, including one payload landing under three info
-  hashes and three piece lengths with one distinct hash between them. See
-  `TODO/multi-source.md` under T-133.
+  hashes and three piece lengths with one distinct hash between them. A `..` in
+  a resolved path is refused, because `auto` and `prefix` composition append
+  the torrent's own name and path and a hostile `.torrent` would otherwise
+  choose the tail of it. See `TODO/multi-source.md` under T-133.
 - `--web-seed-retry-status` and `--web-seed-fatal-status` decide which HTTP
   statuses retire a source, per source, as codes and inclusive ranges. A CDN
   that signs its URLs answers 403 when a signature expires and the next request

@@ -164,6 +164,12 @@ That resolves to `/mnt/backup/album/disc 1/a.flac` and so on, exactly as the
 BEP 19 composition does over HTTP. `webseed list` shows the resolved paths
 before anything is read.
 
+A `..` in a resolved path is refused. `auto` and `prefix` composition append
+the torrent's own `name` and `path` to the source URL, so the tail of it is
+written by the `.torrent` rather than by you, and a hostile one naming
+`../../../Windows/win.ini` would otherwise make a source rooted at one
+directory read out of another.
+
 `file:` is not in BEP 17 or BEP 19 and is never offered to a swarm. It is a
 source for one invocation, like every other source here.
 

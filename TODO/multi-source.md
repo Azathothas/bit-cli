@@ -522,6 +522,14 @@ Layer 1:     **done.** A source URL may be `file:`, and everything else about a
              by the per-piece check with the path and the piece named. Only
              that check can catch it, and it is the default.
 
+             A `..` in a resolved path is refused. `auto` and `prefix`
+             composition append the torrent's own `name` and `path`, so the
+             tail of a source URL is written by the `.torrent` rather than by
+             the caller, and a hostile one naming `../../../Windows/win.ini`
+             would otherwise read out of a directory the caller did not name.
+             The bytes would fail their piece hash, but reading them at all is
+             not this tool's business.
+
              Two things layer 1 does not do, both of which are layers 2 and 3.
              A `--web-seed-for` binding applies to every torrent in the
              invocation, so `-j 2` over torrents A and B needs the shared file

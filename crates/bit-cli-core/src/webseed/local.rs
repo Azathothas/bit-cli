@@ -37,6 +37,10 @@ pub fn is_file_url(url: &str) -> bool {
 /// Percent escapes are decoded, so a directory with a space in it works. On
 /// Windows the leading `/` before a drive letter is dropped and `/` becomes
 /// `\`, which is what `File::open` wants.
+///
+/// A `..` component is refused. `auto` and `prefix` composition append the
+/// torrent's own `name` and `path` to the source URL, so the tail of it is
+/// written by the `.torrent` rather than by the caller.
 pub fn path_of(url: &str) -> Result<PathBuf> {
     let refuse =
         |why: &str| Err(Error::binding(format!("{url}: {why}")).with("url", url.to_string()));
@@ -106,6 +110,20 @@ fn finish(url: &str, path: &str) -> Result<PathBuf> {
         true => format!("{}:{}", &trimmed[..1], &trimmed[2..]),
         false => trimmed,
     };
+
+    // A `..` never survives to a read. Most of a source URL is written by the
+    // caller, who could as easily write the resolved path, but the tail of it
+    // is not: `auto` and `prefix` composition append the torrent's own `name`
+    // and `path`, and a hostile `.torrent` naming `../../../Windows/win.ini`
+    // would otherwise make a source rooted at one directory read out of
+    // another. The bytes would fail their piece hash and be discarded, but
+    // reading them at all is not this tool's business.
+    if drive_fixed.split('/').any(|segment| segment == "..") {
+        return refuse(
+            "has a `..` component; a file: source reads the path it names, so write the resolved one",
+        );
+    }
+
     Ok(PathBuf::from(
         drive_fixed.replace('/', std::path::MAIN_SEPARATOR_STR),
     ))
@@ -335,6 +353,29 @@ mod tests {
         assert_eq!(
             path_of("file:///c|/data/payload.bin").unwrap(),
             PathBuf::from(sep("c:/data/payload.bin"))
+        );
+    }
+
+    #[test]
+    fn a_dot_dot_component_is_refused_wherever_it_appears() {
+        // Composition appends the torrent's own name and path to the base, so
+        // a hostile `.torrent` decides the tail of this URL.
+        for url in [
+            "file:///srv/mirror/../../Windows/win.ini",
+            "file:///srv/../etc/passwd",
+            "file://C:/srv/../secrets.txt",
+            "file:///srv/%2E%2E/secrets.txt",
+        ] {
+            let err = path_of(url).unwrap_err().to_string();
+            assert!(err.contains("`..` component"), "{url}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_name_that_merely_starts_with_dots_is_not_a_traversal() {
+        assert_eq!(
+            path_of("file:///srv/...hidden/..data.bin").unwrap(),
+            PathBuf::from(sep("/srv/...hidden/..data.bin"))
         );
     }
 }

@@ -657,7 +657,6 @@ fn serialize(message: &Message<'_>, payload: usize) -> Result<Vec<u8>, BridgeErr
 /// A block the session asked for, as `(piece, offset in piece, length)`.
 type BlockKey = (u32, u32, u32);
 
-/// Fetch one block over HTTP and queue it, unless the session cancelled it.
 /// Why one block could not be served, and whether the source is finished.
 ///
 /// The fetcher has already spent this request's `retries` by the time an error
@@ -711,6 +710,7 @@ fn reason_of(err: BridgeError) -> String {
     }
 }
 
+/// Fetch one block over HTTP and queue it, unless the session cancelled it.
 async fn serve_block(
     key: BlockKey,
     offset: u64,
