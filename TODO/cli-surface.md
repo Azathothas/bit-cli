@@ -272,7 +272,7 @@ BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema
 
 is the only way the file is ever edited.
 
-Seventeen document kinds and fourteen event types, **650 field rows and 973
+Seventeen document kinds and fourteen event types, **669 field rows and 992
 lines**, up from 444 rows and 751 lines when eight names were still uncovered.
 `hash_mismatch` was found while building it: `verify` writes a different `kind`
 when a piece does not check out, and nothing had said so.

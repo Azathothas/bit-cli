@@ -362,7 +362,7 @@ it, so the history starts here.
   fields each carries, and it is generated from what the program writes rather
   than written by hand: a test drives every command, flattens the JSON, and
   fails when a report carries a field the document does not. All thirty-one
-  names have a run behind them, 650 field rows over 973 lines, and a second
+  names have a run behind them, 669 field rows over 992 lines, and a second
   test fails when a name stops being produced.
 - A resumed download no longer charges its existing bytes to the swarm.
   `from_web_seeds`, `from_peers`, and `from_resume` partition the total.
@@ -419,7 +419,7 @@ it, so the history starts here.
 
 ### Not in this release
 
-`bench probe`, `bench swarm`, Metalink resolution, BEP 52 v2 and hybrid
-creation, BEP 16 superseeding, and `-i/--input-file`. Each has an entry in
+`bench swarm`, Metalink resolution, BEP 52 v2 and hybrid creation, BEP 16
+superseeding, and `-i/--input-file`. Each has an entry in
 `TODO/` with what closes it. Nothing is stubbed: a command that is not
 implemented says so and exits with a code a script can branch on.
