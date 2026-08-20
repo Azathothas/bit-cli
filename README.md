@@ -1251,5 +1251,22 @@ Apache-2.0. Torrent creation, linting, and the environment-injection pattern
 that makes the whole binary drivable from a test are adapted from
 [`intermodal`](https://github.com/casey/intermodal), which is CC0-1.0.
 
-`THIRD_PARTY.md` carries the full licence text for every dependency and is
-generated from `Cargo.lock` so it cannot drift.
+`THIRD_PARTY.md` carries the full licence text for all 310 dependencies and is
+generated from `Cargo.lock`:
+
+```bash
+cargo about generate --config about.toml --output-file THIRD_PARTY.md about.hbs
+```
+
+`deny.toml` allows permissive licences only. Everything else fails the build
+rather than appearing in a generated file, which is checked both ways:
+
+```bash
+cargo deny check
+pwsh scripts/check-licence-gate.ps1
+```
+
+The first says this tree is clean. The second builds a throwaway crate with
+one `GPL-3.0-or-later` dependency and requires the same configuration to
+refuse it, because a gate that has never rejected anything has not been
+tested.

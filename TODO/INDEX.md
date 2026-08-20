@@ -118,8 +118,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-116](cli-surface.md) | P3 | cli | open | -O/--index-out cannot rename a file |
 | [T-117](cli-surface.md) | P1 | cli | **done** | --schema-version has no schema behind it |
 | [T-118](cli-surface.md) | P2 | cli | open | The short-flag table is not checked in CI |
-| [T-120](licensing.md) | P1 | licensing | open | THIRD_PARTY.md is not generated |
-| [T-121](licensing.md) | P1 | licensing | open | No cargo-deny configuration |
+| [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
+| [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | open | reference/ is not deleted at the end of Phase B |
 | [T-130](multi-source.md) | P1 | webseed | **done** | A source cannot be told which statuses are worth retrying |
 | [T-131](multi-source.md) | P1 | bench | **done** | The loopback file server cannot simulate a signed URL |
@@ -180,7 +180,7 @@ under `-j 1` and not above it.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 2 | 1 | 0 | 8 |
-| P1 | 9 | 1 | 0 | 28 |
+| P1 | 7 | 1 | 0 | 30 |
 | P2 | 23 | 1 | 1 | 8 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |

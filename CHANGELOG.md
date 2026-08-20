@@ -390,6 +390,9 @@ it, so the history starts here.
 - `create` output is byte-identical on repeat runs and independent of input
   order, with paths `/`-separated and sorted by raw bytes so no locale can
   affect it.
+  A constant in the test suite pins the bytes, so every platform CI runs on
+  compares against one number rather than against each other, and `ci.yml`
+  builds the same fixture on Linux and Windows and compares the two hashes.
 - `create`, `verify`, and `seed` round trip through two other implementations.
   `scripts/interop-roundtrip.ps1` seeds a four-file 490,012 byte payload on
   loopback and downloads it with `aria2c` 1.37.0 and with `rqbit` 9.0.0, byte
@@ -397,6 +400,12 @@ it, so the history starts here.
   peer at all. `rqbit` skips the third, which it cannot do: it has no BEP 19.
   CI runs the `aria2c` matrix on Linux and Windows. The record is in
   `TODO/create-seed.md` under T-084.
+- `THIRD_PARTY.md` is generated from `Cargo.lock` by `cargo about` and covers
+  310 crates, including the Apache-2.0 text `librqbit` requires. `deny.toml`
+  allows permissive licences only, and CI fails on anything else, both through
+  `cargo deny` and because generation itself refuses an unaccepted licence.
+  `scripts/check-licence-gate.ps1` proves the gate rejects a GPL dependency
+  rather than assuming it would.
 - `edit` splices the original `info` bytes back verbatim and re-hashes before
   returning, so it cannot change the info hash even for a torrent whose
   original encoding was not canonical.

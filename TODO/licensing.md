@@ -157,7 +157,7 @@ Source:      PROMPT.md A6
 Category:    licensing
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     No `THIRD_PARTY.md` exists, so no binary distribution can carry
              the Apache-2.0 text `librqbit` requires.
@@ -171,13 +171,50 @@ Acceptance:  `THIRD_PARTY.md` exists, carries the full Apache-2.0 text for
              `librqbit`, and CI fails when a dependency's licence is not on the
              accept list.
 
+**Done.** `THIRD_PARTY.md` is generated from `Cargo.lock` by `cargo about`
+against `about.toml` and `about.hbs`, covers **310 crates**, and carries the
+Apache-2.0 text attributed to `librqbit 9.0.0` along with every other licence
+that ships. It opens by naming the two dependencies that need saying out loud:
+`librqbit`, Apache-2.0 only rather than dual licensed, and `intermodal`, CC0
+and credited anyway.
+
+```bash
+cargo about generate --config about.toml --output-file THIRD_PARTY.md about.hbs
+```
+
+The `notices` job in `ci.yml` runs that on every push and does two things with
+it. Generation itself is the gate: `cargo about` refuses a licence that is not
+in `about.toml`'s `accepted` list, which is the same list `deny.toml` allows.
+And the crates the regenerated file covers are compared against the committed
+one, so a dependency added without regenerating fails there.
+
+**The comparison is the set of crates, not the bytes, and that is deliberate.**
+Regenerating here today produces a file 835 lines longer than the committed
+one, with `librqbit`'s Apache-2.0 text repeated in four blocks instead of
+grouped into one. The crate sets are identical, all 310 of them, so nothing is
+missing and nothing is extra: what changed is how `cargo about` groups
+identical texts. A byte-exact check would fail on a `cargo about` release and
+make the notice file something that has to be regenerated to make CI green,
+which is how a notice file stops being read.
+
+**One thing found while establishing that**, worth knowing before anyone
+regenerates and sees a diff. `librqbit` ships no licence file at its crate
+root, so `cargo about` falls back to scanning the crate directory, and that
+directory holds a `webui/` tree. `librqbit`'s build script runs `npm install`
+in it under the `webui` feature, which `bit-cli` does not enable but something
+else on a shared machine may have: this one has **147 licence files under
+`webui/node_modules`** for the scan to find. Moving them aside changes nothing
+about the drift above, so they are not its cause, but they are exactly the
+kind of thing that makes a local regeneration disagree with a clean one. The
+`notices` job builds nothing before it generates for that reason.
+
 ### T-121 No cargo-deny configuration
 
 Source:      PROMPT.md A6, A7
 Category:    licensing
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `cargo deny check` is required in CI for licences, advisories,
              bans, and sources. There is no `deny.toml`.
@@ -189,3 +226,40 @@ Approach:    Allow MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Unicode,
              AGPL variant. Every exception carries a comment saying why.
 Acceptance:  `cargo deny check` passes, and adding a GPL dependency makes it
              fail.
+
+**Done, and both halves of the acceptance are now a command rather than an
+assertion.** `deny.toml` allows fourteen permissive licences and denies
+everything else. Two of them carry their reason inline:
+`CDLA-Permissive-2.0`, which covers the Mozilla CA bundle and is a data
+licence rather than a code one, and `Apache-2.0`, whose obligation is on the
+binary distribution and is met by `THIRD_PARTY.md`.
+
+```
+$ cargo deny check
+advisories ok, bans ok, licenses ok, sources ok
+```
+
+The second half is the one that needed building. A configuration that passes
+says the tree is clean today; it does not say the gate would catch a copyleft
+dependency arriving tomorrow. `scripts/check-licence-gate.ps1` proves it does:
+
+```
+$ pwsh -NoProfile -File scripts/check-licence-gate.ps1
+checking this repository against its own deny.toml
+  passes
+checking a tree with one GPL-3.0-or-later dependency
+  rejected: license is not explicitly allowed
+
+verdict: the tree is clean and a GPL dependency is refused
+```
+
+The probe is a throwaway crate depending on a local crate whose manifest
+declares `GPL-3.0-or-later` and whose `lib.rs` is empty, checked against this
+repository's own `deny.toml`. Nothing is downloaded and no network is touched:
+a licence is a string in a manifest, and that string is what `cargo deny`
+reads. The check requires the failure to name the licence, so a gate that
+failed for some other reason does not pass for the right one by accident.
+
+The `deny` job in `ci.yml` runs `cargo deny check licenses advisories bans
+sources` through `EmbarkStudios/cargo-deny-action` on every push.
+

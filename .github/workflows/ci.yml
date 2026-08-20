@@ -109,6 +109,45 @@ jobs:
         shell: pwsh
         run: ./scripts/check-static.ps1 -Path "target/${{ matrix.target }}/release/bit-cli.exe"
 
+  notices:
+    name: Third party notices
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2.9.2
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked
+      # Two things at once. `cargo about generate` fails outright when a
+      # dependency's licence is not on about.toml's accept list, which is the
+      # gate: a copyleft dependency stops the build rather than appearing
+      # quietly in a generated file. And the crates it covers are compared
+      # against the committed notice file, so a dependency added without
+      # regenerating fails here.
+      #
+      # The comparison is the set of crates rather than the bytes. Which
+      # licence texts `cargo about` groups together and which it repeats
+      # changes between its own versions, and a notice file that has to be
+      # regenerated on every cargo-about release is a notice file nobody
+      # regenerates. What matters legally is that every crate that ships is
+      # covered, and that is what this compares.
+      #
+      # Nothing is built first, deliberately. `librqbit`'s build script runs
+      # `npm install` inside its own crate directory under the `webui`
+      # feature, and 147 licence files under `webui/node_modules` are 147
+      # things for a directory scan to find.
+      - name: Regenerate and compare what is covered
+        run: |
+          cargo about generate --config about.toml --output-file generated.md about.hbs
+          covered() {
+            grep '^Used by ' "$1" | sed 's/^Used by //' | tr ',' '\n' \
+              | tr -d '`' | sed 's/^ *//; s/ *$//' | sort -u
+          }
+          diff <(covered THIRD_PARTY.md) <(covered generated.md)
+          echo "$(covered THIRD_PARTY.md | wc -l) crates covered"
+
   deny:
     name: Licences and advisories
     runs-on: ubuntu-latest
