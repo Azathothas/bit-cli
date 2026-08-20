@@ -40,12 +40,13 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 | ID | Priority | Category | Status | Item |
 | --- | --- | --- | --- | --- |
-| [T-001](webseed.md) | P0 | webseed | open | Measure the loopback bridge against a raw curl ceiling |
+| [T-001](webseed.md) | P0 | webseed | **done** | Measure the loopback bridge against a raw curl ceiling |
 | [T-002](webseed.md) | P1 | webseed | open | Measure Candidate A-prime, the in-process virtual peer |
 | [T-003](webseed.md) | P1 | webseed | open | The piece picker cannot be told to prefer HTTP |
 | [T-004](webseed.md) | P2 | webseed | open | BEP 17 style is not auto-detected, only declared |
 | [T-005](webseed.md) | P3 | webseed | open | A source restricted mid-run cannot be re-scoped |
-| [T-006](webseed.md) | P1 | webseed | open | Prove the failure matrix against a real mirror |
+| [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
+| [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
 | [T-010](disk-io.md) | P1 | disk-io | open | pwrite takes a read lock where it needs a write lock |
 | [T-011](disk-io.md) | P1 | disk-io | open | No file handle pool, so long runs exhaust descriptors |
 | [T-012](disk-io.md) | P2 | disk-io | open | Preallocation is not implemented |
@@ -123,13 +124,14 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-80 items: 70 to work through, and 10 deferred to Phase C.
+81 items: 71 to work through, and 10 deferred to Phase C. T-007 was added
+by the T-001 measurement: a stalling source takes 24 seconds to give up.
 
 | Priority | Open | Partial | Done |
 | --- | --- | --- | --- |
-| P0 | 5 | 1 | 4 |
-| P1 | 23 | 1 | 3 |
-| P2 | 22 | 1 | 1 |
+| P0 | 4 | 1 | 5 |
+| P1 | 22 | 1 | 4 |
+| P2 | 23 | 1 | 1 |
 | P3 | 9 | 0 | 0 |
 | Phase C | 10 deferred | | |
 
@@ -156,8 +158,16 @@ The P0 list, in the order that unblocks the most:
    counts by class and by HTTP status. `--fail-under` exits 14 and `--baseline`
    prints a delta per metric. `leech`, `seed`, `probe`, and `swarm` are still
    unbuilt and say so.
-4. [T-001](webseed.md), the web seed benchmark. Every architectural decision
-   about the fetch path waits on this number.
+4. [T-001](webseed.md) is **done**, and so is [T-006](webseed.md). The loopback
+   bridge reaches **6.41% of a `curl` ceiling** on loopback, which is
+   1.38 Gbit/s: enough to saturate a gigabit link with 38% to spare, and not
+   enough for ten gigabit. `scripts/bench-webseed.ps1` takes the number in four
+   stages so the cost is attributed rather than asserted. The failure matrix
+   ran against all 468 web seeds in the Arch Linux ISO torrent, and two defects
+   that had made `webseed test` unusable against any HTTPS mirror were found
+   and fixed there.
 5. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md), and
    [T-040](memory.md), the four long-run failures. Likely fewer than four
-   distinct defects. Measure before theorising.
+   distinct defects. Measure before theorising. [T-042](memory.md) built the
+   sampler they need, and `download` and `seed` now report their own peak RSS,
+   CPU time, and handle count.

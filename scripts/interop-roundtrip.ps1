@@ -80,7 +80,7 @@ $fileserver = Join-Path $repo "target/$Profile/examples/loopback-fileserver$exe"
 
 foreach ($required in @($bitCli, $tracker, $fileserver)) {
     if (-not (Test-Path $required)) {
-        Exit-With 2 "missing $required. Build it first: cargo build --workspace --examples"
+        Exit-With 2 "missing $required. Build it first: cargo build --workspace --bins --examples"
     }
 }
 

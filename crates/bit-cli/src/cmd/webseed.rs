@@ -583,22 +583,69 @@ pub fn test(
     }
 
     let head = args.head;
+    let concurrency = args.concurrency.max(1);
+    let deadline = crate::swarm::optional_duration(&global.timeout, "timeout")?;
     let runtime = runtime()?;
+    let info_hash = meta.info_hash().hex();
+    // Sources are probed in parallel. Each probe is one request to a different
+    // host, so they do not contend, and a real torrent carries enough of them
+    // that doing this one at a time takes minutes: the Arch Linux ISO torrent
+    // carries 468 web seeds.
     let results = runtime.block_on(async {
-        let mut out = Vec::with_capacity(set.bindings.len());
-        for binding in &set.bindings {
-            out.push(
-                bit_cli_core::webseed::probe::test_source(
-                    binding,
-                    &layout,
-                    &meta.info_hash().hex(),
-                    head,
-                )
-                .await,
-            );
+        let probe_all = async {
+            let mut out: Vec<Option<bit_cli_core::webseed::probe::SourceTest>> =
+                vec![None; set.bindings.len()];
+            let mut workers = tokio::task::JoinSet::new();
+            let mut next = 0usize;
+            loop {
+                while workers.len() < concurrency && next < set.bindings.len() {
+                    let index = next;
+                    next += 1;
+                    let binding = set.bindings[index].clone();
+                    let layout = layout.clone();
+                    let info_hash = info_hash.clone();
+                    workers.spawn(async move {
+                        (
+                            index,
+                            bit_cli_core::webseed::probe::test_source(
+                                &binding, &layout, &info_hash, head,
+                            )
+                            .await,
+                        )
+                    });
+                }
+                match workers.join_next().await {
+                    Some(Ok((index, result))) => out[index] = Some(result),
+                    Some(Err(_)) => {}
+                    None => break,
+                }
+            }
+            out
+        };
+        match deadline {
+            // `--timeout` bounds the whole command, not each probe. A source
+            // that has not answered by then is reported as unfinished rather
+            // than dropped, because a caller counting mirrors needs the count
+            // to add up.
+            Some(limit) => tokio::time::timeout(limit, probe_all)
+                .await
+                .unwrap_or_else(|_| vec![None; set.bindings.len()]),
+            None => probe_all.await,
         }
-        out
     });
+
+    let results: Vec<bit_cli_core::webseed::probe::SourceTest> = results
+        .into_iter()
+        .enumerate()
+        .map(|(index, result)| {
+            result.unwrap_or_else(|| {
+                bit_cli_core::webseed::probe::SourceTest::unfinished(
+                    &set.bindings[index],
+                    "the run reached --timeout before this source answered",
+                )
+            })
+        })
+        .collect();
 
     let report = TestReport {
         info_hash: meta.info_hash().hex(),
@@ -863,7 +910,7 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{TorrentFixture, run_err, run_json, run_ok};
+    use crate::test_support::{TorrentFixture, run_err, run_json, run_json_code, run_ok};
     use bit_cli_core::ExitCode;
 
     #[test]
@@ -1136,5 +1183,50 @@ mod tests {
             ExitCode::Usage,
         );
         assert!(err.contains("not one of the declared sources"), "{err}");
+    }
+
+    /// `--timeout` bounds the whole command, and every declared source is
+    /// still reported when it fires.
+    ///
+    /// A caller counting its mirrors needs the count to add up: a source whose
+    /// probe was cut short has to appear as unusable, not vanish. The URLs
+    /// here point at a port nothing answers on, so the deadline is what ends
+    /// the run.
+    #[test]
+    fn a_timeout_ends_the_command_and_every_source_is_still_reported() {
+        let fixture = TorrentFixture::multi_file();
+        let report = run_json_code(
+            &[
+                "webseed",
+                "test",
+                fixture.path_str(),
+                "--no-torrent-web-seed",
+                "--web-seed",
+                "http://127.0.0.1:1/",
+                "--web-seed",
+                "http://127.0.0.1:2/",
+                "--web-seed",
+                "http://127.0.0.1:3/",
+                "--concurrency",
+                "8",
+                "--timeout",
+                "1s",
+            ],
+            fixture.dir(),
+            ExitCode::NoUsableSources,
+        );
+        assert_eq!(report["source_count"], 3);
+        assert_eq!(report["usable"], 0);
+        assert_eq!(report["unusable"], 3);
+        let sources = report["sources"].as_array().unwrap();
+        assert_eq!(sources.len(), 3, "no source is dropped by the deadline");
+        for (index, source) in sources.iter().enumerate() {
+            assert_eq!(source["ok"], false);
+            assert!(source["error"].is_string(), "{source}");
+            assert_eq!(
+                source["index"], index,
+                "the report keeps the order the sources were declared in"
+            );
+        }
     }
 }

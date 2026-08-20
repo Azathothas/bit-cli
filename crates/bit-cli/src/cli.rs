@@ -489,6 +489,10 @@ pub struct DownloadArgs {
     #[command(flatten)]
     pub selection: SelectionArgs,
 
+    /// Listen port, or a range as START-END. `0` asks the OS for a free one.
+    #[arg(long, value_name = "PORT")]
+    pub port: Vec<String>,
+
     /// Sources fetched in parallel within this one invocation.
     #[arg(short = 'j', long, value_name = "N", default_value_t = 1)]
     pub max_concurrent_downloads: usize,
@@ -528,6 +532,7 @@ impl DownloadArgs {
             trackers: TrackerArgs::default(),
             limits: LimitArgs::default(),
             selection: SelectionArgs::default(),
+            port: Vec::new(),
             max_concurrent_downloads: 1,
             check_integrity: false,
             hash_check_only: false,
@@ -715,6 +720,10 @@ pub struct PeersArgs {
     /// Sort key, as KEY or KEY:ORDER. Keys: addr, client, speed, pieces.
     #[arg(long, value_name = "KEY", default_value = "addr")]
     pub sort: String,
+
+    /// Listen port, or a range as START-END. `0` asks the OS for a free one.
+    #[arg(long, value_name = "PORT")]
+    pub port: Vec<String>,
 }
 
 /// `bit-cli trackers`.
@@ -766,6 +775,14 @@ pub struct WebseedTestArgs {
     /// Use HEAD rather than a one-byte ranged GET.
     #[arg(long)]
     pub head: bool,
+
+    /// Sources probed at once.
+    ///
+    /// A real torrent can carry hundreds of web seeds: the Arch Linux ISO
+    /// carries 468. Probing them one at a time takes minutes, and every probe
+    /// is one request to a different host, so they do not contend.
+    #[arg(long, value_name = "N", default_value_t = 16)]
+    pub concurrency: usize,
 }
 
 /// `bit-cli webseed probe`.

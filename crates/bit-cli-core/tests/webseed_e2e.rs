@@ -1316,3 +1316,67 @@ async fn bench_webseed_keeps_a_broken_mirror_apart_from_a_healthy_one() {
         "the failing mirror is visible rather than averaged away"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn many_sources_are_probed_in_parallel_and_every_one_is_reported() {
+    // A real torrent carries hundreds of web seeds: the Arch Linux ISO torrent
+    // carries 468. Probing them one at a time takes minutes, so they are
+    // probed in parallel. What has to hold is that every declared source comes
+    // back, in the order it was declared, with its own result.
+    let src = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(src.path().join("movie.bin"), content(64 * 1024, 91)).unwrap();
+    let torrent_path = tmp.path().join("fixture.torrent");
+    make_torrent(&src.path().join("movie.bin"), &torrent_path).await;
+    let meta = bit_cli_core::torrent::Metainfo::read(&torrent_path).unwrap();
+    let layout = meta.layout();
+    let info_hash = meta.info_hash().hex();
+
+    // Half the sources answer and half return 404, so the results cannot be
+    // told apart by anything except which source produced them.
+    let (good, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let (bad, _) = serve(src.path().to_path_buf(), ServeMode::NotFound).await;
+    let specs: Vec<SourceSpec> = (0..32)
+        .map(|index| match index % 2 {
+            0 => whole(&good),
+            _ => whole(&bad),
+        })
+        .collect();
+    let set = BindingSet::resolve(&layout, &info_hash, &specs).unwrap();
+
+    let mut workers = tokio::task::JoinSet::new();
+    for (index, binding) in set.bindings.iter().enumerate() {
+        let binding = binding.clone();
+        let layout = layout.clone();
+        let info_hash = info_hash.clone();
+        workers.spawn(async move {
+            (
+                index,
+                bit_cli_core::webseed::probe::test_source(&binding, &layout, &info_hash, false)
+                    .await,
+            )
+        });
+    }
+    let mut results: Vec<Option<bit_cli_core::webseed::probe::SourceTest>> = vec![None; 32];
+    while let Some(Ok((index, result))) = workers.join_next().await {
+        results[index] = Some(result);
+    }
+
+    for (index, result) in results.iter().enumerate() {
+        let result = result.as_ref().unwrap_or_else(|| panic!("source {index}"));
+        assert_eq!(
+            result.index, index,
+            "a result landed under the wrong source"
+        );
+        match index % 2 {
+            0 => {
+                assert!(result.ok, "source {index} should be usable: {result:?}");
+                assert_eq!(result.status, Some(206));
+            }
+            _ => {
+                assert!(!result.ok, "source {index} should be unusable");
+                assert_eq!(result.status, Some(404));
+            }
+        }
+    }
+}

@@ -145,7 +145,7 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2.9.2
-      - run: cargo build --workspace --examples --locked
+      - run: cargo build --workspace --bins --examples --locked
       # Everything binds 127.0.0.1: the tracker, the web seed, the seeder, and
       # aria2c. The job never reaches the network.
       - name: Round trip against aria2c

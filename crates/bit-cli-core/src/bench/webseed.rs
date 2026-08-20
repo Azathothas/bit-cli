@@ -502,12 +502,22 @@ fn pacing(recorder: &Recorder, target_bytes_per_sec: u64) -> Option<Duration> {
 /// This is a connection of its own that carries no request and is closed
 /// immediately. It is the only way to separate "the server took a long time to
 /// answer" from "the server took a long time to accept".
+/// The deadline on one connection probe.
+///
+/// A probe that outlives the metrics interval would stack up behind itself and
+/// the samples would drift, so it gives up well inside one. A connection that
+/// takes longer than this is recorded as no sample rather than as a slow one,
+/// because the point of the measurement is the healthy case.
+const CONNECT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 async fn connect_cost(url: &str) -> Option<Duration> {
     let parsed = url::Url::parse(url).ok()?;
     let host = parsed.host_str()?.to_string();
     match parsed.scheme() {
         "https" => {
-            let report = crate::webseed::probe::tls_report(url).await.ok()?;
+            let report = crate::webseed::probe::tls_report_within(url, CONNECT_PROBE_TIMEOUT)
+                .await
+                .ok()?;
             Some(Duration::from_millis(
                 report.connect_ms + report.handshake_ms,
             ))
@@ -515,9 +525,13 @@ async fn connect_cost(url: &str) -> Option<Duration> {
         "http" => {
             let port = parsed.port_or_known_default().unwrap_or(80);
             let began = Instant::now();
-            let stream = tokio::net::TcpStream::connect((host.as_str(), port))
-                .await
-                .ok()?;
+            let stream = tokio::time::timeout(
+                CONNECT_PROBE_TIMEOUT,
+                tokio::net::TcpStream::connect((host.as_str(), port)),
+            )
+            .await
+            .ok()?
+            .ok()?;
             let elapsed = began.elapsed();
             drop(stream);
             Some(elapsed)

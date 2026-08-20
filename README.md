@@ -142,6 +142,7 @@ bit-cli create <PATH>           Create a .torrent
 bit-cli edit <TORRENT>          Rewrite metainfo fields, writing a new file
 bit-cli magnet <SOURCE>         Convert a torrent to a magnet URI
 bit-cli seed <SOURCE>           Seed existing data in the foreground
+bit-cli bench <SUBCOMMAND>      webseed. Measure a target and write a report
 bit-cli config show             Print the resolved configuration with the origin of every value
 bit-cli completions <SHELL>     bash | zsh | fish | powershell | elvish | nushell
 bit-cli man                     Generate a man page
@@ -456,7 +457,7 @@ A torrent only `bit-cli` can read is not a torrent. `create`, `verify`, and
 `seed` are checked against two other implementations, `aria2c` and `rqbit`:
 
 ```bash
-cargo build --workspace --examples
+cargo build --workspace --bins --examples
 ```
 
 ```bash

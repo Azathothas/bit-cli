@@ -123,7 +123,7 @@ pub fn run(
         trackers: &trackers,
         limits: &limits,
         web_seeds: &web_seeds,
-        listen_ports: 6881..=6889,
+        listen_ports: swarm::port_range(&args.port)?,
         no_dht: false,
         no_lsd: false,
     };

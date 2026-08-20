@@ -75,6 +75,12 @@ pub struct DownloadReport {
     pub elapsed_human: String,
     pub completed: usize,
     pub failed: usize,
+    /// What this run cost: peak RSS, CPU time, and open handles.
+    ///
+    /// Measuring a download from outside means sampling a process that has
+    /// already exited, which reports zero. The process is the only thing that
+    /// can report its own high-water mark, so it does.
+    pub process: bit_cli_core::sysinfo::Process,
 }
 
 /// A message from a worker to the one thread that owns the output streams.
@@ -108,7 +114,7 @@ pub fn run(
         trackers: &args.trackers,
         limits: &args.limits,
         web_seeds: &args.web_seeds,
-        listen_ports: 6881..=6889,
+        listen_ports: swarm::port_range(&args.port)?,
         no_dht: false,
         no_lsd: false,
     };
@@ -246,6 +252,7 @@ pub fn run(
         elapsed_ms: elapsed.as_millis().min(u128::from(u64::MAX)) as u64,
         elapsed_human: bit_cli_core::units::format_duration(elapsed),
         torrents: reports,
+        process: bit_cli_core::sysinfo::Process::sample(),
     };
 
     // The worst outcome decides the exit code, so a run with one failed
@@ -960,6 +967,7 @@ fn lines(report: &DownloadReport) -> Vec<String> {
         out.push(field("downloaded", format_size(report.downloaded.0)));
         out.push(field("elapsed", &report.elapsed_human));
     }
+    out.push(field("cost", report.process.summary()));
     while out.last().is_some_and(String::is_empty) {
         out.pop();
     }
@@ -993,6 +1001,10 @@ mod tests {
                 "--web-seed",
                 "http://127.0.0.1:9/",
                 "--no-tracker",
+                // An OS-chosen port, so two tests running at once cannot
+                // race for the same one.
+                "--port",
+                "0",
                 "--stop-after",
                 "2s",
             ],
@@ -1064,6 +1076,10 @@ mod tests {
                 "--web-seed",
                 "http://127.0.0.1:9/",
                 "--no-tracker",
+                // An OS-chosen port, so two tests running at once cannot
+                // race for the same one.
+                "--port",
+                "0",
                 "--stop-after",
                 "2s",
             ],
@@ -1071,6 +1087,53 @@ mod tests {
             ExitCode::Timeout,
         );
         assert!(report["torrents"][0].get("renamed").is_none());
+    }
+
+    /// A download reports what it cost.
+    ///
+    /// Measuring a process from outside means sampling one that has already
+    /// exited, which reports zero, so the process is the only thing that can
+    /// report its own high-water mark. `scripts/bench-webseed.ps1` reads these
+    /// three fields.
+    #[test]
+    fn a_download_reports_its_own_peak_rss_cpu_and_handles() {
+        let fixture = TorrentFixture::multi_file();
+        let out = fixture.dir().join("out");
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                "http://127.0.0.1:9/",
+                "--no-tracker",
+                // An OS-chosen port, so two tests running at once cannot
+                // race for the same one.
+                "--port",
+                "0",
+                "--stop-after",
+                "1s",
+            ],
+            fixture.dir(),
+            ExitCode::Timeout,
+        );
+        let process = &report["process"];
+        assert!(
+            process["peak_rss_bytes"].as_u64().unwrap() > 1024 * 1024,
+            "peak RSS of {} is not a running process",
+            process["peak_rss_bytes"]
+        );
+        assert!(process["open_handles"].as_u64().unwrap() > 0);
+        assert_eq!(
+            process["cpu_ms"].as_u64().unwrap(),
+            process["cpu_user_ms"].as_u64().unwrap() + process["cpu_system_ms"].as_u64().unwrap()
+        );
+        assert!(
+            process.get("unavailable").is_none(),
+            "some field could not be read: {process}"
+        );
     }
 
     fn walk(root: &std::path::Path) -> Vec<String> {

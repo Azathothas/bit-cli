@@ -47,6 +47,12 @@ pub struct SeedReport {
     pub listen_addr: Option<String>,
     pub trackers: Vec<String>,
     pub peers: Vec<PeerSnapshot>,
+    /// What this run cost: peak RSS, CPU time, and open handles.
+    ///
+    /// A seeder is the long-lived process, so its own high-water marks are
+    /// what a soak test reads. Sampling from outside means sampling a process
+    /// that has already exited, which reports zero.
+    pub process: bit_cli_core::sysinfo::Process,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -303,6 +309,7 @@ fn build(
         listen_addr,
         trackers,
         peers,
+        process: bit_cli_core::sysinfo::Process::sample(),
         error: snapshot.error.clone(),
     }
 }
@@ -328,6 +335,7 @@ fn lines(report: &SeedReport) -> Vec<String> {
         field("peers seen", report.peers_seen),
         field("peers served", report.peers_served),
         field("data", &report.data_directory),
+        field("cost", report.process.summary()),
     ];
     if let Some(addr) = &report.listen_addr {
         out.push(field("listening on", addr));
@@ -468,5 +476,24 @@ mod tests {
         assert!(text.contains("udp://t.example:451"), "{text}");
         assert!(text.contains("203.0.113.5:6881"), "{text}");
         assert!(text.contains("0.0.0.0:6881"), "{text}");
+        assert!(text.contains("peak RSS"), "the cost is not display-only");
+    }
+
+    /// A seeder is the long-lived process, so its own high-water marks are
+    /// what a soak test reads. See `TODO/memory.md`, T-040.
+    #[test]
+    fn a_seed_report_carries_what_the_process_cost() {
+        let report = build(
+            &snapshot(0),
+            Stopped::Deadline,
+            Duration::from_secs(1),
+            std::path::Path::new("/data"),
+            None,
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(report.process.peak_rss_bytes > 1024 * 1024);
+        assert!(report.process.open_handles > 0);
+        assert!(report.process.unavailable.is_empty());
     }
 }

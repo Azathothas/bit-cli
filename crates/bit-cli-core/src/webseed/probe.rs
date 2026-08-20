@@ -132,6 +132,21 @@ pub struct SourceTest {
 }
 
 impl SourceTest {
+    /// A source that was never reached, because the command ran out of time
+    /// before its turn came.
+    ///
+    /// Reporting it rather than dropping it is what keeps the source count in
+    /// the report equal to the number of sources the torrent declares.
+    pub fn unfinished(binding: &Binding, reason: &str) -> Self {
+        Self::failed(
+            binding,
+            binding.spec.url.clone(),
+            "GET",
+            Duration::ZERO,
+            reason.to_string(),
+        )
+    }
+
     fn failed(
         binding: &Binding,
         request_url: String,
@@ -340,8 +355,14 @@ pub async fn test_source(
         _ => RangeSupport::Unknown,
     };
 
+    // The TLS probe gets the source's own connect timeout rather than the
+    // default, because a caller who said "give up on this mirror after 2s"
+    // meant it for every connection the probe opens, not only the one
+    // `reqwest` makes.
     let tls = match current.to_ascii_lowercase().starts_with("https://") {
-        true => tls_report(&current).await.ok(),
+        true => tls_report_within(&current, binding.spec.limits.connect_timeout())
+            .await
+            .ok(),
         false => None,
     };
 
@@ -677,6 +698,24 @@ fn headers(binding: &Binding) -> reqwest::header::HeaderMap {
     headers
 }
 
+/// Make sure `rustls` has a cryptography provider before a config is built.
+///
+/// `rustls` 0.23 refuses to pick one on its own and panics when a
+/// `ClientConfig` is built without one. `reqwest` installs one for the
+/// connections it makes, but the TLS probe opens its own connection through
+/// `tokio-rustls` and gets nothing from `reqwest`, so every HTTPS source
+/// panicked here rather than reporting its cipher suite. Installing it once
+/// per process, from any entry point that needs it, is what fixes that.
+///
+/// A second call returns `Err` because something already installed one, which
+/// is the outcome this wants either way.
+pub fn install_crypto_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 /// Resolve a `Location` header against the URL it came from.
 pub fn resolve_redirect(from: &str, location: &str) -> Result<String> {
     let base =
@@ -695,9 +734,40 @@ pub fn resolve_redirect(from: &str, location: &str) -> Result<String> {
 /// slow. So the probe opens one connection of its own to find out and closes
 /// it immediately. It carries no request and no payload.
 pub async fn tls_report(url: &str) -> Result<TlsReport> {
+    tls_report_within(url, DEFAULT_TLS_PROBE_TIMEOUT).await
+}
+
+/// How long a TLS probe waits before giving up.
+///
+/// A probe is a diagnostic, not a transfer. Ten seconds is longer than any
+/// reachable server takes to complete a handshake and short enough that a
+/// mirror that accepts a connection and then says nothing does not hold the
+/// command open forever.
+pub const DEFAULT_TLS_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// [`tls_report`] with an explicit deadline covering the whole exchange.
+///
+/// The deadline covers connect and handshake together rather than each
+/// separately, because the failure being defended against is a server that
+/// accepts the connection and then never finishes the handshake. Timing them
+/// apart would let that case wait twice.
+pub async fn tls_report_within(url: &str, timeout: Duration) -> Result<TlsReport> {
+    tokio::time::timeout(timeout, tls_report_inner(url))
+        .await
+        .unwrap_or_else(|_| {
+            Err(Error::timeout(format!(
+                "{url}: no TLS handshake within {}ms",
+                timeout.as_millis()
+            )))
+        })
+}
+
+async fn tls_report_inner(url: &str) -> Result<TlsReport> {
     use rustls_pki_types::ServerName;
     use tokio::net::TcpStream;
     use tokio_rustls::TlsConnector;
+
+    install_crypto_provider();
 
     let parsed =
         url::Url::parse(url).map_err(|e| Error::network(format!("{url} is not a URL: {e}")))?;
@@ -923,5 +993,71 @@ mod tests {
         let step = Samples::default().into_step(1, Duration::ZERO, 1024);
         assert_eq!(step.throughput, 0);
         assert_eq!(step.requests, 0);
+    }
+
+    /// Building a `rustls` client config panics unless a cryptography provider
+    /// is installed for the process, and `rustls` refuses to pick one on its
+    /// own. Every HTTPS source went through this and panicked, and nothing
+    /// caught it because every test until now used loopback HTTP.
+    ///
+    /// This asserts the config builds, which is the exact call that panicked.
+    /// It needs no network.
+    #[test]
+    fn a_tls_config_builds_without_a_provider_being_installed_by_hand() {
+        install_crypto_provider();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        assert!(!config.alpn_protocols.iter().any(Vec::is_empty));
+    }
+
+    #[test]
+    fn installing_the_provider_twice_is_not_an_error() {
+        install_crypto_provider();
+        install_crypto_provider();
+        install_crypto_provider();
+    }
+
+    #[tokio::test]
+    async fn a_tls_probe_of_a_closed_port_reports_an_error_rather_than_panicking() {
+        // Port 1 on loopback has nothing listening, so this reaches the TLS
+        // setup and fails at the connection, which is what proves the setup
+        // itself did not panic.
+        let error = tls_report("https://127.0.0.1:1/").await.unwrap_err();
+        assert_eq!(error.code(), crate::exit::ExitCode::Network);
+    }
+
+    /// A server that accepts a connection and then says nothing must not hold
+    /// the command open. `webseed test` against a real mirror hung here with
+    /// no deadline at all before this.
+    #[tokio::test]
+    async fn a_tls_probe_gives_up_on_a_server_that_never_completes_a_handshake() {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Accept and then hold the connection without speaking TLS.
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+
+        let began = Instant::now();
+        let error = tls_report_within(
+            &format!("https://127.0.0.1:{port}/"),
+            Duration::from_millis(300),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), crate::exit::ExitCode::Timeout);
+        assert!(
+            began.elapsed() < Duration::from_secs(5),
+            "the probe waited {:?}, which is not a deadline",
+            began.elapsed()
+        );
     }
 }
