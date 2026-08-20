@@ -953,16 +953,37 @@ impl SafeStorage {
 
 /// The directory a torrent unpacks into, under the output directory.
 ///
-/// This follows the session's own rule so the two agree on where a torrent
-/// lands: a single-file torrent gets no directory of its own, and a multi-file
-/// one gets a directory named after the torrent, falling back to the stem of
-/// its largest file when the name is missing. The difference is that the name
-/// is planned like any other path first, because a torrent called `CON` is a
-/// torrent that cannot be written on Windows.
+/// A single-file torrent gets no directory of its own, and a multi-file one
+/// gets a directory named after the torrent, falling back to the stem of its
+/// largest file when the name is missing. The name is planned like any other
+/// path first, because a torrent called `CON` is a torrent that cannot be
+/// written on Windows.
+///
+/// **Multi-file means the metainfo carries a `files` list, not that the list
+/// has two or more entries.** BEP 3 makes `name` the file's name in the
+/// single-file case and the directory's name in the multiple-file case, and a
+/// `files` list holding one entry is still the multiple-file case. Counting
+/// entries instead drops the directory for such a torrent, so two of them
+/// whose one file has the same name land on the same path and both report
+/// success.
+///
+/// This is a deliberate divergence from the session. `librqbit` 9.0.0 counts
+/// entries, in `session.rs:1180-1186`:
+///
+/// ```text
+/// if files.len() < 2 {
+///     return Ok(None);
+/// }
+/// ```
+///
+/// The divergence is invisible outside this module, because `bit-cli` supplies
+/// its own storage and the session's own path calculation is not what decides where
+/// bytes go. `aria2c` 1.37.0 creates the directory for the same torrent, which
+/// is the external check. See `TODO/performance.md`, T-036.
 fn subfolder_for(metadata: &TorrentMetadata) -> Option<String> {
-    if metadata.file_infos.len() < 2 {
-        return None;
-    }
+    // `?` on the list is the test: absent means no `files` key at all, which
+    // is the single-file case and the only case with no directory.
+    metadata.info.info().files.as_ref()?;
     let name = metadata
         .info
         .name()

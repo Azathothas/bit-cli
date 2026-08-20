@@ -149,6 +149,13 @@ it, so the history starts here.
 - `bit-cli` supplies its own storage to do this. Reads and writes are addressed
   by file index and offset rather than by a cursor, so many pieces can be in
   flight against one file.
+- Whether a torrent unpacks into a directory of its own follows BEP 3: `name`
+  is the file's name when the metainfo carries no `files` list and the
+  directory's name when it does, however many entries that list holds. Deciding
+  it by counting files instead dropped the directory for a torrent whose
+  `files` list held one entry, so two such torrents in one invocation wrote the
+  same path and both reported success. `aria2c` 1.37.0 creates the directory
+  for the same torrent. See `TODO/performance.md` under T-036.
 
 ### Disk
 
@@ -171,6 +178,31 @@ it, so the history starts here.
 - Concurrent positioned writes to one file are safe against each other, which
   is why the handle lock is taken by the read half. A test drives eight threads
   at one file and checks every block for the byte its writer owned.
+- They are safe but they do not scale, and `bench disk` says why: on NTFS
+  writes to one file serialise whatever handle they arrive on, so more handles
+  buy nothing and only spreading the work over more files helps. The
+  serialisation is charged per operation rather than per byte, so the same
+  gigabyte in 1 MiB writes reaches 2.30 times what it reaches in 16 KiB writes
+  at eight writers. See `TODO/disk-io.md` under T-017.
+
+### Concurrency
+
+- `download` notices a torrent finishing when it finishes, rather than on the
+  next `--report-interval` tick. The watch loop woke only on the tick and
+  checked completion afterwards, so a run that finished 1.1 seconds in ended at
+  2.0, and `-j 1` with four torrents paid that four times. `--timeout` and
+  `--stop-after` had the same lag and now wake the loop themselves. Measured
+  against the same runs with only the tick: 1.42x for one torrent alone, 1.31x
+  at `-j 1`, 1.36x at `-j 2`, 1.18x at `-j 4`.
+- `-j` scales. Four torrents of 256 MiB at `-j 4` finish 3.54 times faster than
+  running them one invocation at a time, and 3.50 times faster than `-j 1` in
+  the same process, at 71.73% of what the HTTP source serves with no torrent
+  machinery at all. Putting the same total connection count on one torrent at a
+  time reaches 0.59 times that, so the flag buys concurrency rather than
+  connections. `scripts/check-multi-torrent.ps1` is the measurement and it
+  writes `bench/multi-torrent-<timestamp>.json`.
+- Concurrency costs about 22 MiB of peak RSS and twelve handles per torrent in
+  flight. CPU is flat for the same bytes.
 
 ### Contract
 

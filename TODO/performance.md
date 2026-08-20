@@ -11,7 +11,7 @@ Source:      https://github.com/ikatson/rqbit/issues/590 (open)
 Category:    performance
 Priority:    P0
 Effort:      L
-Status:      open
+Status:      **done**
 
 Problem:     Two reports in one: adding several torrents slows all of them well
              past what sharing a link explains, and a single large torrent
@@ -27,6 +27,119 @@ Approach:    Measure before theorising. Three runs with the same total payload:
 Acceptance:  A `bench/multi-torrent-<timestamp>.json` report with the three
              wall times, peak RSS, and CPU time, and this entry naming which
              resource saturated.
+
+**The first report was real and it was two defects, neither of them
+contention.** Both are fixed. `-j 4` now moves four torrents 3.54 times faster
+than running them one invocation at a time, at 72% of what the HTTP source
+serves with no torrent machinery at all. The second report, the intermittent
+stall, reproduced once and is [T-037](#t-037-a-run-stalls-for-minutes-roughly-once-in-fifty).
+
+`scripts/check-multi-torrent.ps1` is the measurement. Six modes rather than the
+three the acceptance asks for, because three cannot separate what the extra
+processes cost from what the shared session costs, and cannot say whether `-j`
+bought concurrency or bought connections:
+
+| Mode | What it runs |
+| --- | --- |
+| `one` | One torrent, one invocation. The per-torrent rate with nothing to share. |
+| `serial` | N torrents, N invocations, one after another. What a caller who avoided `-j` would pay, process startup included. |
+| `j1` | N torrents, one invocation, `-j 1`. Same session, one download at a time. |
+| `j2`, `j4` | N torrents, one invocation, at each step of the sweep. |
+| `control` | One torrent at a time with as many connections as the deepest sweep step has in total. |
+
+Every mode moves the same bytes off the same loopback server, and the run
+starts by measuring what that server serves through `bit-cli`'s own HTTP path
+with no bridge, no hashing, and no disk. Without that ceiling a rate says
+nothing: a mode that reaches it is describing the server.
+
+Acceptance, four torrents of 256 MiB, three iterations, medians,
+2026-08-20T08:07:01.379Z. Report: `bench/multi-torrent-20260820T080701379Z.json`.
+
+```
+$ pwsh -NoProfile -File scripts/check-multi-torrent.ps1 -Torrents 4 -PayloadSize 256MiB -Runs 3
+
+ceiling:  808.84 MiB/s through bit-cli's own HTTP path, no bridge, no hashing, no disk
+
+mode    wall  bytes      rate         of ceiling peak RSS   CPU ms handles
+one     1.46s 256.00 MiB 175.95 MiB/s 21.75%     43.61 MiB    2124     220
+serial  6.24s 1.00 GiB   164.02 MiB/s 20.28%     44.48 MiB    8605     228
+j1      6.18s 1.00 GiB   165.78 MiB/s 20.50%     48.49 MiB    8468     227
+j2      3.01s 1.00 GiB   340.20 MiB/s 42.06%     74.09 MiB    9061     242
+j4      1.76s 1.00 GiB   580.17 MiB/s 71.73%     114.24 MiB  10656     264
+control 2.97s 1.00 GiB   344.32 MiB/s 42.57%     107.59 MiB  15108     289
+```
+
+**Which resource saturated: none of `bit-cli`'s.** `-j 4` runs at 71.73% of
+what the file server itself serves. Attributing the remaining 28% needs a
+faster source than this machine can run beside the client, so the honest answer
+is that the measurement ran out of server before it ran out of `bit-cli`.
+
+**`-j` buys concurrency, not connections.** That is what `control` is for.
+`-j 4` gives four torrents four connections each, sixteen in flight. Putting
+those same sixteen on one torrent at a time reaches 344 MiB/s where `-j 4`
+reaches 580, so the flag is worth 1.69 times what the connections alone are
+worth.
+
+**Memory scales with the flag and nothing else does.** Peak RSS goes 48.49,
+74.09, 114.24 MiB across `-j 1`, `-j 2`, `-j 4`, which is about 22 MiB per
+concurrent torrent. Handles go 227, 242, 264, which is about twelve per
+concurrent torrent. CPU is flat at 8.5 to 10.7 seconds for the same gigabyte.
+Those are the numbers [T-040](memory.md) needs.
+
+## The two defects
+
+### One: completion was noticed on the next report tick
+
+`download`'s watch loop woke only on `--report-interval`, which defaults to one
+second, and completion was checked after the tick. So a torrent that finished
+1.1 seconds in was noticed at 2.0 seconds, and `-j 1` with four torrents paid
+that four times. `--timeout` and `--stop-after` had the same problem and would
+fire up to a second late.
+
+The loop now wakes on three things: the tick, the torrent completing, and the
+earliest deadline the caller set. `should_stop` still decides what any of them
+means, so a seeding run that keeps going after completion is unchanged.
+
+Measured on its own: the same script, the same fixture, the same machine, with
+the path fix below already in and the completion and deadline branches of the
+`select!` the only difference. Tick-only report:
+`bench/multi-torrent-20260820T081542263Z.json`.
+
+| Mode | Woken by the tick only | Also woken by completion | Gain |
+| --- | --- | --- | --- |
+| `one` | 2.08s | 1.46s | 1.42x |
+| `serial` | 8.28s | 6.24s | 1.33x |
+| `j1` | 8.12s | 6.18s | 1.31x |
+| `j2` | 4.08s | 3.01s | 1.36x |
+| `j4` | 2.07s | 1.76s | 1.18x |
+| `control` | 5.11s | 2.97s | 1.72x |
+
+The shape is what the explanation predicts. `-j 1` runs four batches and saves
+1.94 seconds, which is four times the half-second a uniformly distributed
+finish loses to a one-second tick. `-j 4` runs one batch and saves about one
+tick's worth. `one` is a single 1.46-second download that was taking 2.08
+seconds, which is the whole of the difference.
+
+### Two: a multi-file torrent with one file lost its directory
+
+This is the one that made "several torrents" look like contention, and it is a
+correctness bug rather than a slow one. It is written up as
+[T-036](#t-036-a-multi-file-torrent-with-one-file-lands-without-its-directory).
+In short: four torrents were writing to one file, so the run was paying the
+per-file write serialisation [T-017](disk-io.md) measured, and three of the
+four payloads were being destroyed while all four reported success.
+
+## What was checked and did not explain it
+
+- **Ephemeral ports.** Ten alternating `-j 4` and `-j 2` runs moved
+  `TimeWait` from 276 to 500 against a 16,384-port dynamic range, and
+  `CloseWait` stayed at zero throughout. Not the port table.
+- **The `-j` semaphore.** The permit is bound to a named local and held for the
+  whole download, so it is released when the worker ends and not before.
+- **The file server.** It is measured every run and reported as `ceiling`, so a
+  mode that approaches it is visible rather than being read as a `bit-cli`
+  limit.
+
 
 ### T-031 The rate limit did not apply to the session
 
@@ -171,3 +284,145 @@ cannot be tested at all.
 This is not [T-031](#t-031-the-rate-limit-did-not-apply-to-the-session), which
 is the session-wide `--max-download-rate` and `--max-overall-download-rate`.
 That one is still open.
+
+---
+
+### T-036 A multi-file torrent with one file lands without its directory
+
+Source:      the [T-030](#t-030-throughput-collapses-with-several-torrents-at-once) measurement
+Category:    paths
+Priority:    P0
+Effort:      S
+Status:      **done**
+
+Problem:     `SafeStorage` decided whether a torrent unpacks into a directory
+             of its own by counting files rather than by asking whether the
+             metainfo carries a `files` list. BEP 3 makes `name` the file's
+             name in the single-file case and the directory's name in the
+             multiple-file case, and a `files` list holding one entry is still
+             the multiple-file case. So a torrent named `album` whose one file
+             is `movie.bin` wrote `movie.bin` into the output directory instead
+             of `album/movie.bin`.
+Relevance:   P0 because it loses data silently. Two such torrents in one
+             `download` invocation whose one file has the same name write the
+             same path, and both report success: each hash-checks its own
+             pieces as it writes them, so each check passes at the moment it
+             runs and the bytes are gone afterwards. It is the same failure
+             [T-072](windows.md) fixed for names that collide only on NTFS,
+             reached by a different route.
+Acceptance:  A torrent with a one-entry `files` list unpacks into its own
+             directory, a torrent with no `files` list does not, and two of the
+             first kind carrying the same file name both land intact.
+
+The fix is one line in `storage::subfolder_for`: the multiple-file case is
+`metadata.info.info().files.is_some()`, not `file_infos.len() >= 2`. Everything
+else about the function is unchanged, and for a torrent with two or more files
+the behaviour is identical, because such a torrent always has the list.
+
+`bit-cli info` already reported this correctly, which is what made the
+discrepancy findable: the same torrent reads `"multi_file": true,
+"file_count": 1`.
+
+`aria2c` 1.37.0 is the external check. Given the same torrent it creates the
+directory:
+
+```
+$ aria2c --dir=out payload0.torrent
+$ find out -type f
+out/payload0/movie.bin
+```
+
+Before the fix, `bit-cli download` on four such torrents in one invocation:
+
+```
+$ find out -type f
+out/movie.bin
+```
+
+One file, 128 MiB, for four torrents of 128 MiB each, and the run reported
+`"completed": 4, "failed": 0`. After:
+
+```
+$ find out -type f
+out/payload0/movie.bin
+out/payload1/movie.bin
+out/payload2/movie.bin
+out/payload3/movie.bin
+```
+
+and every one hashes equal to its source.
+
+Three tests in `crates/bit-cli-core/tests/hostile_paths.rs` hold it, and the
+first two are a pair because either half alone would pass with the rule
+inverted:
+
+```
+$ cargo test -p bit-cli-core --test hostile_paths
+test a_one_file_multi_file_torrent_still_gets_its_directory ... ok
+test a_single_file_torrent_gets_no_directory_of_its_own ... ok
+test two_one_file_torrents_with_the_same_file_name_do_not_collide ... ok
+test result: ok. 11 passed; 0 failed
+```
+
+The third drives the failure end to end: one session, one output directory, two
+torrents whose single file is `movie.bin` in both, and both files present
+afterwards.
+
+`scripts/interop-roundtrip.ps1` passes against `aria2c` 1.37.0 and `rqbit`
+9.0.0 after the change, which is what says the layout still matches what other
+clients produce.
+
+---
+
+### T-037 A run stalls for minutes, roughly once in fifty
+
+Source:      the [T-030](#t-030-throughput-collapses-with-several-torrents-at-once) measurement
+Category:    performance
+Priority:    P1
+Effort:      M
+Status:      open, not reproducible on demand
+
+Problem:     One `-j 2` run of four 128 MiB torrents took 274,546 ms where the
+             same command usually takes about 3,200 ms. It completed, and every
+             byte arrived. CPU time over that run was 5,155 ms, so the process
+             was waiting rather than working for four and a half minutes. The
+             run is in `bench/multi-torrent-20260820T071833862Z.json` under
+             `runs`, taken before either [T-030](#t-030-throughput-collapses-with-several-torrents-at-once)
+             fix and therefore with a shorter `commands` list than the script
+             writes now.
+Relevance:   This is the second half of what [T-030](#t-030-throughput-collapses-with-several-torrents-at-once)
+             reports: "start-stop-start-stop behaviour where the rate drops to
+             zero and only a pause and resume clears it". The first half is
+             fixed and measured; this is not.
+Approach:    It has been seen once in about seventy runs and has not been
+             reproduced deliberately. What has been ruled out:
+
+             - **Ephemeral ports.** Ten alternating `-j 4` and `-j 2` runs
+               moved `TimeWait` from 276 to 500 against a 16,384-port dynamic
+               range, with `CloseWait` at zero throughout.
+             - **A repeat of the same shape.** Sixty runs stepping `-j` from 1
+               to 4 with `--log-level info` produced no run over 8.1 s, and
+               that one is explained by the reconnect backoff below.
+             - **The `-j` semaphore.** The permit is held for the whole
+               download and released when the worker ends.
+
+             What is worth trying next, in order:
+
+             1. The bridge's reconnect backoff is `RECONNECT_BASE` 1 s doubling
+                to `RECONNECT_MAX` 30 s, and it never gives up on a link
+                failure. Nine consecutive failures is 274 s, which is the
+                observed number. Recording every reconnect in the report, with
+                the reason, would say whether that is what happened. The
+                8,144 ms run in the sixty-run sweep is the same signature at
+                three failures.
+             2. If it is the reconnect loop, the question becomes why the link
+                fails: the bridge dials the session's own listener, and the
+                session, the listener, and the torrent are all live by then.
+             3. A bound on the loop. A bridge that has reconnected N times
+                without serving a byte is not going to, and it should say so
+                and fail rather than retry until the run's deadline.
+Acceptance:  Either a deliberate reproduction with the log showing where the
+             time went, or a bridge that reports its reconnect count and reason
+             in `--json` plus a run of at least two hundred invocations with
+             none over five times the median. The report and the command go
+             here either way.

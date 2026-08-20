@@ -64,12 +64,14 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-023](peers.md) | P1 | peers | **done** | The listen port is chosen without checking both address families |
 | [T-024](peers.md) | P2 | peers | open | Per-peer choke and unchoke history is not reported |
 | [T-025](peers.md) | P3 | peers | open | PeerStatsFilterState is not exported, so the filter is built by JSON |
-| [T-030](performance.md) | P0 | performance | open | Throughput collapses with several torrents at once |
+| [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | open | The rate limit did not apply to the session |
 | [T-032](performance.md) | P1 | performance | open | The piece selector strategy is not implemented |
 | [T-033](performance.md) | P2 | performance | open | --split, -x, and -k do not reach the fetch path |
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
 | [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
+| [T-036](performance.md) | P0 | paths | **done** | A multi-file torrent with one file lands without its directory |
+| [T-037](performance.md) | P1 | performance | open | A run stalls for minutes, roughly once in fifty |
 | [T-040](memory.md) | P0 | memory | open | Memory and descriptors grow without bound over a long run |
 | [T-041](memory.md) | P2 | memory | open | Per-source window cache is bounded but not measured |
 | [T-042](memory.md) | P1 | memory | **done** | Peak RSS is not captured in any report |
@@ -129,20 +131,22 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-86 items: 76 to work through, and 10 deferred to Phase C. Six were added by
+88 items: 78 to work through, and 10 deferred to Phase C. Eight were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
 source cannot be attached over more than one connection, and concurrent
 receive paths contend on the payload file. T-018 came out of T-017's own
 measurement, which found the contention is charged per write operation rather
-than per byte. T-035 came out of building the T-003 acceptance, which needed a
+than per byte. T-036 and T-037 came out of T-030's: a multi-file torrent with
+one file lands without its directory, and a run stalls for minutes roughly
+once in fifty. T-035 came out of building the T-003 acceptance, which needed a
 slow mirror and found that the flag for one did nothing.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
-| P0 | 4 | 1 | 0 | 5 |
-| P1 | 16 | 1 | 0 | 13 |
+| P0 | 3 | 1 | 0 | 7 |
+| P1 | 17 | 1 | 0 | 13 |
 | P2 | 19 | 1 | 1 | 5 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
@@ -243,24 +247,38 @@ first six are done or mostly done; item seven is where the open P0 work is.
    62.60% across five paired runs. `scripts/check-prefer.ps1` is the
    measurement. It found `--web-seed-speed-limit` accepted and ignored, which
    is T-035, now a token bucket per source.
-7. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md), and
-   [T-040](memory.md), the four long-run failures. Likely fewer than four
-   distinct defects. Measure before theorising. [T-042](memory.md) built the
-   sampler they need, and `download` and `seed` now report their own peak RSS,
-   CPU time, and handle count. [T-011](disk-io.md) removed one of the two
-   things [T-040](memory.md) names: descriptors are now bounded by a flag.
+7. The long-run failures. [T-017](disk-io.md) and [T-030](performance.md) are
+   **done**; [T-020](peers.md), [T-021](peers.md), and [T-040](memory.md) are
+   where the open P0 work is. Measure before theorising: that is what closed
+   the first two, and both times the answer was not what the entry predicted.
 
-   [T-017](disk-io.md) was the first thing to look at for
-   [T-030](performance.md), and it is **done**. It rules the disk out rather
-   than in. `bit-cli bench disk` writes the same bytes through the same storage
-   from N threads with no session, and it found that writes to one file
-   serialise whatever handle they arrive on, that the serialisation is charged
-   per operation rather than per byte, and that even fully contended the write
-   path moves 1.31 GiB/s against the 408 MiB/s an eight-bridge `bench leech`
-   run asks of it.
+   [T-017](disk-io.md) rules the disk out rather than in. `bit-cli bench disk`
+   writes the same bytes through the same storage from N threads with no
+   session, and it found that writes to one file serialise whatever handle
+   they arrive on, that the serialisation is charged per operation rather than
+   per byte, and that even fully contended the write path moves 1.31 GiB/s
+   against the 408 MiB/s an eight-bridge `bench leech` run asks of it. The
+   residue is [T-018](disk-io.md), worth at most 18%.
 
-   Two things follow for [T-030](performance.md). Several torrents at once is
-   several files, which is the shape that scales in that measurement, so this
-   is probably not the same defect. And the residue,
-   [T-018](disk-io.md), is worth at most 18% of an eight-bridge run, so it is
-   not where the collapse lives either.
+   [T-030](performance.md) was real and was two defects, neither of them
+   contention. Completion was noticed on the next `--report-interval` tick
+   rather than when it happened, which cost up to a second per torrent, and a
+   multi-file torrent holding one file lost its directory, so four torrents in
+   one invocation wrote to one file, destroyed each other's payload, and all
+   reported success. That second one is [T-036](performance.md), a P0 in its
+   own right, and it is what made the first report look like contention: four
+   torrents on one file is exactly the shape [T-017](disk-io.md) measured as
+   the one that does not scale. With both fixed, `-j 4` moves four torrents
+   3.54 times faster than one invocation at a time, at 72% of what the HTTP
+   source serves with no torrent machinery at all.
+
+   [T-037](performance.md) is what is left of [T-030](performance.md): one run
+   in about seventy stalls for minutes and then completes. It is open with the
+   three things already ruled out and the next thing to try.
+
+   [T-042](memory.md) built the sampler these need, and `download` and `seed`
+   report their own peak RSS, CPU time, and handle count.
+   [T-011](disk-io.md) removed one of the two things [T-040](memory.md) names:
+   descriptors are now bounded by a flag. The multi-torrent measurement gives
+   [T-040](memory.md) its first numbers: about 22 MiB of peak RSS and twelve
+   handles per concurrent torrent, with CPU flat.

@@ -402,6 +402,44 @@ What it found on NTFS is in `TODO/disk-io.md` under T-017: writes to one file
 serialise whatever handle they arrive on, and the serialisation is charged per
 write operation rather than per byte.
 
+## Several torrents at once
+
+`download` takes any number of sources and `-j` says how many run at a time.
+
+```bash
+bit-cli download a.torrent b.torrent c.torrent d.torrent -j 4 --dir ./out
+```
+
+```bash
+pwsh scripts/check-multi-torrent.ps1 -Torrents 4 -PayloadSize 256MiB -Runs 3
+```
+
+```
+ceiling:  808.84 MiB/s through bit-cli's own HTTP path, no bridge, no hashing, no disk
+
+mode    wall  bytes      rate         of ceiling peak RSS   CPU ms handles
+one     1.46s 256.00 MiB 175.95 MiB/s 21.75%     43.61 MiB    2124     220
+serial  6.24s 1.00 GiB   164.02 MiB/s 20.28%     44.48 MiB    8605     228
+j1      6.18s 1.00 GiB   165.78 MiB/s 20.50%     48.49 MiB    8468     227
+j2      3.01s 1.00 GiB   340.20 MiB/s 42.06%     74.09 MiB    9061     242
+j4      1.76s 1.00 GiB   580.17 MiB/s 71.73%     114.24 MiB  10656     264
+control 2.97s 1.00 GiB   344.32 MiB/s 42.57%     107.59 MiB  15108     289
+```
+
+`serial` is the same four torrents as four separate invocations, one after
+another. `control` puts as many connections on one torrent at a time as `-j 4`
+has in flight across four, which is what says the flag buys concurrency rather
+than connections: `-j 4` reaches 580 MiB/s where the same sixteen connections
+on one torrent reach 344.
+
+`ceiling` is what the same source serves through `bit-cli`'s own HTTP path with
+no bridge, no hashing, and no disk. Every mode reads off that one server, so a
+mode approaching it is describing the server rather than the client.
+
+Concurrency costs about 22 MiB of peak RSS and twelve handles per torrent in
+flight, and no extra CPU for the same bytes. The full write-up is in
+`TODO/performance.md` under T-030.
+
 ## Fetch one piece from one mirror
 
 ```bash

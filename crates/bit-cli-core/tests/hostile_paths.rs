@@ -71,6 +71,27 @@ fn hostile_torrent(name: &str, paths: &[&str], each: usize) -> Vec<u8> {
     encode(&Value::Dict(BTreeMap::from([(b"info".to_vec(), info)])))
 }
 
+/// Build a single-file `.torrent`: no `files` list, `name` is the file name.
+///
+/// This is the other half of the BEP 3 rule that
+/// [`a_one_file_multi_file_torrent_still_gets_its_directory`] tests. A torrent
+/// with no `files` list must not get a directory, and one with a `files` list
+/// must, however many entries that list holds.
+fn single_file_torrent(name: &str, len: usize) -> Vec<u8> {
+    let payload = content(len, 1);
+    let mut pieces = Vec::new();
+    for chunk in payload.chunks(PIECE_LENGTH) {
+        pieces.extend_from_slice(&Sha1::digest(chunk));
+    }
+    let info = Value::Dict(BTreeMap::from([
+        (b"length".to_vec(), Value::Int(len as i64)),
+        (b"name".to_vec(), Value::Bytes(name.as_bytes().to_vec())),
+        (b"piece length".to_vec(), Value::Int(PIECE_LENGTH as i64)),
+        (b"pieces".to_vec(), Value::Bytes(pieces)),
+    ]));
+    encode(&Value::Dict(BTreeMap::from([(b"info".to_vec(), info)])))
+}
+
 /// What one run of a hostile torrent produced.
 struct Run {
     /// Held so the directories outlive the assertions.
@@ -322,4 +343,72 @@ async fn every_written_path_is_a_plain_relative_path() {
     }
     // Nothing was dropped: one file on disk per file in the torrent.
     assert_eq!(tree(run.root()).len(), disk.len());
+}
+
+/// A `files` list holding one entry is still the multiple-file case.
+///
+/// BEP 3 makes `name` the file's name in the single-file case and the
+/// directory's name in the multiple-file case. Deciding that by counting
+/// entries rather than by whether the list is there drops the directory for a
+/// torrent that has one, which is how two of them come to share one path. See
+/// `TODO/performance.md`, T-036.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_one_file_multi_file_torrent_still_gets_its_directory() {
+    let torrent = hostile_torrent("album", &["movie.bin"], 1024);
+    let run = add(&torrent).await;
+
+    assert_eq!(run.plan.disk_paths, ["movie.bin"]);
+    assert_eq!(tree(run.root()), ["album/movie.bin"]);
+}
+
+/// The other half of the rule: no `files` list, no directory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_file_torrent_gets_no_directory_of_its_own() {
+    let torrent = single_file_torrent("movie.bin", 1024);
+    let run = add(&torrent).await;
+
+    assert_eq!(tree(run.root()), ["movie.bin"]);
+}
+
+/// Two one-file torrents whose file has the same name both land.
+///
+/// This is the failure the rule above prevents, driven end to end: one
+/// session, one output directory, two torrents, and each keeps its own bytes.
+/// Without the directory both write `movie.bin` and both report success.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_one_file_torrents_with_the_same_file_name_do_not_collide() {
+    let out = tempfile::tempdir().unwrap();
+    let meta = tempfile::tempdir().unwrap();
+
+    let engine = Engine::start(&EngineOptions {
+        download_directory: out.path().to_path_buf(),
+        listen_ports: 0..=0,
+        listen_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+        enable_dht: false,
+        enable_lsd: false,
+        enable_trackers: false,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    for name in ["first", "second"] {
+        let torrent = hostile_torrent(name, &["movie.bin"], 1024);
+        let path = meta.path().join(format!("{name}.torrent"));
+        std::fs::write(&path, &torrent).unwrap();
+        let handle = engine
+            .add(
+                &path.display().to_string(),
+                &AddOptions {
+                    overwrite: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let _ = engine.wait_until_initialized(&handle).await;
+    }
+    engine.stop().await;
+
+    assert_eq!(tree(out.path()), ["first/movie.bin", "second/movie.bin"]);
 }

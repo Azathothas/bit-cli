@@ -525,6 +525,13 @@ async fn one_inner(
 }
 
 /// Watch one torrent until a stop condition fires.
+///
+/// Three things wake this loop, and the report interval is only one of them.
+/// The other two are the events that end a run: the torrent completing, and
+/// the earliest deadline the caller set. Waking only on the tick would make
+/// every run as long as the next multiple of `--report-interval`, which
+/// defaults to a second, so a download that finished in 1.1 s would take 2 s
+/// and a `--timeout 30s` would fire at 31. See `TODO/performance.md`, T-030.
 async fn watch(
     engine: &Engine,
     handle: &bit_cli_core::engine::Handle,
@@ -541,10 +548,38 @@ async fn watch(
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
 
+    // Completion resolves once and must not be polled again, so it is guarded
+    // rather than recreated: a run that goes on seeding after completing is
+    // still driven by the tick.
+    let completion = engine.wait_until_completed(handle);
+    tokio::pin!(completion);
+    let mut completed = false;
+
+    // The soonest moment a deadline could fire. `should_stop` decides whether
+    // it actually does; this only makes sure the loop is awake to ask, and it
+    // measures from here because `should_stop` measures from `progress`, which
+    // starts on the line above.
+    //
+    // With no deadline set the sleep is parked a day out rather than made
+    // optional, because an optional future in a `select!` needs either a boxed
+    // `Option` or a second arm. A run still going after a day wakes once more
+    // than it needed to and nothing else changes.
+    const NO_DEADLINE: Duration = Duration::from_secs(86_400);
+    let limit = [options.stop.timeout, options.stop.stop_after]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(NO_DEADLINE);
+    let deadline = tokio::time::sleep_until(tokio::time::Instant::now() + limit);
+    tokio::pin!(deadline);
+    let mut deadline_fired = false;
+
     loop {
         tokio::select! {
             _ = &mut interrupt => return (Stopped::Interrupted, progress.elapsed()),
             _ = ticker.tick() => {}
+            _ = &mut completion, if !completed => completed = true,
+            _ = &mut deadline, if !deadline_fired => deadline_fired = true,
         }
 
         let snapshot = engine.snapshot(handle);
