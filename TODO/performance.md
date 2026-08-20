@@ -111,3 +111,63 @@ Approach:    Record time to 90, 99, and 100 percent separately in the download
              source.
 Acceptance:  `bit-cli download --json` carries `p90_ms`, `p99_ms`, and
              `total_ms` for progress, and the tail is visible as the difference.
+
+### T-035 The web seed rate limit was never applied
+
+Source:      the [T-003](webseed.md) hybrid measurement
+Category:    performance
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `--web-seed-speed-limit`, and `rate_limit` in a binding table,
+             parsed, validated, and reached `SourceLimits.rate_limit`. Nothing
+             read it. A source told to stay under 24 MiB/s ran at 116 MiB/s.
+Relevance:   It is the flag an operator uses to leave headroom on a mirror they
+             do not own. A cap that is accepted and ignored is worse than one
+             that is refused, because the caller believes they set it.
+Approach:    A token bucket per source in `webseed::fetch::Fetcher`, refilled
+             continuously, holding one second of burst. Tokens are taken before
+             a request goes out rather than after its bytes arrive: a limiter
+             that lets the bytes land and then sleeps has not limited anything
+             the mirror can see.
+
+             Two details worth keeping. The bucket may go negative, because a
+             request larger than a second of burst can never be satisfied from
+             a full bucket and taking what it needs and waiting out the deficit
+             is what keeps the average right rather than deadlocking. And the
+             cap is on bytes off the mirror, so it is taken where a window is
+             fetched and not where a block is served: a block answered from the
+             window cache crossed no wire.
+Acceptance:  A 256 MiB payload under `--web-seed-speed-limit 24MiB/s` takes
+             about ten seconds rather than one, and the unit tests pace the
+             bucket on a paused clock.
+
+Found while building the [T-003](webseed.md) acceptance, which needed a slow
+mirror and did not get one. Under `--web-seed-speed-limit 24MiB/s`, a 256 MiB
+payload took 1,114 ms before the fix, about 116 MiB/s, and 10,192 ms after it,
+about 25 MiB/s. Reproduce either with:
+
+```
+$ bit-cli download <TORRENT> --web-seed <URL> --web-seed-only \
+    --web-seed-speed-limit 24MiB/s --json
+```
+
+The acceptance run itself is uncapped, because a cap decides the split by
+itself, so the committed report under `bench/` does not carry this number.
+
+The unit tests are `webseed::fetch::tests::a_rate_limit_paces_after_the_first_second_of_burst`,
+which times the bucket on tokio's paused clock so the assertion is about the
+delay the limiter asked for rather than how busy the machine was, and
+`a_source_limit_becomes_a_fetcher_rate`, which proves the cap reaches the
+fetcher from the spec.
+
+Making the bucket testable needed one decision: it reads `tokio::time::Instant`
+rather than `std::time::Instant`, so it refills on the same clock its own
+sleeps advance. Outside a test the two are the same clock. Under a paused one
+they are not, and a limiter that refills on a clock its sleeps do not advance
+cannot be tested at all.
+
+This is not [T-031](#t-031-the-rate-limit-did-not-apply-to-the-session), which
+is the session-wide `--max-download-rate` and `--max-overall-download-rate`.
+That one is still open.

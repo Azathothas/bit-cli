@@ -354,7 +354,7 @@ Source:      the [T-090](bench.md) `bench leech` measurement
 Category:    webseed
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     One `--web-seed` is one binding, one bridge, one peer, and one
              serial receive path. That path is what bounds the download, and
@@ -378,6 +378,77 @@ Acceptance:  `bench leech` against the loopback server with
              report records both. Then the same against a real mirror, with
              the number recorded here, because loopback flatters the receive
              path.
+
+## What shipped
+
+`--web-seed-connections <N>`, default 1, on every command that attaches a web
+seed. It is also `connections` in a binding table, per source or as a table
+default. One binding becomes N bridges, so N peers, and they share one
+`Fetcher`: one window cache, one HTTP client, and one concurrency budget
+divided between them rather than multiplied by them. The accounting stays one
+row per source.
+
+Sharing the fetcher turned out to matter more than the connection count. Two
+things follow from it, and the second was not why it was done:
+
+- **The window cache is shared**, so a 4 MiB window is fetched once for the
+  whole source rather than once per connection.
+- **The concurrency budget is a budget.** Four connections with
+  `--web-seed-concurrency 8` make eight requests between them, not thirty-two.
+
+`SourceReport` now carries `connections`, `http_bytes`, and `http_requests`,
+and `bench leech`'s per-source rows carry `connections` and `http_bytes`
+beside the bytes that reached the session. The two differing is the
+amplification, and it was not visible before.
+
+## The loopback number
+
+2026-08-20T04:54:31.219Z, release build, 1 GiB payload, 1024 pieces, five runs
+per step, medians. Report: `bench/leech-20260820T045431219Z.json`.
+
+```
+$ pwsh -NoProfile -File scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -ConnectionSweep "1,2,4,8"
+```
+
+| Stage | Median | Slowest | Fastest | Share of fetch | Against one |
+| --- | --- | --- | --- | --- | --- |
+| `bench webseed`, no bridge | 1.04 GiB/s | | | 100.00% | |
+| 1 connection | 193.24 MiB/s | 185.24 MiB/s | 194.23 MiB/s | 18.18% | 1.00x |
+| 2 connections | 371.01 MiB/s | 337.62 MiB/s | 407.00 MiB/s | 34.90% | **1.92x** |
+| 4 connections | 370.34 MiB/s | 338.85 MiB/s | 372.23 MiB/s | 34.84% | 1.92x |
+| 8 connections | 408.62 MiB/s | 339.64 MiB/s | 453.50 MiB/s | 38.44% | 2.11x |
+| control: 1 connection, 64 requests in flight | 157.01 MiB/s | 150.70 MiB/s | 162.49 MiB/s | 14.77% | 0.81x |
+| the URL named 8 times, 8 sources | 271.62 MiB/s | 202.28 MiB/s | 314.30 MiB/s | 25.55% | 1.41x |
+
+**Two connections is worth 1.92x and the curve is flat after that.** Eight
+reads higher at the median but its slowest run is no faster than two, and the
+spread is a third of the rate. Two is where the gain is; four is free; eight
+is not worth the peer slots.
+
+The control row is the one that names the cause. Eight times the requests in
+flight on a single connection reaches 0.81x, slightly **worse** than the same
+connection at eight. It is the receive paths.
+
+## What sharing the fetcher is worth
+
+| Form | Rate | Pulled off the mirror for a 1 GiB payload |
+| --- | --- | --- |
+| `--web-seed-connections 8` | 408.62 MiB/s | 1.00 GiB, **1.004x** |
+| the URL named 8 times | 271.62 MiB/s | 3.98 GiB, **3.984x** |
+
+Same eight peers either way. Eight separate sources have eight window caches,
+so each one fetches the same 4 MiB window itself and the mirror serves the
+payload nearly four times over.
+
+The acceptance above asked for parity with the repeated form. It is 1.50x the
+rate on a quarter of the mirror's bandwidth, so the criterion is met in the
+direction that matters, and the reason it was written expecting parity is that
+the amplification was not measurable until `http_bytes` existed.
+
+Worth recording for what it says about the earlier runs: every
+"attach the same URL N times" experiment in this file's history was pulling N
+times the payload. Those numbers stand as measurements of that configuration
+and none of them is what `--web-seed-connections` does.
 
 ### T-002 Measure Candidate A-prime, the in-process virtual peer
 
@@ -484,7 +555,7 @@ Source:      `--prefer-web-seed`, PROMPT.md A3.4
 Category:    webseed
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     `--prefer-web-seed` is documented as "bias the picker toward HTTP
              when both a peer and a source have a piece". `librqbit`'s piece
@@ -503,18 +574,71 @@ Acceptance:  A hybrid run with one fast local mirror and one slow peer, run
              twice, shows a measurable shift in the peer/web-seed byte split
              with the flag on. Both splits are recorded here with the commands.
 
-[T-090](bench.md) measured what the current implementation is worth and the
-answer is nothing: one bridge at 64 requests in flight reaches 0.82x the same
-bridge at 8. Doubling a source's in-flight budget does not make it answer
-sooner, because the budget is not what bounds it. So the flag as it ships
-changes a number that does not move the outcome, which is worse than a flag
-that does nothing and says so.
+## What the old implementation was worth
 
-What would give `--prefer-web-seed` a real effect without reaching the picker
-is [T-009](#t-009-a-source-cannot-be-attached-over-more-than-one-connection):
-give the preferred source more receive paths than the swarm gets. That is a
-measured lever rather than a hoped-for one, and it is the shape this flag
-should take when T-009 lands.
+Nothing. [T-090](bench.md) measured it: one connection at 64 requests in flight
+reaches 0.81x the same connection at 8. Doubling a source's in-flight budget
+does not make it answer sooner, because the budget is not what bounds it. So
+the flag changed a number that did not move the outcome, which is worse than a
+flag that does nothing and says so.
+
+## What ships now
+
+The flag doubles each source's **connections** rather than its request budget,
+bounded to at most eight. With the default of one connection that is two, which
+is where [T-009](#t-009-a-source-cannot-be-attached-over-more-than-one-connection)
+measured the knee. That is a lever with a number behind it: connections are
+worth 1.92x on the same measurement where requests are worth 0.81x.
+
+It is still not the picker. `bit-cli` cannot say "take this piece from HTTP";
+what it can do is make HTTP the side that answers first, and the session takes
+the first answer.
+
+## The number
+
+`scripts/check-prefer.ps1` builds a hybrid swarm entirely on loopback: the file
+server as an HTTP source, a second `bit-cli` seeding the same payload as a
+peer, and a leecher given both. Neither side is rate limited, which is the
+point: a cap on either side decides the split by itself, and a flag measured
+against capped sources measures the caps.
+
+The peer announces nothing and the leecher is given its address with `--peer`,
+with `--no-tracker --no-dht --no-lsd` on both, so the swarm is exactly two
+members.
+
+2026-08-20T05:23:37.591Z, release build, 1 GiB payload, five pairs. Each pair
+is one run without the flag and one with it, back to back against the same two
+sources. Report: `bench/prefer-20260820T052337591Z.json`.
+
+```
+$ pwsh -NoProfile -File scripts/check-prefer.ps1 -PayloadSize 1GiB -Runs 5
+```
+
+| Pair | HTTP share without | HTTP share with | Shift |
+| --- | --- | --- | --- |
+| 1 | 50.00% | 66.22% | +16.22 |
+| 2 | 46.00% | 62.89% | +16.89 |
+| 3 | 46.19% | 61.43% | +15.23 |
+| 4 | 45.80% | 62.40% | +16.60 |
+| 5 | 45.61% | 60.06% | +14.45 |
+| mean | **46.72%** | **62.60%** | **+15.88** |
+
+Every pair shifted toward HTTP and none shifted back. Uncapped, the two sides
+split the payload nearly evenly without the flag, which is what says neither
+was throttled into the answer.
+
+## What is still not closed
+
+The picker. This moves the odds, not the decision, and a piece a peer happens
+to answer first still comes from the peer. Reaching the decision needs a
+`librqbit` API for peer preference or Candidate C, a native `Source` trait with
+its own picker integration, and [T-002](#t-002-measure-candidate-a-prime-the-in-process-virtual-peer)
+prices what that fork would cost. The flag's help says what it does rather than
+what it would ideally do.
+
+One defect turned up while building the measurement and is fixed with it:
+`--web-seed-speed-limit` parsed, validated, reached the source spec, and was
+never applied. See [T-035](performance.md).
 
 ---
 

@@ -370,7 +370,7 @@ pub fn text(report: &Report) -> Vec<String> {
                 format_rate(summary.sustained_rate.0),
                 match pipeline.window_ceiling.0 {
                     0 => "n/a".to_string(),
-                    ceiling => crate::units::format_percent(
+                    ceiling => crate::units::format_share(
                         summary.sustained_rate.0 as f64 / ceiling as f64
                     ),
                 },
@@ -414,6 +414,31 @@ pub fn text(report: &Report) -> Vec<String> {
                     source.errors
                 ),
             ));
+            if let Some(connections) = source.connections {
+                out.push(field(
+                    "    connections",
+                    format!(
+                        "{connections} peer connection{}",
+                        match connections {
+                            1 => "",
+                            _ => "s",
+                        }
+                    ),
+                ));
+            }
+            if let Some(http) = source.http_bytes {
+                out.push(field(
+                    "    over HTTP",
+                    match source.bytes.0 {
+                        0 => format_size(http.0),
+                        served => format!(
+                            "{} ({}x what reached the session)",
+                            format_size(http.0),
+                            crate::units::format_ratio(http.0 as f64 / served as f64)
+                        ),
+                    },
+                ));
+            }
             if !source.latency.first_byte.is_empty() {
                 out.push(field("    first byte", source.latency.first_byte.line()));
             }

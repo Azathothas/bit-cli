@@ -176,6 +176,19 @@ fn strip_prefix_ci<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
 pub struct SourceLimits {
     /// Concurrent ranged requests against this source.
     pub concurrency: usize,
+    /// Peer connections the source is presented over.
+    ///
+    /// One source is one peer to the torrent session, and a peer's received
+    /// blocks are written and verified one at a time on that connection's own
+    /// task. That path is what bounds the transfer, so presenting the same
+    /// source over several connections gives it several of them. See
+    /// `TODO/webseed.md`, T-009, for the measurement.
+    ///
+    /// The concurrency above is divided between them rather than multiplied
+    /// by them: the point is more receive paths, not more requests at the
+    /// mirror.
+    #[serde(default = "one")]
+    pub connections: usize,
     /// Bytes per ranged request. Independent of the torrent's piece length.
     pub chunk_size: u64,
     /// Per-request timeout in milliseconds.
@@ -196,6 +209,7 @@ impl Default for SourceLimits {
     fn default() -> Self {
         Self {
             concurrency: 4,
+            connections: 1,
             chunk_size: 4 * crate::units::MIB,
             timeout_ms: 30_000,
             connect_timeout_ms: 10_000,
@@ -207,7 +221,30 @@ impl Default for SourceLimits {
     }
 }
 
+/// The default for [`SourceLimits::connections`], for `serde`.
+///
+/// A binding table written before this field existed leaves it out, and one
+/// connection is what those tables meant.
+fn one() -> usize {
+    1
+}
+
 impl SourceLimits {
+    /// Connections to present this source over, at least one.
+    pub fn connections(&self) -> usize {
+        self.connections.max(1)
+    }
+
+    /// Concurrent requests each connection gets.
+    ///
+    /// The source's whole budget divided between its connections, rounded up,
+    /// so four connections sharing a budget of eight get two each. Dividing
+    /// rather than multiplying is the point: a source presented over four
+    /// connections should not hit the mirror four times harder.
+    pub fn per_connection_concurrency(&self) -> usize {
+        self.concurrency.max(1).div_ceil(self.connections()).max(1)
+    }
+
     /// The per-request timeout.
     pub fn timeout(&self) -> Duration {
         Duration::from_millis(self.timeout_ms)

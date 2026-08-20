@@ -399,6 +399,17 @@ pub struct WebSeedArgs {
     #[arg(long = "web-seed-concurrency", value_name = "N")]
     pub web_seed_concurrency: Option<usize>,
 
+    /// Peer connections each source is presented over. Default: 1.
+    ///
+    /// One source is one peer to the torrent session, and a peer's blocks are
+    /// written and verified one at a time on that connection's own task, so
+    /// that path is what bounds the transfer. Several connections give the
+    /// source several of them. `--web-seed-concurrency` is divided between
+    /// them rather than multiplied by them, so this does not hit the mirror
+    /// harder. Measured in TODO/webseed.md, T-009.
+    #[arg(long = "web-seed-connections", value_name = "N")]
+    pub web_seed_connections: Option<usize>,
+
     /// Concurrent ranged requests across all sources.
     #[arg(long = "web-seed-max-total", value_name = "N")]
     pub web_seed_max_total: Option<usize>,
@@ -493,6 +504,26 @@ pub struct DownloadArgs {
     #[arg(long, value_name = "PORT")]
     pub port: Vec<String>,
 
+    /// Try this peer before any are discovered, as HOST:PORT. Repeatable.
+    ///
+    /// A peer given here is dialled whether or not a tracker or the DHT ever
+    /// answers, which is what makes a swarm of known members testable and a
+    /// private one reachable without discovery.
+    #[arg(long = "peer", value_name = "ADDR")]
+    pub peers: Vec<String>,
+
+    /// Disable the DHT.
+    ///
+    /// With `--peer` and `--no-tracker` this leaves a swarm of exactly the
+    /// members named on the command line, which is what a measurement needs
+    /// and what a private network wants.
+    #[arg(long)]
+    pub no_dht: bool,
+
+    /// Disable local service discovery.
+    #[arg(long)]
+    pub no_lsd: bool,
+
     /// Sources fetched in parallel within this one invocation.
     #[arg(short = 'j', long, value_name = "N", default_value_t = 1)]
     pub max_concurrent_downloads: usize,
@@ -542,6 +573,9 @@ impl DownloadArgs {
             limits: LimitArgs::default(),
             selection: SelectionArgs::default(),
             port: Vec::new(),
+            peers: Vec::new(),
+            no_dht: false,
+            no_lsd: false,
             max_concurrent_downloads: 1,
             check_integrity: false,
             hash_check_only: false,
@@ -1287,6 +1321,10 @@ pub struct BenchLeechArgs {
     /// Listen port, or a range as START-END. `0` asks the OS for a free one.
     #[arg(long, value_name = "PORT")]
     pub port: Vec<String>,
+
+    /// Try this peer before any are discovered, as HOST:PORT. Repeatable.
+    #[arg(long = "peer", value_name = "ADDR")]
+    pub peers: Vec<String>,
 
     /// How disk space is allocated for the payload.
     #[arg(long, value_name = "METHOD", default_value = "sparse")]

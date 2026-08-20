@@ -61,6 +61,8 @@ pub struct Defaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connections: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunk_size: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<String>,
@@ -107,6 +109,9 @@ pub struct Entry {
     /// Concurrent ranged requests against this source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<usize>,
+    /// Peer connections this source is presented over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connections: Option<usize>,
     /// Bytes per ranged request, with units.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunk_size: Option<String>,
@@ -222,6 +227,13 @@ impl Entry {
             .concurrency
             .or(defaults.concurrency)
             .unwrap_or(base.concurrency);
+        let connections = self
+            .connections
+            .or(defaults.connections)
+            .unwrap_or(base.connections);
+        if connections == 0 {
+            return Err(Error::config("connections must be at least 1"));
+        }
         if concurrency == 0 {
             return Err(Error::config("concurrency must be at least 1"));
         }
@@ -252,6 +264,7 @@ impl Entry {
             },
             limits: SourceLimits {
                 concurrency,
+                connections,
                 chunk_size,
                 timeout_ms: self
                     .timeout_ms

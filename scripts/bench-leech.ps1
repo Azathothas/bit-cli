@@ -22,7 +22,7 @@
 #
 # Usage:
 #   pwsh scripts/bench-leech.ps1
-#   pwsh scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5
+#   pwsh scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 5 -ConnectionSweep "1,2,4,8"
 #   pwsh scripts/bench-leech.ps1 -Mirror https://geo.mirror.pkgbuild.com/iso/2026.08.01/ `
 #                                -TorrentUrl https://geo.mirror.pkgbuild.com/iso/2026.08.01/archlinux-2026.08.01-x86_64.iso.torrent
 #
@@ -36,16 +36,17 @@
 param(
     # Payload to generate for the loopback case. Ignored with -Mirror.
     [string]$PayloadSize = "256MiB",
-    # Timed leech runs per bridge count. The median is reported with the spread.
+    # Timed leech runs per connection count. The median is reported with the
+    # spread.
     [int]$Runs = 5,
-    # How many bridge connections the one source is attached over, stepped.
+    # How many peer connections the one source is presented over, stepped.
     #
-    # A bridge is one peer, and a peer's received blocks are written, hashed,
-    # and accounted for one at a time on that connection's own task. So the
-    # number of bridges is the number of those paths running at once, and
-    # stepping it is what separates "the source is slow" from "one peer is as
-    # fast as one peer gets".
-    [string]$BridgeSweep = "1,2,4",
+    # Each connection is one peer, and a peer's received blocks are written,
+    # hashed, and accounted for one at a time on that connection's own task. So
+    # the number of connections is the number of those paths running at once,
+    # and stepping it is what separates "the source is slow" from "one peer is
+    # as fast as one peer gets".
+    [string]$ConnectionSweep = "1,2,4",
     # Ranged requests in flight for the fetch stage, and the per-source
     # concurrency the leech stage's bridge is given.
     [int]$Concurrency = 8,
@@ -63,6 +64,11 @@ param(
     # Which bit-cli build to drive. A debug build measures a debug build.
     [ValidateSet("debug", "release")]
     [string]$Profile = "release",
+    # How long one leech run gets before it stops and reports what it moved.
+    # A loopback run completes long before this; a mirror run is capped by it,
+    # which is how the measurement stays time-boxed and stops short of pulling
+    # a whole ISO once per run per step.
+    [string]$LeechDuration = "600s",
     # Seconds before a single run is abandoned.
     [int]$TimeoutSeconds = 900,
     # Keep the payload and the downloads.
@@ -295,7 +301,7 @@ Write-Step "fetch: bit-cli bench webseed, no bridge, no hashing, no disk"
 $fetchReport = Join-Path $Root "fetch.json"
 $fetchRun = Invoke-Timed "fetch" $bitCli @(
     "bench", "webseed", $torrent,
-    "--web-seed", $webSeed, "--web-seed-only",
+    "--web-seed", $webSeed, "--web-seed-only", "--no-torrent-web-seed",
     "--concurrency", "$Concurrency", "--request-size", $RequestSize,
     "--duration", "20s", "--warmup", "3s", "--metrics-interval", "1s",
     "--report", $fetchReport, "--format", "json"
@@ -314,8 +320,8 @@ Write-Step "  $(Format-Rate $fetchRate)"
 # ---------------------------------------------------------------------------
 
 Write-Step "leech: bit-cli bench leech, bridge, verification, and disk"
-$bridgeCounts = @($BridgeSweep -split ',' | ForEach-Object { [int]$_.Trim() } | Where-Object { $_ -ge 1 })
-if ($bridgeCounts.Count -eq 0) { Exit-With 2 "-BridgeSweep needs at least one count" }
+$bridgeCounts = @($ConnectionSweep -split ',' | ForEach-Object { [int]$_.Trim() } | Where-Object { $_ -ge 1 })
+if ($bridgeCounts.Count -eq 0) { Exit-With 2 "-ConnectionSweep needs at least one count" }
 
 # Every run writes into a directory of its own that did not exist before it.
 #
@@ -335,13 +341,25 @@ function Remove-Old($keep) {
         ForEach-Object { Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue }
 }
 
-function Measure-Leech($label, $bridges, $concurrency) {
-    $seedArgs = @()
-    # The same URL attached N times is N bindings, so N bridges, so N peers.
-    # Each covers the whole torrent, and the session's picker divides the
-    # pieces between them: the per-source rows in the report add up to the
-    # payload rather than to N copies of it.
-    for ($i = 0; $i -lt $bridges; $i++) { $seedArgs += @("--web-seed", $webSeed) }
+function Measure-Leech($label, $bridges, $concurrency, $repeatUrl = $false) {
+    # --no-torrent-web-seed everywhere, because only the mirror named on the
+    # command line is under test. A real torrent carries its own url-list and
+    # the Arch Linux ISO's carries 468 entries; left in, the run would spread
+    # its requests across all of them and the number would describe the
+    # internet rather than the mirror.
+    #
+    # One source over N connections, which is what --web-seed-connections
+    # does: N peers sharing one fetcher, so one window cache and one
+    # concurrency budget between them.
+    $seedArgs = @("--web-seed", $webSeed, "--web-seed-connections", "$bridges", "--no-torrent-web-seed")
+    if ($repeatUrl) {
+        # The same URL named N times instead: N separate sources, each with
+        # its own fetcher and its own window cache. Same number of peers, and
+        # the same window is fetched once per source rather than once. This is
+        # the comparison that says what sharing the fetcher is worth.
+        $seedArgs = @("--no-torrent-web-seed")
+        for ($i = 0; $i -lt $bridges; $i++) { $seedArgs += @("--web-seed", $webSeed) }
+    }
 
     $docs = @()
     $rates = @()
@@ -354,7 +372,7 @@ function Measure-Leech($label, $bridges, $concurrency) {
         ) + $seedArgs + @(
             "--web-seed-only", "--web-seed-concurrency", "$concurrency",
             "--port", "0",
-            "--duration", "600s", "--warmup", "0s", "--metrics-interval", "250ms",
+            "--duration", $LeechDuration, "--warmup", "0s", "--metrics-interval", "250ms",
             "--report", $report, "--format", "json"
         )) $TimeoutSeconds
         $script:commands += $result
@@ -384,22 +402,36 @@ function Measure-Leech($label, $bridges, $concurrency) {
 
 $curve = @()
 foreach ($bridges in $bridgeCounts) {
-    Write-Step "  $bridges bridge$(if ($bridges -ne 1) { 's' })"
+    Write-Step "  --web-seed-connections $bridges"
     $curve += Measure-Leech "leech-$bridges" $bridges $Concurrency
 }
 
+$widest = ($bridgeCounts | Measure-Object -Maximum).Maximum
+
 # The control.
 #
-# Every extra bridge is an extra peer and also an extra set of HTTP requests
-# in flight, so a sweep on its own cannot say which of the two the gain came
-# from. This holds the HTTP concurrency at what the widest step used and puts
-# it all on one bridge. If the rate follows the concurrency the gain was HTTP;
-# if it stays where one bridge was, the gain was the receive paths.
-$widest = ($bridgeCounts | Measure-Object -Maximum).Maximum
+# Every extra connection is an extra peer and could also be an extra set of
+# HTTP requests in flight, so a sweep on its own cannot say which of the two
+# the gain came from. This holds the HTTP concurrency at what the whole sweep
+# had and puts it all on one connection. If the rate follows the concurrency
+# the gain was HTTP; if it stays where one connection was, the gain was the
+# receive paths.
 $control = $null
 if ($widest -gt 1) {
-    Write-Step "  control: 1 bridge at the widest step's total HTTP concurrency ($($Concurrency * $widest))"
+    Write-Step "  control: 1 connection at $($Concurrency * $widest) requests in flight"
     $control = Measure-Leech "control" 1 ($Concurrency * $widest)
+}
+
+# The comparison.
+#
+# The same number of peers built the other way: the URL named N times, so N
+# sources, each with its own fetcher and its own window cache. It answers what
+# sharing the fetcher between connections is worth, in rate and in bytes
+# pulled off the mirror.
+$repeated = $null
+if ($widest -gt 1) {
+    Write-Step "  comparison: the URL named $widest times, $widest separate sources"
+    $repeated = Measure-Leech "repeated" $widest $Concurrency $true
 }
 
 Stop-Background
@@ -434,28 +466,61 @@ Write-Host "Stage                              median       slowest      fastest
 Write-Host "---------------------------------------------------------------------------------------"
 Write-Host ("{0,-34} {1,-12} {2,-12} {3,-12} {4}" -f "fetch, no bridge", (Format-Rate $fetchRate), "", "", "100.00%")
 foreach ($step in $curve) {
-    $label = "leech, $($step.bridges) bridge$(if ($step.bridges -ne 1) { 's' })"
-    Write-Host ("{0,-34} {1,-12} {2,-12} {3,-12} {4}" -f $label, (Format-Rate $step.rate),
-        (Format-Rate $step.stats.min), (Format-Rate $step.stats.max),
+    Write-Host ("{0,-34} {1,-12} {2,-12} {3,-12} {4}" -f "leech, $($step.bridges) connection(s)",
+        (Format-Rate $step.rate), (Format-Rate $step.stats.min), (Format-Rate $step.stats.max),
         (Format-Percent ($step.rate / [math]::Max($fetchRate, 1))))
 }
 if ($control) {
-    Write-Host ("{0,-34} {1,-12} {2,-12} {3,-12} {4}" -f "control: 1 bridge, $($control.concurrency) HTTP",
+    Write-Host ("{0,-34} {1,-12} {2,-12} {3,-12} {4}" -f "control: 1 conn, $($control.concurrency) HTTP",
         (Format-Rate $control.rate), (Format-Rate $control.stats.min), (Format-Rate $control.stats.max),
         (Format-Percent ($control.rate / [math]::Max($fetchRate, 1))))
 }
+if ($repeated) {
+    Write-Host ("{0,-34} {1,-12} {2,-12} {3,-12} {4}" -f "URL named $widest times",
+        (Format-Rate $repeated.rate), (Format-Rate $repeated.stats.min), (Format-Rate $repeated.stats.max),
+        (Format-Percent ($repeated.rate / [math]::Max($fetchRate, 1))))
+}
 if ($oneBridge -and $curve.Count -gt 1) {
     Write-Host ""
-    Write-Host "Scaling against one bridge"
+    Write-Host "Scaling against one connection"
     Write-Host "---------------------------------------------------------------------"
     foreach ($step in $curve) {
-        Write-Host ("{0,-34} {1}" -f "$($step.bridges) bridge$(if ($step.bridges -ne 1) { 's' })",
+        Write-Host ("{0,-34} {1}" -f "$($step.bridges) connection(s)",
             ("{0:N2}x" -f ($step.rate / [math]::Max($oneBridge.rate, 1))))
     }
     if ($control) {
-        Write-Host ("{0,-34} {1}" -f "1 bridge, $($control.concurrency) HTTP in flight",
+        Write-Host ("{0,-34} {1}" -f "1 connection, $($control.concurrency) HTTP",
             ("{0:N2}x" -f ($control.rate / [math]::Max($oneBridge.rate, 1))))
     }
+    if ($repeated) {
+        Write-Host ("{0,-34} {1}" -f "URL named $widest times",
+            ("{0:N2}x" -f ($repeated.rate / [math]::Max($oneBridge.rate, 1))))
+    }
+}
+
+# What each form pulled off the mirror to move the payload once. Sources
+# sharing a fetcher share its window cache; separate sources at the same URL
+# do not, and fetch the same window once each.
+$amplification = {
+    param($step)
+    if (-not $step) { return $null }
+    $served = 0
+    $http = 0
+    foreach ($row in $step.median.sources) {
+        $served += [int64]$row.bytes.bytes
+        if ($row.http_bytes) { $http += [int64]$row.http_bytes.bytes }
+    }
+    if ($served -le 0) { return $null }
+    [pscustomobject]@{ served = $served; http = $http; ratio = [math]::Round($http / $served, 3) }
+}
+$widestAmp = & $amplification ($curve | Where-Object { $_.bridges -eq $widest } | Select-Object -First 1)
+$repeatedAmp = & $amplification $repeated
+if ($widestAmp -and $repeatedAmp) {
+    Write-Host ""
+    Write-Host "Bytes pulled off the mirror to move the payload once"
+    Write-Host "---------------------------------------------------------------------"
+    Write-Host ("{0,-34} {1,-14} {2}" -f "--web-seed-connections $widest", (Format-Size $widestAmp.http), "$($widestAmp.ratio)x")
+    Write-Host ("{0,-34} {1,-14} {2}" -f "URL named $widest times", (Format-Size $repeatedAmp.http), "$($repeatedAmp.ratio)x")
 }
 Write-Host ""
 Write-Host "Where the time went, at $paths receive path$(if ($paths -ne 1) { 's' })"
@@ -502,7 +567,8 @@ $report = [ordered]@{
     }
     parameters = [ordered]@{
         runs = $Runs
-        bridge_sweep = $bridgeCounts
+        connection_sweep = $bridgeCounts
+        leech_duration = $LeechDuration
         concurrency = $Concurrency
         request_size = $RequestSize
         profile = $Profile
@@ -523,28 +589,44 @@ $report = [ordered]@{
             report = $leech.summary
         }
     }
-    bridge_curve = @($curve | ForEach-Object {
+    connection_curve = @($curve | ForEach-Object {
         [ordered]@{
-            bridges = $_.bridges
+            connections = $_.bridges
             web_seed_concurrency = $_.concurrency
             sustained_rate_bytes = $_.rate
             sustained_rate_human = Format-Rate $_.rate
             share_of_fetch = Format-Percent ($_.rate / [math]::Max($fetchRate, 1))
-            speedup_over_one_bridge = if ($oneBridge) { [math]::Round($_.rate / [math]::Max($oneBridge.rate, 1), 3) } else { $null }
+            speedup_over_one_connection = if ($oneBridge) { [math]::Round($_.rate / [math]::Max($oneBridge.rate, 1), 3) } else { $null }
             rate_stats_bytes = $_.stats
+            amplification = & $amplification $_
             summary = $_.median.summary
+            sources = $_.median.sources
         }
     })
     control = if ($control) {
         [ordered]@{
-            what = "one bridge carrying the same total HTTP concurrency as the widest step, so the sweep's gain can be attributed to the receive paths rather than to the requests in flight"
-            bridges = 1
+            what = "one connection carrying the same total HTTP concurrency as the widest step, so the sweep's gain can be attributed to the receive paths rather than to the requests in flight"
+            connections = 1
             web_seed_concurrency = $control.concurrency
             sustained_rate_bytes = $control.rate
             sustained_rate_human = Format-Rate $control.rate
-            speedup_over_one_bridge = if ($oneBridge) { [math]::Round($control.rate / [math]::Max($oneBridge.rate, 1), 3) } else { $null }
+            speedup_over_one_connection = if ($oneBridge) { [math]::Round($control.rate / [math]::Max($oneBridge.rate, 1), 3) } else { $null }
             rate_stats_bytes = $control.stats
             summary = $control.median.summary
+        }
+    } else { $null }
+    repeated_url = if ($repeated) {
+        [ordered]@{
+            what = "the same URL named N times, so N separate sources with N fetchers and N window caches, against --web-seed-connections N which is N connections sharing one"
+            connections = $repeated.bridges
+            web_seed_concurrency = $repeated.concurrency
+            sustained_rate_bytes = $repeated.rate
+            sustained_rate_human = Format-Rate $repeated.rate
+            speedup_over_one_connection = if ($oneBridge) { [math]::Round($repeated.rate / [math]::Max($oneBridge.rate, 1), 3) } else { $null }
+            rate_stats_bytes = $repeated.stats
+            amplification = $repeatedAmp
+            summary = $repeated.median.summary
+            sources = $repeated.median.sources
         }
     } else { $null }
     attribution = [ordered]@{

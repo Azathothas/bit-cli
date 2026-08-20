@@ -22,6 +22,14 @@ use bit_cli_core::webseed::{Mode, Scope};
 use crate::cli::WebSeedArgs;
 use crate::env::Env;
 
+/// The most connections one source is presented over.
+///
+/// Each is a peer slot in the session and a bridge task here, and the measured
+/// gain flattens between two and four (`TODO/webseed.md`, T-009). The cap is
+/// well past where the curve stops rising, so it bounds a typo rather than a
+/// legitimate setting.
+const MAX_CONNECTIONS: usize = 32;
+
 /// Everything the flags say about how CLI-supplied sources behave.
 struct Shared {
     mode: Mode,
@@ -88,6 +96,10 @@ impl Shared {
             scope,
             limits: SourceLimits {
                 concurrency: args.web_seed_concurrency.unwrap_or(base.concurrency).max(1),
+                connections: args
+                    .web_seed_connections
+                    .unwrap_or(base.connections)
+                    .clamp(1, MAX_CONNECTIONS),
                 chunk_size: size(
                     &args.web_seed_chunk_size,
                     base.chunk_size,

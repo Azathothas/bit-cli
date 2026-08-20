@@ -42,13 +42,13 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | --- | --- | --- | --- | --- |
 | [T-001](webseed.md) | P0 | webseed | **done** | Measure the loopback bridge against a raw curl ceiling |
 | [T-002](webseed.md) | P1 | webseed | **done** | Measure Candidate A-prime, the in-process virtual peer |
-| [T-003](webseed.md) | P1 | webseed | open | The piece picker cannot be told to prefer HTTP |
+| [T-003](webseed.md) | P1 | webseed | **done** | The piece picker cannot be told to prefer HTTP |
 | [T-004](webseed.md) | P2 | webseed | open | BEP 17 style is not auto-detected, only declared |
 | [T-005](webseed.md) | P3 | webseed | open | A source restricted mid-run cannot be re-scoped |
 | [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
 | [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
 | [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
-| [T-009](webseed.md) | P1 | webseed | open | A source cannot be attached over more than one connection |
+| [T-009](webseed.md) | P1 | webseed | **done** | A source cannot be attached over more than one connection |
 | [T-010](disk-io.md) | P1 | disk-io | **done** | pwrite takes a read lock where it needs a write lock |
 | [T-011](disk-io.md) | P1 | disk-io | **done** | No file handle pool, so long runs exhaust descriptors |
 | [T-012](disk-io.md) | P2 | disk-io | **done** | Preallocation is not implemented |
@@ -68,6 +68,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-032](performance.md) | P1 | performance | open | The piece selector strategy is not implemented |
 | [T-033](performance.md) | P2 | performance | open | --split, -x, and -k do not reach the fetch path |
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
+| [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
 | [T-040](memory.md) | P0 | memory | open | Memory and descriptors grow without bound over a long run |
 | [T-041](memory.md) | P2 | memory | open | Per-source window cache is bounded but not measured |
 | [T-042](memory.md) | P1 | memory | **done** | Peak RSS is not captured in any report |
@@ -127,17 +128,19 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-84 items: 74 to work through, and 10 deferred to Phase C. Four were added by
+85 items: 75 to work through, and 10 deferred to Phase C. Five were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
 source cannot be attached over more than one connection, and concurrent
-receive paths contend on the payload file.
+receive paths contend on the payload file. T-035 came out of building the
+T-003 acceptance, which needed a slow mirror and found that the flag for one
+did nothing.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 4 | 1 | 0 | 5 |
-| P1 | 19 | 1 | 0 | 9 |
+| P1 | 17 | 1 | 0 | 12 |
 | P2 | 18 | 1 | 1 | 5 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
@@ -193,8 +196,15 @@ The P0 list, in the order that unblocks the most:
    wall and it is what stops the sweep at four, recorded as
    [T-017](disk-io.md).
 
-   The fix the measurement points at is [T-009](webseed.md),
-   `--web-seed-connections`, and it needs no upstream change.
+   The fix the measurement points at is [T-009](webseed.md), and it is
+   **done**. `--web-seed-connections <N>` presents one source over N
+   connections, which is N peers and so N receive paths. Two is worth 1.92x on
+   loopback and the curve is flat after that. The same requests in flight on
+   one connection are worth 0.81x, which is what says it is the paths. The N
+   connections share one fetcher, so the mirror serves the payload once: the
+   same eight peers built as eight separate sources at one URL pulled it 3.98
+   times over, which was not visible until the report carried the HTTP bytes
+   beside the served bytes.
 
    [T-002](webseed.md) is **done** and the answer is no: `librqbit` 9.0.0 has
    no public way to hand the session a peer that is not a socket. Every route

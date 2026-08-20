@@ -199,6 +199,23 @@ pub fn format_percent(fraction: f64) -> String {
     format!("{:.2}%", clamped * 100.0)
 }
 
+/// Format a measured share as a percentage, which may exceed a hundred.
+///
+/// [`format_percent`] clamps, and it should: it renders progress, and a
+/// progress bar past a hundred percent is a bug. A share is a comparison
+/// rather than a progress, and a run that beat the rate it was compared
+/// against reached more than a hundred percent of it. Clamping that to
+/// `100.00%` reports a number that is not true, which is worse than an
+/// awkward-looking one. See `TODO/webseed.md`, T-001, where the HTTP path
+/// reached 156.71% of the `curl` reference it was measured against.
+pub fn format_share(fraction: f64) -> String {
+    let value = match fraction.is_finite() {
+        true => fraction.max(0.0),
+        false => 0.0,
+    };
+    format!("{:.2}%", value * 100.0)
+}
+
 /// Percentage of `part` out of `whole`, with two decimal places. A `whole` of
 /// zero reads as `100.00%`, since nothing left to do is complete.
 pub fn percent_of(part: u64, whole: u64) -> String {
@@ -507,6 +524,25 @@ mod tests {
         assert_eq!(percent_of(0, 0), "100.00%");
         assert_eq!(format_ratio(1.2345), "1.234");
         assert_eq!(format_ratio(f64::NAN), "0.000");
+    }
+
+    /// A share is a comparison, not a progress. Clamping one at a hundred
+    /// reports a number that is not true, which is how `bench --ceiling` came
+    /// to read `100.00%` for a run that reached 156.71% of its reference.
+    #[test]
+    fn a_share_above_one_is_reported_rather_than_clamped() {
+        assert_eq!(format_share(0.421), "42.10%");
+        assert_eq!(format_share(1.0), "100.00%");
+        assert_eq!(format_share(1.5671), "156.71%");
+        assert_eq!(format_share(3.8118), "381.18%");
+        assert_eq!(format_share(-1.0), "0.00%");
+        assert_eq!(format_share(f64::NAN), "0.00%");
+        assert_eq!(format_share(f64::INFINITY), "0.00%");
+        assert_eq!(
+            format_percent(2.0),
+            "100.00%",
+            "the clamping one still clamps: it renders progress"
+        );
     }
 
     #[test]

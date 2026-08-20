@@ -85,6 +85,39 @@ pub fn port_range(values: &[String]) -> Result<std::ops::RangeInclusive<u16>> {
     Ok(low..=high)
 }
 
+/// Parse `--peer` values into addresses.
+///
+/// A name is resolved here rather than at dial time, so `--peer nope:6881`
+/// fails before the session starts instead of showing up later as a peer that
+/// never connected. A name that resolves to several addresses contributes all
+/// of them, because any of them may be the one that answers.
+pub fn peer_addrs(values: &[String]) -> Result<Vec<std::net::SocketAddr>> {
+    use std::net::ToSocketAddrs;
+
+    let mut out = Vec::new();
+    for value in values {
+        let resolved: Vec<std::net::SocketAddr> = value
+            .to_socket_addrs()
+            .map_err(|e| {
+                Error::usage(format!(
+                    "--peer `{value}` is not a reachable HOST:PORT: {e}"
+                ))
+                .with("value", value.clone())
+            })?
+            .collect();
+        if resolved.is_empty() {
+            return Err(
+                Error::usage(format!("--peer `{value}` resolved to no address"))
+                    .with("value", value.clone()),
+            );
+        }
+        out.extend(resolved);
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
 /// Where payloads are written for this run.
 pub fn download_directory(global: &Global, env: &Env) -> PathBuf {
     match &global.dir {
@@ -183,6 +216,15 @@ impl SessionSetup<'_> {
 }
 
 /// One HTTP source attached to a running torrent.
+///
+/// A source may be presented over more than one connection, each of which is
+/// its own peer to the session and its own bridge here. They share one
+/// fetcher, so they share the window cache and the concurrency budget: the
+/// point of the second connection is a second receive path, not a second set
+/// of requests at the mirror. See `TODO/webseed.md`, T-009.
+///
+/// The accounting stays one row per source regardless. A caller asked for one
+/// mirror and wants to know what that mirror served.
 pub struct AttachedSource {
     pub index: usize,
     pub url: String,
@@ -190,14 +232,97 @@ pub struct AttachedSource {
     pub scope: String,
     /// Pieces this source can serve on its own.
     pub whole_pieces: usize,
-    pub status: Arc<BridgeStatus>,
-    task: tokio::task::JoinHandle<()>,
+    statuses: Vec<Arc<BridgeStatus>>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// The one fetcher every connection shares, kept so the run can report
+    /// what went over HTTP against what reached the session.
+    fetcher: Arc<Fetcher>,
 }
 
 impl AttachedSource {
-    /// Stop the bridge.
+    /// Stop every bridge for this source.
     pub fn stop(&self) {
-        self.task.abort();
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
+
+    /// How many connections this source is presented over.
+    pub fn connections(&self) -> usize {
+        self.statuses.len()
+    }
+
+    /// Bytes handed to the session, across every connection.
+    pub fn served_bytes(&self) -> u64 {
+        self.statuses.iter().map(|s| s.served_bytes()).sum()
+    }
+
+    /// Blocks handed to the session, across every connection.
+    pub fn blocks(&self) -> u64 {
+        self.statuses.iter().map(|s| s.blocks()).sum()
+    }
+
+    /// What the source is doing, taken as the best of its connections.
+    ///
+    /// One connection failing while another serves is a source that is
+    /// serving. A source is failed only when every connection has given up,
+    /// which is also when it has nothing left to try.
+    pub fn state(&self) -> BridgeState {
+        let rank = |state: BridgeState| match state {
+            BridgeState::Active => 3,
+            BridgeState::Connecting => 2,
+            BridgeState::Idle => 1,
+            BridgeState::Failed => 0,
+        };
+        self.statuses
+            .iter()
+            .map(|s| s.state())
+            .max_by_key(|state| rank(*state))
+            .unwrap_or(BridgeState::Failed)
+    }
+
+    /// The first problem any connection reported.
+    pub fn error(&self) -> Option<String> {
+        self.statuses.iter().find_map(|s| s.error())
+    }
+
+    /// Bytes pulled over HTTP, and the requests that pulled them.
+    ///
+    /// Against [`Self::served_bytes`] this is the amplification: the two are
+    /// equal when every byte fetched reached the session, and the first is
+    /// larger when the same range was fetched more than once. Sources sharing
+    /// a fetcher share its window cache, so a source over four connections
+    /// fetches a window once; four separate sources at the same URL fetch it
+    /// up to four times.
+    pub fn http(&self) -> (u64, u64) {
+        let stats = self.fetcher.stats();
+        (
+            stats.bytes.load(std::sync::atomic::Ordering::Relaxed),
+            stats.requests.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    /// Every loopback port this source's connections have dialled from.
+    pub fn local_ports(&self) -> Vec<u16> {
+        self.statuses.iter().flat_map(|s| s.local_ports()).collect()
+    }
+
+    /// The request pipeline across every connection.
+    ///
+    /// The depths are summed rather than maxed: each connection is its own
+    /// peer with its own request window, and what bounds the source is the
+    /// total the session keeps outstanding to it.
+    pub fn pipeline(&self) -> bit_cli_core::webseed::bridge::BridgePipeline {
+        let mut total = bit_cli_core::webseed::bridge::BridgePipeline::default();
+        for status in &self.statuses {
+            let one = status.pipeline();
+            total.in_flight += one.in_flight;
+            total.peak_in_flight += one.peak_in_flight;
+            total.requests += one.requests;
+            total.blocks += one.blocks;
+            total.service_nanos += one.service_nanos;
+        }
+        total
     }
 }
 
@@ -209,10 +334,17 @@ pub struct SourceReport {
     pub origin: &'static str,
     pub scope: String,
     pub whole_pieces: usize,
+    /// Peer connections this source is presented over.
+    pub connections: usize,
     pub state: BridgeState,
     pub served_bytes: u64,
     pub served_human: String,
     pub blocks: u64,
+    /// Bytes pulled over HTTP, and the requests that pulled them.
+    ///
+    /// Larger than `served_bytes` when a range was fetched more than once.
+    pub http_bytes: u64,
+    pub http_requests: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -220,18 +352,22 @@ pub struct SourceReport {
 impl AttachedSource {
     /// A snapshot of this source for the report.
     pub fn report(&self) -> SourceReport {
-        let served = self.status.served_bytes();
+        let served = self.served_bytes();
+        let (http_bytes, http_requests) = self.http();
         SourceReport {
             index: self.index,
             url: self.url.clone(),
             origin: self.origin,
             scope: self.scope.clone(),
             whole_pieces: self.whole_pieces,
-            state: self.status.state(),
+            connections: self.connections(),
+            state: self.state(),
             served_bytes: served,
             served_human: format_size(served),
-            blocks: self.status.blocks(),
-            error: self.status.error(),
+            blocks: self.blocks(),
+            http_bytes,
+            http_requests,
+            error: self.error(),
         }
     }
 }
@@ -287,15 +423,20 @@ pub async fn attach_sources(
 
     let mut attached = Vec::with_capacity(set.bindings.len());
     for binding in &set.bindings {
+        let limits = &binding.spec.limits;
         let params = BridgeParams::for_binding(
             target,
             handle.info_hash(),
             session_peer_id,
             layout,
             binding,
-            binding.spec.limits.concurrency.max(1),
+            limits.per_connection_concurrency(),
         );
         let whole_pieces = params.pieces.len();
+        // One fetcher for the whole source, however many connections it is
+        // presented over. That is what shares the window cache between them
+        // and what keeps the concurrency budget a budget: the fetcher's own
+        // semaphore is the cap on requests actually in flight at the mirror.
         let fetcher = Arc::new(
             Fetcher::new(
                 binding.clone(),
@@ -306,20 +447,26 @@ pub async fn attach_sources(
             )?
             .with_verification(verify, piece_hashes.clone()),
         );
-        let status = Arc::new(BridgeStatus::default());
-        let task = tokio::spawn(bit_cli_core::webseed::bridge::run(
-            params,
-            fetcher,
-            status.clone(),
-        ));
+        let mut statuses = Vec::with_capacity(limits.connections());
+        let mut tasks = Vec::with_capacity(limits.connections());
+        for _ in 0..limits.connections() {
+            let status = Arc::new(BridgeStatus::default());
+            tasks.push(tokio::spawn(bit_cli_core::webseed::bridge::run(
+                params.clone(),
+                fetcher.clone(),
+                status.clone(),
+            )));
+            statuses.push(status);
+        }
         attached.push(AttachedSource {
             index: binding.index,
             url: binding.spec.url.clone(),
             origin: binding.spec.origin.as_str(),
             scope: binding.scope.selector.clone(),
             whole_pieces,
-            status,
-            task,
+            statuses,
+            tasks,
+            fetcher,
         });
     }
     Ok((attached, set))
@@ -335,7 +482,7 @@ pub async fn attach_sources(
 pub fn bridge_ports(sources: &[AttachedSource]) -> HashSet<u16> {
     sources
         .iter()
-        .flat_map(|s| s.status.local_ports())
+        .flat_map(AttachedSource::local_ports)
         .collect()
 }
 
@@ -569,7 +716,7 @@ pub fn progress_line(snapshot: &TorrentSnapshot, sources: &[AttachedSource]) -> 
         format_rate(snapshot.upload_rate),
         snapshot.peers.live,
     );
-    let served: u64 = sources.iter().map(|s| s.status.served_bytes()).sum();
+    let served: u64 = sources.iter().map(AttachedSource::served_bytes).sum();
     if !sources.is_empty() {
         line.push_str(&format!("  http {}", format_size(served)));
     }
@@ -671,7 +818,7 @@ pub fn report_failed_sources(
 ) -> Vec<SourceReport> {
     let mut newly_failed = Vec::new();
     for source in sources {
-        if source.status.state() != BridgeState::Failed || !reported.insert(source.index) {
+        if source.state() != BridgeState::Failed || !reported.insert(source.index) {
             continue;
         }
         let report = source.report();

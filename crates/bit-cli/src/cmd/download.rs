@@ -123,8 +123,8 @@ pub fn run(
         limits: &args.limits,
         web_seeds: &args.web_seeds,
         listen_ports: swarm::port_range(&args.port)?,
-        no_dht: false,
-        no_lsd: false,
+        no_dht: args.no_dht,
+        no_lsd: args.no_lsd,
         allocation: allocation_of(args.selection.file_allocation),
     };
     let engine_options = setup.engine_options(env)?;
@@ -172,6 +172,7 @@ pub fn run(
         crate::cli::VerifyWhen::None => Verify::None,
         crate::cli::VerifyWhen::Piece | crate::cli::VerifyWhen::File => Verify::Piece,
     };
+    let peers = swarm::peer_addrs(&args.peers)?;
     let concurrency = args.max_concurrent_downloads.max(1);
     let started = std::time::Instant::now();
     let runtime = swarm::runtime()?;
@@ -221,6 +222,7 @@ pub fn run(
                 verify,
                 trace_http,
                 directory: directory.clone(),
+                peers: peers.clone(),
             };
             workers.spawn(async move {
                 let _permit = permits.acquire().await;
@@ -319,6 +321,8 @@ struct Options {
     verify: Verify,
     trace_http: bool,
     directory: std::path::PathBuf,
+    /// Peers to dial before any are discovered, from `--peer`.
+    peers: Vec<std::net::SocketAddr>,
 }
 
 /// One source and what was resolved for it before the session started.
@@ -381,6 +385,7 @@ async fn one_inner(
         only_files: options.only_files.clone(),
         trackers: plan.trackers.clone(),
         disable_trackers: plan.trackers.as_ref().is_some_and(Vec::is_empty),
+        initial_peers: options.peers.clone(),
         ..Default::default()
     };
     let handle = engine.add(&plan.source, &add).await?;
@@ -569,7 +574,7 @@ async fn watch(
         }
 
         for source in sources {
-            if source.status.state() == bit_cli_core::webseed::BridgeState::Failed
+            if source.state() == bit_cli_core::webseed::BridgeState::Failed
                 && reported_failures.insert(source.index)
             {
                 let report = source.report();
@@ -589,7 +594,7 @@ async fn watch(
             }
         }
 
-        let served: u64 = sources.iter().map(|s| s.status.served_bytes()).sum();
+        let served: u64 = sources.iter().map(AttachedSource::served_bytes).sum();
         let _ = tx
             .send(Msg::Event(
                 "progress",
@@ -617,7 +622,7 @@ async fn watch(
             && options.web_seed_only
             && sources
                 .iter()
-                .all(|s| s.status.state() == bit_cli_core::webseed::BridgeState::Failed)
+                .all(|s| s.state() == bit_cli_core::webseed::BridgeState::Failed)
         {
             return (Stopped::Failed, progress.elapsed());
         }
@@ -651,7 +656,7 @@ fn finish(
     elapsed: Duration,
     renamed: Vec<Rename>,
 ) -> TorrentReport {
-    let served: u64 = sources.iter().map(|s| s.status.served_bytes()).sum();
+    let served: u64 = sources.iter().map(AttachedSource::served_bytes).sum();
     let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
     let mean = match elapsed_ms {
         0 => 0,
@@ -685,13 +690,18 @@ fn finish(
 ///
 /// `bit-cli` cannot reach `librqbit`'s piece picker, so it cannot tell the
 /// picker "take this piece from HTTP rather than from that peer". What it can
-/// do is change the odds: with more requests in flight, an HTTP source answers
-/// a block sooner, and `librqbit` takes the first answer. So the preference is
-/// applied as a doubled per-source request budget, bounded so one flag cannot
-/// turn into a request flood against a mirror.
+/// do is give the HTTP source more of what decides which answer arrives first,
+/// because the session takes whichever peer answers a block soonest.
 ///
-/// This is the honest extent of the flag today. `TODO/webseed.md` records the
-/// picker gap and what closing it would take.
+/// What decides that is receive paths, not requests. The flag used to double
+/// the per-source request budget, and `TODO/webseed.md` T-009 measured that at
+/// 0.81x: eight times the requests in flight on one connection is slightly
+/// slower, not faster. Doubling the connections is 1.92x on the same
+/// measurement. So the preference is a doubled connection count, bounded, and
+/// the request budget is left alone.
+///
+/// This is still not the picker. `TODO/webseed.md` T-003 records the gap and
+/// what closing it would take.
 fn apply_preference(specs: Vec<SourceSpec>, prefer: bool) -> Vec<SourceSpec> {
     if !prefer {
         return specs;
@@ -699,7 +709,7 @@ fn apply_preference(specs: Vec<SourceSpec>, prefer: bool) -> Vec<SourceSpec> {
     specs
         .into_iter()
         .map(|mut spec| {
-            spec.limits.concurrency = (spec.limits.concurrency * 2).clamp(1, 32);
+            spec.limits.connections = (spec.limits.connections().saturating_mul(2)).clamp(2, 8);
             spec
         })
         .collect()

@@ -387,6 +387,7 @@ pub fn leech(
     let warmup = Duration::from_millis(parameters.warmup.0);
     let interval = Duration::from_millis(parameters.metrics_interval.0);
     let init_timeout = swarm::duration_flag(&args.limits.init_timeout, "init-timeout")?;
+    let peers = swarm::peer_addrs(&args.peers)?;
 
     let setup = SessionSetup {
         global,
@@ -453,6 +454,7 @@ pub fn leech(
             overwrite: !args.keep_existing,
             trackers: trackers.clone(),
             disable_trackers: trackers.as_ref().is_some_and(Vec::is_empty),
+            initial_peers: peers.clone(),
             ..Default::default()
         };
         let handle = engine.add(&args.source.source, &add).await?;
@@ -652,7 +654,6 @@ async fn drive_leech(
             .iter()
             .flat_map(|source| {
                 source
-                    .status
                     .local_ports()
                     .into_iter()
                     .map(|port| (port, (source.index, source.url.clone())))
@@ -719,14 +720,11 @@ async fn drive_leech(
         renderer.event(env, "bench_sample", &sample)?;
 
         for source in sources {
-            if source.status.state() == bit_cli_core::webseed::BridgeState::Failed {
+            if source.state() == bit_cli_core::webseed::BridgeState::Failed {
                 let note = format!(
                     "{} is unusable: {}",
                     source.url,
-                    source
-                        .status
-                        .error()
-                        .unwrap_or_else(|| "no reason given".into())
+                    source.error().unwrap_or_else(|| "no reason given".into())
                 );
                 if !notes.contains(&note) {
                     notes.push(note);
@@ -756,9 +754,22 @@ async fn drive_leech(
         notes.push("the torrent completed before the deadline, so the measured window is the transfer rather than --duration".to_string());
     }
 
+    // The per-source rows come from the recorder, which counts what reached
+    // the session. What went over HTTP to get it is the source's own, so it is
+    // folded in here: the two differing is the amplification.
+    let mut rows = recorder.sources(&labels);
+    for row in &mut rows {
+        let Some(source) = sources.iter().find(|s| s.index == row.index) else {
+            continue;
+        };
+        let (http_bytes, _) = source.http();
+        row.connections = Some(source.connections());
+        row.http_bytes = Some(Size(http_bytes));
+    }
+
     Ok(LeechOutcome {
         series: recorder.series(),
-        sources: recorder.sources(&labels),
+        sources: rows,
         summary: recorder.summary(),
         endpoints: sources.iter().map(|s| s.url.clone()).collect(),
         notes,
@@ -777,13 +788,13 @@ fn pipeline(sources: &[AttachedSource]) -> Option<bit_cli_core::bench::report::P
     let mut total = bit_cli_core::webseed::bridge::BridgePipeline::default();
     let mut served = 0u64;
     for source in sources {
-        let one = source.status.pipeline();
+        let one = source.pipeline();
         total.in_flight += one.in_flight;
         total.peak_in_flight += one.peak_in_flight;
         total.requests += one.requests;
         total.blocks += one.blocks;
         total.service_nanos += one.service_nanos;
-        served += source.status.served_bytes();
+        served += source.served_bytes();
     }
     Some(bit_cli_core::bench::report::Pipeline {
         peak_in_flight: total.peak_in_flight,
@@ -1545,5 +1556,52 @@ mod tests {
             stderr.contains("already complete"),
             "the reason has to name what happened: {stderr}"
         );
+    }
+
+    /// One source over several connections is still one source in the report,
+    /// and every connection serves part of the payload.
+    #[test]
+    fn a_source_over_several_connections_stays_one_row_and_serves_between_them() {
+        let fixture = TorrentFixture::single_file();
+        let server = FileServer::start(fixture.payload_dir());
+        let out = fixture.dir().join("out");
+        let doc = report(
+            &[
+                "bench",
+                "leech",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed",
+                &server.base,
+                "--web-seed-only",
+                "--web-seed-connections",
+                "3",
+                "--port",
+                "0",
+                "--duration",
+                "60s",
+                "--warmup",
+                "0s",
+                "--metrics-interval",
+                "100ms",
+            ],
+            ExitCode::Success,
+        );
+
+        let total = fixture.files[0].1.len() as u64;
+        assert_eq!(doc["summary"]["bytes"]["bytes"].as_u64().unwrap(), total);
+        assert_eq!(
+            std::fs::read(out.join("payload.bin")).unwrap(),
+            fixture.files[0].1
+        );
+
+        let sources = doc["sources"].as_array().unwrap();
+        assert_eq!(
+            sources.len(),
+            1,
+            "three connections are one source: {sources:?}"
+        );
+        assert_eq!(sources[0]["bytes"]["bytes"].as_u64().unwrap(), total);
     }
 }

@@ -689,6 +689,8 @@ impl Recorder {
                 rate: Size(source.window.bytes.saturating_mul(1000) / duration_ms),
                 requests: source.window.requests,
                 errors: errors.total,
+                connections: None,
+                http_bytes: None,
                 latency: source.window.latency.snapshot(),
                 error_detail: (errors.total > 0).then_some(errors),
                 failure: None,

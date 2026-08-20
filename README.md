@@ -63,6 +63,49 @@ torrent's `name` and `path`.
 The three are orthogonal. Any source can serve any scope under any
 composition.
 
+### One source, several connections
+
+A source reaches the torrent session as a peer, and a peer's blocks are
+written and hash-checked one at a time on that connection's own task. That
+path is what bounds the transfer, so a source presented over one connection
+runs at one path's speed however fast the mirror is.
+
+`--web-seed-connections <N>` presents the source over N connections, which is
+N of those paths. They share one HTTP client, one window cache, and one
+concurrency budget divided between them, so the mirror sees the same number of
+requests either way.
+
+```bash
+bit-cli download release.torrent \
+  --web-seed https://mirror.example.com/pub/ --web-seed-connections 2
+```
+
+On loopback, two connections reach 1.92 times what one reaches, and the curve
+is flat after that. Eight times the requests in flight on a single connection
+reaches 0.81 times, so it is the connections and not the requests. The numbers,
+the commands, and the control are in `TODO/webseed.md` under T-009, with the
+report under `bench/`.
+
+The default is one connection. Two is the measured knee on loopback and
+loopback flatters the receive path, so raising the default waits on the same
+measurement against a real mirror.
+
+`--prefer-web-seed` is the same lever applied for a different reason. On a
+hybrid run where peers and HTTP sources both hold a piece, it doubles each
+source's connections, so HTTP is more often the side that answers first. On a
+loopback swarm of one mirror and one peer, neither rate limited, it moves the
+HTTP share of a 1 GiB payload from a mean of 46.72% to 62.60% across five
+paired runs:
+
+```bash
+pwsh scripts/check-prefer.ps1 -PayloadSize 1GiB -Runs 5
+```
+
+It moves the odds, not the decision. `librqbit`'s piece picker is not reachable
+from outside the crate, so a piece a peer happens to answer first still comes
+from the peer. `TODO/webseed.md` under T-003 has the numbers and what closing
+the gap would take.
+
 ### Composition modes
 
 | Mode | What it does |
@@ -525,6 +568,7 @@ scope       = "*"
 mode        = "auto"
 priority    = 10
 concurrency = 8
+connections = 2
 
 [[source]]
 url   = "https://cdn.example.com/blobs/a3f1b2/payload.bin"

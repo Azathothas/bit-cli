@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sysinfo::{Host, Process};
 use crate::time::Timestamp;
-use crate::units::{Millis, Size, format_percent, format_rate, format_size};
+use crate::units::{Millis, Size, format_rate, format_share, format_size};
 
 /// The version of the report contract.
 ///
@@ -370,6 +370,15 @@ pub struct SourceSummary {
     pub rate: Size,
     pub requests: u64,
     pub errors: u64,
+    /// Peer connections this source was presented over, for an HTTP source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connections: Option<usize>,
+    /// Bytes pulled over HTTP, when that is a different number from `bytes`.
+    ///
+    /// It is larger when the same range was fetched more than once, so
+    /// `http_bytes / bytes` is the amplification the transport paid for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_bytes: Option<Size>,
     #[serde(skip_serializing_if = "Latencies::is_empty", default)]
     pub latency: Latencies,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -534,10 +543,14 @@ pub struct Summary {
 
 impl Summary {
     /// Sustained rate as a share of a stated ceiling.
+    ///
+    /// It may exceed a hundred percent. `--ceiling` is a reference the caller
+    /// states, not a physical limit, and a run that beat its reference should
+    /// say so rather than read as having exactly matched it.
     pub fn share_of(&self, ceiling: u64) -> Option<String> {
         match ceiling {
             0 => None,
-            c => Some(format_percent(self.sustained_rate.0 as f64 / c as f64)),
+            c => Some(format_share(self.sustained_rate.0 as f64 / c as f64)),
         }
     }
 }
@@ -1019,11 +1032,12 @@ mod tests {
         assert_eq!(summary.share_of(1000).as_deref(), Some("50.00%"));
         assert!(summary.share_of(0).is_none());
         summary.sustained_rate = Size(2000);
-        assert_eq!(
-            summary.share_of(1000).as_deref(),
-            Some("100.00%"),
-            "a share is clamped, because faster than the ceiling means the ceiling was wrong"
-        );
+        // `--ceiling` is a reference the caller states, such as what `curl`
+        // reached against the same URL, and a run can beat it. Reporting that
+        // as `100.00%` would hide a result: `TODO/webseed.md` T-001 measured
+        // the HTTP path at 156.71% of its `curl` reference over a real
+        // network, which is the finding rather than an error in the ceiling.
+        assert_eq!(summary.share_of(1000).as_deref(), Some("200.00%"));
     }
 
     #[test]

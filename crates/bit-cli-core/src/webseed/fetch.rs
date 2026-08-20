@@ -264,6 +264,68 @@ impl SourceStats {
     }
 }
 
+/// A byte-rate cap for one source.
+///
+/// A token bucket refilled continuously at the configured rate, holding one
+/// second of burst. Tokens are taken before a request goes out rather than
+/// after its bytes arrive: a limiter that lets the bytes land and then sleeps
+/// has not limited anything the mirror can see, it has only delayed the next
+/// request by the wrong amount.
+///
+/// The bucket is allowed to go negative. A request larger than one second of
+/// burst can never be satisfied from a full bucket, and taking what it needs
+/// and waiting out the deficit is what keeps the average right instead of
+/// deadlocking. It also makes concurrent callers queue in the order they
+/// arrived rather than racing for a refill.
+#[derive(Debug)]
+struct RateLimiter {
+    /// Bytes per second.
+    rate: f64,
+    state: std::sync::Mutex<Bucket>,
+}
+
+#[derive(Debug)]
+struct Bucket {
+    tokens: f64,
+    /// `tokio::time::Instant` rather than the standard one, so the bucket
+    /// follows the same clock the sleep does. Outside a test they are the
+    /// same clock; under a paused one they are not, and a limiter that
+    /// refills on a clock its own sleeps do not advance cannot be tested.
+    last: tokio::time::Instant,
+}
+
+impl RateLimiter {
+    fn new(rate: u64) -> Self {
+        let rate = rate.max(1) as f64;
+        Self {
+            rate,
+            state: std::sync::Mutex::new(Bucket {
+                tokens: rate,
+                last: tokio::time::Instant::now(),
+            }),
+        }
+    }
+
+    /// Wait until `bytes` may be requested.
+    async fn take(&self, bytes: u64) {
+        let wait = {
+            let mut bucket = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let now = tokio::time::Instant::now();
+            let refill = now.duration_since(bucket.last).as_secs_f64() * self.rate;
+            bucket.tokens = (bucket.tokens + refill).min(self.rate);
+            bucket.last = now;
+            bucket.tokens -= bytes as f64;
+            match bucket.tokens < 0.0 {
+                true => Duration::from_secs_f64(-bucket.tokens / self.rate),
+                false => Duration::ZERO,
+            }
+        };
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+    }
+}
+
 /// One window of a file held in memory.
 struct CachedWindow {
     url: String,
@@ -283,6 +345,9 @@ pub struct Fetcher {
     headers: HeaderMap,
     stats: Arc<SourceStats>,
     limiter: Arc<Semaphore>,
+    /// The source's byte-rate cap, from `--web-seed-speed-limit` or the
+    /// binding table's `rate_limit`. `None` is unlimited.
+    rate: Option<RateLimiter>,
     window: u64,
     capacity: usize,
     cache: Mutex<VecDeque<CachedWindow>>,
@@ -356,6 +421,7 @@ impl Fetcher {
             headers,
             stats: Arc::new(SourceStats::default()),
             limiter: Arc::new(Semaphore::new(limits.concurrency.max(1))),
+            rate: limits.rate_limit.map(RateLimiter::new),
             window: limits.chunk_size.max(1),
             capacity: cache_windows.max(1),
             cache: Mutex::new(VecDeque::new()),
@@ -537,6 +603,9 @@ impl Fetcher {
                 self.stats.retries.fetch_add(1, Ordering::Relaxed);
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(16));
+            }
+            if let Some(rate) = &self.rate {
+                rate.take(length).await;
             }
             let permit =
                 self.limiter.acquire().await.map_err(|e| {
@@ -815,6 +884,12 @@ impl Fetcher {
                 self.stats.retries.fetch_add(1, Ordering::Relaxed);
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(16));
+            }
+            // The cap is on bytes off the mirror, so it is taken here and not
+            // where a block is served: a block answered from the window cache
+            // crossed no wire and throttling it would cap the wrong thing.
+            if let Some(rate) = &self.rate {
+                rate.take(length).await;
             }
             let permit =
                 self.limiter.acquire().await.map_err(|e| {
@@ -1585,5 +1660,68 @@ mod tests {
         let agent = default_user_agent();
         assert!(agent.starts_with("bit-cli/"), "{agent}");
         assert!(agent.len() > "bit-cli/".len());
+    }
+
+    /// The bucket hands out one second of burst immediately and then paces.
+    ///
+    /// Timed with the tokio test clock rather than a wall clock, so the
+    /// assertion is about the delay the limiter asked for and not about how
+    /// busy the machine was.
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_limit_paces_after_the_first_second_of_burst() {
+        let limiter = RateLimiter::new(1024);
+        let began = tokio::time::Instant::now();
+
+        // The bucket starts full, so a second of traffic is free.
+        limiter.take(1024).await;
+        assert_eq!(began.elapsed(), Duration::ZERO, "the burst is not paced");
+
+        // The next second's worth has to be waited for.
+        limiter.take(1024).await;
+        assert_eq!(began.elapsed(), Duration::from_secs(1));
+
+        // And a request larger than the whole bucket is served rather than
+        // deadlocking, by waiting out its own deficit.
+        limiter.take(4096).await;
+        assert_eq!(began.elapsed(), Duration::from_secs(5));
+    }
+
+    /// A source with no cap never waits.
+    #[tokio::test(start_paused = true)]
+    async fn no_rate_limit_never_waits() {
+        let limiter = RateLimiter::new(u64::MAX / 2);
+        let began = tokio::time::Instant::now();
+        for _ in 0..64 {
+            limiter.take(4 * 1024 * 1024).await;
+        }
+        assert_eq!(began.elapsed(), Duration::ZERO);
+    }
+
+    /// The cap reaches the fetcher from the spec, which is what
+    /// `--web-seed-speed-limit` and a binding table's `rate_limit` both set.
+    #[test]
+    fn a_source_limit_becomes_a_fetcher_rate() {
+        use crate::webseed::binding::{Origin, SourceSpec};
+
+        let layout = std::sync::Arc::new(crate::layout::Layout::from_lengths(
+            "payload.bin",
+            false,
+            1024,
+            [("payload.bin".to_string(), 4096u64)],
+        ));
+        let mut spec = SourceSpec::new("http://127.0.0.1:9/", Origin::CommandLine);
+        spec.limits.rate_limit = Some(5 * crate::units::MIB);
+        let bindings =
+            crate::webseed::binding::BindingSet::resolve(&layout, &"a".repeat(40), &[spec])
+                .expect("resolve");
+        let fetcher = Fetcher::new(
+            bindings.bindings[0].clone(),
+            layout,
+            "a".repeat(40),
+            2,
+            false,
+        )
+        .expect("fetcher");
+        assert!(fetcher.rate.is_some(), "the cap did not reach the fetcher");
     }
 }

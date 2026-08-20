@@ -31,6 +31,23 @@ it, so the history starts here.
   full, and a partial source advertises BEP 21 `upload_only`.
 - Fetched pieces are hash-checked at the source, so a mirror serving wrong data
   is named rather than showing up as "a peer sent something wrong".
+- `--web-seed-connections <N>` presents one source over N connections, which is
+  N peers to the session and so N receive paths. They share one HTTP client,
+  one window cache, and one concurrency budget divided between them, so the
+  mirror sees the same number of requests. On loopback two connections reach
+  1.92 times one, measured in `TODO/webseed.md` under T-009.
+- `--prefer-web-seed` doubles each source's connections rather than its request
+  budget. On a loopback swarm of one mirror and one peer it moves the HTTP
+  share of a 1 GiB payload from 46.72% to 62.60% across five paired runs. It
+  moves the odds and not the decision: `librqbit`'s piece picker is not
+  reachable from outside the crate. See `TODO/webseed.md` under T-003.
+- `--web-seed-speed-limit` and a binding table's `rate_limit` are enforced. They
+  parsed and were never applied, so a source told to stay under 24 MiB/s ran at
+  116. A token bucket per source now paces requests before they go out.
+- `--peer <ADDR>` dials a peer whether or not a tracker or the DHT answers, and
+  `download` takes `--no-dht` and `--no-lsd` as `seed` already did. Together
+  they make a swarm of exactly the members named on the command line, which is
+  what a measurement needs and what a private network wants.
 
 ### Commands
 
@@ -96,6 +113,15 @@ it, so the history starts here.
 - `bench leech` refuses to run against an output directory that already holds
   the complete payload. That run finishes without fetching anything and would
   report the hash checker's rate as a download rate.
+- Every source reports the bytes it pulled over HTTP beside the bytes that
+  reached the session. The two differing is the amplification: separate
+  sources at one URL each keep their own window cache and fetch the same
+  window once each, which measured 3.98x against 1.004x for the same number of
+  connections on one source.
+- A share of a stated ceiling is no longer clamped at a hundred percent. It is
+  a comparison rather than a progress, and `--ceiling` names a reference the
+  caller supplies, so a run that beat it now says so. The clamping renderer is
+  still what progress uses.
 
 ### Paths
 
