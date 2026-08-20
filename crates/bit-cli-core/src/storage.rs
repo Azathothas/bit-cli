@@ -250,12 +250,20 @@ impl OpenSet {
     }
 }
 
-/// Why a file is being opened.
+/// Why a file is being opened, and therefore how.
 ///
-/// A write creates the file; a read does not. The hash check reads every
+/// Two things follow from the distinction.
+///
+/// A write creates the file and a read does not. The hash check reads every
 /// piece of every file to learn what is on disk, and if that created files
-/// then a torrent added with a selection would still get all of them. See
+/// then a torrent added with a selection would still get all of them.
 /// `TODO/disk-io.md`, T-013.
+///
+/// And a read opens for reading only. Windows refuses to load an image while
+/// another process holds a writable handle to it, so a seeder holding the
+/// payload open for write makes a downloaded executable unrunnable for the
+/// length of the run. A seeder only reads, so it holds read handles and the
+/// executable runs. `TODO/windows.md`, T-070.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Intent {
     Read,
@@ -272,13 +280,25 @@ enum Intent {
 #[derive(Default)]
 struct Slot {
     path: PathBuf,
-    file: RwLock<Option<File>>,
+    file: RwLock<Option<Opened>>,
+}
+
+/// An open payload file and what it was opened for.
+///
+/// A handle opened for reading is upgraded on the first write. A seeding run
+/// never writes, so it never upgrades, which is the whole point.
+#[derive(Debug)]
+struct Opened {
+    file: File,
+    writable: bool,
 }
 
 impl Slot {
-    /// Run `f` against the open handle, or report that the slot is closed.
+    /// Run `f` against the open handle, or report that the slot is closed or
+    /// not open for what the caller needs.
     fn try_with<T>(
         &self,
+        intent: Intent,
         what: &str,
         f: impl FnOnce(&File) -> std::io::Result<T>,
     ) -> anyhow::Result<Option<T>> {
@@ -286,12 +306,26 @@ impl Slot {
             .file
             .read()
             .map_err(|_| anyhow::anyhow!("the lock on {} is poisoned", self.path.display()))?;
-        let Some(file) = guard.as_ref() else {
+        let Some(opened) = guard.as_ref() else {
             return Ok(None);
         };
-        f(file)
+        if intent == Intent::Write && !opened.writable {
+            // The handle is read-only and this is a write. The caller reopens
+            // rather than upgrading in place, because upgrading would mean
+            // taking the write guard while holding the read one.
+            return Ok(None);
+        }
+        f(&opened.file)
             .map(Some)
             .map_err(|e| anyhow::anyhow!("cannot {what} {}: {e}", self.path.display()))
+    }
+
+    /// Whether the open handle, if any, can be written through.
+    fn is_writable(&self) -> bool {
+        self.file
+            .read()
+            .map(|guard| guard.as_ref().is_some_and(|opened| opened.writable))
+            .unwrap_or(false)
     }
 
     /// Close the handle, if one is open.
@@ -359,7 +393,7 @@ impl SafeStorage {
             ));
         }
         let slot = self.slot(file_id)?;
-        slot.try_with(what, f)?.ok_or_else(|| {
+        slot.try_with(intent, what, f)?.ok_or_else(|| {
             // The handle was evicted between the open and the call. One more
             // attempt is enough: only a cap smaller than the number of files
             // in flight can produce this, and that is worth reporting rather
@@ -371,13 +405,19 @@ impl SafeStorage {
         })
     }
 
-    /// Make sure one file is open, closing others if the cap says so.
+    /// Make sure one file is open, for at least what the caller needs.
     ///
     /// Returns whether the file is open afterwards. A read of a file that does
-    /// not exist answers `false` rather than creating it.
+    /// not exist answers `false` rather than creating it. A write to a file
+    /// that is open for reading reopens it, which is what makes a seeder hold
+    /// read handles and a downloader hold writable ones.
     fn ensure_open(&self, file_id: usize, intent: Intent) -> anyhow::Result<bool> {
         let slot = self.slot(file_id)?;
-        if slot.is_open() {
+        let enough = match intent {
+            Intent::Read => slot.is_open(),
+            Intent::Write => slot.is_writable(),
+        };
+        if enough {
             return Ok(true);
         }
         if intent == Intent::Read && !slot.path.exists() {
@@ -398,16 +438,23 @@ impl SafeStorage {
             .file
             .write()
             .map_err(|_| anyhow::anyhow!("the lock on {} is poisoned", slot.path.display()))?;
-        if guard.is_some() {
-            // Another thread opened it while this one was evicting.
+        if guard
+            .as_ref()
+            .is_some_and(|opened| intent == Intent::Read || opened.writable)
+        {
+            // Another thread opened it, for at least as much, while this one
+            // was evicting.
             return Ok(true);
         }
+        // A read-only handle being upgraded is dropped before the new one is
+        // opened, so the two never coexist and the file is never held twice.
+        drop(guard.take());
         if let Some(parent) = slot.path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 anyhow::anyhow!("cannot create the directory {}: {e}", parent.display())
             })?;
         }
-        *guard = Some(open(&slot.path, self.overwrite)?);
+        *guard = Some(open(&slot.path, self.overwrite, intent)?);
         Ok(true)
     }
 
@@ -562,6 +609,18 @@ impl TorrentStorage for SafeStorage {
         if self.padding.get(file_id).copied().unwrap_or(false) {
             return Ok(());
         }
+        // A file that is already the length asked for needs nothing, and doing
+        // nothing is what matters: opening it to set the length it already has
+        // would leave a writable handle open, and a seeder that holds one
+        // makes a downloaded executable unrunnable on Windows for the length
+        // of the run. A complete seed touches no file for writing at all.
+        // See `TODO/windows.md`, T-070.
+        let slot = self.slot(file_id)?;
+        if !slot.is_writable()
+            && std::fs::metadata(&slot.path).is_ok_and(|meta| meta.len() == length)
+        {
+            return Ok(());
+        }
         let outcome = self.with(file_id, Intent::Write, "reserve space for", |file| {
             crate::alloc::reserve(file, length, self.allocation)
         })?;
@@ -682,17 +741,24 @@ fn refuse_existing(path: &Path) -> anyhow::Error {
 }
 
 /// Open one payload file, creating it if it is not there.
-fn open(path: &Path, overwrite: bool) -> anyhow::Result<File> {
-    if !overwrite && path.exists() {
+/// A read opens for reading only, which is what lets a downloaded executable
+/// be launched while a seeder is serving it: Windows refuses to load an image
+/// while another process holds a writable handle to the file. A seeder never
+/// writes, so its handles stay read-only for the length of the run. See
+/// `TODO/windows.md`, T-070.
+fn open(path: &Path, overwrite: bool, intent: Intent) -> anyhow::Result<Opened> {
+    let writable = intent == Intent::Write;
+    if writable && !overwrite && path.exists() {
         return Err(refuse_existing(path));
     }
-    OpenOptions::new()
-        .create(true)
+    let file = OpenOptions::new()
+        .create(writable)
         .truncate(false)
         .read(true)
-        .write(true)
+        .write(writable)
         .open(path)
-        .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", path.display()))
+        .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", path.display()))?;
+    Ok(Opened { file, writable })
 }
 
 /// Join a planned relative path onto the output directory.
@@ -830,17 +896,18 @@ mod tests {
     fn positioned_writes_and_reads_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("payload.bin");
-        let file = open(&path, true).unwrap();
+        let opened = open(&path, true, Intent::Write).unwrap();
+        let file = &opened.file;
         file.set_len(16).unwrap();
 
-        pwrite_all(&file, 8, b"second").unwrap();
-        pwrite_all(&file, 0, b"first").unwrap();
+        pwrite_all(file, 8, b"second").unwrap();
+        pwrite_all(file, 0, b"first").unwrap();
 
         let mut buf = [0u8; 6];
-        pread_exact(&file, 8, &mut buf).unwrap();
+        pread_exact(file, 8, &mut buf).unwrap();
         assert_eq!(&buf, b"second");
         let mut buf = [0u8; 5];
-        pread_exact(&file, 0, &mut buf).unwrap();
+        pread_exact(file, 0, &mut buf).unwrap();
         assert_eq!(&buf, b"first");
     }
 
@@ -848,11 +915,11 @@ mod tests {
     fn reading_past_the_end_is_an_error_not_a_read_of_zeroes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("short.bin");
-        let file = open(&path, true).unwrap();
-        pwrite_all(&file, 0, b"four").unwrap();
+        let opened = open(&path, true, Intent::Write).unwrap();
+        pwrite_all(&opened.file, 0, b"four").unwrap();
 
         let mut buf = [0u8; 8];
-        let err = pread_exact(&file, 0, &mut buf).unwrap_err();
+        let err = pread_exact(&opened.file, 0, &mut buf).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 
@@ -862,15 +929,15 @@ mod tests {
         let path = dir.path().join("there.bin");
         std::fs::write(&path, b"existing").unwrap();
 
-        let err = open(&path, false).unwrap_err().to_string();
+        let err = open(&path, false, Intent::Write).unwrap_err().to_string();
         assert!(err.contains("already exists"), "{err}");
         assert!(err.contains("--allow-overwrite"), "{err}");
 
         // With overwrite the existing bytes are still there: opening does not
         // truncate, which is what makes resuming into a partial file work.
-        let file = open(&path, true).unwrap();
+        let opened = open(&path, true, Intent::Write).unwrap();
         let mut buf = [0u8; 8];
-        pread_exact(&file, 0, &mut buf).unwrap();
+        pread_exact(&opened.file, 0, &mut buf).unwrap();
         assert_eq!(&buf, b"existing");
     }
 
@@ -880,7 +947,10 @@ mod tests {
             path: PathBuf::from("gone.bin"),
             file: RwLock::new(None),
         };
-        assert_eq!(slot.try_with("read", |_| Ok(())).unwrap(), None);
+        assert_eq!(
+            slot.try_with(Intent::Read, "read", |_| Ok(())).unwrap(),
+            None
+        );
         assert!(!slot.is_open());
     }
 
@@ -890,13 +960,16 @@ mod tests {
         let path = dir.path().join("payload.bin");
         let slot = Slot {
             path: path.clone(),
-            file: RwLock::new(Some(open(&path, true).unwrap())),
+            file: RwLock::new(Some(open(&path, true, Intent::Write).unwrap())),
         };
 
         let taken = slot.take().unwrap();
         assert!(taken.is_open());
         assert!(!slot.is_open());
-        assert_eq!(slot.try_with("read", |_| Ok(())).unwrap(), None);
+        assert_eq!(
+            slot.try_with(Intent::Read, "read", |_| Ok(())).unwrap(),
+            None
+        );
     }
 
     /// A storage with no files, for the pure path logic.
@@ -1095,6 +1168,48 @@ mod tests {
         assert!(open.opened(0).is_empty());
         assert_eq!(open.opened(1), vec![0]);
         assert_eq!(open.len(), 1);
+    }
+
+    /// A read never opens a writable handle.
+    ///
+    /// Windows refuses to load an image while another process holds a writable
+    /// handle to it, so a seeder holding the payload open for write makes a
+    /// downloaded executable unrunnable for the length of the run. A seeder
+    /// only reads. See `TODO/windows.md`, T-070.
+    #[test]
+    fn a_read_opens_for_reading_only_and_a_write_upgrades() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.bin"), b"payload").unwrap();
+        let storage = storage_at(dir.path(), &["a.bin"], 4);
+
+        let mut buf = [0u8; 7];
+        storage.pread_exact(0, 0, &mut buf).unwrap();
+        assert_eq!(&buf, b"payload");
+        assert!(storage.files[0].is_open());
+        assert!(
+            !storage.files[0].is_writable(),
+            "a read left a writable handle open"
+        );
+
+        storage.pwrite_all(0, 0, b"PAYLOAD").unwrap();
+        assert!(
+            storage.files[0].is_writable(),
+            "a write did not upgrade the handle"
+        );
+        assert_eq!(std::fs::read(dir.path().join("a.bin")).unwrap(), b"PAYLOAD");
+        // Upgrading replaced the handle rather than adding one.
+        assert_eq!(storage.open_files(), 1);
+    }
+
+    #[test]
+    fn a_read_of_a_missing_file_neither_creates_it_nor_opens_a_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["gone.bin"], 4);
+        let mut buf = [0u8; 4];
+        let error = storage.pread_exact(0, 0, &mut buf).unwrap_err().to_string();
+        assert!(error.contains("has not been created"), "{error}");
+        assert!(!dir.path().join("gone.bin").exists());
+        assert_eq!(storage.open_files(), 0);
     }
 
     #[test]

@@ -77,7 +77,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-063](trackers.md) | P3 | trackers | open | Tracker tiers are announced in parallel rather than in order |
 | [T-064](trackers.md) | P2 | trackers | open | UDP tracker retry does not follow the BEP 15 backoff |
 | [T-065](trackers.md) | P3 | trackers | open | Scrape is only implemented for the BEP 48 URL convention |
-| [T-070](windows.md) | P1 | windows | open | A downloaded executable cannot be run until the process exits |
+| [T-070](windows.md) | P1 | windows | **done** | A downloaded executable cannot be run until the process exits |
 | [T-071](windows.md) | P0 | windows | **done** | Reserved device names in torrent paths are not sanitised |
 | [T-072](windows.md) | P0 | windows | **done** | Case-colliding paths silently overwrite |
 | [T-073](windows.md) | P1 | windows | open | Long paths are not tested |
@@ -130,7 +130,7 @@ by the T-001 measurement: a stalling source takes 24 seconds to give up.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 4 | 1 | 0 | 5 |
-| P1 | 19 | 1 | 0 | 7 |
+| P1 | 18 | 1 | 0 | 8 |
 | P2 | 18 | 1 | 1 | 5 |
 | P3 | 9 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
@@ -182,14 +182,22 @@ The P0 list, in the order that unblocks the most:
    parallel `curl` slices. The failure matrix ran against all 468 web seeds in
    the Arch torrent, and two defects that had made `webseed test` unusable
    against any HTTPS mirror were found and fixed there.
-5. The disk I/O cluster: [T-010](disk-io.md), [T-011](disk-io.md),
-   [T-012](disk-io.md), and [T-013](disk-io.md) are **done**. Payload files
-   open when they are first touched and close on an LRU when
-   `--max-open-files` says so, so a torrent with twenty thousand files does not
-   need twenty thousand descriptors, and a file selection no longer creates the
-   files it did not select. All four `--file-allocation` methods do four
-   different things, measured. `scripts/check-handles.ps1` and
-   `scripts/check-allocation.ps1` are the acceptance.
+5. The disk I/O cluster. [T-010](disk-io.md), [T-011](disk-io.md),
+   [T-012](disk-io.md), [T-013](disk-io.md), [T-014](disk-io.md), and
+   [T-015](disk-io.md) are **done**, and so are the two Windows items that
+   depended on the same storage, [T-070](windows.md) and
+   [T-076](windows.md). [T-016](disk-io.md) is blocked upstream.
+
+   One change closed most of them: a payload file opens when it is first
+   touched, a read opens for reading only and does not create it, and a write
+   opens for writing and does. So a file selection no longer creates the files
+   it did not select, `--max-open-files` is a real cap on descriptors, and a
+   downloaded executable runs while `bit-cli seed` is serving it.
+
+   All four `--file-allocation` methods now do four different things, measured
+   by volume free space before the payload arrives.
+   `scripts/check-handles.ps1` and `scripts/check-allocation.ps1` are the
+   acceptance for those two.
 6. [T-020](peers.md), [T-021](peers.md), [T-030](performance.md), and
    [T-040](memory.md), the four long-run failures. Likely fewer than four
    distinct defects. Measure before theorising. [T-042](memory.md) built the

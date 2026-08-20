@@ -11,7 +11,7 @@ Source:      https://github.com/ikatson/rqbit/issues/369 (open)
 Category:    windows
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     A `.exe` inside a completed torrent cannot be launched while the
              session still holds a handle to it, downloading, paused, or
@@ -28,6 +28,67 @@ Approach:    Two halves. The finalize half: close every payload handle before
 Acceptance:  `bit-cli download <TORRENT WITH EXE>` followed immediately by
              running the executable succeeds, and the same during a concurrent
              `bit-cli seed` of the same payload.
+
+## What it actually was
+
+Reproduced first, on a torrent holding a real 64 KiB executable and 256 KiB of
+padding, served over loopback:
+
+```
+Start-Process -FilePath out\payload\tool.exe
+  This command cannot be run due to the error: The process cannot access the
+  file because it is being used by another process.
+```
+
+while `bit-cli seed` was serving it. `Copy-Item`, `Rename-Item`, and
+`Remove-Item` on the same file all succeeded at the same moment, which is the
+clue: the share mode was not the problem. Rust's `File` already opens with
+`FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`, so the approach above
+was aimed at something that was already true.
+
+The problem was the **access**, not the sharing. Loading an image asks for read
+access with a share mode that does not include write, and that conflicts with
+an existing handle that was granted write access. A seeder held one on every
+file.
+
+## The fix
+
+Two changes, both in `bit_cli_core::storage`:
+
+- A read opens for reading only. `Intent::Read` opens without `.write(true)`
+  and without `.create(true)`; `Intent::Write` opens for both and upgrades a
+  read-only handle in place, dropping the old one first so the two never
+  coexist. A seeder only ever reads, so it never upgrades.
+- `ensure_file_length` does nothing when the file is already the length asked
+  for. Without this the first thing a seed did was open every file for writing
+  to set the size it already had, which put the writable handle back.
+
+Together, a complete seed touches no payload file for writing at all.
+
+## Acceptance
+
+```
+$ bit-cli download p.torrent --web-seed $URL --web-seed-only --dir out --port 0
+download exit 0
+exec right after download: 0
+
+$ bit-cli seed p.torrent --data out --port 0 --stop-after 25s     # in background
+seeder running: True
+EXEC OK while seeding, exit 0: C:\Windows\System32\where.exe
+
+$ bit-cli seed p.torrent --data out --port 0 --stop-after 4s --json
+seed complete True, have 320.00 KiB of 320.00 KiB
+
+$ bit-cli verify p.torrent --data out --json
+verify exit 0, complete True
+```
+
+Both halves of the acceptance pass, the payload still hashes equal to the
+source, and the seed still serves the whole of it.
+
+`storage::tests::a_read_opens_for_reading_only_and_a_write_upgrades` pins the
+invariant without needing Windows: a read leaves `is_writable()` false, a write
+makes it true, and the upgrade replaces the handle rather than adding one.
 
 ### T-071 Reserved device names in torrent paths are not sanitised
 
