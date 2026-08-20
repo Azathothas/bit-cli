@@ -57,3 +57,11 @@ webpki-roots.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "fs", "test-util"] }
+
+# The signing and redirect routing in the file server is logic, not plumbing,
+# and a fixture that answers 403 when it should not would fail a download and
+# look like a defect in `bit-cli`. `test = true` puts its unit tests in
+# `cargo test --workspace` alongside everything else.
+[[example]]
+name = "loopback-fileserver"
+test = true
