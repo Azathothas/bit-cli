@@ -38,6 +38,8 @@ pub enum Kind {
     Swarm,
     /// One-shot reachability and capability probe.
     Probe,
+    /// Measure the payload file under several writers, with no session.
+    Disk,
 }
 
 impl Kind {
@@ -49,6 +51,7 @@ impl Kind {
             Self::Webseed => "webseed",
             Self::Swarm => "swarm",
             Self::Probe => "probe",
+            Self::Disk => "disk",
         }
     }
 }
@@ -346,6 +349,59 @@ pub struct Costs {
     pub mean_service_us: Option<u64>,
 }
 
+/// What one writer thread cost, for `bench disk`.
+///
+/// The per-thread figure is what says whether the threads are waiting on each
+/// other: eight threads that each take as long as one thread took on its own
+/// are eight threads taking turns.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskThread {
+    pub index: usize,
+    pub blocks: u64,
+    pub bytes: Size,
+    /// Wall time this thread spent inside `pwrite_all`.
+    pub write_time: Millis,
+    /// Mean time for one of this thread's writes.
+    pub mean_write_us: u64,
+}
+
+/// One step of a `bench disk` sweep.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskStep {
+    pub threads: usize,
+    /// `shared` or `split`.
+    pub layout: String,
+    pub files: usize,
+    pub bytes: Size,
+    /// Wall time of the write phase.
+    pub elapsed: Millis,
+    pub rate: Size,
+    /// Every thread's write time added together. Against `elapsed` it says how
+    /// many writes were really in flight.
+    pub total_write_time: Millis,
+    pub write_ops: u64,
+    /// Mean time for one positioned write, across every thread.
+    pub mean_write_us: u64,
+    /// Writes actually overlapping, as `total_write_time / elapsed`. It is the
+    /// thread count when nothing serialises and 1.00 when everything does.
+    pub concurrency_achieved: String,
+    /// Time to push what the write phase left in the page cache out to the
+    /// device, taken after `elapsed` and not counted in it.
+    ///
+    /// It is here for two reasons. A step that leaves gigabytes outstanding
+    /// would otherwise charge them to the next step, and `rate` against this
+    /// says whether a step was measuring the cache or the device.
+    pub flush: Millis,
+    pub threads_detail: Vec<DiskThread>,
+    /// Whether the payload read back as what was written. `None` when the
+    /// read-back was skipped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verified: Option<bool>,
+    /// What that read-back cost, when one ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_back: Option<Disk>,
+}
+
 /// One step of a concurrency sweep, so the knee is visible.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConcurrencyStep {
@@ -577,6 +633,10 @@ pub struct Report {
     pub series: Vec<Sample>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub concurrency_curve: Vec<ConcurrencyStep>,
+    /// Per-step detail for `bench disk`, which measures threads rather than
+    /// requests and so needs the per-thread cost the curve cannot carry.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub disk_steps: Vec<DiskStep>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub sources: Vec<SourceSummary>,
     pub summary: Summary,
@@ -601,6 +661,7 @@ impl Report {
             target: Target::default(),
             series: Vec::new(),
             concurrency_curve: Vec::new(),
+            disk_steps: Vec::new(),
             sources: Vec::new(),
             summary: Summary::default(),
             threshold: None,

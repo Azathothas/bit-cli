@@ -70,6 +70,13 @@ it, so the history starts here.
   request pipeline, piece verification, and the disk. All three are measured
   rather than modelled, and all three appear per interval as well as in the
   summary.
+- `bench disk` measures the disk on its own: a payload written through the same
+  storage a download writes through, from N threads, with no session and no
+  network. `--layout shared|handles|split` decides whether the threads share
+  one file behind one handle, share one file behind a handle each, or take a
+  file each, and comparing the three is what says where a limit lives. Every
+  step reads its payload back and checks each block is the one written to it,
+  and exits 7 rather than reporting a rate when it is not.
 
 ### Measurement
 
@@ -122,6 +129,10 @@ it, so the history starts here.
   a comparison rather than a progress, and `--ceiling` names a reference the
   caller supplies, so a run that beat it now says so. The clamping renderer is
   still what progress uses.
+- Each `bench disk` step drains its writeback after the clock stops and reports
+  it as `flush`. Without that, a step that filled the page cache hands its cost
+  to whichever step runs after it, and a sweep reports the order the steps ran
+  in rather than the thread count.
 
 ### Paths
 
@@ -211,8 +222,8 @@ it, so the history starts here.
 
 ### Not in this release
 
-`bench leech`, `bench seed`, `bench probe`, `bench swarm`, Metalink resolution,
-BEP 52 v2 and hybrid creation, BEP 16 superseeding, `--log-file` rotation, and
+`bench seed`, `bench probe`, `bench swarm`, Metalink resolution, BEP 52 v2 and
+hybrid creation, BEP 16 superseeding, `--log-file` rotation, and
 `-i/--input-file`. Each has an entry in `TODO/` with what closes it. Nothing is
 stubbed: a command that is not implemented says so and exits with a code a
 script can branch on.

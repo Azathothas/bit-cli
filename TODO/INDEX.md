@@ -56,7 +56,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-014](disk-io.md) | P2 | disk-io | **done** | Adding a torrent can fail with "File exists (os error 17)" |
 | [T-015](disk-io.md) | P1 | disk-io | **done** | Hash checking can hang at 0 percent |
 | [T-016](disk-io.md) | P2 | disk-io | blocked | fastresume is not used when adding a torrent |
-| [T-017](disk-io.md) | P1 | disk-io | open | Concurrent receive paths contend on the payload file |
+| [T-017](disk-io.md) | P1 | disk-io | **done** | Concurrent receive paths contend on the payload file |
+| [T-018](disk-io.md) | P2 | disk-io | open | The write path issues one operation per 16 KiB block |
 | [T-020](peers.md) | P0 | peers | open | Connections accumulate in CLOSE_WAIT until TCP is unusable |
 | [T-021](peers.md) | P0 | peers | open | A temporary network drop stops the download permanently |
 | [T-022](peers.md) | P1 | peers | open | Peer connections churn on IPv6-only swarms |
@@ -128,20 +129,21 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-85 items: 75 to work through, and 10 deferred to Phase C. Five were added by
+86 items: 76 to work through, and 10 deferred to Phase C. Six were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
 source cannot be attached over more than one connection, and concurrent
-receive paths contend on the payload file. T-035 came out of building the
-T-003 acceptance, which needed a slow mirror and found that the flag for one
-did nothing.
+receive paths contend on the payload file. T-018 came out of T-017's own
+measurement, which found the contention is charged per write operation rather
+than per byte. T-035 came out of building the T-003 acceptance, which needed a
+slow mirror and found that the flag for one did nothing.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 4 | 1 | 0 | 5 |
-| P1 | 17 | 1 | 0 | 12 |
-| P2 | 18 | 1 | 1 | 5 |
+| P1 | 16 | 1 | 0 | 13 |
+| P2 | 19 | 1 | 1 | 5 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 
@@ -192,9 +194,11 @@ first six are done or mostly done; item seven is where the open P0 work is.
    requests on one connection reach 0.81x, slightly worse than 8 on the same
    connection. Not the request window: the bridge sees `librqbit`'s 128 block
    window reached, but the run sits at 40% of what that peak would allow. Not
-   hashing: piece checks are 11% of a one-connection run. The disk is the
-   second wall and it is what flattens the curve after two, recorded as
-   [T-017](disk-io.md).
+   hashing: piece checks are 11% of a one-connection run. It looked like the
+   disk was the second wall and the thing flattening the curve after two, and
+   [T-017](disk-io.md) measured that separately and found it is not: storage
+   moves 1.31 GiB/s at eight writers on one file, which is 3.3 times what the
+   eight-bridge run asks of it.
 
    The fix the measurement points at is [T-009](webseed.md), and it is
    **done**. `--web-seed-connections <N>` presents one source over N
@@ -246,8 +250,17 @@ first six are done or mostly done; item seven is where the open P0 work is.
    CPU time, and handle count. [T-011](disk-io.md) removed one of the two
    things [T-040](memory.md) names: descriptors are now bounded by a flag.
 
-   [T-017](disk-io.md) is the first thing to look at for
-   [T-030](performance.md). The same 1 GiB of writes costs 1,137 ms across one
-   receive path and 14,036 ms across eight, and several torrents at once is
-   several receive paths against several files. It may be one defect rather
-   than two.
+   [T-017](disk-io.md) was the first thing to look at for
+   [T-030](performance.md), and it is **done**. It rules the disk out rather
+   than in. `bit-cli bench disk` writes the same bytes through the same storage
+   from N threads with no session, and it found that writes to one file
+   serialise whatever handle they arrive on, that the serialisation is charged
+   per operation rather than per byte, and that even fully contended the write
+   path moves 1.31 GiB/s against the 408 MiB/s an eight-bridge `bench leech`
+   run asks of it.
+
+   Two things follow for [T-030](performance.md). Several torrents at once is
+   several files, which is the shape that scales in that measurement, so this
+   is probably not the same defect. And the residue,
+   [T-018](disk-io.md), is worth at most 18% of an eight-bridge run, so it is
+   not where the collapse lives either.

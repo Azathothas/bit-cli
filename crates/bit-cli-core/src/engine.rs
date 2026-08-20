@@ -1154,10 +1154,10 @@ mod tests {
     }
     /// A file that is already there is a disk failure, not a bad source.
     ///
-    /// A caller branches on the exit code, and  over an
-    /// existing payload without  is exactly the case where
-    /// a generic failure is useless: the fix is a flag, and the code has to say
-    /// so. See , T-014.
+    /// A caller branches on the exit code, and `download` over an existing
+    /// payload without `--allow-overwrite` is exactly the case where a generic
+    /// failure is useless: the fix is a flag, and the code has to say so. See
+    /// `TODO/disk-io.md`, T-014.
     #[test]
     fn an_existing_file_is_classified_by_type_rather_than_by_its_wording() {
         let error = anyhow::Error::new(crate::storage::AlreadyExists {

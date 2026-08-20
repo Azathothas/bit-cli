@@ -30,6 +30,10 @@ Approach:    Build in this order, because each reuses the last:
              5. `bench probe`, a one-shot reachability check.
              6. `bench swarm`, the synthetic load generator, which is the
                 largest and should come last. See [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator).
+
+             `bench disk` was added to this list after the fact, by
+             [T-017](disk-io.md), which needed the disk measured on its own and
+             found the envelope already there to put it in. **Done.**
 Acceptance:  Each subcommand writes a report with the metrics A3.11 lists, and
              `--fail-under` set above the observed rate exits 14.
 
@@ -124,6 +128,38 @@ output directory hash-checks clean on add, and the torrent is finished before
 a byte is fetched. A rate taken from that run describes the hash checker, so
 `bench leech` refuses it and names the directory. The benchmark script hit
 exactly this when its own cleanup silently failed, which is how it was found.
+
+`bench disk` is built. It writes a payload through the same
+`bit_cli_core::storage::SafeStorage` a download writes through, from N threads,
+with no session and no network, so the disk can be measured on its own instead
+of inferred from a download doing four things at once. It was built for
+[T-017](disk-io.md) and it answered that entry: writes to one file serialise
+whatever handle they arrive on, and the serialisation is charged per operation
+rather than per byte.
+
+Three layouts make that readable, and the difference between two of them is the
+whole measurement: `shared` is one file behind one handle, `handles` is the same
+file and the same offsets behind one handle per thread, and `split` is one file
+per thread. It fills the same envelope as every other subcommand, adds
+`disk_steps` for the per-thread cost a concurrency curve cannot carry, and
+exits 7 rather than 0 when a step reads back a block it did not write, because
+that is a correctness failure and not a slow one.
+
+```
+$ bit-cli bench disk --payload-size 1GiB --concurrency-sweep 1,2,4,8 --format text
+
+Writers
+  THREADS  LAYOUT   FILES  RATE           WALL      FLUSH     WRITE TOTAL  MEAN WRITE  OVERLAP
+  1        shared   1      2.27 GiB/s     440ms     821ms     423ms        6us         0.96
+  2        shared   1      1.57 GiB/s     635ms     412ms     1s           18us        1.93
+  4        shared   1      1.65 GiB/s     606ms     915ms     2s           34us        3.73
+  8        shared   1      1.46 GiB/s     685ms     1s        4s           75us        7.22
+```
+
+`scripts/check-disk-contention.ps1` drives the sweep across all three layouts
+and a block-size range, alternating the order so no layout always gets the disk
+in the same state, and writes the medians and a verdict to
+`bench/disk-contention-<timestamp>.json`.
 
 Still open: `seed`, `probe`, and `swarm` refuse with exit 1 naming this entry,
 the same as before. Each is its own slice of work on the envelope that now

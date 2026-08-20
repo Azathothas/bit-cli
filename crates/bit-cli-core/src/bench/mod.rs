@@ -15,8 +15,10 @@
 //! - [`render`] writes a report out as JSON, NDJSON, CSV, or text.
 //!
 //! The measurement drivers live beside them: [`webseed`] measures HTTP
-//! sources.
+//! sources, and [`disk`] measures what the payload file costs when several
+//! receive paths write into it at once.
 
+pub mod disk;
 pub mod recorder;
 pub mod render;
 pub mod report;

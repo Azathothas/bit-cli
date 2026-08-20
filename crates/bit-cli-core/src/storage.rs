@@ -126,6 +126,20 @@ impl StorageMetrics {
         }
     }
 
+    /// Count a positioned read this storage did not perform itself.
+    ///
+    /// [`crate::bench::disk`] writes through its own handles for one of its
+    /// layouts, and its series has to come out of the same counters as every
+    /// other layout's or the two would not be comparable.
+    pub fn observe_read(&self, bytes: u64, elapsed: std::time::Duration) {
+        self.add_read(bytes, elapsed);
+    }
+
+    /// Count a positioned write this storage did not perform itself.
+    pub fn observe_write(&self, bytes: u64, elapsed: std::time::Duration) {
+        self.add_write(bytes, elapsed);
+    }
+
     fn add_read(&self, bytes: u64, elapsed: std::time::Duration) {
         self.read_ops.fetch_add(1, Ordering::Relaxed);
         self.read_bytes.fetch_add(bytes, Ordering::Relaxed);
@@ -309,6 +323,30 @@ impl SafeStorageFactory {
     pub fn plan_handle(&self) -> PlanHandle {
         PlanHandle(self.plan.clone())
     }
+
+    /// Storage for a list of torrent-relative paths, with no session.
+    ///
+    /// [`StorageFactory::create`] is this plus the two things only metadata
+    /// carries: the subfolder a multi-file torrent unpacks into, and which
+    /// files are BEP 47 padding. Both routes run the same plan and build the
+    /// same [`SafeStorage`], so a measurement taken through this one measures
+    /// the storage a download uses rather than a copy of it. See
+    /// `TODO/disk-io.md`, T-017.
+    pub fn for_paths(&self, torrent_paths: &[String], root: PathBuf) -> SafeStorage {
+        let planned = plan(torrent_paths);
+        let _ = self.plan.set(planned.clone());
+        SafeStorage {
+            root,
+            overwrite: self.overwrite,
+            allocation: self.allocation,
+            padding: vec![false; planned.disk_paths.len()],
+            disk_paths: planned.disk_paths,
+            files: Vec::new(),
+            open: Mutex::new(OpenSet::new(self.max_open_files)),
+            notes: self.notes.clone(),
+            metrics: self.metrics.clone(),
+        }
+    }
 }
 
 /// A read handle on the path plan of one torrent.
@@ -341,33 +379,23 @@ impl StorageFactory for SafeStorageFactory {
             .iter()
             .map(|file| slash_path(&file.relative_filename))
             .collect();
-        let planned = plan(&torrent_paths);
-        // `set` fails only if storage is created twice for the same torrent,
-        // which happens when it is paused and resumed. The plan is a pure
-        // function of the file list, so the second one is the same as the
-        // first and the first is kept.
-        let _ = self.plan.set(planned.clone());
 
         let root = match self.subfolder.then(|| subfolder_for(metadata)).flatten() {
             Some(name) => join_relative(&self.output_folder, &name),
             None => self.output_folder.clone(),
         };
 
-        Ok(SafeStorage {
-            root,
-            overwrite: self.overwrite,
-            allocation: self.allocation,
-            disk_paths: planned.disk_paths,
-            padding: metadata
-                .file_infos
-                .iter()
-                .map(|file| file.attrs.padding)
-                .collect(),
-            files: Vec::new(),
-            open: Mutex::new(OpenSet::new(self.max_open_files)),
-            notes: self.notes.clone(),
-            metrics: self.metrics.clone(),
-        })
+        // `for_paths` sets the plan, and `OnceLock::set` fails only if storage
+        // is created twice for the same torrent, which happens when it is
+        // paused and resumed. The plan is a pure function of the file list, so
+        // the second one is the same as the first and the first is kept.
+        let mut storage = self.for_paths(&torrent_paths, root);
+        storage.padding = metadata
+            .file_infos
+            .iter()
+            .map(|file| file.attrs.padding)
+            .collect();
+        Ok(storage)
     }
 
     fn clone_box(&self) -> BoxStorageFactory {
@@ -654,24 +682,44 @@ impl SafeStorage {
     pub fn open_files(&self) -> usize {
         self.open.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
-}
 
-impl TorrentStorage for SafeStorage {
-    fn init(
-        &mut self,
-        _shared: &ManagedTorrentShared,
-        _metadata: &TorrentMetadata,
-    ) -> anyhow::Result<()> {
+    /// Push every open handle's writes to the device and wait for them.
+    ///
+    /// A download never calls this: a positioned write that has reached the
+    /// page cache is written as far as the session and the next reader are
+    /// concerned, and forcing the device on every block would make the tool
+    /// slower for no gain in correctness that a hash check does not already
+    /// give. It exists for the measurement, where a step that left gigabytes
+    /// of writeback outstanding would otherwise charge them to the next step.
+    /// See `TODO/disk-io.md`, T-017.
+    pub fn flush_all(&self) -> anyhow::Result<()> {
+        for (index, slot) in self.files.iter().enumerate() {
+            if slot.path.as_os_str().is_empty() {
+                continue;
+            }
+            slot.try_with(Intent::Write, "flush", |file| file.sync_all())
+                .map_err(|e| anyhow::anyhow!("cannot flush file {index}: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Plan the slots and create the directories, with no session.
+    ///
+    /// [`TorrentStorage::init`] is exactly this: it takes the session's two
+    /// metadata arguments and uses neither. Naming the session-free half lets
+    /// a measurement drive this storage directly. See `TODO/disk-io.md`,
+    /// T-017.
+    pub fn init_paths(&mut self) -> anyhow::Result<()> {
         // Paths are planned here and files are opened on first use. A torrent
         // added with a file selection never touches the files it was not asked
         // for, so this is what keeps them off the disk entirely rather than
         // creating them empty. See `TODO/disk-io.md`, T-013.
         //
-        // Directories are still created here, and once each rather than once
-        // per file: a torrent with many files in one directory is the common
-        // case, and `create_dir_all` per file is a syscall per file for no
-        // reason. An empty directory a selection did not fill is cheap and
-        // visible, which an empty file pretending to be payload is not.
+        // Directories are created here, and once each rather than once per
+        // file: a torrent with many files in one directory is the common case,
+        // and `create_dir_all` per file is a syscall per file for no reason.
+        // An empty directory a selection did not fill is cheap and visible,
+        // which an empty file pretending to be payload is not.
         let mut made = BTreeSet::new();
         let mut files = Vec::with_capacity(self.disk_paths.len());
 
@@ -704,6 +752,16 @@ impl TorrentStorage for SafeStorage {
 
         self.files = files;
         Ok(())
+    }
+}
+
+impl TorrentStorage for SafeStorage {
+    fn init(
+        &mut self,
+        _shared: &ManagedTorrentShared,
+        _metadata: &TorrentMetadata,
+    ) -> anyhow::Result<()> {
+        self.init_paths()
     }
 
     fn pread_exact(&self, file_id: usize, offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
@@ -993,7 +1051,7 @@ fn slash_path(path: &Path) -> String {
 }
 
 #[cfg(unix)]
-fn pread_exact(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+pub fn pread_exact(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
     use std::os::unix::fs::FileExt;
     file.read_exact_at(buf, offset)
 }
@@ -1003,7 +1061,7 @@ fn pread_exact(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<()> 
 /// returns nothing is end of file, and treating that as a read of zeroes is
 /// how a hash check passes over a file that is not there.
 #[cfg(windows)]
-fn pread_exact(file: &File, mut offset: u64, mut buf: &mut [u8]) -> std::io::Result<()> {
+pub fn pread_exact(file: &File, mut offset: u64, mut buf: &mut [u8]) -> std::io::Result<()> {
     use std::os::windows::fs::FileExt;
     while !buf.is_empty() {
         match file.seek_read(buf, offset)? {
@@ -1023,13 +1081,13 @@ fn pread_exact(file: &File, mut offset: u64, mut buf: &mut [u8]) -> std::io::Res
 }
 
 #[cfg(unix)]
-fn pwrite_all(file: &File, offset: u64, buf: &[u8]) -> std::io::Result<()> {
+pub fn pwrite_all(file: &File, offset: u64, buf: &[u8]) -> std::io::Result<()> {
     use std::os::unix::fs::FileExt;
     file.write_all_at(buf, offset)
 }
 
 #[cfg(windows)]
-fn pwrite_all(file: &File, mut offset: u64, mut buf: &[u8]) -> std::io::Result<()> {
+pub fn pwrite_all(file: &File, mut offset: u64, mut buf: &[u8]) -> std::io::Result<()> {
     use std::os::windows::fs::FileExt;
     while !buf.is_empty() {
         match file.seek_write(buf, offset)? {

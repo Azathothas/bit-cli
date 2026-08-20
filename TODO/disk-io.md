@@ -310,7 +310,7 @@ Source:      https://github.com/ikatson/rqbit/issues/504 (open)
 Category:    disk-io
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     Adding a torrent fails outright when the session's own cache files
              already exist.
@@ -324,13 +324,34 @@ Approach:    `bit-cli` maps this to `ExitCode::Disk` in
 Acceptance:  A test adds a torrent over an existing conflicting path and
              asserts exit code 8, not exit code 1.
 
+The classification is by type rather than by text. `storage::AlreadyExists` is
+an error type carrying the path, `SafeStorage::init` returns it before anything
+is written, and `engine::classify_add_error` finds it by downcasting the error
+chain. So the exit code does not change when somebody rewords a message.
+
+The text classifier is still there for what `librqbit` reports as prose with no
+type to match, and the phrases it matches on are pinned by a test, which is
+what keeps a reworded upstream phrase from silently changing an exit code.
+
+```
+$ cargo test -p bit-cli-core --lib engine::tests::an_existing_file_is_classified_by_type
+test result: ok. 1 passed; 0 failed
+```
+
+Three tests hold it. `an_existing_file_is_classified_by_type_rather_than_by_its_wording`
+asserts exit code 8 and that the message names both the path and
+`--allow-overwrite`. `every_text_classification_maps_to_the_code_it_is_there_for`
+pins the nine phrases. `a_type_beats_the_text_when_both_could_match` uses a path
+containing the word "connect", which the text classifier would call a network
+failure, and asserts the type wins.
+
 ### T-015 Hash checking can hang at 0 percent
 
 Source:      https://github.com/ikatson/rqbit/issues/347 (open)
 Category:    disk-io
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     Roughly one add in twenty of a torrent with existing files sticks
              at 0 percent or 100 percent "checking files" and never leaves.
@@ -345,6 +366,39 @@ Approach:    `--timeout` and `--stop-after` already bound the whole run, so a
              files are on a slow or contended volume.
 Acceptance:  `bit-cli download <TORRENT> --timeout 30s` against a stuck hash
              check exits 9 with `"phase": "initializing"` in the error context.
+
+`Engine::wait_until_initialized_within` is the initialisation-specific
+deadline. It exits 9 and the context says which phase and how far the check
+had got, so a caller can tell a stuck hash check from a slow one:
+
+```json
+{
+  "phase": "initializing",
+  "info_hash": "...",
+  "waited_ms": 30000,
+  "checked_bytes": 0,
+  "total_bytes": 1073741824,
+  "checked_percent": "0.00%",
+  "state": "initializing"
+}
+```
+
+`checked_percent` is what separates the two failures the entry names.
+Consecutive samples that do not move are the hang; samples that move are a
+volume that is slower than the deadline allows, and the fix for that is a
+longer deadline rather than a bug report.
+
+The reproduction is
+`webseed_e2e::a_hash_check_that_has_not_finished_names_the_phase_it_is_in`,
+which hash-checks a 64 MiB payload with a one-millisecond deadline. That is a
+check that cannot finish in time rather than one that is stuck, and it exercises
+the same path: no test can make the upstream hang happen on demand, and one that
+waited for it would be a test that usually passes for the wrong reason.
+
+```
+$ cargo test -p bit-cli-core --test webseed_e2e a_hash_check_that_has_not_finished
+test result: ok. 1 passed; 0 failed
+```
 
 ### T-016 fastresume is not used when adding a torrent
 
@@ -450,7 +504,7 @@ Source:      the [T-090](bench.md) `bench leech` measurement
 Category:    disk-io
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     The same 1 GiB of payload writes costs 1,137 ms totalled across
              one receive path and 14,036 ms totalled across eight. That is the
@@ -486,3 +540,215 @@ Approach:    Two candidate causes, and the measurement does not yet separate
 Acceptance:  The micro-benchmark is committed and run on both platforms, this
              entry records which cause it found, and the fix is measured
              against `bench leech` at one, two, four, and eight bridges.
+
+**Neither cause. The writes serialise on the file, not on the handle, and the
+session is not involved.** A third finding came out of the same measurement and
+is the one that matters: the serialisation is charged per write operation
+rather than per byte.
+
+The benchmark is `bit-cli bench disk`, in `bit_cli_core::bench::disk`. It
+writes a payload through the same `SafeStorage` a download writes through, from
+N threads, with no session and no network. Three layouts, all writing the same
+bytes in the same block size from the same threads onto the same volume:
+
+| Layout | Files | Handles | Who writes what |
+| --- | --- | --- | --- |
+| `shared` | 1 | 1 | Every thread interleaves blocks into one file. This is a torrent with one payload file and several peers. |
+| `handles` | 1 | N | The same file at the same offsets, but thread `i` writes through its own handle. |
+| `split` | N | N | Thread `i` owns file `i` and writes it end to end. |
+
+`shared` and `handles` differ only in how many open handles the identical
+writes go through, which is what makes the pair decisive. `split` is the
+control that says whether anything scales at all.
+
+Acceptance, `scripts/check-disk-contention.ps1`, 1 GiB per step, three
+iterations, medians, 2026-08-20T06:48:13.208Z. Report:
+`bench/disk-contention-20260820T064813208Z.json`.
+
+```
+$ pwsh -NoProfile -File scripts/check-disk-contention.ps1
+
+Where the limit lives, in 16KiB blocks:
+
+threads shared     handles        split      shared x1 handles x1 split x1
+      1 2.25 GiB/s 2.29 GiB/s     2.27 GiB/s      1.00       1.00     1.00
+      2 1.52 GiB/s 1.55 GiB/s     3.96 GiB/s      0.68       0.68     1.75
+      4 1.45 GiB/s 1.21 GiB/s     4.58 GiB/s      0.65       0.53     2.02
+      8 1.31 GiB/s 1,012.63 MiB/s 2.29 GiB/s      0.58       0.43     1.01
+
+verdict: the file, not the handle: more handles on one file reach 1x, the same
+writes over separate files reach 2.021x. Writes to one file serialise whatever
+handle they arrive on.
+```
+
+Three things it says.
+
+**More writers on one file make it slower, not faster.** One thread reaches
+2.25 GiB/s and eight reach 1.31 GiB/s, which is 0.58x. Adding a writer to a
+file costs throughput from the second one onward.
+
+**More handles do not help.** `handles` gives each of the eight threads its own
+open handle to the same file, writing the same offsets, and it reaches 0.43x
+where one handle reaches 0.58x. So the serialisation is not the synchronous
+file object that candidate 1 named. It is the file. Spreading the writes over
+separate files is what scales, and only that: `split` reaches 2.02x at four
+threads.
+
+**The session is not involved.** There is no session in this benchmark and the
+curve reproduces, so candidate 2 is out as well.
+
+The order the layouts run in alternates inside each iteration and flips between
+iterations, because the volume's own state carries between steps. Each step
+drains its writeback before the next starts, reported as `flush` and not
+counted in the rate, or a step that filled the page cache would hand its cost
+to whichever step ran after it.
+
+## What it is charged for
+
+The same script's second phase writes the same 1 GiB to one file from the same
+threads, in blocks from 16 KiB up:
+
+```
+What one write costs, shared layout:
+
+block  t1         t2         t4         t8           ops
+16KiB  2.07 GiB/s 1.50 GiB/s 1.22 GiB/s 1.24 GiB/s 65536
+64KiB  3.09 GiB/s 2.49 GiB/s 2.64 GiB/s 2.54 GiB/s 16384
+256KiB 3.27 GiB/s 3.18 GiB/s 3.21 GiB/s 1.56 GiB/s  4096
+1MiB   3.47 GiB/s 3.51 GiB/s 3.28 GiB/s 2.84 GiB/s  1024
+
+charged: per operation: at 8 threads, 1MiB writes reach 2.296x what 16KiB
+writes reach for the same bytes
+```
+
+The same bytes to the same file from the same threads, and the only thing that
+changed is how many write operations they were split into. At 1 MiB the thread
+count stops mattering at all: 3.47, 3.51, 3.28, 2.84 across one to eight
+writers. The per-write serialisation is still there and still exact, visible in
+the mean write time growing by the thread count at every block size, but with
+few enough operations it costs nothing in wall time.
+
+That is what a fix would have to do, and it is recorded as
+[T-018](#t-018-the-write-path-issues-one-operation-per-16-kib-block).
+
+## Whether it caps a download
+
+**It does not.** The Relevance above said this was what caps
+[T-009](webseed.md). The numbers say otherwise.
+
+`bench leech` at eight bridges, re-measured in the same session,
+2026-08-20T06:53:25.367Z, report `bench/leech-20260820T065325367Z.json`:
+
+```
+$ pwsh -NoProfile -File scripts/bench-leech.ps1 -PayloadSize 1GiB -Runs 3 -ConnectionSweep "1,2,4,8"
+
+fetch, no bridge                   662.45 MiB/s   100.00%
+leech, 1 connection(s)             162.51 MiB/s    24.53%
+leech, 2 connection(s)             314.01 MiB/s    47.40%
+leech, 4 connection(s)             340.31 MiB/s    51.37%
+leech, 8 connection(s)             407.97 MiB/s    61.58%
+```
+
+The deepest bridge count moves 408 MiB/s. Storage at the same eight writers, on
+one file, in the same 16 KiB blocks, moves 1.31 GiB/s. That is 3.3 times what
+the download asks of it, so the write path has headroom rather than being the
+wall.
+
+What the disk does cost the download is its share of the wall clock. 1 GiB of
+16 KiB writes at eight writers takes about 806 ms of wall time on its own,
+against the leech run's 2,510 ms, so writes occupy at most 32% of the run and
+removing them entirely could not do better than that.
+[T-018](#t-018-the-write-path-issues-one-operation-per-16-kib-block) is what is
+actually available there.
+
+So the sentence in the Relevance above is wrong, and it is left standing with
+this correction under it rather than edited away. What caps
+[T-009](webseed.md) is the per-peer serial receive path, which is what that
+entry already says.
+
+## Not run on Linux
+
+The acceptance asks for both platforms and this machine has neither. `wsl
+--list` reports no installed distribution, and no container runtime is present:
+
+```
+$ wsl -l -v
+Windows Subsystem for Linux has no installed distributions.
+
+$ docker info
+docker: command not found
+```
+
+Installing either is a system-level change that rule 0.4 puts outside what this
+session may do. To unblock it, one of:
+
+```
+wsl --install -d Ubuntu
+```
+
+```
+winget install -e --id Docker.DockerDesktop
+```
+
+Then the same command produces the Linux half, because `bench disk` is in the
+binary rather than in a script:
+
+```
+cargo build --release --bins && ./target/release/bit-cli bench disk \
+    --payload-size 1GiB --concurrency-sweep 1,2,4,8 --layout shared --format text
+```
+
+The answer is expected to differ. Linux `pwrite` on a regular file takes the
+inode lock shared for a write inside the existing size on ext4 and xfs, so
+`shared` should track `split` there rather than falling behind it. That is a
+prediction and not a result, and it stays one in this entry until the command
+above has been run.
+
+---
+
+### T-018 The write path issues one operation per 16 KiB block
+
+Source:      the [T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-file) measurement
+Category:    disk-io
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     The session hands storage one 16 KiB block at a time and storage
+             turns each into one positioned write.
+             [T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-file)
+             measured that writes to one file serialise per operation rather
+             than per byte, so 1 GiB in 16 KiB writes costs 2.30 times what the
+             same gigabyte costs in 1 MiB writes at eight writers. A 1 GiB
+             `bench leech` run issues 65,536 write operations where 1,024 would
+             carry the same bytes.
+Relevance:   Bounded, and the bound is measured rather than guessed. Writes take
+             about 806 ms of the 2,510 ms an eight-bridge `bench leech` run
+             takes. Coalescing to 1 MiB would take that to about 352 ms, so the
+             change is worth at most 454 ms of 2,510 ms, which is 18%, and
+             408 MiB/s becoming about 497 MiB/s. Worth having, and not worth
+             having before the open P0 items.
+Approach:    A write-combining buffer per active region in `SafeStorage`, not
+             one buffer per file: with N peers the writes arrive as N
+             interleaved sequential streams, because the bridge fetches a 1 MiB
+             range and answers 16 KiB blocks out of it, so one buffer per file
+             would thrash where N would not.
+
+             Three correctness constraints, and none of them can be traded:
+
+             1. A read has to see a buffered write. The session reads every
+                piece back to hash it as soon as its last block lands, so a
+                buffer that `pread_exact` does not consult fails the piece.
+             2. Every buffer flushes before the file is closed, before the
+                handle is evicted by `--max-open-files`, and at the end of the
+                run.
+             3. Losing a buffered block on a crash is recoverable for a
+                download, which re-fetches it. It is not recoverable for
+                anything that reports progress from it, so nothing reports
+                progress from a byte that is still in a buffer.
+Acceptance:  `bit-cli bench disk --block-size 16KiB --layout shared
+             --concurrency-sweep 1,2,4,8` reaches within 10% of the same run at
+             `--block-size 1MiB`, `bench leech` at eight bridges improves and
+             the improvement is recorded here with both reports, and the whole
+             suite passes including `scripts/interop-roundtrip.ps1`, which is
+             what proves no byte moved.

@@ -61,6 +61,7 @@ fn ndjson(report: &Report) -> Result<String> {
     head.series = Vec::new();
     head.sources = Vec::new();
     head.concurrency_curve = Vec::new();
+    head.disk_steps = Vec::new();
 
     let mut lines = Vec::new();
     let mut push = |kind: &str, value: serde_json::Value| -> Result<()> {
@@ -84,6 +85,9 @@ fn ndjson(report: &Report) -> Result<String> {
     }
     for step in &report.concurrency_curve {
         push("concurrency_step", to_value(step)?)?;
+    }
+    for step in &report.disk_steps {
+        push("disk_step", to_value(step)?)?;
     }
     for source in &report.sources {
         push("source", to_value(source)?)?;
@@ -379,7 +383,50 @@ pub fn text(report: &Report) -> Vec<String> {
     }
     out.extend(error_lines(&summary.errors));
 
-    if !report.concurrency_curve.is_empty() {
+    // `bench disk` fills both `disk_steps` and `concurrency_curve`, and the
+    // curve's latency columns are empty for it because a positioned write has
+    // no connect time and no first byte. The step table carries the columns
+    // that do mean something, so it replaces the curve rather than sitting
+    // beside it.
+    if !report.disk_steps.is_empty() {
+        out.push(String::new());
+        out.push("Writers".to_string());
+        out.push(format!(
+            "  {:<8} {:<8} {:<6} {:<14} {:<9} {:<9} {:<12} {:<11} {}",
+            "THREADS",
+            "LAYOUT",
+            "FILES",
+            "RATE",
+            "WALL",
+            "FLUSH",
+            "WRITE TOTAL",
+            "MEAN WRITE",
+            "OVERLAP"
+        ));
+        for step in &report.disk_steps {
+            out.push(format!(
+                "  {:<8} {:<8} {:<6} {:<14} {:<9} {:<9} {:<12} {:<11} {}",
+                step.threads,
+                step.layout,
+                step.files,
+                format_rate(step.rate.0),
+                format_duration_ms(step.elapsed.0),
+                format_duration_ms(step.flush.0),
+                format_duration_ms(step.total_write_time.0),
+                format!("{}us", step.mean_write_us),
+                step.concurrency_achieved,
+            ));
+        }
+        if let Some(step) = report.disk_steps.iter().find(|s| s.verified == Some(false)) {
+            out.push(field(
+                "  verify",
+                format!(
+                    "the {}-thread step read back a block it did not write",
+                    step.threads
+                ),
+            ));
+        }
+    } else if !report.concurrency_curve.is_empty() {
         out.push(String::new());
         out.push("Concurrency".to_string());
         out.push(format!(

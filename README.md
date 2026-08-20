@@ -200,7 +200,7 @@ a bare info hash, and `-` for stdin.
 Every command runs in the foreground, does its work, and exits. There is no
 daemon and no stored session.
 
-Metalink as a source, and three of the five `bench` subcommands, parse but are
+Metalink as a source, and three of the six `bench` subcommands, parse but are
 not built yet. Each exits non-zero naming the `TODO/` entry that closes it,
 rather than pretending to work:
 
@@ -352,6 +352,55 @@ The results are in `TODO/webseed.md` under T-001 and `TODO/bench.md` under
 T-090, with the committed reports under `bench/`. In one line: one source is
 one peer, one peer is one serial receive path, and that path is what bounds
 the download.
+
+## Measuring the disk on its own
+
+`bench disk` writes a payload through the same storage a download writes
+through, from N threads, with no session and no network. A download has the
+network, the session, the hash, and the disk running at once and cannot say
+which of them a slow run was waiting for; this takes the other three away.
+
+```bash
+bit-cli bench disk --payload-size 1GiB --concurrency-sweep 1,2,4,8 --format text
+```
+
+```
+Writers
+  THREADS  LAYOUT   FILES  RATE           WALL      FLUSH     WRITE TOTAL  MEAN WRITE  OVERLAP
+  1        shared   1      2.27 GiB/s     440ms     821ms     423ms        6us         0.96
+  2        shared   1      1.57 GiB/s     635ms     412ms     1s           18us        1.93
+  4        shared   1      1.65 GiB/s     606ms     915ms     2s           34us        3.73
+  8        shared   1      1.46 GiB/s     685ms     1s        4s           75us        7.22
+```
+
+`--layout` decides how the same bytes are spread, and comparing the three is
+the measurement:
+
+| Layout | Files | Handles | What it is |
+| --- | --- | --- | --- |
+| `shared` | 1 | 1 | Every thread interleaves blocks into one file. What a torrent with one payload file and several peers does. |
+| `handles` | 1 | N | The same file at the same offsets, one handle per thread. |
+| `split` | N | N | One file per thread. |
+
+`OVERLAP` is the summed write time over the wall clock: the thread count when
+nothing serialises, and 1.00 when everything does. `FLUSH` is what the write
+phase left in the page cache, drained after the clock stops so one step does
+not hand its cost to the next.
+
+Every step reads the payload back and checks that each block is the block that
+was written to it. A step that reads back something else exits 7, because that
+is a correctness failure and not a slow one. Pass `--no-verify` to skip it.
+
+```bash
+pwsh scripts/check-disk-contention.ps1
+```
+
+That runs the sweep across all three layouts and a range of block sizes,
+alternating the order so no layout always gets the disk in the same state, and
+writes the medians and a verdict to `bench/disk-contention-<timestamp>.json`.
+What it found on NTFS is in `TODO/disk-io.md` under T-017: writes to one file
+serialise whatever handle they arrive on, and the serialisation is charged per
+write operation rather than per byte.
 
 ## Fetch one piece from one mirror
 

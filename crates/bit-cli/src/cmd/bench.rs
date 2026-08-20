@@ -24,7 +24,7 @@ use std::time::Duration;
 use bit_cli_core::ExitCode;
 use bit_cli_core::bench::render::{self, Format};
 use bit_cli_core::bench::report::{Build, Environment, Kind, Parameters, Report, Target};
-use bit_cli_core::bench::{recorder, webseed as bench_webseed};
+use bit_cli_core::bench::{disk as bench_disk, recorder, webseed as bench_webseed};
 use bit_cli_core::engine::Engine;
 use bit_cli_core::error::{Error, Result};
 use bit_cli_core::layout::Layout;
@@ -32,7 +32,9 @@ use bit_cli_core::torrent::Metainfo;
 use bit_cli_core::units::{Millis, Size, parse_duration, parse_rate, parse_size};
 use bit_cli_core::webseed::binding::BindingSet;
 
-use crate::cli::{BenchArgs, BenchCommand, BenchShared, BenchWebseedArgs, Global, ReportFormat};
+use crate::cli::{
+    BenchArgs, BenchCommand, BenchShared, BenchWebseedArgs, Global, ReportArgs, ReportFormat,
+};
 use crate::env::Env;
 use crate::output::Renderer;
 use crate::source::{Kind as SourceKind, load_local};
@@ -52,6 +54,7 @@ pub fn run(
     match command {
         BenchCommand::Webseed(args) => webseed(args, global, renderer, env),
         BenchCommand::Leech(args) => leech(args, global, renderer, env),
+        BenchCommand::Disk(args) => disk(args, global, renderer, env),
         BenchCommand::Seed(args) => unbuilt(Kind::Seed, args),
         BenchCommand::Swarm(args) => unbuilt(Kind::Swarm, args),
         BenchCommand::Probe(args) => unbuilt(Kind::Probe, args),
@@ -103,25 +106,25 @@ struct Output {
 }
 
 impl Output {
-    fn resolve(shared: &BenchShared, global: &Global, env: &Env) -> Result<Self> {
+    fn resolve(args: &ReportArgs, global: &Global, env: &Env) -> Result<Self> {
         // `--json` and `--jsonl` are the global way to ask for a machine
         // surface, so they set the report format rather than sitting beside
         // it. An explicit `--format` still wins over the default.
-        let format = match (global.json, global.jsonl, shared.format) {
+        let format = match (global.json, global.jsonl, args.format) {
             (_, true, _) => Format::Ndjson,
             (true, _, ReportFormat::Json) => Format::Json,
             (true, _, other) => format_of(other),
-            _ => format_of(shared.format),
+            _ => format_of(args.format),
         };
-        let path = match shared.report.as_deref() {
+        let path = match args.report.as_deref() {
             None | Some("-") => None,
             Some(path) => Some(env.resolve(std::path::Path::new(path))),
         };
         Ok(Self {
             format,
             path,
-            baseline: shared.baseline.as_ref().map(|p| env.resolve(p)),
-            fail_under: shared
+            baseline: args.baseline.as_ref().map(|p| env.resolve(p)),
+            fail_under: args
                 .fail_under
                 .as_deref()
                 .map(|rate| {
@@ -160,7 +163,7 @@ fn parameters(shared: &BenchShared) -> Result<Parameters> {
         concurrency: shared.concurrency.max(1),
         concurrency_sweep: sweep(shared.concurrency_sweep.as_deref())?,
         target_rate: rate(shared.target_rate.as_deref(), "target-rate")?.map(Size),
-        fail_under: rate(shared.fail_under.as_deref(), "fail-under")?.map(Size),
+        fail_under: rate(shared.report.fail_under.as_deref(), "fail-under")?.map(Size),
         ceiling: rate(shared.ceiling.as_deref(), "ceiling")?.map(Size),
         ..Default::default()
     })
@@ -235,7 +238,7 @@ pub fn webseed(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let output = Output::resolve(&args.shared, global, env)?;
+    let output = Output::resolve(&args.shared.report, global, env)?;
     let parameters = parameters(&args.shared)?;
     let request_size = size(args.shared.request_size.as_deref(), "request-size")?;
 
@@ -366,6 +369,152 @@ pub fn webseed(
     emit(&report, &output, renderer, env, code)
 }
 
+/// `bit-cli bench disk`: what the payload file costs under several writers.
+///
+/// No torrent, no session, no network. The same
+/// [`bit_cli_core::storage::SafeStorage`] a download writes through, driven
+/// from N threads, so the disk can be measured on its own rather than inferred
+/// from a download that is doing three things at once. See `TODO/disk-io.md`,
+/// T-017.
+pub fn disk(
+    args: &crate::cli::BenchDiskArgs,
+    global: &Global,
+    renderer: &mut Renderer,
+    env: &mut Env,
+) -> Result<ExitCode> {
+    let output = Output::resolve(&args.report, global, env)?;
+    let payload_size = size(Some(&args.payload_size), "payload-size")?.unwrap_or(0);
+    let block_size = size(Some(&args.block_size), "block-size")?.unwrap_or(0);
+    if payload_size == 0 {
+        return Err(Error::usage("--payload-size cannot be zero"));
+    }
+    if block_size == 0 {
+        return Err(Error::usage("--block-size cannot be zero"));
+    }
+    if block_size > payload_size {
+        return Err(Error::usage(
+            "--block-size is larger than --payload-size, so nothing would be written",
+        )
+        .with("block_size", args.block_size.clone())
+        .with("payload_size", args.payload_size.clone()));
+    }
+    let options = bench_disk::Options {
+        payload_size,
+        block_size,
+        threads: args.concurrency.max(1),
+        sweep: sweep(args.concurrency_sweep.as_deref())?,
+        layout: args.layout.into(),
+        allocation: super::download::allocation_of(args.file_allocation),
+        max_open_files: args.max_open_files,
+        duration: duration(&args.duration, "duration")?,
+        metrics_interval: duration(&args.metrics_interval, "metrics-interval")?,
+        verify: !args.no_verify,
+    };
+
+    let mut report = Report::new(
+        Kind::Disk,
+        Environment::begin(
+            build(),
+            env.args.clone(),
+            env.cwd.display().to_string(),
+            global.trace.clone(),
+        ),
+    );
+    report.parameters = Parameters {
+        duration: Millis::from(options.duration),
+        metrics_interval: Millis::from(options.metrics_interval),
+        concurrency: options.threads,
+        concurrency_sweep: options.sweep.clone(),
+        fail_under: output.fail_under.map(Size),
+        payload_size: Some(Size(payload_size)),
+        piece_size: Some(Size(block_size)),
+        ..Default::default()
+    };
+    if report.environment.build.debug_assertions {
+        report.note("this is a debug build: the numbers describe a debug build and nothing else");
+    }
+
+    // The payload directory has to be one this run owns, because every step
+    // removes it afterwards. A caller-named directory is used as given and a
+    // default one is made fresh and removed at the end.
+    let (root, temporary) = match &args.dir {
+        Some(dir) => (env.resolve(dir), false),
+        None => (
+            std::env::temp_dir().join(format!("bit-cli-bench-disk-{}", std::process::id())),
+            true,
+        ),
+    };
+    std::fs::create_dir_all(&root).map_err(|e| {
+        bit_cli_core::error::from_io(e, format!("cannot create {}", root.display()))
+    })?;
+    report.target = Target {
+        source: root.display().to_string(),
+        name: Some(format!(
+            "{} across {} thread{}",
+            options.layout.as_str(),
+            options.threads,
+            match options.threads {
+                1 => "",
+                _ => "s",
+            }
+        )),
+        total: Some(Size(payload_size)),
+        piece_length: Some(Size(block_size)),
+        ..Default::default()
+    };
+
+    if global.dry_run {
+        report.note("dry run: nothing was written");
+    } else {
+        let mut samples = Vec::new();
+        let outcome = bench_disk::run(&root, &options, |sample| samples.push(sample.clone()))
+            .map_err(|e| Error::disk(format!("{e:#}")))?;
+        for sample in &samples {
+            renderer.event(env, "bench_sample", sample)?;
+        }
+        for note in &outcome.notes {
+            renderer.warn(env, note);
+            report.note(note.clone());
+        }
+        report.series = outcome.series;
+        report.concurrency_curve = outcome.concurrency_curve;
+        report.disk_steps = outcome.steps;
+        report.summary = outcome.summary;
+        for sample in &report.series {
+            report.environment.observe(&sample.process);
+        }
+    }
+    if temporary && let Err(e) = std::fs::remove_dir_all(&root) {
+        renderer.warn(env, format!("could not remove {}: {e}", root.display()));
+    }
+
+    let met = match global.dry_run {
+        true => {
+            if output.fail_under.is_some() {
+                report.note("--fail-under was not applied: a dry run measures nothing");
+            }
+            true
+        }
+        false => report.apply_threshold(output.fail_under),
+    };
+    compare_against_baseline(&mut report, &output, renderer, env)?;
+    report.environment.finish();
+
+    // A step that read back a block it did not write is a correctness failure,
+    // not a slow one, and it outranks the threshold.
+    let scrambled = report
+        .disk_steps
+        .iter()
+        .any(|step| step.verified == Some(false));
+    let code = match (global.dry_run, scrambled, met) {
+        (true, _, _) => ExitCode::Success,
+        (_, true, _) => ExitCode::HashMismatch,
+        (_, _, false) => ExitCode::ThresholdNotMet,
+        _ => ExitCode::Success,
+    };
+    emit(&report, &output, renderer, env, code)
+}
+
 /// `bit-cli bench leech`: download a target and measure what it cost.
 ///
 /// The same fetch `download` runs, with the clock and the counters on. Three
@@ -381,7 +530,7 @@ pub fn leech(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let output = Output::resolve(&args.shared, global, env)?;
+    let output = Output::resolve(&args.shared.report, global, env)?;
     let parameters = parameters(&args.shared)?;
     let run_for = Duration::from_millis(parameters.duration.0);
     let warmup = Duration::from_millis(parameters.warmup.0);
@@ -1603,5 +1752,190 @@ mod tests {
             "three connections are one source: {sources:?}"
         );
         assert_eq!(sources[0]["bytes"]["bytes"].as_u64().unwrap(), total);
+    }
+
+    /// `bench disk` writes the payload, reads every block back, and reports
+    /// what each thread cost.
+    #[test]
+    fn a_disk_run_reports_a_step_per_thread_count_and_verifies_what_it_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = report(
+            &[
+                "bench",
+                "disk",
+                "--dir",
+                dir.path().to_str().unwrap(),
+                "--payload-size",
+                "2MiB",
+                "--block-size",
+                "64KiB",
+                "--concurrency-sweep",
+                "1,2",
+                "--metrics-interval",
+                "50ms",
+            ],
+            ExitCode::Success,
+        );
+
+        let steps = doc["disk_steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 2, "{steps:?}");
+        for (index, step) in steps.iter().enumerate() {
+            assert_eq!(step["threads"].as_u64().unwrap(), (index + 1) as u64);
+            assert_eq!(step["layout"], "shared");
+            assert_eq!(step["files"].as_u64().unwrap(), 1);
+            assert_eq!(step["bytes"]["bytes"].as_u64().unwrap(), 2 * 1024 * 1024);
+            assert_eq!(step["write_ops"].as_u64().unwrap(), 32);
+            assert_eq!(step["verified"], true, "the read-back did not check out");
+            assert_eq!(
+                step["threads_detail"].as_array().unwrap().len(),
+                index + 1,
+                "one row per thread"
+            );
+        }
+        // Every step writes the whole payload, so the summary is the sum.
+        assert_eq!(
+            doc["summary"]["bytes"]["bytes"].as_u64().unwrap(),
+            4 * 1024 * 1024
+        );
+        // No torrent and no network, so the payload directory is the target.
+        assert_eq!(doc["kind"], "disk");
+        // Each step removes its own payload, so nothing is left behind.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    /// The `split` layout gives every thread its own file, which is the
+    /// control the `shared` reading is taken against.
+    #[test]
+    fn the_split_layout_reports_one_file_per_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = report(
+            &[
+                "bench",
+                "disk",
+                "--dir",
+                dir.path().to_str().unwrap(),
+                "--payload-size",
+                "1MiB",
+                "--block-size",
+                "64KiB",
+                "--concurrency",
+                "4",
+                "--layout",
+                "split",
+                "--metrics-interval",
+                "50ms",
+            ],
+            ExitCode::Success,
+        );
+        let step = &doc["disk_steps"][0];
+        assert_eq!(step["layout"], "split");
+        assert_eq!(step["files"].as_u64().unwrap(), 4);
+        assert_eq!(step["verified"], true);
+    }
+
+    /// The `handles` layout writes through one handle per thread onto one
+    /// file, which is what separates a per-handle limit from a per-file one.
+    #[test]
+    fn the_handles_layout_writes_one_file_through_several_handles() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = report(
+            &[
+                "bench",
+                "disk",
+                "--dir",
+                dir.path().to_str().unwrap(),
+                "--payload-size",
+                "1MiB",
+                "--block-size",
+                "64KiB",
+                "--concurrency",
+                "4",
+                "--layout",
+                "handles",
+                "--metrics-interval",
+                "50ms",
+            ],
+            ExitCode::Success,
+        );
+        let step = &doc["disk_steps"][0];
+        assert_eq!(step["layout"], "handles");
+        assert_eq!(step["files"].as_u64().unwrap(), 1, "handles share one file");
+        assert_eq!(step["verified"], true);
+    }
+
+    #[test]
+    fn a_disk_run_below_the_threshold_exits_fourteen() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = report(
+            &[
+                "bench",
+                "disk",
+                "--dir",
+                dir.path().to_str().unwrap(),
+                "--payload-size",
+                "1MiB",
+                "--block-size",
+                "64KiB",
+                "--concurrency",
+                "2",
+                "--metrics-interval",
+                "50ms",
+                "--fail-under",
+                "100GiB/s",
+            ],
+            ExitCode::ThresholdNotMet,
+        );
+        assert_eq!(doc["threshold"]["met"], false);
+    }
+
+    #[test]
+    fn a_block_larger_than_the_payload_is_refused_rather_than_measured() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = run_err(
+            &[
+                "bench",
+                "disk",
+                "--dir",
+                dir.path().to_str().unwrap(),
+                "--payload-size",
+                "64KiB",
+                "--block-size",
+                "1MiB",
+            ],
+            ".",
+            ExitCode::Usage,
+        );
+        assert!(error.contains("--block-size"), "{error}");
+        assert!(error.contains("--payload-size"), "{error}");
+    }
+
+    /// A dry run says what it would do and writes a full report, the same as
+    /// every other subcommand.
+    #[test]
+    fn a_disk_dry_run_describes_the_target_without_writing_a_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = report(
+            &[
+                "--dry-run",
+                "bench",
+                "disk",
+                "--dir",
+                dir.path().to_str().unwrap(),
+                "--payload-size",
+                "1GiB",
+                "--concurrency",
+                "8",
+            ],
+            ExitCode::Success,
+        );
+        assert_eq!(doc["kind"], "disk");
+        assert!(environment_is_complete(&doc["environment"]));
+        assert_eq!(doc["target"]["name"], "shared across 8 threads");
+        assert_eq!(
+            doc["target"]["total"]["bytes"].as_u64().unwrap(),
+            1024 * 1024 * 1024
+        );
+        assert!(doc["disk_steps"].as_array().is_none_or(|s| s.is_empty()));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 }

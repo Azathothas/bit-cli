@@ -1190,6 +1190,8 @@ pub enum BenchCommand {
     Seed(BenchArgs),
     /// Measure HTTP sources: latency percentiles, concurrency scaling, ranges.
     Webseed(BenchWebseedArgs),
+    /// Measure the payload file under several writers, with no session.
+    Disk(BenchDiskArgs),
     /// Synthetic peer load against a target.
     Swarm(BenchArgs),
     /// One-shot capability and reachability probe.
@@ -1241,6 +1243,18 @@ pub struct BenchShared {
     #[arg(long, value_name = "RATE")]
     pub ceiling: Option<String>,
 
+    #[command(flatten)]
+    pub report: ReportArgs,
+}
+
+/// Where a `bench` report goes and what it is checked against.
+///
+/// These are separate from the rest of [`BenchShared`] because every
+/// subcommand has them and not every subcommand has a duration or a
+/// concurrency. A flag that a subcommand cannot honour does not appear on it.
+#[derive(Debug, Args, Clone, Default)]
+#[command(next_help_heading = "Report options")]
+pub struct ReportArgs {
     /// Write the full report here, or `-` for stdout. Default: stdout.
     #[arg(long, value_name = "PATH")]
     pub report: Option<String>,
@@ -1260,9 +1274,10 @@ pub struct BenchShared {
 }
 
 /// How a bench report is written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum ReportFormat {
+    #[default]
     Json,
     Ndjson,
     Csv,
@@ -1363,6 +1378,88 @@ pub struct BenchWebseedArgs {
 
     #[command(flatten)]
     pub shared: BenchShared,
+}
+
+/// `bit-cli bench disk`.
+///
+/// No torrent and no session: the same storage a download writes through,
+/// driven straight from N threads. It takes only the shared flags it can
+/// honour, because a fixed number of bytes has no warmup window and no target
+/// rate. See `TODO/disk-io.md`, T-017.
+#[derive(Debug, Args)]
+pub struct BenchDiskArgs {
+    #[command(flatten)]
+    pub report: ReportArgs,
+
+    /// Where the payload is written. Defaults to a directory this run makes
+    /// under the system temporary directory and removes afterwards.
+    #[arg(long, value_name = "DIR")]
+    pub dir: Option<PathBuf>,
+
+    /// Total bytes written per step.
+    #[arg(long, value_name = "SIZE", default_value = "1GiB")]
+    pub payload_size: String,
+
+    /// Bytes per positioned write. The peer protocol's block is 16 KiB.
+    #[arg(long, value_name = "SIZE", default_value = "16KiB")]
+    pub block_size: String,
+
+    /// How many threads write at once.
+    #[arg(long, value_name = "N", default_value_t = 8)]
+    pub concurrency: usize,
+
+    /// Step the thread count and report the curve, for example `1,2,4,8`.
+    #[arg(long, value_name = "SPEC")]
+    pub concurrency_sweep: Option<String>,
+
+    /// How the payload is spread over files. `shared` is one file with every
+    /// thread interleaving into it, which is what a download does. `split`
+    /// gives each thread its own file, which is the control.
+    #[arg(long, value_name = "LAYOUT", default_value = "shared")]
+    pub layout: DiskLayout,
+
+    /// How disk space is allocated for the payload.
+    #[arg(long, value_name = "METHOD", default_value = "sparse")]
+    pub file_allocation: FileAllocation,
+
+    /// How many payload files stay open at once. 0 uses the storage default.
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub max_open_files: usize,
+
+    /// Time series resolution.
+    #[arg(long, value_name = "DUR", default_value = "1s")]
+    pub metrics_interval: String,
+
+    /// Stop a step once this much wall time has passed.
+    #[arg(long, value_name = "DUR", default_value = "300s")]
+    pub duration: String,
+
+    /// Skip the read-back that checks every block landed where it was sent.
+    #[arg(long)]
+    pub no_verify: bool,
+}
+
+/// How `bench disk` spreads the payload over files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum DiskLayout {
+    /// One file, every thread interleaving blocks into it.
+    #[default]
+    Shared,
+    /// One file per thread, each writing only its own.
+    Split,
+    /// One file opened once per thread, each writing through its own handle.
+    Handles,
+}
+
+impl From<DiskLayout> for bit_cli_core::bench::disk::Layout {
+    fn from(layout: DiskLayout) -> Self {
+        match layout {
+            DiskLayout::Shared => Self::Shared,
+            DiskLayout::Split => Self::Split,
+            DiskLayout::Handles => Self::Handles,
+        }
+    }
 }
 
 /// `bit-cli config`.
