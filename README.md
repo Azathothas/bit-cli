@@ -225,6 +225,27 @@ on different hardware. Every report carries the machine, the exact command
 line, and what the process cost, because two numbers from two machines are not
 comparable and nothing in the number itself says so.
 
+### What the whole path costs
+
+`bench webseed` measures the HTTP fetch on its own. To measure what the torrent
+machinery adds on top of it, `scripts/bench-webseed.ps1` takes the same payload
+from the same server four ways in one session: `curl` on one connection, `curl`
+on N, `bit-cli bench webseed`, and `bit-cli download --web-seed-only`.
+
+```bash
+pwsh scripts/bench-webseed.ps1 -PayloadSize 256MiB -Runs 5
+```
+
+```bash
+pwsh scripts/bench-webseed.ps1 `
+  -Mirror https://geo.mirror.pkgbuild.com/iso/2026.08.01/ `
+  -TorrentUrl https://geo.mirror.pkgbuild.com/iso/2026.08.01/archlinux-2026.08.01-x86_64.iso.torrent
+```
+
+Four stages rather than two because one ratio says "slower" without saying
+where. The results, and what they say about the loopback bridge, are in
+`TODO/webseed.md` under T-001, with the committed reports under `bench/`.
+
 ## Fetch one piece from one mirror
 
 ```bash
@@ -315,6 +336,14 @@ bit-cli download hostile.torrent --json | jq '.torrents[0].renamed'
 The key is absent when nothing changed, which is the common case. `index` is
 the file's index in the torrent, so a caller can reconcile what it asked for
 with what is on disk.
+
+`seed` and `verify` carry the same array, because they serve and read the files
+`download` wrote:
+
+```bash
+bit-cli seed hostile.torrent --data out --json   | jq '.renamed'
+bit-cli verify hostile.torrent --data out --json | jq '.renamed'
+```
 
 ## Disk
 

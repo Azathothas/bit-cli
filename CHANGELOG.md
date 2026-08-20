@@ -131,16 +131,26 @@ it, so the history starts here.
   rendering and nothing else.
 - Six-layer configuration precedence, and `config show` reports the origin of
   every value.
+- A failed add carries the code that says why. `download --json` reports a
+  `code` per torrent and the run exits with the worst of them, so an existing
+  file exits 8 rather than a generic 1.
+- `seed` and `verify` carry the same `renamed` array `download` does, because
+  they serve and read the files it wrote. `verify` also reads the planned paths
+  rather than the torrent's own, which it did not before.
+- `--port` reaches `download` and `peers`, not only `seed`. `--no-continue`
+  turns off `--continue`, which previously defaulted on with no way to clear
+  it. `--init-timeout` bounds the hash check and names the phase when it fires.
 
 ### Build
 
 - Windows release binaries link the C runtime statically, so they run with no
   Visual C++ redistributable. `scripts/check-static.ps1` verifies it and CI
-  runs it. The `x86_64-pc-windows-msvc` binary is 16,082,432 bytes and imports
-  `kernel32`, `ntdll`, `combase`, `bcryptprimitives`,
-  `api-ms-win-core-synch-l1-2-0`, `ws2_32`, `shell32`, `crypt32`, `bcrypt`,
-  `userenv`, `ADVAPI32`, and `iphlpapi`. The one api-set is a core OS set, not
-  a CRT redirect.
+  runs it. The `x86_64-pc-windows-msvc` binary imports `kernel32`, `ntdll`,
+  `combase`, `bcryptprimitives`, `api-ms-win-core-synch-l1-2-0`, `ws2_32`,
+  `shell32`, `crypt32`, `bcrypt`, `userenv`, `advapi32`, and `iphlpapi`. The
+  one api-set is a core OS set, not a CRT redirect. The script prints the size
+  of whichever binary it checked rather than the number being pinned here,
+  because a size moves with every commit and a pinned one goes stale.
 - `create` output is byte-identical on repeat runs and independent of input
   order, with paths `/`-separated and sorted by raw bytes so no locale can
   affect it.
