@@ -1004,6 +1004,12 @@ bit-cli seed hostile.torrent --data out --json   | jq '.renamed'
 bit-cli verify hostile.torrent --data out --json | jq '.renamed'
 ```
 
+A long path is not one of the three. A payload whose deepest path plus the
+output directory runs past the 260 characters the classic Windows API allows
+lands as written and verifies from the same path, with nothing renamed. The
+one limit that does apply is per component: a name over 255 bytes is truncated
+to fit, keeping its extension, and reported like any other rename.
+
 ## Disk
 
 A payload file is created when it is first written, not when the torrent is

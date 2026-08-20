@@ -244,6 +244,10 @@ it, so the history starts here.
   distinct names.
 - The rules run on every platform, not only Windows, so a payload downloaded on
   Linux and copied to a Windows machine still works.
+- A payload path past the 260 characters the classic Windows API allows lands
+  as written and verifies from the same path, with nothing renamed. The one
+  limit that applies is per component: a name over 255 bytes is truncated to
+  fit, keeps its extension, and is reported like any other rename.
 - Every change is reported on stderr and in `--json` as a `renamed` array
   carrying the file index, both paths, and the reason. The key is absent when
   nothing changed.

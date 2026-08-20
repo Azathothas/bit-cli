@@ -101,6 +101,18 @@ impl TorrentFixture {
         )
     }
 
+    /// A torrent whose deepest path is past the 260 character limit the
+    /// classic Windows API imposes, once an output directory is in front of
+    /// it.
+    ///
+    /// Four segments of sixty characters each, which is under the 255 byte
+    /// per-component limit every filesystem has and well over the total. See
+    /// `TODO/windows.md`, T-073.
+    pub fn deep() -> Self {
+        let segment = "d".repeat(60);
+        let path = format!("{segment}/{segment}/{segment}/{segment}/payload.bin");
+        Self::build("deep", true, &[(path.as_str(), 2000usize, 0x77u8)])
+    }
     /// Write this fixture's payload under `root`, in the layout the torrent
     /// expects: a multi-file torrent unpacks into a directory named after
     /// itself.

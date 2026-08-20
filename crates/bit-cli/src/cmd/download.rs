@@ -2563,4 +2563,65 @@ mod tests {
         let ports: std::collections::HashSet<String> = tracker.param("port").into_iter().collect();
         assert_eq!(ports.len(), 1, "{:?}", tracker.seen());
     }
+
+    /// A payload path past the classic Windows limit lands and verifies.
+    ///
+    /// The download directory plus this torrent's deepest path is over 300
+    /// characters, which is past the 260 the `MAX_PATH` era allows. Nothing
+    /// here adds an extended-length prefix: it is a test of whether the tool
+    /// needs one. See `TODO/windows.md`, T-073.
+    #[test]
+    fn a_path_past_the_classic_windows_limit_lands_and_verifies() {
+        let fixture = TorrentFixture::deep();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let out = fixture.dir().join("out");
+        let source = format!("{}payload/", server.base);
+
+        let landed = out.join("deep").join(&fixture.files[0].0);
+        assert!(
+            landed.to_string_lossy().chars().count() > 300,
+            "the fixture is not long enough to test anything: {}",
+            landed.display()
+        );
+
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--port",
+                "0",
+                "--report-interval",
+                "100ms",
+                "--stop-after",
+                "20s",
+            ],
+            fixture.dir(),
+            ExitCode::Success,
+        );
+        assert_eq!(report["torrents"][0]["finished"], true, "{report}");
+        assert!(
+            report["torrents"][0]["renamed"].is_null(),
+            "a long path was rewritten rather than written: {report}"
+        );
+        assert_eq!(
+            std::fs::read(&landed).expect("the payload is not where it was planned"),
+            fixture.files[0].1
+        );
+
+        // And the hash check reads it back from the same path.
+        let verified = run_json_code(
+            &["verify", fixture.path_str(), "--dir", out.to_str().unwrap()],
+            fixture.dir(),
+            ExitCode::Success,
+        );
+        assert_eq!(verified["complete"], true, "{verified}");
+    }
 }

@@ -90,7 +90,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-070](windows.md) | P1 | windows | **done** | A downloaded executable cannot be run until the process exits |
 | [T-071](windows.md) | P0 | windows | **done** | Reserved device names in torrent paths are not sanitised |
 | [T-072](windows.md) | P0 | windows | **done** | Case-colliding paths silently overwrite |
-| [T-073](windows.md) | P1 | windows | open | Long paths are not tested |
+| [T-073](windows.md) | P1 | windows | **done** | Long paths are not tested |
 | [T-074](windows.md) | P1 | windows | **done** | A false hash-check pass on empty files |
 | [T-075](windows.md) | P2 | windows | open | PowerShell redirection encoding is not documented |
 | [T-076](windows.md) | P2 | windows | **done** | seed and verify do not report renamed paths |
@@ -180,7 +180,7 @@ under `-j 1` and not above it.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 2 | 1 | 0 | 8 |
-| P1 | 12 | 0 | 0 | 26 |
+| P1 | 11 | 0 | 0 | 27 |
 | P2 | 23 | 1 | 1 | 8 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |

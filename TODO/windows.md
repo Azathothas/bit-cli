@@ -222,7 +222,7 @@ Source:      rule 0.3
 Category:    windows
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `git config core.longpaths true` is set, but nothing in `bit-cli`
              tests a payload path past 260 characters, and nothing uses the
@@ -235,6 +235,50 @@ Approach:    Normalise the download directory to an extended-length path on
              deep path.
 Acceptance:  A torrent whose deepest path plus the download directory exceeds
              300 characters downloads and verifies on Windows.
+
+**Done, and the fix the approach proposes turned out not to be needed.**
+`TorrentFixture::deep` is a torrent whose one file sits four directories deep,
+sixty characters each, and
+`a_path_past_the_classic_windows_limit_lands_and_verifies` downloads it from a
+loopback server into a temporary directory, asserts the resolved path is over
+300 characters, reads the payload back from exactly the path that was planned,
+and then runs `verify` over the result.
+
+**Nothing here adds a `\\?\` prefix, because Rust's standard library already
+does.** `std::sys::path::windows::maybe_verbatim` converts an absolute path
+past the legacy limit into its verbatim form before it reaches the Win32 call,
+so every `File::open`, `create_dir_all`, and `metadata` in the storage path
+gets the long form without asking. `bit-cli` supplies its own storage
+(`bit_cli_core::storage`) and its own reader for `verify`, and both are built
+on `std::fs`, so the whole payload path is covered by that one property.
+
+Two things it depends on, both of which hold and are worth writing down
+because a change to either would break this quietly:
+
+- **The download directory is absolute.** `swarm::download_directory` resolves
+  `--dir` against the working directory, so a relative one is absolute before
+  it reaches storage. `maybe_verbatim` only converts absolute paths: a relative
+  path has no length limit it can fix.
+- **No component is over 255 bytes.** That is a filesystem limit rather than a
+  path limit, and `paths::plan` already truncates a component past it and
+  reports the rename. The fixture stays under it on purpose: this entry is
+  about the total, and the per-component case is
+  [T-071](#t-071-reserved-device-names-in-torrent-paths-are-not-sanitised)'s.
+
+The same thing from the command line, on a payload written by hand at a
+308 character path:
+
+```
+$ bit-cli create .tmp/deep/deep --name deep --piece-length 1KiB \
+    --no-creation-date --output .tmp/deep/deep.torrent --force --json
+"info_hash": "6de2f4843ffb3edc91054ca792885e2b6e0d2ed5"
+
+$ bit-cli verify .tmp/deep/deep.torrent --dir .tmp/deep --json
+"complete": true
+```
+
+The test asserts `renamed` is absent, which is the part that says the path was
+written rather than shortened to fit.
 
 ### T-074 A false hash-check pass on empty files
 

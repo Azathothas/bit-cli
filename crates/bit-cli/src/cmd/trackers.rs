@@ -584,6 +584,10 @@ mod tests {
     fn the_announced_port_is_bound_and_the_record_is_withdrawn() {
         let fixture = crate::test_support::TorrentFixture::multi_file();
         let tracker = crate::test_support::Tracker::start(&[]);
+        // A port of this run's choosing rather than the default range, so the
+        // assertion is "it announced what it bound" and not "6881 happened to
+        // be free".
+        let wanted = crate::test_support::free_port();
         let report = crate::test_support::run_json(
             &[
                 "trackers",
@@ -591,13 +595,14 @@ mod tests {
                 "--replace-trackers",
                 "--tracker",
                 &tracker.announce,
+                "--port",
+                &wanted.to_string(),
             ],
             fixture.dir(),
         );
 
         let port = report["announced_port"].as_u64().expect("a port");
-        assert_ne!(port, 0, "{report}");
-        assert_ne!(port, 6881, "the fixed port is what this replaced: {report}");
+        assert_eq!(port, u64::from(wanted), "{report}");
         assert_eq!(report["withdrawn"], 1, "{report}");
 
         // Two announces: the question, then the withdrawal, both naming the
