@@ -115,31 +115,33 @@ pub fn run(
     let (key, descending) = SortKey::parse(&args.sort)?;
     let kind = Kind::classify(&args.source.source, env)?;
 
-    let trackers = crate::cli::TrackerArgs::default();
-    let limits = crate::cli::LimitArgs::default();
     let web_seeds = crate::cli::WebSeedArgs::default();
     let setup = SessionSetup {
         global,
-        trackers: &trackers,
-        limits: &limits,
+        trackers: &args.trackers,
+        limits: &args.limits,
         web_seeds: &web_seeds,
         listen_ports: swarm::port_range(&args.port)?,
-        no_dht: false,
-        no_lsd: false,
+        no_dht: args.no_dht,
+        no_lsd: args.no_lsd,
         // `peers` samples a swarm and writes no payload, so allocation never
         // comes up.
         allocation: bit_cli_core::alloc::Allocation::default(),
     };
     let mut engine_options = setup.engine_options(env)?;
-    // Sampling a swarm must never write a payload. The session still needs a
-    // directory for its own bookkeeping, so it gets a temporary one that goes
-    // away with the process.
+    // A sample transfers, and what it transfers goes to a temporary directory
+    // that the process removes when it exits. Nothing is written where the
+    // caller is standing: this command reports a swarm, it does not deliver a
+    // payload. `--duration`, `--count`, and `--max-download-rate` are what
+    // bound how much moves. See `TODO/peers.md`, T-142.
     let scratch = tempfile::tempdir()
         .map_err(|e| bit_cli_core::error::from_io(e, "cannot create a scratch directory"))?;
     engine_options.download_directory = scratch.path().to_path_buf();
 
     let source = args.source.source.clone();
     let count = args.count;
+    let initial_peers = swarm::peer_addrs(&args.peers)?;
+    let no_trackers = args.trackers.no_tracker;
     let _ = kind;
     let runtime = swarm::runtime()?;
 
@@ -148,11 +150,24 @@ pub fn run(
         for warning in engine.warnings() {
             renderer.warn(env, warning);
         }
-        // Paused keeps the torrent connected to the swarm for peer discovery
-        // without pulling any payload, which is the whole point of sampling.
+        // Live, and interested. Sampling a swarm means joining it, and a
+        // paused torrent is not in it: `librqbit` 9.0.0 hands a torrent its
+        // peer stream only when it starts, so a paused one never announces,
+        // never dials, and reports an empty swarm however long it is watched.
+        //
+        // Interested is the other half, and it is why nothing is deselected.
+        // A peer holds a connection open for as long as one side wants
+        // something from the other: with an empty selection every peer is
+        // dropped as `not needed` on the handshake, which reports an address
+        // and nothing else. `--sort speed` orders by bytes that arrived, so
+        // the report is built on a transfer having happened. See
+        // `TODO/peers.md`, T-142.
         let add = AddOptions {
-            paused: true,
+            paused: false,
+            only_files: None,
             list_only: false,
+            initial_peers: initial_peers.clone(),
+            disable_trackers: no_trackers,
             ..Default::default()
         };
         let handle = engine.add(&source, &add).await?;
@@ -339,5 +354,87 @@ mod tests {
         peers[0].web_seed = true;
         let text = swarm::peer_table(&peers).join("\n");
         assert!(text.contains("web seed"), "{text}");
+    }
+
+    /// Sampling a swarm means joining it.
+    ///
+    /// The command used to add its torrent paused, and `librqbit` 9.0.0 hands
+    /// a torrent its peer stream only when it starts, so a paused one never
+    /// announced, never dialled, and reported an empty swarm however long it
+    /// was watched. A seeder on loopback and `--peer` pointed at it is the
+    /// smallest swarm there is. See `TODO/peers.md`, T-142.
+    #[test]
+    fn a_sampled_swarm_carries_what_came_from_each_peer() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        // The seeder needs the payload under the torrent's own name. The
+        // fixture keeps it under `payload/`.
+        let data = dir.join("seeded");
+        for (path, bytes) in &fixture.files {
+            let target = data.join("album").join(path);
+            std::fs::create_dir_all(target.parent().expect("a parent")).expect("mkdir");
+            std::fs::write(&target, bytes).expect("write the seeded payload");
+        }
+
+        let port = crate::test_support::free_port();
+        let seeder = {
+            let torrent = fixture.path_str().to_string();
+            let data = data.to_str().expect("utf-8 path").to_string();
+            let cwd = dir.clone();
+            std::thread::spawn(move || {
+                let (mut env, _) = Env::test(
+                    &[
+                        "seed",
+                        &torrent,
+                        "--data",
+                        &data,
+                        "--port",
+                        &port.to_string(),
+                        "--no-dht",
+                        "--no-lsd",
+                        "--no-tracker",
+                        "--stop-after",
+                        "10s",
+                    ],
+                    cwd,
+                );
+                crate::run(&mut env)
+            })
+        };
+
+        let report = crate::test_support::run_json(
+            &[
+                "peers",
+                fixture.path_str(),
+                "--peer",
+                &format!("127.0.0.1:{port}"),
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--duration",
+                "5s",
+                "--port",
+                "0",
+            ],
+            dir.clone(),
+        );
+        let _ = seeder.join();
+
+        assert_eq!(report["seen"], 1, "{report}");
+        let peers = report["peers"].as_array().expect("a peer array");
+        assert_eq!(peers.len(), 1, "{report}");
+        assert_eq!(peers[0]["direction"], "outgoing", "{report}");
+        assert_eq!(peers[0]["errors"], 0, "{report}");
+        // What came from each peer, which is the report's whole point and was
+        // zero for every peer before this was fixed.
+        assert_eq!(peers[0]["downloaded_bytes"], 2000, "{report}");
+        assert_eq!(peers[0]["verified_pieces"], 2, "{report}");
+
+        // The payload went to the scratch directory and not to the caller's.
+        // A sampler that leaves files behind is a downloader.
+        assert!(
+            !dir.join("album").exists(),
+            "sampling wrote a payload into the working directory"
+        );
     }
 }

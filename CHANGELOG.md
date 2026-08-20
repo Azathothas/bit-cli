@@ -124,6 +124,14 @@ it, so the history starts here.
   modulo it.
 - `trackers` announces and scrapes over HTTP and UDP directly, reporting each
   tracker's tier, interval, seeder and leecher counts, and failure reason.
+- `peers` joins the swarm and reports every peer it saw with the bytes that
+  came from each. It used to add its torrent paused, which in `librqbit` 9.0.0
+  means the torrent never gets its peer stream, so the command never announced
+  and every run reported an empty swarm. It now takes `--peer`, `--no-dht`,
+  `--no-lsd`, and the tracker and limit flags `download` carries, so a sample
+  can be exactly the members named on the command line. What it pulls goes to a
+  temporary directory the process removes on exit. See `TODO/peers.md` under
+  T-142.
 - `bench webseed` measures HTTP sources: latency percentiles for connection
   establishment, first byte, and completion; a concurrency curve; per-source
   attribution; and error counts by class and by HTTP status.
@@ -317,7 +325,9 @@ it, so the history starts here.
 - `docs/schema.md` lists every document `kind` and every event `type` with the
   fields each carries, and it is generated from what the program writes rather
   than written by hand: a test drives every command, flattens the JSON, and
-  fails when a report carries a field the document does not.
+  fails when a report carries a field the document does not. All thirty-one
+  names have a run behind them, 650 field rows over 973 lines, and a second
+  test fails when a name stops being produced.
 - A resumed download no longer charges its existing bytes to the swarm.
   `from_web_seeds`, `from_peers`, and `from_resume` partition the total.
 - `--log-file` writes and rotates. `--log-max-size` is the size a live log may

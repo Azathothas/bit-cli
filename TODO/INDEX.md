@@ -49,6 +49,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
 | [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
 | [T-009](webseed.md) | P1 | webseed | **done** | A source cannot be attached over more than one connection |
+| [T-141](webseed.md) | P1 | webseed | open | --web-seed-connect-timeout does not bound a connect that never answers |
 | [T-010](disk-io.md) | P1 | disk-io | **done** | pwrite takes a read lock where it needs a write lock |
 | [T-011](disk-io.md) | P1 | disk-io | **done** | No file handle pool, so long runs exhaust descriptors |
 | [T-012](disk-io.md) | P2 | disk-io | **done** | Preallocation is not implemented |
@@ -64,6 +65,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-023](peers.md) | P1 | peers | **done** | The listen port is chosen without checking both address families |
 | [T-024](peers.md) | P2 | peers | open | Per-peer choke and unchoke history is not reported |
 | [T-025](peers.md) | P3 | peers | open | PeerStatsFilterState is not exported, so the filter is built by JSON |
+| [T-142](peers.md) | P1 | peers | **done** | bit-cli peers never joined the swarm it was sampling |
 | [T-138](peers.md) | P2 | peers | **done** | A peer that comes back waits out a backoff that grows by six |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
@@ -114,7 +116,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-114](cli-surface.md) | P2 | cli | open | -i/--input-file batch input is not implemented |
 | [T-115](cli-surface.md) | P2 | cli | partial | Hooks do not fire for every documented trigger |
 | [T-116](cli-surface.md) | P3 | cli | open | -O/--index-out cannot rename a file |
-| [T-117](cli-surface.md) | P1 | cli | partial | --schema-version has no schema behind it |
+| [T-117](cli-surface.md) | P1 | cli | **done** | --schema-version has no schema behind it |
 | [T-118](cli-surface.md) | P2 | cli | open | The short-flag table is not checked in CI |
 | [T-120](licensing.md) | P1 | licensing | open | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | open | No cargo-deny configuration |
@@ -142,7 +144,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-99 items: 89 to work through, and 10 deferred to Phase C. Twelve were added by
+101 items: 91 to work through, and 10 deferred to Phase C. Fourteen were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -165,10 +167,16 @@ still not turned into a source on its own.
 [multi-source.md](multi-source.md) records which of the five scenarios work,
 with the commands that were run, and what the rest need.
 
+T-141 and T-142 came out of building T-117's last eight fixtures. A source at
+a blackholed address makes no request until the request timeout, so
+`--web-seed-connect-timeout` bounds nothing and the source is never retired.
+And `bit-cli peers` added its torrent paused, which in `librqbit` 9.0.0 means
+it never announced: every run of that command had reported an empty swarm.
+
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 2 | 1 | 0 | 8 |
-| P1 | 14 | 2 | 0 | 20 |
+| P1 | 15 | 1 | 0 | 22 |
 | P2 | 23 | 1 | 1 | 7 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |

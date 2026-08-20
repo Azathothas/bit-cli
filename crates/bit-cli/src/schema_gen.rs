@@ -210,11 +210,88 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         }
     }
 
-    // A download that cannot finish, for `source_failed` and `error`, and a
-    // stalled one for `peer_redial`.
+    // The three `webseed` verbs that need a server: one request per source,
+    // a concurrency sweep, and one piece pulled and checked.
+    //
+    // `--no-torrent-web-seed` because the fixture torrent carries
+    // `https://mirror.example.com/pub/` in its url-list, and without it that
+    // is source zero: `fetch --piece 0` reached for the network and failed,
+    // and `test` and `probe` waited out a connect timeout against a name this
+    // machine should never resolve during a test run.
     for (label, args) in [
         (
-            "bit-cli download <TORRENT> --web-seed <DEAD URL> --jsonl",
+            "bit-cli webseed test <TORRENT> --web-seed <URL> --json",
+            vec![
+                "--json",
+                "webseed",
+                "test",
+                &torrent,
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+            ],
+        ),
+        (
+            "bit-cli webseed probe <TORRENT> --web-seed <URL> --json",
+            vec![
+                "--json",
+                "webseed",
+                "probe",
+                &torrent,
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--duration",
+                "1s",
+                "--concurrency-sweep",
+                "1,2",
+            ],
+        ),
+        (
+            "bit-cli webseed fetch <TORRENT> --piece 0 --web-seed <URL> --json",
+            vec![
+                "--json",
+                "webseed",
+                "fetch",
+                &torrent,
+                "--no-torrent-web-seed",
+                "--piece",
+                "0",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+            ],
+        ),
+    ] {
+        let (_, out) = capture(&args, dir.clone());
+        observe_document(&mut documents, label, &out);
+    }
+
+    // A download that cannot finish, for `source_failed` and `error`, a
+    // cooling one for `source_cooling`, and a stalled one for `peer_redial`.
+    //
+    // Both failing runs point at a path the server does not have rather than
+    // at an address nothing listens on. A source has to answer to fail: the
+    // bridge only makes a request when the session asks it for a block, so an
+    // address that neither answers nor refuses produces no request, no error,
+    // and no event until the request timeout 30 seconds later. That is
+    // [T-141](../../TODO/webseed.md), found here. A 404 from a live server
+    // fails in the first second.
+    //
+    // The two runs differ only in `--web-seed-cooldown`, which is what decides
+    // whether a spent budget leaves the source `Failed` or `Cooling`. The
+    // cooling one also needs `--web-seed-retry-status 404`, because a 404 is
+    // fatal by default and a fatal status retires a source without spending
+    // the budget that a cooldown waits out.
+    let absent = format!("{}absent/", server.base);
+    for (label, args) in [
+        (
+            "bit-cli download <TORRENT> --web-seed <404 URL> --jsonl",
             vec![
                 "--jsonl",
                 "download",
@@ -222,13 +299,53 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
                 "--dir",
                 dir.join("dead").to_str().unwrap(),
                 "--web-seed-only",
+                "--no-torrent-web-seed",
                 "--web-seed",
-                "http://127.0.0.1:9/",
+                &absent,
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-max-errors",
+                "1",
+                "--web-seed-retries",
+                "0",
                 "--no-tracker",
                 "--port",
                 "0",
+                "--report-interval",
+                "100ms",
                 "--stop-after",
                 "10s",
+            ],
+        ),
+        (
+            "bit-cli download <TORRENT> --web-seed <404 URL> --web-seed-cooldown <DUR> --jsonl",
+            vec![
+                "--jsonl",
+                "download",
+                &torrent,
+                "--dir",
+                dir.join("cooling").to_str().unwrap(),
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &absent,
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-retry-status",
+                "404",
+                "--web-seed-max-errors",
+                "1",
+                "--web-seed-retries",
+                "0",
+                "--web-seed-cooldown",
+                "60s",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--report-interval",
+                "100ms",
+                "--stop-after",
+                "5s",
             ],
         ),
         (
@@ -336,6 +453,135 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
             _ => observe_events(&mut events, "bit-cli seed <TORRENT> --jsonl", &out),
         }
     }
+
+    // `peers` needs a swarm and `trackers` needs a tracker, and neither may
+    // reach the network to get one.
+    //
+    // The seeder is a real one: it holds the payload under the torrent's own
+    // name, which the fixture directory does not, because it keeps its files
+    // under `payload/`. `peers` is pointed straight at it with `--peer`, so
+    // the sampled peer is a live connection with a client string and a
+    // direction rather than an address a tracker named.
+    let seeder_port = crate::test_support::free_port();
+    let seed_root = dir.join("seedroot");
+    for (path, bytes) in &fixture.files {
+        let target = seed_root.join("album").join(path);
+        std::fs::create_dir_all(target.parent().expect("a parent")).expect("mkdir");
+        std::fs::write(&target, bytes).expect("write the seeded payload");
+    }
+
+    let seeder = {
+        let torrent = torrent.clone();
+        let data = seed_root.to_str().unwrap().to_string();
+        let cwd = dir.clone();
+        std::thread::spawn(move || {
+            capture(
+                &[
+                    "seed",
+                    &torrent,
+                    "--data",
+                    &data,
+                    "--port",
+                    &seeder_port.to_string(),
+                    "--no-dht",
+                    "--no-lsd",
+                    "--no-tracker",
+                    "--stop-after",
+                    "10s",
+                ],
+                cwd,
+            )
+        })
+    };
+
+    let peer = format!("127.0.0.1:{seeder_port}");
+    let (_, out) = capture(
+        &[
+            "--json",
+            "peers",
+            &torrent,
+            "--peer",
+            &peer,
+            "--no-tracker",
+            "--no-dht",
+            "--no-lsd",
+            "--duration",
+            "5s",
+            "--port",
+            "0",
+        ],
+        dir.clone(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli peers <TORRENT> --peer <ADDR> --json",
+        &out,
+    );
+
+    // Two trackers, and the second one is dead on purpose: `failure` is only
+    // set on a tracker that did not answer, and a document that never carries
+    // it does not describe the field. `--replace-trackers` keeps the fixture's
+    // own `udp://tracker.example.com:80` out of the run.
+    let tracker = crate::test_support::Tracker::start(&[std::net::SocketAddrV4::new(
+        std::net::Ipv4Addr::LOCALHOST,
+        seeder_port,
+    )]);
+    let (_, out) = capture(
+        &[
+            "--json",
+            "trackers",
+            &torrent,
+            "--replace-trackers",
+            "--tracker",
+            &tracker.announce,
+            "--tracker",
+            "http://127.0.0.1:1/announce",
+            "--tracker-timeout",
+            "5s",
+        ],
+        dir.clone(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli trackers <TORRENT> --tracker <URL> --json",
+        &out,
+    );
+    let _ = seeder.join();
+
+    // `bench_sample` is one point of a time series, and every `bench` target
+    // emits it. `disk` is the one that needs no source, no port, and no
+    // network.
+    //
+    // The payload has to be big enough to outlast a sample interval. 4 MiB
+    // finished in 5 ms on this machine and produced no sample at all, which is
+    // the same reason a two minute soak says nothing about a six hour one.
+    //
+    // Only the events are folded in. A `bench` report is a versioned document
+    // of its own, with `report_version` and its own `kind`, and it is not part
+    // of this contract: under `--jsonl` it renders as NDJSON records carrying
+    // `record` rather than `type`, so nothing here picks it up.
+    let (_, out) = capture(
+        &[
+            "--jsonl",
+            "bench",
+            "disk",
+            "--dir",
+            dir.join("bench").to_str().unwrap(),
+            "--payload-size",
+            "64MiB",
+            "--block-size",
+            "64KiB",
+            "--concurrency",
+            "2",
+            "--metrics-interval",
+            "10ms",
+            "--duration",
+            "10s",
+            "--no-verify",
+        ],
+        dir.clone(),
+    );
+    observe_events(&mut events, "bit-cli bench disk --jsonl", &out);
 
     let mut documents: Vec<Sample> = documents.into_values().collect();
     let mut events: Vec<Sample> = events.into_values().collect();
@@ -452,15 +698,18 @@ mod tests {
     #[test]
     fn every_produced_kind_and_event_is_documented() {
         let (documents, events) = collect();
-        let undocumented_documents: Vec<&str> = documents
+        // Named with the command that produced them. An undocumented `kind` is
+        // usually an error document from a run that was meant to succeed, and
+        // the name alone does not say which run that was.
+        let undocumented_documents: Vec<String> = documents
             .iter()
-            .map(|sample| sample.name.as_str())
-            .filter(|name| !DOCUMENT_KINDS.iter().any(|(kind, _)| kind == name))
+            .filter(|sample| !DOCUMENT_KINDS.iter().any(|(kind, _)| *kind == sample.name))
+            .map(|sample| format!("{} from `{}`", sample.name, sample.command))
             .collect();
-        let undocumented_events: Vec<&str> = events
+        let undocumented_events: Vec<String> = events
             .iter()
-            .map(|sample| sample.name.as_str())
-            .filter(|name| !EVENT_TYPES.iter().any(|(event, _)| event == name))
+            .filter(|sample| !EVENT_TYPES.iter().any(|(event, _)| *event == sample.name))
+            .map(|sample| format!("{} from `{}`", sample.name, sample.command))
             .collect();
         assert!(
             undocumented_documents.is_empty() && undocumented_events.is_empty(),

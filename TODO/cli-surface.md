@@ -244,7 +244,7 @@ Source:      PROMPT.md A3.10
 Category:    cli
 Priority:    P1
 Effort:      M
-Status:      partial
+Status:      **done**
 
 Problem:     `--schema-version` prints `1`. There is no `docs/schema.md`, so
              the number refers to nothing a caller can check against.
@@ -256,9 +256,8 @@ Approach:    Document every JSON document and every event type with a worked
 Acceptance:  `docs/schema.md` exists, covers every `kind` and every event
              `type`, and a test fails when a field is added without updating it.
 
-**Mostly done. `docs/schema.md` exists, is generated, and the drift test
-fails when a field is added. Eight of the thirty-one names have no run driving
-them yet, so this stays open until they do.**
+**Done. Every one of the thirty-one names has a run behind it, and
+`schema::NOT_YET_COVERED` is empty.**
 
 The document is generated rather than written. `crates/bit-cli/src/schema.rs`
 holds the two tables of names with their descriptions and a flattener that
@@ -273,7 +272,8 @@ BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema
 
 is the only way the file is ever edited.
 
-Seventeen document kinds and fourteen event types, 444 field rows, 751 lines.
+Seventeen document kinds and fourteen event types, **650 field rows and 973
+lines**, up from 444 rows and 751 lines when eight names were still uncovered.
 `hash_mismatch` was found while building it: `verify` writes a different `kind`
 when a piece does not check out, and nothing had said so.
 
@@ -289,23 +289,68 @@ timing.
 
 Two more tests hold the ends together.
 `every_produced_kind_and_event_is_documented` fails when the program writes a
-`kind` the tables do not name, which is what caught `hash_mismatch`.
+`kind` the tables do not name, which is what caught `hash_mismatch`, and it
+names the command that produced it, because an undocumented `kind` is usually
+an error document from a run that was meant to succeed.
 `coverage_of_the_documented_names_matches_what_is_recorded` compares the set of
-names no run produces against `schema::NOT_YET_COVERED`, so coverage cannot go
-backwards and the list cannot go stale in either direction.
+names no run produces against `schema::NOT_YET_COVERED`, which is now empty, so
+a name that stops being produced fails the build rather than quietly losing its
+field table.
 
-**What is left is eight runs.** `NOT_YET_COVERED` is `bench_sample`, `peers`,
-`source_cooling`, `source_failed`, `trackers`, `webseed_fetch`,
-`webseed_probe`, and `webseed_test`. Each needs a fixture the generator does
-not build: `peers` and `trackers` need a tracker answering, the three
-`webseed_*` runs need a server on a bound port, `bench_sample` needs a `bench`
-run long enough to tick, and `source_failed` and `source_cooling` need a source
-that spends its error budget inside the run's deadline. The loopback tracker
-and file server exist as examples, so the work is wiring them into
-`schema_gen::collect` rather than building anything.
+**The eight fixtures, and what each one needed.** None of them touches the
+network.
 
-`--schema-version` still prints `1` and now refers to something. Bumping it is
-a separate decision and belongs with the first field that is removed or
+| name | what it needed |
+| --- | --- |
+| `webseed_test`, `webseed_probe`, `webseed_fetch` | the `FileServer` that was already there, plus `--no-torrent-web-seed` |
+| `source_failed` | a source that answers, and fails, inside the run |
+| `source_cooling` | the same source with `--web-seed-retry-status 404` and a cooldown |
+| `bench_sample` | a `bench disk` run long enough to tick |
+| `peers` | a seeder on a thread and `--peer` pointed at it |
+| `trackers` | a loopback tracker, and a second tracker that is dead |
+
+Four of them found something.
+
+- **`--no-torrent-web-seed`, or the generator reaches the internet.** The
+  fixture torrent carries `https://mirror.example.com/pub/` in its url-list, so
+  that was source zero: `webseed fetch --piece 0` fetched from it and failed,
+  and `test` and `probe` waited out a connect timeout against a name no test
+  should be resolving.
+- **A source has to answer to fail.** Both failing runs first pointed at
+  `http://127.0.0.1:9/`, which on this machine is blackholed rather than
+  refused. The bridge makes a request only when the session asks it for a
+  block, so the request sat in a connect that never completed: no error, no
+  budget spent, no event, for the 30 seconds until the request timeout. That is
+  [T-141](webseed.md), written up with its measurements. Pointed at a path the
+  live server does not have, the same run fails in the first second.
+- **A fatal status never cools down.** 404 is fatal by default, and a fatal
+  status retires a source without spending the error budget a cooldown waits
+  out, so `source_cooling` needs `--web-seed-retry-status 404` as well as
+  `--web-seed-cooldown`. The two runs are otherwise identical, which is what
+  makes the pair worth having: they are the two ends of the same state machine.
+- **`bench_sample` needs a run longer than its own sample interval.** At
+  4 MiB the disk bench finished in 5 ms and emitted no sample at all. 64 MiB at
+  a 10 ms interval emits two. It is the same lesson the soak in
+  [T-040](memory.md) turns on, at a different scale.
+
+**`peers` produced nothing at all, and that was the command rather than the
+fixture.** It added its torrent paused, and a paused torrent in `librqbit`
+9.0.0 never gets its peer stream, so it never announced and never dialled.
+Every `bit-cli peers` run ever made reported an empty swarm. That is
+[T-142](peers.md), fixed and tested.
+
+The `bench` report itself is deliberately not in these tables. It is a
+versioned document of its own, with `report_version` and its own `kind`, and
+under `--jsonl` it renders as NDJSON records carrying `record` rather than
+`type`, so the generator sees only its events.
+
+```
+$ cargo test -p bit-cli --lib schema
+test result: ok. 7 passed; 0 failed
+```
+
+`--schema-version` still prints `1` and now refers to something whole. Bumping
+it is a separate decision and belongs with the first field that is removed or
 changes meaning, which has not happened.
 
 ### T-118 The short-flag table is not checked in CI

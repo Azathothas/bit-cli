@@ -774,3 +774,69 @@ command had never worked against a real HTTPS mirror:
 Both now have regression tests in `webseed::probe::tests` that need no network.
 The probe also runs sources in parallel now: at one source at a time, 468
 mirrors would have taken between ten and forty minutes.
+
+---
+
+### T-141 --web-seed-connect-timeout does not bound a connect that never answers
+
+Source:      found building [T-117](cli-surface.md)'s `source_failed` fixture
+Category:    webseed
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     `--web-seed-connect-timeout` parses, reaches
+             `Limits::connect_timeout_ms`, and is handed to
+             `reqwest::ClientBuilder::connect_timeout` in both
+             `webseed::fetch::Fetcher::new` and `webseed::probe`. It changes
+             nothing a caller can measure. Against an address that drops the
+             SYN rather than refusing it, the attempt ends on
+             `--web-seed-timeout` instead, whatever the connect timeout says.
+Relevance:   Rule 0.10: a flag that does not move a number does not ship. It
+             also decides how long an unattended run waits on a mirror behind
+             a firewall that blackholes traffic, which is the common failure
+             on a public mirror list. Today the answer is the request timeout,
+             30 seconds by default, per attempt.
+Approach:    Three things to establish, in order. First whether
+             `reqwest` 0.12.28's `connect_timeout` fires at all on this
+             platform, with a repro of ten lines against a blackholed address
+             and no `bit-cli` in the way. Second, if it does not, whether the
+             fix is ours: wrapping the request future in
+             `tokio::time::timeout(connect_timeout)` bounds the whole request
+             rather than the connect, which is not the same promise and would
+             be wrong to ship under this name. Third, if neither, the flag
+             either becomes a documented alias for the shorter of the two
+             timeouts or it goes, per rule 0.10.
+Acceptance:  A run against a blackholed address with
+             `--web-seed-connect-timeout 2s --web-seed-timeout 45s` ends in
+             about 2 seconds rather than 45, and a test proves it without
+             needing a firewall.
+
+**The measurement, 2026-08-20T16:07Z, release build.** `127.0.0.1:9` is
+blackholed on this machine: Windows drops the SYN rather than refusing it, and
+`curl -m 6` against it times out with no response rather than failing fast.
+
+```
+$ bit-cli --json webseed test album.torrent --no-torrent-web-seed \
+    --web-seed http://127.0.0.1:9/ [--web-seed-connect-timeout ...] [--web-seed-timeout ...]
+```
+
+| connect timeout | request timeout | wall time |
+| --- | --- | --- |
+| default 10s | default 30s | 30.138s |
+| **2s** | default 30s | 30.108s |
+| **2s** | **45s** | **45.110s** |
+
+The third row is what makes it decisive. Halving the connect timeout does not
+move the number and raising the request timeout moves it exactly, so the
+request timeout is the only bound in play.
+
+It has a second effect worth naming, because it is what led here. A source at
+a blackholed address makes no request until that timeout expires, so it records
+no error, spends none of its `--web-seed-max-errors` budget, and is not
+retired. A `--web-seed-only` run against one such mirror reports the source as
+`active` with `http_requests: 0` and sits there. Measured with
+`--web-seed-only --web-seed-max-errors 1 --web-seed-retries 0` and nothing
+else to fetch from, the whole run takes **30.364s** against a blackholed
+address and **1.109s** against a live server answering 404. That is the same
+defect from the other end, and it is why the generator uses the 404.

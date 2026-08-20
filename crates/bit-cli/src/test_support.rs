@@ -346,6 +346,116 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// A BEP 3 HTTP tracker on loopback, for the commands that announce.
+///
+/// It keeps no swarm. Every announce gets the same answer, built once from the
+/// peers it was started with, and every field a
+/// [`bit_cli_core::tracker::TrackerResult`] can carry is in it: `complete`,
+/// `incomplete`, `downloaded`, `interval`, `min interval`, `warning message`,
+/// and a compact `peers` list. A real tracker answers differently on the first
+/// request and the hundredth, which is right for a tracker and wrong for a
+/// fixture that has to produce the same document twice.
+///
+/// `crates/bit-cli-core/examples/loopback-tracker.rs` is the other one: it
+/// tracks a real swarm and is what the interop scripts drive. This one is for
+/// tests, which cannot run an example binary.
+pub struct Tracker {
+    /// The announce URL, ready for `--announce` or `--tracker`.
+    pub announce: String,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Tracker {
+    /// Serve an announce that hands back `peers`, on a port the OS picks.
+    pub fn start(peers: &[std::net::SocketAddrV4]) -> Self {
+        use std::io::{Read, Write};
+
+        let body = announce_body(peers);
+        let listener =
+            std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind loopback");
+        let port = listener.local_addr().expect("local addr").port();
+        listener
+            .set_nonblocking(true)
+            .expect("non-blocking listener");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = stop.clone();
+
+        std::thread::spawn(move || {
+            while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    continue;
+                };
+                let body = body.clone();
+                std::thread::spawn(move || {
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 2048];
+                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match stream.read(&mut buf) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => request.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&body);
+                    let _ = stream.flush();
+                });
+            }
+        });
+
+        Self {
+            announce: format!("http://127.0.0.1:{port}/announce"),
+            stop,
+        }
+    }
+}
+
+impl Drop for Tracker {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The bencoded announce response, with the keys in sorted order.
+fn announce_body(peers: &[std::net::SocketAddrV4]) -> Vec<u8> {
+    let mut packed = Vec::with_capacity(peers.len() * 6);
+    for peer in peers {
+        packed.extend_from_slice(&peer.ip().octets());
+        packed.extend_from_slice(&peer.port().to_be_bytes());
+    }
+    let warning = "this tracker is a test fixture";
+
+    let mut body = Vec::new();
+    body.push(b'd');
+    body.extend_from_slice(b"8:completei1e");
+    body.extend_from_slice(b"10:downloadedi7e");
+    body.extend_from_slice(b"10:incompletei2e");
+    body.extend_from_slice(b"8:intervali1800e");
+    body.extend_from_slice(b"12:min intervali900e");
+    body.extend_from_slice(format!("5:peers{}:", packed.len()).as_bytes());
+    body.extend_from_slice(&packed);
+    body.extend_from_slice(format!("15:warning message{}:{warning}", warning.len()).as_bytes());
+    body.push(b'e');
+    body
+}
+
+/// Reserve a port by binding it and letting it go.
+///
+/// A seeder has to be announced before it starts listening, so its port has to
+/// be known first. Binding zero and closing is the same pattern
+/// `scripts/check-peer-recovery.ps1` uses to restart a peer on the port it had.
+pub fn free_port() -> u16 {
+    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .expect("bind loopback")
+        .local_addr()
+        .expect("local addr")
+        .port()
+}
+
 /// Run the binary in-process and require success, returning stdout.
 pub fn run_ok(args: &[&str], cwd: impl Into<PathBuf>) -> String {
     let (mut env, captured) = Env::test(args, cwd);

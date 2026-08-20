@@ -154,22 +154,11 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
 
 /// Names the generator does not yet drive a run for.
 ///
-/// Each needs a fixture the generator does not build: `peers` and `trackers`
-/// need a tracker answering, the three `webseed_*` runs need a server, and
-/// `bench_sample` needs a `bench` run long enough to tick. They are listed
-/// here rather than left to fail, so the coverage test fails when this list
-/// grows and not for the gap that is already recorded. See
-/// `TODO/cli-surface.md`, T-117.
-pub const NOT_YET_COVERED: &[&str] = &[
-    "bench_sample",
-    "peers",
-    "source_cooling",
-    "source_failed",
-    "trackers",
-    "webseed_fetch",
-    "webseed_probe",
-    "webseed_test",
-];
+/// Empty: every document kind and every event type has a run behind it. The
+/// constant stays because the coverage test compares against it, so a name
+/// that stops being produced fails the build here rather than quietly losing
+/// its field table. See `TODO/cli-surface.md`, T-117.
+pub const NOT_YET_COVERED: &[&str] = &[];
 
 /// The JSON type of a value, as the document names it.
 fn type_of(value: &Value) -> &'static str {

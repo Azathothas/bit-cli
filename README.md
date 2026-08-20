@@ -792,6 +792,36 @@ and reports full timing. Under `--trace http` it also prints the equivalent
 held to: if you cannot reproduce a failing request by hand from the log, the
 trace is not detailed enough.
 
+## Sampling a swarm
+
+```bash
+bit-cli peers album.torrent --duration 30s --sort speed:desc --json
+```
+
+Joins the swarm, watches for `--duration` or until `--count` distinct peers
+have been seen, and reports every peer with the address, the state, the
+direction, the bytes each way, the pieces it verified, and its mean piece
+time. The client string and the connection type come from the peer's extended
+handshake, so they are there while it is connected and gone once it is not.
+
+It joins as a real member, so payload arrives. That is what makes
+`--sort speed` mean anything: the rows are bytes that actually came from each
+peer. What arrives goes to a temporary directory that the process removes when
+it exits, and nothing is written where you are standing. Bound it with
+`--duration`, `--count`, or `--max-download-rate`.
+
+`--peer HOST:PORT` dials a known member whether or not anything else answers,
+and with `--no-tracker --no-dht --no-lsd` the sample is exactly the members
+named on the command line:
+
+```bash
+bit-cli peers album.torrent --peer 127.0.0.1:51413 \
+  --no-tracker --no-dht --no-lsd --duration 5s --json
+```
+
+Exit 6 when nobody was seen, which is a real answer rather than a failure to
+produce one, and a script tells the two apart by the code.
+
 ## Machine output
 
 Two rules, and neither bends.

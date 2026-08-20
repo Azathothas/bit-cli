@@ -262,6 +262,217 @@ function Start-Churn {
 }
 
 # ---------------------------------------------------------------------------
+# Slopes
+# ---------------------------------------------------------------------------
+#
+# Least squares against elapsed hours, so the slope reads as "per hour" and a
+# six-hour run and a twenty-minute one are comparable. R squared is reported
+# beside it because a slope through noise is not a trend, and the two numbers
+# together are what say whether the line is real.
+
+function Get-Slope($rows, $column) {
+    $n = $rows.Count
+    if ($n -lt 2) { return $null }
+    $sumX = 0.0; $sumY = 0.0; $sumXY = 0.0; $sumXX = 0.0
+    foreach ($row in $rows) {
+        $x = [double]$row.elapsed_s / 3600.0
+        $y = [double]$row.$column
+        $sumX += $x; $sumY += $y; $sumXY += ($x * $y); $sumXX += ($x * $x)
+    }
+    $denominator = ($n * $sumXX) - ($sumX * $sumX)
+    if ([math]::Abs($denominator) -lt 1e-12) { return $null }
+    $slope = (($n * $sumXY) - ($sumX * $sumY)) / $denominator
+    $intercept = ($sumY - ($slope * $sumX)) / $n
+    $meanY = $sumY / $n
+    $ssTot = 0.0; $ssRes = 0.0
+    foreach ($row in $rows) {
+        $x = [double]$row.elapsed_s / 3600.0
+        $y = [double]$row.$column
+        $ssTot += [math]::Pow($y - $meanY, 2)
+        $ssRes += [math]::Pow($y - ($intercept + ($slope * $x)), 2)
+    }
+    $r2 = if ($ssTot -gt 0) { 1.0 - ($ssRes / $ssTot) } else { $null }
+    $values = @($rows | ForEach-Object { [double]$_.$column })
+    [ordered]@{
+        column         = $column
+        samples        = $n
+        first          = $values[0]
+        last           = $values[$n - 1]
+        min            = ($values | Measure-Object -Minimum).Minimum
+        max            = ($values | Measure-Object -Maximum).Maximum
+        mean           = [math]::Round(($values | Measure-Object -Average).Average, 2)
+        slope_per_hour = [math]::Round($slope, 3)
+        r_squared      = if ($null -eq $r2) { $null } else { [math]::Round($r2, 4) }
+    }
+}
+
+# What the seeder says it cost, so the sampler can be checked against the
+# subject. A sampler that disagrees with the process is measuring something
+# else.
+#
+# This reads forward from where the last call stopped rather than re-reading
+# the whole file, because a six hour run writes 720 progress events and
+# re-parsing every one of them on every sample is work charged to the machine
+# under measurement. A chunk can end mid-line, so the tail is held back until
+# its newline arrives.
+
+$script:SelfStream = $null
+$script:SelfReader = $null
+$script:SelfPending = ""
+$script:SelfPeakRss = $null
+$script:SelfHandles = $null
+$script:SelfEvents = 0
+
+function Update-SelfReported {
+    try {
+        if (-not $script:SelfReader) {
+            $selfPath = Join-Path $Root "seed.out"
+            if (-not (Test-Path $selfPath)) { return }
+            $script:SelfStream = [System.IO.File]::Open(
+                $selfPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::ReadWrite)
+            $script:SelfReader = [System.IO.StreamReader]::new($script:SelfStream)
+        }
+        $chunk = $script:SelfReader.ReadToEnd()
+        if (-not $chunk) { return }
+        $lines = ($script:SelfPending + $chunk) -split "`n"
+        $script:SelfPending = $lines[-1]
+        for ($index = 0; $index -lt $lines.Count - 1; $index++) {
+            $text = $lines[$index].Trim()
+            if (-not $text) { continue }
+            $reported = $null
+            try { $reported = $text | ConvertFrom-Json } catch { continue }
+            if ($reported.type -ne "progress" -or -not $reported.process) { continue }
+            $script:SelfEvents++
+            if ($null -eq $script:SelfPeakRss -or $reported.process.peak_rss_bytes -gt $script:SelfPeakRss) {
+                $script:SelfPeakRss = $reported.process.peak_rss_bytes
+            }
+            if ($null -eq $script:SelfHandles -or $reported.process.open_handles -gt $script:SelfHandles) {
+                $script:SelfHandles = $reported.process.open_handles
+            }
+        }
+    } catch { }
+}
+
+# The reader holds seed.out open, and -Keep off deletes the root at the end.
+# Windows will not delete a file another handle is on, so this is called
+# before the cleanup rather than left to the process exiting.
+function Close-SelfReported {
+    if ($script:SelfReader) { $script:SelfReader.Dispose(); $script:SelfReader = $null }
+    if ($script:SelfStream) { $script:SelfStream.Dispose(); $script:SelfStream = $null }
+}
+
+# The summary is written after every sample, not only when the window ends, so
+# a run killed at hour four leaves a report of four hours rather than a CSV
+# somebody has to fit a line through by hand. `complete` is what says which of
+# the two a reader is holding; nothing else about the shape changes, and the
+# last write of a run that finished is the object this file always carried.
+#
+# Returns the slopes, the failures, and the verdict, so the caller prints what
+# was written rather than computing it a second time.
+function Write-SoakSummary([bool]$Complete) {
+    $summaryRows = @($samples)
+    $summarySlopes = [ordered]@{}
+    foreach ($column in @("rss_bytes", "peak_rss_bytes", "handles", "threads",
+            "tcp_total", "tcp_close_wait", "tcp_established")) {
+        $summarySlopes[$column] = Get-Slope $summaryRows $column
+    }
+
+    $summaryHours = $clock.Elapsed.TotalHours
+    $summaryFailures = [System.Collections.ArrayList]::new()
+    if ($seedDied) { [void]$summaryFailures.Add("the seeder exited before the sampling window ended; see $Root/seed.err") }
+
+    $summaryRss = if ($summarySlopes["rss_bytes"]) { [math]::Round($summarySlopes["rss_bytes"].slope_per_hour / 1MB, 3) } else { $null }
+    if ($RssCeilingMiBPerHour -gt 0 -and $null -ne $summaryRss -and $summaryRss -gt $RssCeilingMiBPerHour) {
+        [void]$summaryFailures.Add("resident memory grew $summaryRss MiB/hour, over the ceiling of $RssCeilingMiBPerHour")
+    }
+    if ($HandleCeilingPerHour -gt 0 -and $summarySlopes["handles"] -and
+        $summarySlopes["handles"].slope_per_hour -gt $HandleCeilingPerHour) {
+        [void]$summaryFailures.Add("handles grew $($summarySlopes["handles"].slope_per_hour)/hour, over the ceiling of $HandleCeilingPerHour")
+    }
+    if ($CloseWaitCeilingPerHour -gt 0 -and $summarySlopes["tcp_close_wait"] -and
+        $summarySlopes["tcp_close_wait"].slope_per_hour -gt $CloseWaitCeilingPerHour) {
+        [void]$summaryFailures.Add("CLOSE_WAIT grew $($summarySlopes["tcp_close_wait"].slope_per_hour)/hour, over the ceiling of $CloseWaitCeilingPerHour")
+    }
+
+    $summaryJudged = ($RssCeilingMiBPerHour -gt 0) -or ($HandleCeilingPerHour -gt 0) -or ($CloseWaitCeilingPerHour -gt 0)
+    $summaryVerdict = switch ($true) {
+        ($summaryFailures.Count -gt 0) { "$($summaryFailures.Count) ceiling(s) or the run itself did not hold"; break }
+        (-not $Complete) { "in flight: $($summaryRows.Count) samples over $([math]::Round($summaryHours, 2)) of the $([math]::Round($Minutes / 60.0, 2)) hours asked for"; break }
+        ($summaryJudged) { "every named ceiling held over $([math]::Round($summaryHours, 2)) hours"; break }
+        default { "recorded, not judged: no ceiling was named"; break }
+    }
+
+    [ordered]@{
+        kind             = "soak"
+        schema_version   = "1"
+        generated_at     = Get-Timestamp
+        complete         = $Complete
+        host             = [ordered]@{
+            machine = [System.Environment]::MachineName
+            os      = [System.Environment]::OSVersion.VersionString
+            cpus    = [System.Environment]::ProcessorCount
+        }
+        parameters       = [ordered]@{
+            minutes           = $Minutes
+            sample_seconds    = $SampleSeconds
+            workload          = $Workload
+            payload_mib       = $PayloadMiB
+            leechers          = $Leechers
+            churn_connections = $ChurnConnections
+            churn_concurrency = $ChurnConcurrency
+            profile           = $Profile
+            ceilings          = [ordered]@{
+                rss_mib_per_hour    = $RssCeilingMiBPerHour
+                handles_per_hour    = $HandleCeilingPerHour
+                close_wait_per_hour = $CloseWaitCeilingPerHour
+            }
+        }
+        info_hash        = $infoHash
+        csv              = $csvPath
+        elapsed_hours    = [math]::Round($summaryHours, 4)
+        samples          = $summaryRows.Count
+        cycles           = [ordered]@{
+            leech_completed         = $leechDone
+            leech_failed            = $leechFailed
+            churn_runs              = $churnRuns
+            churn_connections_total = $churnRuns * $ChurnConnections
+            progress_events         = $script:SelfEvents
+        }
+        slopes           = $summarySlopes
+        rss_mib_per_hour = $summaryRss
+        self_reported    = [ordered]@{
+            peak_rss_bytes = $script:SelfPeakRss
+            open_handles   = $script:SelfHandles
+        }
+        seed_exited_early = $seedDied
+        verdict          = $summaryVerdict
+        failures         = @($summaryFailures)
+        commands         = @(
+            "$bitCli $($seedArgs -join ' ')",
+            $(if ($wantChurn) { "$churnExe --peer 127.0.0.1:$port --connections $ChurnConnections --concurrency $ChurnConcurrency --no-handshake" } else { $null }),
+            $(if ($wantLeech) { "$bitCli download $torrent --dir leech-N --peer 127.0.0.1:$port --no-dht --no-lsd --no-tracker --allow-overwrite --stop-after 120s --json" } else { $null }),
+            $(if ($wantAnnounce) { "$trackerExe --port 0 --interval 5" } else { $null })
+        ) | Where-Object { $_ }
+        notes            = @(
+            "The subject is the seeder. rss_bytes and handles are read from outside with Get-Process, and the seeder's own progress events carry the same two figures, so self_reported is the cross-check rather than a second measurement.",
+            "slope_per_hour is least squares against elapsed hours. r_squared beside it says whether the line is a trend or noise: a large slope with a low r squared is a spike, not growth.",
+            "peak_rss_bytes is a high-water mark rather than a level, so its slope is bounded below by zero and says nothing on its own. rss_bytes is the series that can fall as well as rise, and it is the one a leak shows in.",
+            "The loopback tracker never expires a peer, so under -Workload announce or all the peer list handed to the seeder grows for the whole run. That is deliberate: it is the shape a busy tracker has, and it is the path T-040's report points at.",
+            "complete is false while the run is still sampling. This file is rewritten after every sample, so a run that is killed leaves the report it had reached rather than nothing at all."
+        )
+    } | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding utf8NoBOM
+
+    [ordered]@{
+        slopes           = $summarySlopes
+        failures         = $summaryFailures
+        verdict          = $summaryVerdict
+        hours            = $summaryHours
+        rss_mib_per_hour = $summaryRss
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Sampling
 # ---------------------------------------------------------------------------
 
@@ -335,6 +546,12 @@ while ((Get-Date) -lt $endAt) {
     [void]$samples.Add($row)
     Add-Content -Path $csvPath -Encoding utf8NoBOM -Value (($row.Values | ForEach-Object { "$_" }) -join ",")
 
+    # Rewrite the report now rather than only when the window ends, so a run
+    # that is killed at hour four leaves four hours of slopes. See
+    # Write-SoakSummary.
+    Update-SelfReported
+    [void](Write-SoakSummary $false)
+
     if ($sample % 10 -eq 0) {
         Write-Step ("  t+{0,6}s  rss {1,7:N1} MiB  handles {2,5}  sockets {3,5}  CW {4,5}  leech {5}" -f `
                 $row.elapsed_s, ($row.rss_bytes / 1MB), $row.handles, $row.tcp_total, $row.tcp_close_wait, $leechDone)
@@ -351,165 +568,16 @@ while ((Get-Date) -lt $endAt) {
 $clock.Stop()
 Write-Step "sampling finished after $([int]$clock.Elapsed.TotalMinutes) minutes, $($samples.Count) samples"
 
-# What the seeder says it cost, so the sampler can be checked against the
-# subject. A sampler that disagrees with the process is measuring something
-# else.
-$seedPeakSelf = $null
-$seedHandlesSelf = $null
-$progressEvents = 0
 if (-not $seed.HasExited) { Stop-Process -Id $seed.Id -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Milliseconds 500
-try {
-    foreach ($line in (Get-Content (Join-Path $Root "seed.out") -ErrorAction SilentlyContinue)) {
-        if (-not $line.Trim()) { continue }
-        $event = $null
-        try { $event = $line | ConvertFrom-Json } catch { continue }
-        if ($event.type -ne "progress" -or -not $event.process) { continue }
-        $progressEvents++
-        if ($null -eq $seedPeakSelf -or $event.process.peak_rss_bytes -gt $seedPeakSelf) {
-            $seedPeakSelf = $event.process.peak_rss_bytes
-        }
-        if ($null -eq $seedHandlesSelf -or $event.process.open_handles -gt $seedHandlesSelf) {
-            $seedHandlesSelf = $event.process.open_handles
-        }
-    }
-} catch { }
-
+Update-SelfReported
+Close-SelfReported
 Stop-Background
 
-# ---------------------------------------------------------------------------
-# Slopes
-# ---------------------------------------------------------------------------
-#
-# Least squares against elapsed hours, so the slope reads as "per hour" and a
-# six-hour run and a twenty-minute one are comparable. R squared is reported
-# beside it because a slope through noise is not a trend, and the two numbers
-# together are what say whether the line is real.
-
-function Get-Slope($rows, $column) {
-    $n = $rows.Count
-    if ($n -lt 2) { return $null }
-    $sumX = 0.0; $sumY = 0.0; $sumXY = 0.0; $sumXX = 0.0
-    foreach ($row in $rows) {
-        $x = [double]$row.elapsed_s / 3600.0
-        $y = [double]$row.$column
-        $sumX += $x; $sumY += $y; $sumXY += ($x * $y); $sumXX += ($x * $x)
-    }
-    $denominator = ($n * $sumXX) - ($sumX * $sumX)
-    if ([math]::Abs($denominator) -lt 1e-12) { return $null }
-    $slope = (($n * $sumXY) - ($sumX * $sumY)) / $denominator
-    $intercept = ($sumY - ($slope * $sumX)) / $n
-    $meanY = $sumY / $n
-    $ssTot = 0.0; $ssRes = 0.0
-    foreach ($row in $rows) {
-        $x = [double]$row.elapsed_s / 3600.0
-        $y = [double]$row.$column
-        $ssTot += [math]::Pow($y - $meanY, 2)
-        $ssRes += [math]::Pow($y - ($intercept + ($slope * $x)), 2)
-    }
-    $r2 = if ($ssTot -gt 0) { 1.0 - ($ssRes / $ssTot) } else { $null }
-    $values = @($rows | ForEach-Object { [double]$_.$column })
-    [ordered]@{
-        column         = $column
-        samples        = $n
-        first          = $values[0]
-        last           = $values[$n - 1]
-        min            = ($values | Measure-Object -Minimum).Minimum
-        max            = ($values | Measure-Object -Maximum).Maximum
-        mean           = [math]::Round(($values | Measure-Object -Average).Average, 2)
-        slope_per_hour = [math]::Round($slope, 3)
-        r_squared      = if ($null -eq $r2) { $null } else { [math]::Round($r2, 4) }
-    }
-}
-
-$rows = @($samples)
-$slopes = [ordered]@{}
-foreach ($column in @("rss_bytes", "peak_rss_bytes", "handles", "threads",
-        "tcp_total", "tcp_close_wait", "tcp_established")) {
-    $slopes[$column] = Get-Slope $rows $column
-}
-
-$hours = $clock.Elapsed.TotalHours
-$failures = [System.Collections.ArrayList]::new()
-if ($seedDied) { [void]$failures.Add("the seeder exited before the sampling window ended; see $Root/seed.err") }
-
-$rssPerHourMiB = if ($slopes["rss_bytes"]) { [math]::Round($slopes["rss_bytes"].slope_per_hour / 1MB, 3) } else { $null }
-if ($RssCeilingMiBPerHour -gt 0 -and $null -ne $rssPerHourMiB -and $rssPerHourMiB -gt $RssCeilingMiBPerHour) {
-    [void]$failures.Add("resident memory grew $rssPerHourMiB MiB/hour, over the ceiling of $RssCeilingMiBPerHour")
-}
-if ($HandleCeilingPerHour -gt 0 -and $slopes["handles"] -and
-    $slopes["handles"].slope_per_hour -gt $HandleCeilingPerHour) {
-    [void]$failures.Add("handles grew $($slopes["handles"].slope_per_hour)/hour, over the ceiling of $HandleCeilingPerHour")
-}
-if ($CloseWaitCeilingPerHour -gt 0 -and $slopes["tcp_close_wait"] -and
-    $slopes["tcp_close_wait"].slope_per_hour -gt $CloseWaitCeilingPerHour) {
-    [void]$failures.Add("CLOSE_WAIT grew $($slopes["tcp_close_wait"].slope_per_hour)/hour, over the ceiling of $CloseWaitCeilingPerHour")
-}
-
-$judged = ($RssCeilingMiBPerHour -gt 0) -or ($HandleCeilingPerHour -gt 0) -or ($CloseWaitCeilingPerHour -gt 0)
-$verdict = switch ($true) {
-    ($failures.Count -gt 0) { "$($failures.Count) ceiling(s) or the run itself did not hold"; break }
-    ($judged) { "every named ceiling held over $([math]::Round($hours, 2)) hours"; break }
-    default { "recorded, not judged: no ceiling was named"; break }
-}
-
-[ordered]@{
-    kind           = "soak"
-    schema_version = "1"
-    generated_at   = Get-Timestamp
-    host           = [ordered]@{
-        machine = [System.Environment]::MachineName
-        os      = [System.Environment]::OSVersion.VersionString
-        cpus    = [System.Environment]::ProcessorCount
-    }
-    parameters     = [ordered]@{
-        minutes           = $Minutes
-        sample_seconds    = $SampleSeconds
-        workload          = $Workload
-        payload_mib       = $PayloadMiB
-        leechers          = $Leechers
-        churn_connections = $ChurnConnections
-        churn_concurrency = $ChurnConcurrency
-        profile           = $Profile
-        ceilings          = [ordered]@{
-            rss_mib_per_hour        = $RssCeilingMiBPerHour
-            handles_per_hour        = $HandleCeilingPerHour
-            close_wait_per_hour     = $CloseWaitCeilingPerHour
-        }
-    }
-    info_hash      = $infoHash
-    csv            = $csvPath
-    elapsed_hours  = [math]::Round($hours, 4)
-    samples        = $samples.Count
-    cycles         = [ordered]@{
-        leech_completed = $leechDone
-        leech_failed    = $leechFailed
-        churn_runs      = $churnRuns
-        churn_connections_total = $churnRuns * $ChurnConnections
-        progress_events = $progressEvents
-    }
-    slopes         = $slopes
-    rss_mib_per_hour = $rssPerHourMiB
-    self_reported  = [ordered]@{
-        peak_rss_bytes = $seedPeakSelf
-        open_handles   = $seedHandlesSelf
-    }
-    seed_exited_early = $seedDied
-    verdict        = $verdict
-    failures       = @($failures)
-    commands       = @(
-        "$bitCli $($seedArgs -join ' ')",
-        $(if ($wantChurn) { "$churnExe --peer 127.0.0.1:$port --connections $ChurnConnections --concurrency $ChurnConcurrency --no-handshake" } else { $null }),
-        $(if ($wantLeech) { "$bitCli download $torrent --dir leech-N --peer 127.0.0.1:$port --no-dht --no-lsd --no-tracker --allow-overwrite --stop-after 120s --json" } else { $null }),
-        $(if ($wantAnnounce) { "$trackerExe --port 0 --interval 5" } else { $null })
-    ) | Where-Object { $_ }
-    notes          = @(
-        "The subject is the seeder. rss_bytes and handles are read from outside with Get-Process, and the seeder's own progress events carry the same two figures, so self_reported is the cross-check rather than a second measurement.",
-        "slope_per_hour is least squares against elapsed hours. r_squared beside it says whether the line is a trend or noise: a large slope with a low r squared is a spike, not growth.",
-        "peak_rss_bytes is a high-water mark rather than a level, so its slope is bounded below by zero and says nothing on its own. rss_bytes is the series that can fall as well as rise, and it is the one a leak shows in.",
-        "The loopback tracker never expires a peer, so under -Workload announce or all the peer list handed to the seeder grows for the whole run. That is deliberate: it is the shape a busy tracker has, and it is the path T-040's report points at."
-    )
-} | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding utf8NoBOM
+$summary = Write-SoakSummary $true
+$slopes = $summary.slopes
+$failures = $summary.failures
+$hours = $summary.hours
 
 Write-Host ""
 Write-Host "workload:  $Workload for $([math]::Round($hours, 2)) hours, $($samples.Count) samples"
@@ -520,19 +588,19 @@ Write-Host ""
     $entry = $slopes[$_]
     if (-not $entry) { return }
     [pscustomobject][ordered]@{
-        series           = $_
-        first            = $entry.first
-        last             = $entry.last
-        max              = $entry.max
-        "per hour"       = $entry.slope_per_hour
-        "r2"             = $entry.r_squared
+        series     = $_
+        first      = $entry.first
+        last       = $entry.last
+        max        = $entry.max
+        "per hour" = $entry.slope_per_hour
+        "r2"       = $entry.r_squared
     }
 } | Format-Table -AutoSize | Out-String | Write-Host
 Write-Host "leech cycles: $leechDone completed, $leechFailed failed. churn bursts: $churnRuns."
-if ($null -ne $seedPeakSelf) {
-    Write-Host "self reported: peak RSS $([math]::Round($seedPeakSelf / 1MB, 2)) MiB, $seedHandlesSelf handles, over $progressEvents progress events"
+if ($null -ne $script:SelfPeakRss) {
+    Write-Host "self reported: peak RSS $([math]::Round($script:SelfPeakRss / 1MB, 2)) MiB, $script:SelfHandles handles, over $($script:SelfEvents) progress events"
 }
-Write-Host "verdict: $verdict"
+Write-Host "verdict: $($summary.verdict)"
 
 if (-not $Keep) { Remove-Item -Recurse -Force $Root -ErrorAction SilentlyContinue }
 

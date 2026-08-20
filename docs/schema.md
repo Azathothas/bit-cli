@@ -362,15 +362,72 @@ From `bit-cli seed <TORRENT> --json`.
 
 The swarm as sampled over a window.
 
-Not covered by the generator yet, so its fields are not listed here. See
-`docs/schema.md`'s note above.
+From `bit-cli peers <TORRENT> --peer <ADDR> --json`.
+
+| field | type |
+| --- | --- |
+| `bit_cli_version` | string |
+| `connecting` | integer |
+| `dead` | integer |
+| `downloaded.bytes` | integer |
+| `downloaded.human` | string |
+| `generated_at` | string |
+| `info_hash` | string |
+| `kind` | string |
+| `live` | integer |
+| `name` | string |
+| `peers[].addr` | string |
+| `peers[].chunks` | integer |
+| `peers[].connect_ms` | integer |
+| `peers[].direction` | string |
+| `peers[].downloaded_bytes` | integer |
+| `peers[].errors` | integer |
+| `peers[].mean_piece_ms` | integer |
+| `peers[].state` | string |
+| `peers[].uploaded_bytes` | integer |
+| `peers[].verified_pieces` | integer |
+| `peers[].web_seed` | bool |
+| `queued` | integer |
+| `sampled_human` | string |
+| `sampled_ms` | integer |
+| `schema_version` | string |
+| `seen` | integer |
 
 ### `trackers`
 
 What each tracker answered.
 
-Not covered by the generator yet, so its fields are not listed here. See
-`docs/schema.md`'s note above.
+From `bit-cli trackers <TORRENT> --tracker <URL> --json`.
+
+| field | type |
+| --- | --- |
+| `action` | string |
+| `bit_cli_version` | string |
+| `failed` | integer |
+| `generated_at` | string |
+| `info_hash` | string |
+| `kind` | string |
+| `leechers` | integer |
+| `name` | string |
+| `peers[]` | string |
+| `responded` | integer |
+| `schema_version` | string |
+| `seeders` | integer |
+| `tracker_count` | integer |
+| `trackers[].completed` | integer |
+| `trackers[].elapsed_ms` | integer |
+| `trackers[].failure` | string |
+| `trackers[].http_status` | integer |
+| `trackers[].interval_s` | integer |
+| `trackers[].leechers` | integer |
+| `trackers[].min_interval_s` | integer |
+| `trackers[].ok` | bool |
+| `trackers[].peers[]` | array |
+| `trackers[].protocol` | string |
+| `trackers[].seeders` | integer |
+| `trackers[].tier` | integer |
+| `trackers[].url` | string |
+| `trackers[].warning` | string |
 
 ### `webseed_list`
 
@@ -421,22 +478,109 @@ From `bit-cli webseed list <TORRENT> --web-seed <URL> --json`.
 
 One request per source: status, ranges, redirects, and timing.
 
-Not covered by the generator yet, so its fields are not listed here. See
-`docs/schema.md`'s note above.
+From `bit-cli webseed test <TORRENT> --web-seed <URL> --json`.
+
+| field | type |
+| --- | --- |
+| `bit_cli_version` | string |
+| `generated_at` | string |
+| `info_hash` | string |
+| `kind` | string |
+| `name` | string |
+| `schema_version` | string |
+| `source_count` | integer |
+| `sources[].at` | string |
+| `sources[].content_length` | integer |
+| `sources[].error` | string |
+| `sources[].expected_length` | integer |
+| `sources[].http_version` | string |
+| `sources[].index` | integer |
+| `sources[].length_matches` | bool |
+| `sources[].method` | string |
+| `sources[].mode` | string |
+| `sources[].ok` | bool |
+| `sources[].origin` | string |
+| `sources[].range_support` | string |
+| `sources[].request_url` | string |
+| `sources[].scope` | string |
+| `sources[].status` | integer |
+| `sources[].total_ms` | integer |
+| `sources[].ttfb_ms` | integer |
+| `sources[].url` | string |
+| `unusable` | integer |
+| `usable` | integer |
 
 ### `webseed_probe`
 
 A source measured at several concurrencies.
 
-Not covered by the generator yet, so its fields are not listed here. See
-`docs/schema.md`'s note above.
+From `bit-cli webseed probe <TORRENT> --web-seed <URL> --json`.
+
+| field | type |
+| --- | --- |
+| `bit_cli_version` | string |
+| `concurrency_sweep[]` | integer |
+| `duration_ms` | integer |
+| `generated_at` | string |
+| `info_hash` | string |
+| `kind` | string |
+| `name` | string |
+| `schema_version` | string |
+| `sources[].best_concurrency` | integer |
+| `sources[].best_throughput` | integer |
+| `sources[].best_throughput_human` | string |
+| `sources[].chunk_size.bytes` | integer |
+| `sources[].chunk_size.human` | string |
+| `sources[].index` | integer |
+| `sources[].scope` | string |
+| `sources[].steps[].bytes` | integer |
+| `sources[].steps[].bytes_human` | string |
+| `sources[].steps[].concurrency` | integer |
+| `sources[].steps[].elapsed_ms` | integer |
+| `sources[].steps[].errors` | integer |
+| `sources[].steps[].max_ms` | integer |
+| `sources[].steps[].p50_ms` | integer |
+| `sources[].steps[].p90_ms` | integer |
+| `sources[].steps[].p999_ms` | integer |
+| `sources[].steps[].p99_ms` | integer |
+| `sources[].steps[].requests` | integer |
+| `sources[].steps[].throughput` | integer |
+| `sources[].steps[].throughput_human` | string |
+| `sources[].steps[].ttfb_p50_ms` | integer |
+| `sources[].steps[].ttfb_p99_ms` | integer |
+| `sources[].url` | string |
 
 ### `webseed_fetch`
 
 One piece pulled from one source and checked.
 
-Not covered by the generator yet, so its fields are not listed here. See
-`docs/schema.md`'s note above.
+From `bit-cli webseed fetch <TORRENT> --piece 0 --web-seed <URL> --json`.
+
+| field | type |
+| --- | --- |
+| `bit_cli_version` | string |
+| `elapsed.human` | string |
+| `elapsed.ms` | integer |
+| `generated_at` | string |
+| `kind` | string |
+| `length.bytes` | integer |
+| `length.human` | string |
+| `offset` | integer |
+| `pieces[]` | integer |
+| `rate.bytes` | integer |
+| `rate.human` | string |
+| `requests[].at` | string |
+| `requests[].bytes` | integer |
+| `requests[].curl` | string |
+| `requests[].range` | string |
+| `requests[].status` | integer |
+| `requests[].total_ms` | integer |
+| `requests[].ttfb_ms` | integer |
+| `requests[].url` | string |
+| `schema_version` | string |
+| `source_index` | integer |
+| `url` | string |
+| `verified` | bool |
 
 ### `config`
 
@@ -598,15 +742,57 @@ From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`.
 
 A source spent its error budget and is out for the run.
 
-Not produced by any run the generator drives, so its fields are not listed
-here.
+From `bit-cli download <TORRENT> --web-seed <404 URL> --jsonl`.
+
+| field | type |
+| --- | --- |
+| `at` | string |
+| `blocks` | integer |
+| `connections` | integer |
+| `cooldowns` | integer |
+| `error` | string |
+| `http_bytes` | integer |
+| `http_requests` | integer |
+| `index` | integer |
+| `origin` | string |
+| `retries` | integer |
+| `scope` | string |
+| `seq` | integer |
+| `served_bytes` | integer |
+| `served_human` | string |
+| `state` | string |
+| `type` | string |
+| `url` | string |
+| `whole_pieces` | integer |
 
 ### `source_cooling`
 
 A source spent its error budget and will be tried again after `--web-seed-cooldown`.
 
-Not produced by any run the generator drives, so its fields are not listed
-here.
+From `bit-cli download <TORRENT> --web-seed <404 URL> --web-seed-cooldown <DUR> --jsonl`.
+
+| field | type |
+| --- | --- |
+| `at` | string |
+| `blocks` | integer |
+| `connections` | integer |
+| `cooldown_remaining_ms` | integer |
+| `cooldown_until` | string |
+| `cooldowns` | integer |
+| `error` | string |
+| `http_bytes` | integer |
+| `http_requests` | integer |
+| `index` | integer |
+| `origin` | string |
+| `retries` | integer |
+| `scope` | string |
+| `seq` | integer |
+| `served_bytes` | integer |
+| `served_human` | string |
+| `state` | string |
+| `type` | string |
+| `url` | string |
+| `whole_pieces` | integer |
 
 ### `peer_redial`
 
@@ -692,8 +878,45 @@ From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`.
 
 One point of a `bench` time series.
 
-Not produced by any run the generator drives, so its fields are not listed
-here.
+From `bit-cli bench disk --jsonl`.
+
+| field | type |
+| --- | --- |
+| `at.epoch_ms` | integer |
+| `at.iso` | string |
+| `bytes.bytes` | integer |
+| `bytes.human` | string |
+| `concurrency` | integer |
+| `costs.disk_read.human` | string |
+| `costs.disk_read.ms` | integer |
+| `costs.disk_read_bytes.bytes` | integer |
+| `costs.disk_read_bytes.human` | string |
+| `costs.disk_write.human` | string |
+| `costs.disk_write.ms` | integer |
+| `costs.disk_write_bytes.bytes` | integer |
+| `costs.disk_write_bytes.human` | string |
+| `costs.mean_service_us` | integer |
+| `costs.verify.human` | string |
+| `costs.verify.ms` | integer |
+| `costs.verify_bytes.bytes` | integer |
+| `costs.verify_bytes.human` | string |
+| `cumulative_bytes.bytes` | integer |
+| `cumulative_bytes.human` | string |
+| `elapsed.human` | string |
+| `elapsed.ms` | integer |
+| `errors` | integer |
+| `process.cpu_ms` | integer |
+| `process.cpu_system_ms` | integer |
+| `process.cpu_user_ms` | integer |
+| `process.open_handles` | integer |
+| `process.peak_rss_bytes` | integer |
+| `process.rss_bytes` | integer |
+| `rate.bytes` | integer |
+| `rate.human` | string |
+| `requests` | integer |
+| `seq` | integer |
+| `type` | string |
+| `warmup` | bool |
 
 ### `torrent_completed`
 

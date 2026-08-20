@@ -894,6 +894,27 @@ pub struct PeersArgs {
     /// Listen port, or a range as START-END. `0` asks the OS for a free one.
     #[arg(long, value_name = "PORT")]
     pub port: Vec<String>,
+
+    #[command(flatten)]
+    pub trackers: TrackerArgs,
+
+    #[command(flatten)]
+    pub limits: LimitArgs,
+
+    /// Try this peer before any are discovered, as HOST:PORT. Repeatable.
+    #[arg(long = "peer", value_name = "ADDR")]
+    pub peers: Vec<String>,
+
+    /// Disable the DHT.
+    ///
+    /// With `--peer` and `--no-tracker` this samples a swarm of exactly the
+    /// members named on the command line and reaches nothing else.
+    #[arg(long)]
+    pub no_dht: bool,
+
+    /// Disable local service discovery.
+    #[arg(long)]
+    pub no_lsd: bool,
 }
 
 /// `bit-cli trackers`.

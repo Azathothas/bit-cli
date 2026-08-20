@@ -437,3 +437,85 @@ Approach:    One line upstream: re-export `PeerStatsFilterState` alongside
              at `engine::all_peers_filter`.
 Acceptance:  `engine::all_peers_filter` constructs the filter with a named
              enum variant and no JSON.
+
+### T-142 bit-cli peers never joined the swarm it was sampling
+
+Source:      found building [T-117](cli-surface.md)'s `peers` fixture
+Category:    peers
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `bit-cli peers` added its torrent with `paused: true`, and
+             `librqbit` 9.0.0 hands a torrent its peer stream only when it
+             starts: `ManagedTorrent::start` takes `peer_rx` and documents
+             that it must be set unless `start_paused`. So the command never
+             announced, never dialled, and reported an empty swarm however
+             long it watched. Every run said `seen: 0`, `peers: []`, and exit
+             9.
+Relevance:   P1 by the definition in [INDEX.md](INDEX.md): a documented
+             capability that does not work. `README.md` says "Connect, sample
+             the swarm, report peers, exit" and the command could not do the
+             first of those.
+Approach:    Start the torrent. The comment said paused "keeps the torrent
+             connected to the swarm for peer discovery without pulling any
+             payload", and neither half of that was true.
+Acceptance:  A seeder on loopback and `bit-cli peers` pointed at it report
+             that peer, with the bytes that came from it.
+
+**Done, with two other gaps closed alongside it because the fix could not be
+proven without them.**
+
+The measurement that found it, 2026-08-20T16:15Z. `loopback-tracker` logs
+every announce it gets, one seeder was serving, and the tracker saw exactly
+one client:
+
+```
+16:15:20.141Z announce ... port=55502 left=0 event=started -> 0 peer(s)     the seeder
+                                                                            nothing from `peers`
+16:16:11.238Z announce ... port=57261 left=2000 event=started -> 1 peer(s)  `download`, for contrast
+```
+
+`bit-cli peers ... --duration 10s` between those two announces reported
+`seen: 0` with the seeder up and registered. `bit-cli download` against the
+same torrent announced and found it.
+
+**Nothing selected is not the same as nothing wanted.** The first fix tried
+was `paused: false` with `only_files: Some(vec![])`, which announces and
+dials and still pulls no payload. Measured against the loopback seeder, that
+reports the peer and nothing else: `state: "not needed"`, `errors: 1`,
+`downloaded_bytes: 0`, and no client string, because neither side wants
+anything from the other and the connection is dropped on the handshake. With
+the file selection left alone the same fixture reports
+`downloaded_bytes: 2000`, `verified_pieces: 2`, `chunks: 2`,
+`mean_piece_ms: 10`, and `errors: 0`.
+
+The report is built on the second of those. `--sort speed` orders peers by
+bytes that arrived, and `PeersReport` carries `downloaded` and per-peer
+`downloaded_bytes`, so a sample that transfers nothing cannot answer what the
+command is asked. What the sample pulls goes to a temporary directory that the
+process removes when it exits, which is unchanged, and `--duration`,
+`--count`, and now `--max-download-rate` are what bound how much moves.
+
+**The command could not be driven offline, which is why this survived.**
+`peers` built `TrackerArgs::default()`, hardcoded `no_dht: false` and
+`no_lsd: false`, and had no `--peer`. So it could not be pointed at a known
+peer, could not be told to stay off the DHT, and could not be tested without
+the network. It now flattens `TrackerArgs` and `LimitArgs` and takes `--peer`,
+`--no-dht`, and `--no-lsd`, which is the same set `download` and `seed` carry.
+`peers --peer <ADDR> --no-tracker --no-dht --no-lsd` samples a swarm of
+exactly the members named on the command line and reaches nothing else.
+
+BEP 27 was never at risk here: `librqbit` builds neither the DHT nor the LSD
+receiver for a private torrent, in `session.rs` around line 1537, whatever the
+session's own settings say.
+
+`cmd::peers::tests::a_sampled_swarm_carries_what_came_from_each_peer` is the
+regression test: a real seeder on a thread, `--peer` pointed at it, and
+assertions on the bytes that arrived and on the working directory being left
+empty. It fails on the old code with `seen: 0`.
+
+```
+$ cargo test -p bit-cli --lib peers
+test result: ok. 11 passed; 0 failed
+```
