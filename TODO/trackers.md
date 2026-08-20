@@ -11,7 +11,7 @@ Source:      https://github.com/ikatson/rqbit/issues/507 (open)
 Category:    trackers
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     On 8.1.1 the announced port was always 0, which some trackers
              (aquatic among them) reject. On main it is always 4240 even when
@@ -28,13 +28,32 @@ Acceptance:  `bit-cli trackers <TORRENT> --json` announces the port the session
              is listening on, and a packet capture or a tracker that echoes the
              peer list confirms the announced address is dialable.
 
+**Done, and it was a verification rather than a fix.** `bit-cli` leaves
+`ListenerOptions::announce_port` unset, so the session announces the port it
+bound, and the test proves it end to end rather than by reading the source.
+
+`cmd::seed::tests::the_session_announces_the_port_it_listens_on` runs
+`bit-cli seed --port <N>` against a loopback tracker that records every
+announce, waits for the first one, and asserts two things: the `port`
+parameter is `N`, and a TCP connection to that port is accepted while the run
+lasts. The second is the half a recorded number does not prove, and it is what
+the acceptance asks for in place of a packet capture.
+
+The tracker is `crate::test_support::Tracker`, a fixture that answers every
+announce with the same bencoded reply and keeps the request lines. It is not
+`crates/bit-cli-core/examples/loopback-tracker.rs`, which tracks a real swarm
+and is what the interop scripts drive; a test cannot run an example binary.
+
+The `bit-cli trackers` half of this entry was its own defect and is
+[T-061](#t-061-bit-cli-trackers-announces-a-fixed-port).
+
 ### T-061 bit-cli trackers announces a fixed port
 
 Source:      `bit-cli` defect, found while writing T-060
 Category:    trackers
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `cmd::trackers::run` builds its `Announce` with a hardcoded 6881.
              The command does not start a session, so it has no listening port
@@ -50,13 +69,38 @@ Acceptance:  `bit-cli trackers <TORRENT>` either binds the port it announces,
              or announces `event=stopped` immediately after so the tracker
              record does not linger. Whichever it does is tested.
 
+**Done, and it does both.** The command binds a port for as long as the
+announce lasts, announces that port, and then withdraws the record with a
+second announce carrying `event=stopped`. Either alone leaves something
+wrong: a bound port that stays registered after the process exits is a dead
+address for the tracker's whole interval, and a withdrawal of a port nothing
+ever listened on is a wrong answer politely retracted.
+
+`--port` takes a port or a `START-END` range, the same spelling `download` and
+`seed` use, and defaults to the same `6881-6889`. `--no-withdraw` leaves the
+record in place for a caller who wants exactly the announce a client would
+send. A scrape binds nothing and withdraws nothing: it carries no port and no
+event.
+
+The report carries `announced_port` and `withdrawn`, so what the command did
+is in the JSON rather than only in what the tracker saw.
+
+Three tests, all against the recording tracker in `test_support`:
+
+- `the_announced_port_is_bound_and_the_record_is_withdrawn` asserts the
+  announced port is neither zero nor 6881, that both announces carry the same
+  port, that the events are `started` then `stopped`, and that the port is
+  free again once the command exits, which is what says it was held.
+- `no_withdraw_sends_one_announce_and_reports_no_withdrawal`.
+- `a_scrape_carries_no_port_and_no_withdrawal`.
+
 ### T-062 Announce timing has no started, completed, or stopped events
 
 Source:      https://github.com/ikatson/rqbit/issues/539 (open)
 Category:    trackers
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     The session announces on unpause and then loops on the interval.
              It never sends `completed` when a download finishes, and never
@@ -72,6 +116,45 @@ Approach:    `bit-cli` runs in the foreground and knows exactly when both
 Acceptance:  A capture of a full `bit-cli download` run against a local tracker
              shows `event=started`, then `event=completed`, then
              `event=stopped`, in that order.
+
+**Done, exactly as the approach describes it.** `cmd::download::announce_event`
+sends one event to every tracker the torrent uses: `completed` from the watch
+loop the moment the torrent finishes, and `stopped` after the loop ends however
+it ended.
+
+**The peer id is the part that had to be right.** An announce from a second
+identity does not update the session's record, it creates another one, so a
+`stopped` sent that way would leave the original peer registered and add a
+phantom beside it. Both announces carry `handle.shared().peer_id` and the
+session's own listening port, which is what makes them updates rather than a
+second peer. The test asserts one peer id and one port across all three
+announces.
+
+The acceptance, run as a test rather than as a capture. The tracker records
+every request line and the run is a real transfer from a loopback file server:
+
+```
+GET /announce?...&peer_id=-rQ9000-...&event=started&port=59193&...
+GET /announce?...&peer_id=-rQ9000-...&port=59193&...&numwant=0&event=completed
+GET /announce?...&peer_id=-rQ9000-...&port=59193&...&numwant=0&event=stopped
+```
+
+`a_run_announces_started_then_completed_then_stopped` asserts that sequence,
+and that the report's `announced` array carries `completed` and `stopped` with
+how many trackers accepted each.
+
+**A payload already on disk announces in a different order, and that is not a
+defect.** A torrent complete on its hash check finishes before the session's
+own `started` announce has left, so a tracker sees `completed` first. The test
+fetches its payload for that reason, and it is worth knowing before someone
+reads the log of a resumed run and files it as a bug.
+
+Three things this deliberately does not do. It does not fail a run when a
+tracker is unreachable at the end: the announce is a courtesy and the payload
+is already on disk. It does not send `started` itself, because the session
+already does. And it counts trackers rather than reporting each one, because a
+withdrawal that failed leaves a record that expires on its own, which is the
+state the run was in anyway.
 
 ### T-063 Tracker tiers are announced in parallel rather than in order
 

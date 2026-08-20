@@ -841,6 +841,30 @@ and reports full timing. Under `--trace http` it also prints the equivalent
 held to: if you cannot reproduce a failing request by hand from the log, the
 trace is not detailed enough.
 
+## Asking a tracker
+
+```bash
+bit-cli trackers album.torrent --json
+```
+
+Announces to every tracker in the torrent and reports what each one said: its
+tier, its protocol, its interval, its seeder and leecher counts, the peers it
+returned, and its failure reason when it has one. `--scrape` asks for the
+counts without announcing.
+
+The announce is a real one, so the command binds the port it announces for as
+long as the announce lasts and then withdraws the record with a second
+announce carrying `event=stopped`. A diagnostic that registers a peer nobody
+can dial, and leaves it registered for the tracker's interval, is worse than
+no answer. `--port` chooses the port or the range, and `--no-withdraw` leaves
+the record in place.
+
+A `download` run announces the same three events a client should:
+`started` when the torrent goes live, `completed` the moment it finishes, and
+`stopped` when the run ends. The last two come from `bit-cli` rather than from
+the session, carrying the session's own peer id and port so the tracker
+updates one record, and `--json` reports them under `announced`.
+
 ## Sampling a swarm
 
 ```bash

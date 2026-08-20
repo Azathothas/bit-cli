@@ -421,6 +421,8 @@ fn percent_decode(input: &str) -> String {
 pub struct Tracker {
     /// The announce URL, ready for `--announce` or `--tracker`.
     pub announce: String,
+    /// Every request line it has served, in order.
+    seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -438,6 +440,8 @@ impl Tracker {
             .expect("non-blocking listener");
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = stop.clone();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
 
         std::thread::spawn(move || {
             while !flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -446,6 +450,7 @@ impl Tracker {
                     continue;
                 };
                 let body = body.clone();
+                let log = log.clone();
                 std::thread::spawn(move || {
                     let mut request = Vec::new();
                     let mut buf = [0u8; 2048];
@@ -454,6 +459,15 @@ impl Tracker {
                             Ok(0) | Err(_) => return,
                             Ok(n) => request.extend_from_slice(&buf[..n]),
                         }
+                    }
+                    // The request line, which carries the whole announce: a
+                    // tracker query has no body. Recorded before the reply, so
+                    // a caller that reads `seen` after the command exits sees
+                    // everything the command sent.
+                    if let Some(line) = String::from_utf8_lossy(&request).lines().next()
+                        && let Ok(mut log) = log.lock()
+                    {
+                        log.push(line.to_string());
                     }
                     let head = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -468,8 +482,33 @@ impl Tracker {
 
         Self {
             announce: format!("http://127.0.0.1:{port}/announce"),
+            seen,
             stop,
         }
+    }
+
+    /// Every request line served so far.
+    pub fn seen(&self) -> Vec<String> {
+        self.seen.lock().map(|log| log.clone()).unwrap_or_default()
+    }
+
+    /// The value of one query parameter, once per announce that carried it.
+    ///
+    /// No decoding: the parameters this is asked for (`port`, `event`,
+    /// `left`, `numwant`) are all plain. `info_hash` and `peer_id` are binary
+    /// and percent-encoded, and reading them is not what these tests are for.
+    pub fn param(&self, name: &str) -> Vec<String> {
+        let prefix = format!("{name}=");
+        self.seen()
+            .iter()
+            .filter_map(|line| {
+                let query = line.split_whitespace().nth(1)?.split_once('?')?.1;
+                query
+                    .split('&')
+                    .find_map(|pair| pair.strip_prefix(&prefix))
+                    .map(str::to_string)
+            })
+            .collect()
     }
 }
 

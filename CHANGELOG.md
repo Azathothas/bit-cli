@@ -123,7 +123,20 @@ it, so the history starts here.
   same bytes of each, so it needs the same piece length and the same offset
   modulo it.
 - `trackers` announces and scrapes over HTTP and UDP directly, reporting each
-  tracker's tier, interval, seeder and leecher counts, and failure reason.
+  tracker's tier, interval, seeder and leecher counts, and failure reason. It
+  binds the port it announces, for as long as the announce lasts, and then
+  withdraws the record with a second announce carrying `event=stopped`. It sent
+  a hardcoded 6881 before, which registers a peer nobody can dial and leaves it
+  for the tracker's whole interval. `--port` takes a port or a range and
+  `--no-withdraw` leaves the record in place.
+- A whole `download` run tells its trackers what happened: `completed` the
+  moment the torrent finishes and `stopped` when the run ends, both from the
+  session's own peer id and listening port so a tracker updates one record
+  rather than seeing a second peer. The session sends `started` and then
+  repeats on the interval; it says nothing about either of the other two, which
+  leaves a seeder count wrong and a dead address handed out until the record
+  expires. `--json` reports them under `announced`. See `TODO/trackers.md`
+  under T-062.
 - `peers` joins the swarm and reports every peer it saw with the bytes that
   came from each. It used to add its torrent paused, which in `librqbit` 9.0.0
   means the torrent never gets its peer stream, so the command never announced

@@ -942,6 +942,23 @@ pub struct TrackersArgs {
     /// Scrape instead of announcing.
     #[arg(long)]
     pub scrape: bool,
+
+    /// Port to announce, or a range as START-END. `0` asks the OS for a free
+    /// one.
+    ///
+    /// The port is bound for the length of the announce, so what the tracker
+    /// is told is a port something is actually listening on. The command then
+    /// announces `stopped`, so the record does not outlive it.
+    #[arg(long, value_name = "PORT")]
+    pub port: Vec<String>,
+
+    /// Announce and leave the peer record behind.
+    ///
+    /// The default withdraws it with a second announce carrying
+    /// `event=stopped`, because asking a tracker a question should not
+    /// register a peer that is gone by the time anyone dials it.
+    #[arg(long)]
+    pub no_withdraw: bool,
 }
 
 /// `bit-cli webseed`.

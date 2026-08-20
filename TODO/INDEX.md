@@ -81,9 +81,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-050](dht.md) | P2 | dht | open | The DHT cache costs disk I/O even when nothing is running |
 | [T-051](dht.md) | P2 | dht | open | A magnet with no DHT and no trackers fails without saying so |
 | [T-052](dht.md) | P3 | dht | open | DHT is not reported |
-| [T-060](trackers.md) | P1 | trackers | open | The announced port is wrong when no port is configured |
-| [T-061](trackers.md) | P1 | trackers | open | bit-cli trackers announces a fixed port |
-| [T-062](trackers.md) | P1 | trackers | open | Announce timing has no started, completed, or stopped events |
+| [T-060](trackers.md) | P1 | trackers | **done** | The announced port is wrong when no port is configured |
+| [T-061](trackers.md) | P1 | trackers | **done** | bit-cli trackers announces a fixed port |
+| [T-062](trackers.md) | P1 | trackers | **done** | Announce timing has no started, completed, or stopped events |
 | [T-063](trackers.md) | P3 | trackers | open | Tracker tiers are announced in parallel rather than in order |
 | [T-064](trackers.md) | P2 | trackers | open | UDP tracker retry does not follow the BEP 15 backoff |
 | [T-065](trackers.md) | P3 | trackers | open | Scrape is only implemented for the BEP 48 URL convention |
@@ -180,7 +180,7 @@ under `-j 1` and not above it.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 2 | 1 | 0 | 8 |
-| P1 | 15 | 0 | 0 | 23 |
+| P1 | 12 | 0 | 0 | 26 |
 | P2 | 23 | 1 | 1 | 8 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |

@@ -28,6 +28,15 @@ pub struct TrackersReport {
     pub name: Option<String>,
     /// `announce` or `scrape`.
     pub action: &'static str,
+    /// The port announced, which is a port this command held open for the
+    /// length of the announce. Absent on a scrape, which carries none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub announced_port: Option<u16>,
+    /// Trackers that accepted the `stopped` announce withdrawing the peer
+    /// record this command's own announce created. Absent when
+    /// `--no-withdraw` left it in place, and on a scrape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withdrawn: Option<usize>,
     pub tracker_count: usize,
     pub responded: usize,
     pub failed: usize,
@@ -82,18 +91,33 @@ pub fn run(
     )?
     .unwrap_or(Duration::from_secs(10));
 
+    // A port nothing is listening on registers a peer nobody can dial, which
+    // is worse than useless on a public tracker: it is handed out to every
+    // client that asks for the next hour. So the announce binds one for as
+    // long as it lasts, and the run withdraws it afterwards. A scrape carries
+    // no port and no event, so it binds nothing.
+    //
+    // See `TODO/trackers.md`, T-061.
+    let listener = match args.scrape {
+        true => None,
+        false => Some(bind_announce_port(&args.port)?),
+    };
+    let announced_port = listener
+        .as_ref()
+        .and_then(|socket| socket.local_addr().ok())
+        .map(|addr| addr.port())
+        .unwrap_or(0);
+
     let request = Announce {
         event: match args.scrape {
-            // A scrape carries no event, and announcing `started` from a
-            // command that is not going to stay connected would leave a peer
-            // record behind that nobody is serving.
+            // A scrape carries no event.
             true => Event::None,
             false => Event::Started,
         },
         ..Announce::new(
             info_hash.0,
             peer_id(),
-            6881,
+            announced_port,
             meta.as_ref().map(|m| m.layout().total_length).unwrap_or(0),
         )
     };
@@ -127,8 +151,9 @@ pub fn run(
     }
 
     let scrape = args.scrape;
+    let withdraw = !args.scrape && !args.no_withdraw;
     let runtime = swarm::runtime()?;
-    let results = runtime.block_on(async {
+    let (results, withdrawn) = runtime.block_on(async {
         let client = std::sync::Arc::new(Client::new(
             &format!("bit-cli/{}", bit_cli_core::VERSION),
             timeout,
@@ -161,13 +186,40 @@ pub fn run(
         // Report in the order the trackers were listed, not the order they
         // happened to answer in, so two runs produce comparable output.
         results.sort_by_key(|(order, _)| *order);
-        Ok::<_, Error>(
-            results
-                .into_iter()
-                .map(|(_, result)| result)
-                .collect::<Vec<_>>(),
-        )
+        let results: Vec<TrackerResult> = results
+            .into_iter()
+            .map(|(_, result)| result)
+            .collect::<Vec<_>>();
+
+        // Withdraw the peer record from every tracker that took it. The
+        // result is not reported per tracker: a withdrawal that failed leaves
+        // a record that expires on its own, which is the state the command
+        // was in before it withdrew anything.
+        let mut withdrawn = 0usize;
+        if withdraw {
+            let stop = Announce {
+                event: Event::Stopped,
+                ..request.clone()
+            };
+            let mut work = tokio::task::JoinSet::new();
+            for result in results.iter().filter(|result| result.ok) {
+                let client = client.clone();
+                let stop = stop.clone();
+                let url = result.url.clone();
+                let tier = result.tier;
+                work.spawn(async move { client.announce(&url, tier, &stop).await });
+            }
+            while let Some(finished) = work.join_next().await {
+                if let Ok(result) = finished
+                    && result.ok
+                {
+                    withdrawn += 1;
+                }
+            }
+        }
+        Ok::<_, Error>((results, withdrawn))
     })?;
+    drop(listener);
 
     let mut peers: Vec<String> = results.iter().flat_map(|r| r.peers.clone()).collect();
     peers.sort();
@@ -177,6 +229,8 @@ pub fn run(
         info_hash: info_hash.hex(),
         name: meta.as_ref().map(|m| m.layout().name),
         action: action(args),
+        announced_port: (!args.scrape).then_some(announced_port),
+        withdrawn: withdraw.then_some(withdrawn),
         tracker_count: results.len(),
         responded: results.iter().filter(|r| r.ok).count(),
         failed: results.iter().filter(|r| !r.ok).count(),
@@ -208,6 +262,35 @@ pub fn run(
     };
     renderer.emit(env, "trackers", &report, || lines(&report))?;
     Ok(code)
+}
+
+/// Hold a port open for as long as the announce lasts.
+///
+/// Binds every address, not loopback, because the point of announcing a port
+/// is that somebody else can reach it. Tries each port in the range in turn,
+/// which is what `--port 6881-6889` asks for, and `0` asks the OS.
+///
+/// Returned rather than leaked: the caller drops it after the withdrawal, so
+/// the listener outlives every announce that named it.
+fn bind_announce_port(values: &[String]) -> Result<std::net::TcpListener> {
+    let range = swarm::port_range(values)?;
+    let mut last = None;
+    for port in range.clone() {
+        match std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)) {
+            Ok(listener) => return Ok(listener),
+            Err(e) => last = Some(e),
+        }
+    }
+    // A range that is entirely taken is the caller's problem to hear about,
+    // named with the range they asked for.
+    Err(bit_cli_core::error::from_io(
+        last.unwrap_or_else(|| std::io::Error::other("no port in range")),
+        format!(
+            "cannot bind a port in {}-{} to announce",
+            range.start(),
+            range.end()
+        ),
+    ))
 }
 
 const fn action(args: &TrackersArgs) -> &'static str {
@@ -290,6 +373,12 @@ fn lines(report: &TrackersReport) -> Vec<String> {
         out.push(field("name", name));
     }
     out.push(field("action", report.action));
+    if let Some(port) = report.announced_port {
+        out.push(field("announced port", port));
+    }
+    if let Some(withdrawn) = report.withdrawn {
+        out.push(field("withdrawn from", withdrawn));
+    }
     out.push(field("trackers", report.tracker_count));
     out.push(field("responded", report.responded));
     out.push(field("failed", report.failed));
@@ -456,6 +545,8 @@ mod tests {
             info_hash: "0".repeat(40),
             name: None,
             action: "announce",
+            announced_port: Some(6881),
+            withdrawn: Some(2),
             tracker_count: 2,
             responded: 2,
             failed: 0,
@@ -480,5 +571,95 @@ mod tests {
         let text = lines(&report).join("\n");
         assert!(text.contains("udp://a.example:451"), "{text}");
         assert!(text.contains("udp://b.example:451"), "{text}");
+    }
+
+    /// The announced port is one this command is holding open, and the peer
+    /// record it creates does not outlive the command.
+    ///
+    /// It announced 6881 unconditionally before, whatever it was doing and
+    /// whatever was listening there, which registers a peer nobody can dial
+    /// and leaves it for the tracker's interval. See `TODO/trackers.md`,
+    /// T-061.
+    #[test]
+    fn the_announced_port_is_bound_and_the_record_is_withdrawn() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let tracker = crate::test_support::Tracker::start(&[]);
+        let report = crate::test_support::run_json(
+            &[
+                "trackers",
+                fixture.path_str(),
+                "--replace-trackers",
+                "--tracker",
+                &tracker.announce,
+            ],
+            fixture.dir(),
+        );
+
+        let port = report["announced_port"].as_u64().expect("a port");
+        assert_ne!(port, 0, "{report}");
+        assert_ne!(port, 6881, "the fixed port is what this replaced: {report}");
+        assert_eq!(report["withdrawn"], 1, "{report}");
+
+        // Two announces: the question, then the withdrawal, both naming the
+        // port the command held open.
+        let events = tracker.param("event");
+        assert_eq!(events, ["started", "stopped"], "{:?}", tracker.seen());
+        let ports = tracker.param("port");
+        assert_eq!(
+            ports,
+            [port.to_string(), port.to_string()],
+            "{:?}",
+            tracker.seen()
+        );
+
+        // And the port really was bound, which is the whole point: binding it
+        // again while the command held it would have failed, and now that it
+        // has exited it is free.
+        std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port as u16))
+            .expect("the announced port is released when the command exits");
+    }
+
+    /// `--no-withdraw` leaves the record, and says so.
+    #[test]
+    fn no_withdraw_sends_one_announce_and_reports_no_withdrawal() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let tracker = crate::test_support::Tracker::start(&[]);
+        let report = crate::test_support::run_json(
+            &[
+                "trackers",
+                fixture.path_str(),
+                "--replace-trackers",
+                "--no-withdraw",
+                "--tracker",
+                &tracker.announce,
+            ],
+            fixture.dir(),
+        );
+        assert!(report["withdrawn"].is_null(), "{report}");
+        assert_eq!(tracker.param("event"), ["started"], "{:?}", tracker.seen());
+    }
+
+    /// A scrape announces nothing, so it binds nothing and withdraws nothing.
+    #[test]
+    fn a_scrape_carries_no_port_and_no_withdrawal() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let tracker = crate::test_support::Tracker::start(&[]);
+        let (mut env, captured) = Env::test(
+            &[
+                "--json",
+                "trackers",
+                fixture.path_str(),
+                "--scrape",
+                "--replace-trackers",
+                "--tracker",
+                &tracker.announce,
+            ],
+            fixture.dir(),
+        );
+        let _ = crate::run(&mut env);
+        let report = captured.json().expect("a report");
+        assert!(report["announced_port"].is_null(), "{report}");
+        assert!(report["withdrawn"].is_null(), "{report}");
+        assert!(tracker.param("event").is_empty(), "{:?}", tracker.seen());
     }
 }

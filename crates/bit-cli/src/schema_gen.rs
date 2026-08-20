@@ -380,10 +380,15 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
     // a `download` document carries `shared`. The donor is complete on disk
     // and the receiver has everything except the shared file, so the run needs
     // no source and no network. See `TODO/multi-source.md`, T-140.
+    //
+    // It is also the run that announces, because a `download` document
+    // carries `announced` only when the run has a tracker to tell. The
+    // loopback one answers and records nothing.
     let (donor, receiver) = TorrentFixture::sharing_pair();
     let share_dir = donor.dir().join("out");
     donor.place(&share_dir, &[]);
     receiver.place(&share_dir, &["extra-b.txt"]);
+    let share_tracker = crate::test_support::Tracker::start(&[]);
     let (_, out) = capture(
         &[
             "--json",
@@ -393,7 +398,9 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
             "--dir",
             share_dir.to_str().unwrap(),
             "--no-torrent-web-seed",
-            "--no-tracker",
+            "--replace-trackers",
+            "--tracker",
+            &share_tracker.announce,
             "--no-dht",
             "--no-lsd",
             "--port",

@@ -274,6 +274,10 @@ From `bit-cli download <TORRENT> --web-seed <URL> --json`.
 | `process.peak_rss_bytes` | integer |
 | `process.rss_bytes` | integer |
 | `schema_version` | string |
+| `torrents[].announced[].accepted` | integer |
+| `torrents[].announced[].at_ms` | integer |
+| `torrents[].announced[].event` | string |
+| `torrents[].announced[].trackers` | integer |
 | `torrents[].code` | string |
 | `torrents[].downloaded.bytes` | integer |
 | `torrents[].downloaded.human` | string |
@@ -414,6 +418,7 @@ From `bit-cli trackers <TORRENT> --tracker <URL> --json`.
 | field | type |
 | --- | --- |
 | `action` | string |
+| `announced_port` | integer |
 | `bit_cli_version` | string |
 | `failed` | integer |
 | `generated_at` | string |
@@ -440,6 +445,7 @@ From `bit-cli trackers <TORRENT> --tracker <URL> --json`.
 | `trackers[].tier` | integer |
 | `trackers[].url` | string |
 | `trackers[].warning` | string |
+| `withdrawn` | integer |
 
 ### `webseed_list`
 

@@ -72,6 +72,11 @@ pub struct TorrentReport {
     /// Empty unless two torrents in one invocation hold the same file.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shared: Vec<SharedFile>,
+    /// Announces this run sent itself: `completed` when the download
+    /// finished and `stopped` when it ended. Empty when the torrent has no
+    /// trackers or `--no-tracker` was given.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub announced: Vec<SentAnnounce>,
     /// The exit code this torrent's outcome produces.
     ///
     /// A run's code is the worst of its torrents'. Without this, a torrent
@@ -82,6 +87,25 @@ pub struct TorrentReport {
     pub code: ExitCode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// One announce this run sent itself, beyond the session's own.
+///
+/// The session announces `started` when a torrent goes live and then repeats
+/// on the tracker's interval. It never says a download finished and never says
+/// it stopped, so a tracker's seeder count is wrong and a dead address is
+/// handed out until the record expires. `bit-cli` runs in the foreground and
+/// knows both moments exactly. See `TODO/trackers.md`, T-062.
+#[derive(Debug, Clone, Serialize)]
+pub struct SentAnnounce {
+    /// `completed` or `stopped`.
+    pub event: &'static str,
+    /// Trackers it was sent to.
+    pub trackers: usize,
+    /// Trackers that answered without a failure.
+    pub accepted: usize,
+    /// Milliseconds into the run.
+    pub at_ms: u64,
 }
 
 /// One file this torrent read from another torrent in the same run.
@@ -277,6 +301,17 @@ pub fn run(
     }
 
     let init_timeout = swarm::duration_flag(&args.limits.init_timeout, "init-timeout")?;
+    // The courtesy announces at the end of a run use the same timeouts
+    // `bit-cli trackers` does, because they are the same client talking to the
+    // same trackers. See `TODO/trackers.md`, T-062.
+    let tracker_timeout =
+        swarm::optional_duration(&args.trackers.tracker_timeout, "tracker-timeout")?
+            .unwrap_or(Duration::from_secs(30));
+    let tracker_connect_timeout = swarm::optional_duration(
+        &args.trackers.tracker_connect_timeout,
+        "tracker-connect-timeout",
+    )?
+    .unwrap_or(Duration::from_secs(10));
     let trace_http = global.trace.iter().any(|t| t == "http");
     // A source-level check is per piece or nothing. `file` asks for a coarser
     // grain than the fetcher works at, and the per-piece check subsumes it, so
@@ -368,6 +403,8 @@ pub fn run(
                 redial_after,
                 max_redials: args.max_redials,
                 donors: donor_files.clone(),
+                tracker_timeout,
+                tracker_connect_timeout,
             };
             workers.spawn(async move {
                 loop {
@@ -484,6 +521,10 @@ struct Options {
     /// Where each torrent in the run wrote its files, filled in as they
     /// finish. See `TODO/multi-source.md`, T-140.
     donors: SharedDonors,
+    /// How long a courtesy announce at the end of a run waits. See
+    /// `TODO/trackers.md`, T-062.
+    tracker_timeout: Duration,
+    tracker_connect_timeout: Duration,
 }
 
 /// One source and what was resolved for it before the session started.
@@ -619,6 +660,7 @@ async fn one(
                 output_directory: options.directory.display().to_string(),
                 renamed: Vec::new(),
                 shared: Vec::new(),
+                announced: Vec::new(),
                 code: error.code(),
                 error: Some(error.to_string()),
             }
@@ -770,11 +812,38 @@ async fn one_inner(
             .await;
     }
 
-    let outcome = watch(engine, &handle, &layout, &sources, options, tx).await;
+    let mut announced: Vec<SentAnnounce> = Vec::new();
+    let outcome = watch(
+        engine,
+        &handle,
+        &layout,
+        &sources,
+        plan,
+        options,
+        tx,
+        &mut announced,
+    )
+    .await;
     for source in &sources {
         source.stop();
     }
     let (stopped, elapsed, redials) = outcome;
+
+    // `stopped` last, whatever ended the run. A tracker that is not told keeps
+    // handing this address out until the record expires, which on a public
+    // tracker is the next half hour.
+    if let Some(sent) = announce_event(
+        engine,
+        &handle,
+        plan,
+        options,
+        bit_cli_core::tracker::Event::Stopped,
+        elapsed,
+    )
+    .await
+    {
+        announced.push(sent);
+    }
     let snapshot = engine.snapshot(&handle);
     let mut report = finish(
         plan,
@@ -788,6 +857,7 @@ async fn one_inner(
         renames(engine, &handle),
     );
     report.shared = shared;
+    report.announced = announced;
     // A finished torrent can lend its files to the ones after it. An
     // unfinished one cannot: its files are on disk but not all of their bytes
     // are.
@@ -822,13 +892,16 @@ async fn one_inner(
 /// every run as long as the next multiple of `--report-interval`, which
 /// defaults to a second, so a download that finished in 1.1 s would take 2 s
 /// and a `--timeout 30s` would fire at 31. See `TODO/performance.md`, T-030.
+#[allow(clippy::too_many_arguments)]
 async fn watch(
     engine: &Engine,
     handle: &bit_cli_core::engine::Handle,
     layout: &Layout,
     sources: &[AttachedSource],
+    plan: &Plan,
     options: &Options,
     tx: &mpsc::Sender<Msg>,
+    announced: &mut Vec<SentAnnounce>,
 ) -> (Stopped, Duration, Vec<Redial>) {
     let lengths: Vec<u64> = layout.files.iter().map(|f| f.length).collect();
     let mut progress = Progress::new(layout.piece_count(), lengths);
@@ -875,7 +948,24 @@ async fn watch(
         tokio::select! {
             _ = &mut interrupt => return (Stopped::Interrupted, progress.elapsed(), redials),
             _ = ticker.tick() => {}
-            _ = &mut completion, if !completed => completed = true,
+            _ = &mut completion, if !completed => {
+                completed = true;
+                // Now, not when the run ends: a run that keeps seeding after
+                // completing would otherwise tell the tracker minutes late,
+                // and the seeder count is what a tracker uses this for.
+                if let Some(sent) = announce_event(
+                    engine,
+                    handle,
+                    plan,
+                    options,
+                    bit_cli_core::tracker::Event::Completed,
+                    progress.elapsed(),
+                )
+                .await
+                {
+                    announced.push(sent);
+                }
+            }
             _ = &mut deadline, if !deadline_fired => deadline_fired = true,
         }
 
@@ -1110,6 +1200,76 @@ fn donated_sources(
     (specs, shared)
 }
 
+/// Tell every tracker this torrent uses that something happened.
+///
+/// The announce carries the session's own peer id and listening port, so a
+/// tracker updates the record the session created rather than registering a
+/// second peer that then has to be cleaned up. A tracker that fails is counted
+/// and nothing else: this is a courtesy announce, and a run does not fail
+/// because a tracker was down when it ended.
+///
+/// See `TODO/trackers.md`, T-062.
+async fn announce_event(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    plan: &Plan,
+    options: &Options,
+    event: bit_cli_core::tracker::Event,
+    at: Duration,
+) -> Option<SentAnnounce> {
+    use bit_cli_core::tracker::{Announce, Client};
+
+    let urls = plan.trackers.clone().unwrap_or_default();
+    if urls.is_empty() {
+        return None;
+    }
+    let port = engine.listen_addr().map(|addr| addr.port()).unwrap_or(0);
+    let snapshot = engine.snapshot(handle);
+    let request = Announce {
+        event,
+        uploaded: snapshot.uploaded_bytes,
+        downloaded: snapshot.progress_bytes,
+        left: snapshot.total_bytes.saturating_sub(snapshot.progress_bytes),
+        // A client that is leaving or has finished is not asking for peers.
+        numwant: 0,
+        ..Announce::new(
+            handle.info_hash().0,
+            handle.shared().peer_id.0,
+            port,
+            snapshot.total_bytes.saturating_sub(snapshot.progress_bytes),
+        )
+    };
+
+    let client = Client::new(
+        &format!("bit-cli/{}", bit_cli_core::VERSION),
+        options.tracker_timeout,
+        options.tracker_connect_timeout,
+    )
+    .ok()?;
+    let client = std::sync::Arc::new(client);
+    let mut work = tokio::task::JoinSet::new();
+    for url in &urls {
+        let client = client.clone();
+        let url = url.clone();
+        let request = request.clone();
+        work.spawn(async move { client.announce(&url, 0, &request).await });
+    }
+    let mut accepted = 0usize;
+    while let Some(finished) = work.join_next().await {
+        if let Ok(result) = finished
+            && result.ok
+        {
+            accepted += 1;
+        }
+    }
+    Some(SentAnnounce {
+        event: event.as_str().unwrap_or("none"),
+        trackers: urls.len(),
+        accepted,
+        at_ms: at.as_millis().min(u128::from(u64::MAX)) as u64,
+    })
+}
+
 /// Record where a finished torrent put its files, so the ones after it can
 /// read them.
 fn publish_donor(
@@ -1174,6 +1334,7 @@ fn finish(
         output_directory: options.directory.display().to_string(),
         renamed,
         shared: Vec::new(),
+        announced: Vec::new(),
         code: stopped.code(),
         error: snapshot.error.clone(),
     }
@@ -2322,5 +2483,84 @@ mod tests {
         assert_eq!(torrent["from_peers"]["bytes"], 0, "{torrent}");
         assert_eq!(torrent["from_web_seeds"]["bytes"], 0, "{torrent}");
         assert_eq!(report["from_resume"]["bytes"], 3000);
+    }
+
+    /// A whole run tells its trackers when it started, when it finished, and
+    /// when it stopped.
+    ///
+    /// The session sends `started` and then repeats on the interval. It never
+    /// says a download completed, so a tracker's seeder count is wrong, and it
+    /// never says stopped, so a dead address is handed out until the record
+    /// expires. Both are sent by `bit-cli` itself, from the session's own peer
+    /// id and port, so the tracker updates one record rather than seeing two
+    /// peers. See `TODO/trackers.md`, T-062.
+    ///
+    /// The payload is fetched rather than already on disk. A torrent that is
+    /// complete on its hash check finishes before the session's own `started`
+    /// announce has left, and the order the tracker sees is then a race rather
+    /// than a sequence.
+    #[test]
+    fn a_run_announces_started_then_completed_then_stopped() {
+        let fixture = TorrentFixture::multi_file();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let tracker = crate::test_support::Tracker::start(&[]);
+        let out = fixture.dir().join("out");
+        let source = format!("{}payload/", server.base);
+
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--replace-trackers",
+                "--tracker",
+                &tracker.announce,
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "--report-interval",
+                "100ms",
+                "--stop-after",
+                "20s",
+            ],
+            fixture.dir(),
+            ExitCode::Success,
+        );
+
+        let announced = report["torrents"][0]["announced"]
+            .as_array()
+            .expect("an announced array");
+        let events: Vec<&str> = announced
+            .iter()
+            .filter_map(|sent| sent["event"].as_str())
+            .collect();
+        assert_eq!(events, ["completed", "stopped"], "{report}");
+        for sent in announced {
+            assert_eq!(sent["trackers"], 1, "{sent}");
+            assert_eq!(sent["accepted"], 1, "{sent}");
+        }
+
+        // What the tracker actually saw, in order. `started` is the session's
+        // own; the other two are this run's.
+        assert_eq!(
+            tracker.param("event"),
+            ["started", "completed", "stopped"],
+            "{:?}",
+            tracker.seen()
+        );
+
+        // One peer id and one port throughout, which is what makes these
+        // updates to the session's record rather than a second peer.
+        let ids: std::collections::HashSet<String> = tracker.param("peer_id").into_iter().collect();
+        assert_eq!(ids.len(), 1, "{:?}", tracker.seen());
+        let ports: std::collections::HashSet<String> = tracker.param("port").into_iter().collect();
+        assert_eq!(ports.len(), 1, "{:?}", tracker.seen());
     }
 }

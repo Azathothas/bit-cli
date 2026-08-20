@@ -666,4 +666,75 @@ mod tests {
             );
         }
     }
+
+    /// The session announces the port it is listening on, and that port is
+    /// dialable while the run lasts.
+    ///
+    /// The upstream report this comes from is a session announcing 0 on one
+    /// version and a fixed 4240 on another, either of which registers a peer
+    /// nobody can reach while the download itself looks fine. `bit-cli` leaves
+    /// `ListenerOptions::announce_port` unset so the session announces what it
+    /// bound, and this is what says so rather than assuming it. See
+    /// `TODO/trackers.md`, T-060.
+    #[test]
+    fn the_session_announces_the_port_it_listens_on() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let tracker = crate::test_support::Tracker::start(&[]);
+        let port = crate::test_support::free_port();
+        let data = fixture.dir().join("served");
+        fixture.place(&data, &[]);
+
+        let seeder = {
+            let torrent = fixture.path_str().to_string();
+            let data = data.to_str().expect("utf-8 path").to_string();
+            let announce = tracker.announce.clone();
+            let cwd = fixture.dir();
+            std::thread::spawn(move || {
+                let (mut env, _) = crate::env::Env::test(
+                    &[
+                        "seed",
+                        &torrent,
+                        "--data",
+                        &data,
+                        "--port",
+                        &port.to_string(),
+                        "--replace-trackers",
+                        "--tracker",
+                        &announce,
+                        "--no-dht",
+                        "--no-lsd",
+                        "--stop-after",
+                        "4s",
+                    ],
+                    cwd,
+                );
+                crate::run(&mut env)
+            })
+        };
+
+        // Wait for the first announce rather than sleeping a fixed time: the
+        // session announces as soon as the torrent is live, which is after a
+        // hash check whose length is the machine's business.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let mut announced = Vec::new();
+        while announced.is_empty() && std::time::Instant::now() < deadline {
+            announced = tracker.param("port");
+            if announced.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+        assert_eq!(
+            announced.first().map(String::as_str),
+            Some(port.to_string().as_str()),
+            "announced {announced:?}, listening on {port}: {:?}",
+            tracker.seen()
+        );
+
+        // The announced address is one a peer could dial, which is the half of
+        // this that a recorded port number does not prove.
+        std::net::TcpStream::connect(("127.0.0.1", port))
+            .expect("the announced port is not accepting connections");
+
+        let _ = seeder.join();
+    }
 }
