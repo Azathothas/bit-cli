@@ -25,6 +25,27 @@ pub struct FileRow {
     pub share: String,
     /// Whether this is a BEP 47 padding file, which carries no real data.
     pub padding: bool,
+    /// The same file in a torrent named by `--against`, and what says so.
+    /// Empty unless `--against` was given. See `TODO/multi-source.md`, T-133.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shared: Vec<Shared>,
+}
+
+/// One file of another torrent that holds the same bytes as this one.
+#[derive(Debug, Clone, Serialize)]
+pub struct Shared {
+    /// The other torrent, as it was named on the command line.
+    pub torrent: String,
+    pub info_hash: String,
+    pub index: usize,
+    pub path: String,
+    /// `piece-hashes` when the pieces line up and agree, `length` when the
+    /// size is all that could be compared.
+    pub evidence: &'static str,
+    /// Whether the evidence is a proof rather than a candidate.
+    pub proven: bool,
+    pub pieces_compared: u32,
+    pub bytes_proven: Size,
 }
 
 /// What `bit-cli files` reports.
@@ -53,7 +74,37 @@ impl Report {
                 ]
             })
             .collect();
-        table(&["INDEX", "SIZE", "SHARE", "PIECES", "PATH"], &rows)
+        let mut out = table(&["INDEX", "SIZE", "SHARE", "PIECES", "PATH"], &rows);
+
+        // A second section rather than a sixth column: a file can match
+        // several files in several torrents, and one row per match reads
+        // better than a cell holding a list.
+        let shared: Vec<Vec<String>> = self
+            .files
+            .iter()
+            .flat_map(|f| {
+                f.shared.iter().map(move |s| {
+                    vec![
+                        f.index.to_string(),
+                        s.evidence.to_string(),
+                        match s.proven {
+                            true => format_size(s.bytes_proven.0),
+                            false => "-".to_string(),
+                        },
+                        format!("{}:{}", &s.info_hash[..8.min(s.info_hash.len())], s.index),
+                        s.path.clone(),
+                    ]
+                })
+            })
+            .collect();
+        if !shared.is_empty() {
+            out.push(String::new());
+            out.extend(table(
+                &["INDEX", "EVIDENCE", "PROVEN", "OTHER", "OTHER PATH"],
+                &shared,
+            ));
+        }
+        out
     }
 }
 
@@ -99,6 +150,15 @@ pub fn run(
     let layout = meta.layout();
     let total = layout.total_length;
 
+    // Every comparison torrent is read before anything is printed, so a
+    // mistyped path fails rather than producing a listing with a gap in it.
+    let mut others = Vec::with_capacity(args.against.len());
+    for source in &args.against {
+        let kind = Kind::classify(source, env)?;
+        let other = load_local(&kind, env)?;
+        others.push((source.clone(), other));
+    }
+
     let mut files: Vec<FileRow> = layout
         .files
         .iter()
@@ -114,9 +174,36 @@ pub fn run(
                 last_piece: pieces.end.saturating_sub(1),
                 share: percent_of(file.length, total),
                 padding: meta.info().files.get(index).is_some_and(|f| f.is_padding()),
+                shared: Vec::new(),
             }
         })
         .collect();
+
+    for (source, other) in &others {
+        let other_layout = other.layout();
+        let found = bit_cli_core::equivalence::matches(
+            &layout,
+            &meta.info().pieces,
+            &other_layout,
+            &other.info().pieces,
+        );
+        for one in found {
+            let Some(row) = files.get_mut(one.index) else {
+                continue;
+            };
+            row.shared.push(Shared {
+                torrent: source.clone(),
+                info_hash: other.info_hash().hex(),
+                index: one.other_index,
+                path: one.other_path,
+                evidence: one.evidence.as_str(),
+                proven: one.evidence.is_proof(),
+                pieces_compared: one.pieces_compared,
+                bytes_proven: Size(one.bytes_proven),
+            });
+        }
+    }
+
     sort_rows(&mut files, &args.sort)?;
 
     let report = Report {
@@ -227,5 +314,56 @@ mod tests {
         assert_eq!(doc["file_count"], 1);
         assert_eq!(doc["files"][0]["path"], "payload.bin");
         assert_eq!(doc["files"][0]["share"], "100.00%");
+    }
+
+    /// A file that another torrent holds identically is reported with the
+    /// evidence behind it.
+    ///
+    /// Both fixtures start with the same 1500 byte file at offset 0 under the
+    /// same 1024 byte piece length, so the first piece lines up and its hash
+    /// is the proof. The second file differs in both, so it is not a match at
+    /// all. See `TODO/multi-source.md`, T-133.
+    #[test]
+    fn against_reports_a_shared_file_and_what_proves_it() {
+        let mine = TorrentFixture::multi_file();
+        let theirs = TorrentFixture::multi_file_with_a_different_tail();
+        let doc = run_json(
+            &["files", mine.path_str(), "--against", theirs.path_str()],
+            mine.dir(),
+        );
+        let shared = doc["files"][0]["shared"].as_array().expect("an array");
+        assert_eq!(shared.len(), 1, "{}", doc["files"][0]);
+        assert_eq!(shared[0]["evidence"], "piece-hashes");
+        assert_eq!(shared[0]["proven"], true);
+        assert_eq!(shared[0]["index"], 0);
+        assert_eq!(shared[0]["path"], "disc 1/a.flac");
+        assert_eq!(shared[0]["pieces_compared"], 1);
+        assert_eq!(shared[0]["bytes_proven"]["bytes"], 1024);
+        assert_eq!(shared[0]["info_hash"], theirs.info_hash);
+
+        // The second file is 500 bytes here and 900 there, so nothing matches.
+        assert!(doc["files"][1]["shared"].is_null(), "{}", doc["files"][1]);
+    }
+
+    /// Without the flag the field is absent, so an ordinary listing is
+    /// unchanged.
+    #[test]
+    fn a_listing_without_against_carries_no_shared_field() {
+        let fixture = TorrentFixture::multi_file();
+        let doc = run_json(&["files", fixture.path_str()], fixture.dir());
+        assert!(doc["files"][0]["shared"].is_null(), "{doc}");
+    }
+
+    /// A comparison torrent that cannot be read fails the command rather than
+    /// producing a listing with a gap in it.
+    #[test]
+    fn an_unreadable_comparison_torrent_fails_the_command() {
+        let fixture = TorrentFixture::multi_file();
+        let err = run_err(
+            &["files", fixture.path_str(), "--against", "nope.torrent"],
+            fixture.dir(),
+            ExitCode::SourceResolution,
+        );
+        assert!(err.contains("nope.torrent"), "{err}");
     }
 }

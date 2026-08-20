@@ -48,6 +48,25 @@ impl TorrentFixture {
         Self::build("payload.bin", false, &[("payload.bin", 3000usize, 0xCCu8)])
     }
 
+    /// [`Self::multi_file`] with the same first file and a different second
+    /// one, so exactly one file is shared between the two torrents.
+    ///
+    /// Same piece length and the shared file at offset zero in both, so its
+    /// first whole piece lines up and its hash is a proof rather than a
+    /// coincidence. The second file differs in length as well as in content,
+    /// which keeps it out of the match entirely. See
+    /// `TODO/multi-source.md`, T-133.
+    pub fn multi_file_with_a_different_tail() -> Self {
+        Self::build(
+            "album",
+            true,
+            &[
+                ("disc 1/a.flac", 1500usize, 0xAAu8),
+                ("liner.txt", 900, 0xDD),
+            ],
+        )
+    }
+
     fn build(name: &str, multi_file: bool, spec: &[(&str, usize, u8)]) -> Self {
         let temp = tempfile::tempdir().expect("temp dir");
         let root = temp.path().to_path_buf();

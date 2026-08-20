@@ -48,6 +48,10 @@ pub struct TorrentReport {
     /// Bytes served by HTTP sources. The rest came from peers.
     pub from_web_seeds: Size,
     pub from_peers: Size,
+    /// Bytes that were already on the disk when the torrent was added, found
+    /// by the hash check. Charged to neither transport, because this run did
+    /// not fetch them. See `TODO/multi-source.md`, T-139.
+    pub from_resume: Size,
     pub elapsed_ms: u64,
     pub elapsed_human: String,
     pub mean_rate: Size,
@@ -101,6 +105,10 @@ pub struct DownloadReport {
     pub downloaded: Size,
     pub from_web_seeds: Size,
     pub from_peers: Size,
+    /// Bytes that were already on the disk when the torrent was added, found
+    /// by the hash check. Charged to neither transport, because this run did
+    /// not fetch them. See `TODO/multi-source.md`, T-139.
+    pub from_resume: Size,
     pub elapsed_ms: u64,
     pub elapsed_human: String,
     pub completed: usize,
@@ -341,6 +349,7 @@ pub fn run(
         downloaded: Size(reports.iter().map(|r| r.downloaded.0).sum()),
         from_web_seeds: Size(reports.iter().map(|r| r.from_web_seeds.0).sum()),
         from_peers: Size(reports.iter().map(|r| r.from_peers.0).sum()),
+        from_resume: Size(reports.iter().map(|r| r.from_resume.0).sum()),
         completed: reports.iter().filter(|r| r.finished).count(),
         failed: reports.iter().filter(|r| !r.finished).count(),
         elapsed_ms: elapsed.as_millis().min(u128::from(u64::MAX)) as u64,
@@ -438,6 +447,7 @@ async fn one(
                 uploaded: Size(0),
                 from_web_seeds: Size(0),
                 from_peers: Size(0),
+                from_resume: Size(0),
                 elapsed_ms: 0,
                 elapsed_human: "0s".into(),
                 mean_rate: Size(0),
@@ -521,6 +531,16 @@ async fn one_inner(
         ))
         .await;
 
+    // What the hash check found already on disk, read once the check has
+    // finished and before anything is fetched.
+    //
+    // `progress_bytes` is everything the torrent has, not everything this run
+    // fetched, so charging `progress_bytes - served` to peers charges them for
+    // a resumed download's existing bytes as well. A run that resumed 45 MiB
+    // of a 64 MiB file with no peer in the swarm reported 45 MiB from peers.
+    // See `TODO/multi-source.md`, T-139.
+    let resumed = engine.snapshot(&handle).progress_bytes;
+
     if options.hash_check_only {
         let snapshot = engine.snapshot(&handle);
         return Ok(finish(
@@ -531,6 +551,7 @@ async fn one_inner(
             Stopped::Completed,
             Duration::ZERO,
             Vec::new(),
+            resumed,
             renames(engine, &handle),
         ));
     }
@@ -585,6 +606,7 @@ async fn one_inner(
         stopped,
         elapsed,
         redials,
+        resumed,
         renames(engine, &handle),
     );
 
@@ -599,6 +621,7 @@ async fn one_inner(
                 "downloaded_bytes": report.downloaded.0,
                 "from_web_seeds": report.from_web_seeds.0,
                 "from_peers": report.from_peers.0,
+                "from_resume": report.from_resume.0,
                 "elapsed_ms": report.elapsed_ms,
             }),
         ))
@@ -843,6 +866,7 @@ fn finish(
     stopped: Stopped,
     elapsed: Duration,
     redials: Vec<Redial>,
+    resumed: u64,
     renamed: Vec<Rename>,
 ) -> TorrentReport {
     let served: u64 = sources.iter().map(AttachedSource::served_bytes).sum();
@@ -861,7 +885,13 @@ fn finish(
         downloaded: Size(snapshot.progress_bytes),
         uploaded: Size(snapshot.uploaded_bytes),
         from_web_seeds: Size(served),
-        from_peers: Size(snapshot.progress_bytes.saturating_sub(served)),
+        from_peers: Size(
+            snapshot
+                .progress_bytes
+                .saturating_sub(served)
+                .saturating_sub(resumed),
+        ),
+        from_resume: Size(resumed),
         elapsed_ms,
         elapsed_human: bit_cli_core::units::format_duration(elapsed),
         mean_rate: Size(mean),
@@ -1168,6 +1198,11 @@ fn lines(report: &DownloadReport) -> Vec<String> {
             "from web seeds",
             format_size(torrent.from_web_seeds.0),
         ));
+        // Only when there were any, because a fresh download resumes nothing
+        // and a line reading zero on every one of them is noise.
+        if torrent.from_resume.0 > 0 {
+            out.push(field("already on disk", format_size(torrent.from_resume.0)));
+        }
         out.push(field("uploaded", format_size(torrent.uploaded.0)));
         out.push(field("elapsed", &torrent.elapsed_human));
         out.push(field("mean rate", &torrent.mean_rate_human));
@@ -1842,5 +1877,44 @@ mod tests {
             [first.info_hash.clone(), second.info_hash.clone()],
             "torrents started out of order: {added:?}"
         );
+    }
+
+    /// Bytes that were already on the disk are not charged to peers.
+    ///
+    /// `progress_bytes` is everything the torrent has, not everything this run
+    /// fetched, so `progress_bytes - served` charges a resumed download's
+    /// existing bytes to the swarm. This run has no peers and no sources at
+    /// all, and the payload is already complete, so anything non-zero in
+    /// `from_peers` is that arithmetic and nothing else. See
+    /// `TODO/multi-source.md`, T-139.
+    #[test]
+    fn bytes_already_on_disk_are_reported_as_resumed_rather_than_from_peers() {
+        let fixture = TorrentFixture::single_file();
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                fixture.payload_dir().to_str().unwrap(),
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "--allow-overwrite",
+                "--stop-after",
+                "20s",
+            ],
+            fixture.dir(),
+            // The payload is already there, so the hash check finds it
+            // complete and the run finishes at once.
+            ExitCode::Success,
+        );
+        let torrent = &report["torrents"][0];
+        assert_eq!(torrent["downloaded"]["bytes"], 3000);
+        assert_eq!(torrent["from_resume"]["bytes"], 3000, "{torrent}");
+        assert_eq!(torrent["from_peers"]["bytes"], 0, "{torrent}");
+        assert_eq!(torrent["from_web_seeds"]["bytes"], 0, "{torrent}");
+        assert_eq!(report["from_resume"]["bytes"], 3000);
     }
 }

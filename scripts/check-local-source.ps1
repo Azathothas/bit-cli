@@ -1,11 +1,11 @@
 # Drive a `file:` source: bytes already on the disk, named as a web seed.
 #
-# This is the acceptance for `TODO/multi-source.md` T-133 layer 1, and for the
-# two-step form of the operator's Scenario 2. Nothing here touches the network
-# and no server runs: every byte comes off the local filesystem.
+# This is the acceptance for `TODO/multi-source.md` T-133 layers 1 and 2, and
+# for the operator's Scenario 2. Nothing here touches the network and no server
+# runs: every byte comes off the local filesystem.
 #
 # It builds the three-torrent fixture (one bit-identical `file.blob` under
-# three info hashes and three piece lengths) and runs six cases:
+# three info hashes and three piece lengths) and runs eight cases:
 #
 #   exact          torrent C's file.blob from the CDN copy, a name and a path
 #                  with no relation to the torrent's. Completes, hash matches.
@@ -20,10 +20,25 @@
 #                  piece.
 #   missing        a path that is not there. The source is refused and the
 #                  report names it.
+#   one_invocation the same three torrents in one command instead of three.
+#                  C reads the CDN copy, A and B read what C wrote, and all
+#                  three land byte for byte.
+#   equivalence    what the metadata alone proves: nothing across the three
+#                  piece lengths, and the shared file byte for byte across a
+#                  pair built to line up.
 #
 # The shared cases are the point: one 64 MiB payload fetched once and written
 # into three output directories under three different info hashes, all four
 # copies hashing equal.
+#
+# `one_invocation` is the same result in one command, which needs two things
+# the earlier cases do not. A binding has to name one torrent, because
+# `file.blob` is index 0 in A and C and index 1 in B, so
+# `--web-seed-for '<INFOHASH>:file:N=URL'` says which. And `-j 1` has to start
+# the sources in the order they were given, because A and B read the file C
+# writes. Every other file in each torrent is put in place first, so the only
+# bytes the run fetches are the shared file's and "fetched once" is a number
+# rather than a claim: exactly one source reads the CDN copy.
 #
 # Usage:
 #   pwsh scripts/check-local-source.ps1
@@ -293,6 +308,214 @@ Add-Case "missing" $run $null `
     "the source is refused and the report names the path" `
     $ok "exit $($run.exit_code), reason $(if ($named) { 'names the path' } else { 'does not' })"
 
+# --- 7. all three torrents in one invocation -------------------------------
+#
+# The two-step above is three invocations. This is the same result in one,
+# which is what T-133 layer 2 asks for, and it needs two things that did not
+# exist: a binding that names one torrent, because `file.blob` is index 0 in
+# A and C and index 1 in B, and `-j 1` starting the sources in the order they
+# were given, because A and B read the file C writes.
+#
+# Every other file in each torrent is put in place first, so the only bytes
+# this run fetches are the shared file's. That is what makes "fetched once"
+# a number rather than a claim: torrent C reads the CDN copy, and A and B read
+# what C wrote.
+
+Write-Step "one_invocation: three torrents, one command, C first and A and B from its output"
+$hashes = @{}
+foreach ($pair in @(@{ k = "a"; t = $torrentA }, @{ k = "b"; t = $torrentB }, @{ k = "c"; t = $torrentC })) {
+    $info = & $bitCli info $pair.t --json | ConvertFrom-Json
+    if (-not $info.info_hash) { Exit-With 2 "could not read the info hash of $($pair.t)" }
+    $hashes[$pair.k] = $info.info_hash
+}
+
+$oneOut = Join-Path $Root "out-one"
+New-Item -ItemType Directory -Force -Path $oneOut | Out-Null
+# Everything except the shared file, so the run has nothing else to fetch.
+foreach ($name in @("payload_a", "payload_b", "payload_c")) {
+    $from = Join-Path $fixture $name
+    $to = Join-Path $oneOut $name
+    Copy-Item -Recurse -Force -LiteralPath $from -Destination $to
+    Get-ChildItem -Recurse -File -LiteralPath $to |
+        Where-Object { $_.Name -eq "file.blob" } |
+        Remove-Item -Force
+}
+$sharedFromC = Join-Path $oneOut "payload_c/a/b/c/file.blob"
+
+$oneArgs = @(
+    "download", $torrentC, $torrentA, $torrentB,
+    "--dir", $oneOut,
+    "-j", "1",
+    "--web-seed-only",
+    "--no-torrent-web-seed",
+    "--web-seed-mode", "exact",
+    "--port", "0",
+    "--web-seed-for", "$($hashes['c']):file:0=$(ConvertTo-FileUrl $cdnCopy)",
+    "--web-seed-for", "$($hashes['a']):file:0=file:///$(($sharedFromC -replace '\\', '/'))",
+    "--web-seed-for", "$($hashes['b']):file:1=file:///$(($sharedFromC -replace '\\', '/'))",
+    "--json"
+)
+[void]$commands.Add("bit-cli $($oneArgs -join ' ')")
+$oneStdout = Join-Path $Root "one.json"
+$oneStderr = Join-Path $Root "one.err"
+$clock = [System.Diagnostics.Stopwatch]::StartNew()
+$process = Start-Process -FilePath $bitCli -WorkingDirectory $repo -NoNewWindow -PassThru `
+    -ArgumentList $oneArgs -RedirectStandardOutput $oneStdout -RedirectStandardError $oneStderr
+$finished = $process.WaitForExit($TimeoutSeconds * 1000)
+$clock.Stop()
+if (-not $finished) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+$oneReport = $null
+try { $oneReport = Get-Content $oneStdout -Raw | ConvertFrom-Json } catch { }
+
+$landedOne = @(
+    (Join-Path $oneOut "payload_c/a/b/c/file.blob"),
+    (Join-Path $oneOut "payload_a/deep/nested/dirs/file.blob"),
+    (Join-Path $oneOut "payload_b/media/file.blob")
+)
+$oneHashes = @($landedOne | ForEach-Object {
+        if (Test-Path $_) { (Get-FileHash -Algorithm SHA256 $_).Hash.ToLower() } else { $null }
+    })
+$oneDistinct = @($oneHashes | Where-Object { $_ } | Sort-Object -Unique)
+# Exactly one torrent read the CDN copy. The other two read what it wrote,
+# which is the "fetched once" the scenario is about.
+$fromCdn = 0
+if ($oneReport -and $oneReport.torrents) {
+    foreach ($torrent in $oneReport.torrents) {
+        foreach ($source in @($torrent.sources)) {
+            if ($source -and $source.url -like "*a3f1b2c4-signed-blob.dat") { $fromCdn++ }
+        }
+    }
+}
+$oneExit = if ($finished) { $process.ExitCode } else { 124 }
+$oneOk = ($oneExit -eq 0) -and ($oneDistinct.Count -eq 1) -and ($oneDistinct[0] -eq $expected) -and
+    ($oneHashes.Count -eq 3) -and (-not ($oneHashes -contains $null)) -and ($fromCdn -eq 1)
+[void]$cases.Add([ordered]@{
+    case             = "one_invocation"
+    expectation      = "three torrents in one command: C reads the CDN copy, A and B read what C wrote, and all three land byte for byte"
+    exit_code        = $oneExit
+    elapsed_ms       = $clock.ElapsedMilliseconds
+    downloaded_bytes = if ($oneReport) { $oneReport.downloaded.bytes } else { 0 }
+    downloaded_human = if ($oneReport) { $oneReport.downloaded.human } else { "0 B" }
+    landed_path      = ($landedOne -join "; ")
+    sha256           = $oneDistinct[0]
+    hash_matches     = ($oneDistinct.Count -eq 1 -and $oneDistinct[0] -eq $expected)
+    source_url       = "one binding per torrent, by info hash"
+    source_state     = $null
+    source_error     = $null
+    sources_from_cdn = $fromCdn
+    info_hashes      = @($hashes["c"], $hashes["a"], $hashes["b"])
+    ok               = $oneOk
+    detail           = "exit $oneExit, $($oneDistinct.Count) distinct hash across three torrents, $fromCdn source read the CDN copy"
+})
+if (-not $oneOk) {
+    [void]$failures.Add("one_invocation : exit $oneExit, $($oneDistinct.Count) distinct hash across three torrents, $fromCdn source read the CDN copy")
+}
+
+# --- 8. what the metadata alone can prove ----------------------------------
+#
+# T-133 layer 3 asks for the equivalence to be derived rather than declared.
+# A `.torrent` hashes fixed-size pieces of the whole payload, not files, so two
+# files can be compared by hash only where the pieces cover the same bytes of
+# each: the same piece length, and the same offset modulo it.
+#
+# The three-torrent fixture is built from three different piece lengths, which
+# is precisely the case where that cannot hold. So this case measures both
+# halves: nothing is provable there, and something is provable in a pair built
+# to line up. Without the second half the first is an untested "no".
+
+Write-Step "equivalence: what the metadata proves across the fixture, and across an aligned pair"
+
+$againstJson = & $bitCli files $torrentA --against $torrentB --against $torrentC --json | ConvertFrom-Json
+$fixtureMatches = @()
+foreach ($file in $againstJson.files) {
+    if ($file.PSObject.Properties.Name -contains 'shared' -and $file.shared) {
+        foreach ($match in $file.shared) {
+            $fixtureMatches += [ordered]@{
+                index = $file.index
+                path = $file.path
+                other_index = $match.index
+                other_path = $match.path
+                evidence = $match.evidence
+                proven = $match.proven
+            }
+        }
+    }
+}
+$fixtureProven = @($fixtureMatches | Where-Object { $_.proven }).Count
+
+# An aligned pair: the same shared file at offset zero in both, the same piece
+# length, and a second file that differs in length so it cannot match.
+$alignedRoot = Join-Path $Root "aligned"
+New-Item -ItemType Directory -Force -Path (Join-Path $alignedRoot "dx") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $alignedRoot "dy") | Out-Null
+$sharedBlob = Join-Path $fixture "payload_a/deep/nested/dirs/file.blob"
+Copy-Item -LiteralPath $sharedBlob -Destination (Join-Path $alignedRoot "dx/file.blob") -Force
+Copy-Item -LiteralPath $sharedBlob -Destination (Join-Path $alignedRoot "dy/file.blob") -Force
+# Named to sort after `file.blob`, so the shared file is at offset zero in both.
+foreach ($tail in @(@{ dir = "dx"; name = "z1.bin"; mib = 2; seed = 777 },
+        @{ dir = "dy"; name = "z2.bin"; mib = 3; seed = 888 })) {
+    $block = [byte[]]::new(1024 * 1024)
+    [int64]$state = $tail.seed
+    for ($i = 0; $i -lt $block.Length; $i++) {
+        $state = ($state * 1103515245 + 12345) -band 0x7FFFFFFF
+        $block[$i] = [byte](($state -shr 16) -band 0xFF)
+    }
+    $stream = [System.IO.File]::Create((Join-Path $alignedRoot "$($tail.dir)/$($tail.name)"))
+    try { for ($i = 0; $i -lt $tail.mib; $i++) { $stream.Write($block, 0, $block.Length) } }
+    finally { $stream.Dispose() }
+}
+foreach ($pair in @(@{ dir = "dx" }, @{ dir = "dy" })) {
+    & $bitCli create (Join-Path $alignedRoot $pair.dir) --name $pair.dir --piece-length 1MiB `
+        --no-creation-date --output (Join-Path $alignedRoot "$($pair.dir).torrent") --force --json 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Exit-With 2 "bit-cli create exited $LASTEXITCODE building the aligned pair" }
+}
+[void]$commands.Add("bit-cli files $torrentA --against $torrentB --against $torrentC --json")
+[void]$commands.Add("bit-cli files $(Join-Path $alignedRoot 'dx.torrent') --against $(Join-Path $alignedRoot 'dy.torrent') --json")
+
+$alignedJson = & $bitCli files (Join-Path $alignedRoot "dx.torrent") `
+    --against (Join-Path $alignedRoot "dy.torrent") --json | ConvertFrom-Json
+$alignedMatches = @()
+foreach ($file in $alignedJson.files) {
+    if ($file.PSObject.Properties.Name -contains 'shared' -and $file.shared) {
+        foreach ($match in $file.shared) {
+            $alignedMatches += [ordered]@{
+                index = $file.index
+                path = $file.path
+                other_index = $match.index
+                other_path = $match.path
+                evidence = $match.evidence
+                proven = $match.proven
+                bytes_proven = $match.bytes_proven.bytes
+            }
+        }
+    }
+}
+$alignedProven = @($alignedMatches | Where-Object { $_.proven })
+$equivOk = ($fixtureProven -eq 0) -and ($alignedProven.Count -eq 1) -and
+    ($alignedProven[0].bytes_proven -eq $blobBytes) -and ($alignedMatches.Count -eq 1)
+[void]$cases.Add([ordered]@{
+    case             = "equivalence"
+    expectation      = "nothing is provable across three piece lengths, and the shared file is proven byte for byte across an aligned pair"
+    exit_code        = 0
+    elapsed_ms       = 0
+    downloaded_bytes = 0
+    downloaded_human = "0 B"
+    landed_path      = $null
+    sha256           = $null
+    hash_matches     = $true
+    source_url       = $null
+    source_state     = $null
+    source_error     = $null
+    fixture_matches  = @($fixtureMatches)
+    fixture_proven   = $fixtureProven
+    aligned_matches  = @($alignedMatches)
+    ok               = $equivOk
+    detail           = "$($fixtureMatches.Count) candidate(s) across the fixture and $fixtureProven proven; $($alignedMatches.Count) match across the aligned pair and $($alignedProven.Count) proven"
+})
+if (-not $equivOk) {
+    [void]$failures.Add("equivalence : $($fixtureMatches.Count) candidates and $fixtureProven proven across the fixture; $($alignedMatches.Count) matches and $($alignedProven.Count) proven across the aligned pair")
+}
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
@@ -334,6 +557,15 @@ $verdict = switch ($true) {
         piece_lengths    = @("2 MiB", "1 MiB", "512 KiB")
         distinct_hashes  = $sharedHashes.Count
         matches_source   = $sharedOk
+        one_invocation   = [ordered]@{
+            info_hashes      = @($hashes["c"], $hashes["a"], $hashes["b"])
+            sources_from_cdn = $fromCdn
+            distinct_hashes  = $oneDistinct.Count
+            from_web_seeds   = if ($oneReport) { $oneReport.from_web_seeds.human } else { $null }
+            from_peers       = if ($oneReport) { $oneReport.from_peers.human } else { $null }
+            from_resume      = if ($oneReport -and $oneReport.PSObject.Properties.Name -contains 'from_resume') { $oneReport.from_resume.human } else { $null }
+            elapsed_ms       = $clock.ElapsedMilliseconds
+        }
     }
     verdict        = $verdict
     failures       = @($failures)
@@ -342,7 +574,11 @@ $verdict = switch ($true) {
         "No server runs and nothing binds a port. Every byte comes off the local filesystem, so a failure here is bit-cli and not the network.",
         "The three torrents have three info hashes and three piece lengths, 2 MiB, 1 MiB, and 512 KiB. The shared file's piece boundaries therefore line up in none of them, which is what makes the shared cases worth running.",
         "shared_a and shared_b read the copy torrent C wrote in the exact case, so the 64 MiB is fetched once and lands three times.",
-        "wrong_bytes uses a file of exactly the right length, so nothing but the per-piece hash check can catch it. That check is --web-seed-verify piece and it is the default."
+        "wrong_bytes uses a file of exactly the right length, so nothing but the per-piece hash check can catch it. That check is --web-seed-verify piece and it is the default.",
+        "one_invocation is the same result in one command. It counts how many sources read the CDN copy and requires exactly one: the other two read what the first torrent wrote, which is what 'fetched once' means when the CDN is a real one.",
+        "The equivalence in one_invocation is declared by the caller and verified by bit-cli rather than trusted. Every piece a file: source serves is hash-checked against the torrent that asked for it before the session sees it, which is what wrong_bytes measures with a file of exactly the right length.",
+        "The equivalence case measures both halves of what the metadata can decide. A .torrent hashes fixed-size pieces of the whole payload rather than files, so two files can be compared by hash only where the pieces cover the same bytes of each: the same piece length, and the same offset modulo it. The three-torrent fixture has three piece lengths, so nothing there is provable and the report says `length` rather than claiming a match. The aligned pair has one piece length and the shared file at offset zero in both, so its hashes line up and the whole file is proven.",
+        "Two of the fixture's `length` candidates are files that are not the same bytes at all: deep/other.bin against a/extra.bin, and readme.txt against notes/changelog.txt. Equal length is not evidence, which is exactly why the evidence is reported rather than a yes or no."
     )
 } | ConvertTo-Json -Depth 8 | Set-Content -Path $reportPath -Encoding utf8NoBOM
 

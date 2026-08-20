@@ -852,6 +852,17 @@ pub struct FilesArgs {
     /// Sort key, as KEY or KEY:ORDER. Keys: index, path, size.
     #[arg(long, value_name = "KEY", default_value = "index")]
     pub sort: String,
+
+    /// Also report which files another torrent holds identically. Repeatable.
+    ///
+    /// Two torrents that hold the same file are two downloads of the same
+    /// bytes unless something connects them, and connecting them safely means
+    /// knowing they are the same first. Each match says what the answer rests
+    /// on: `piece-hashes` when the pieces line up and their hashes agree,
+    /// which proves the bytes equal; `length` when only the size matches,
+    /// which proves nothing and is what a differing piece length leaves.
+    #[arg(long = "against", value_name = "TORRENT")]
+    pub against: Vec<String>,
 }
 
 /// `bit-cli peers`.

@@ -177,10 +177,68 @@ source for one invocation, like every other source here.
 pwsh scripts/check-local-source.ps1
 ```
 
-That drives six cases with no server running and no port bound, including the
+That drives eight cases with no server running and no port bound, including the
 one this exists for: three torrents with three info hashes and three piece
 lengths (2 MiB, 1 MiB, 512 KiB) sharing one 64 MiB file. The file is fetched
 once and lands in three output directories with one distinct hash between them.
+
+### Several torrents that hold the same file
+
+A binding normally applies to every torrent in the invocation. When the same
+file sits at a different index in each, say which one you mean by prefixing the
+selector with that torrent's info hash:
+
+```bash
+bit-cli download c.torrent a.torrent b.torrent --dir out -j 1 \
+  --web-seed-mode exact \
+  --web-seed-for 'e608e60a…:file:0=https://cdn.example.com/blob' \
+  --web-seed-for '00c47ee9…:file:0=file:///out/payload_c/a/b/c/file.blob' \
+  --web-seed-for '17eb3674…:file:1=file:///out/payload_c/a/b/c/file.blob'
+```
+
+Torrent C fetches the file from the CDN. A and B read the copy C wrote. One
+invocation, one trip to the CDN, three output directories, and the payload
+hashes equal in all three. `-j 1` is what makes that safe: sources start in the
+order they were given, so C has finished before A looks for its file.
+
+Exactly forty hexadecimal characters followed by a colon is read as an info
+hash. A hash naming no torrent in the run is a usage error, not a binding that
+quietly does nothing. The binding table takes the same thing as a `torrent`
+field on a `[[source]]`.
+
+Nothing is trusted here. Every piece a `file:` source serves is hash-checked
+against the torrent that asked for it, so a wrong binding costs a failed source
+rather than a corrupt payload.
+
+### Which files two torrents actually share
+
+```bash
+bit-cli files a.torrent --against b.torrent --against c.torrent
+```
+
+```
+INDEX  EVIDENCE  PROVEN  OTHER       OTHER PATH
+0      length    -       c2806b5a:1  media/file.blob
+0      length    -       31084dc6:0  a/b/c/file.blob
+1      length    -       31084dc6:1  a/extra.bin
+2      length    -       c2806b5a:2  notes/changelog.txt
+```
+
+`piece-hashes` means the pieces line up and their hashes agree, which proves
+the bytes equal. `length` means the sizes match and nothing else could be
+checked, which proves nothing: two of the four rows above are files that have
+the same size and different contents.
+
+A `.torrent` hashes fixed-size pieces of the whole payload, not files, so two
+files can be compared by hash only where the pieces cover the same bytes of
+each. That needs the same piece length and the same offset modulo it. The three
+torrents above have three piece lengths, so nothing among them is provable.
+Against a pair that lines up, the same command proves the whole file:
+
+```
+INDEX  EVIDENCE      PROVEN     OTHER       OTHER PATH
+0      piece-hashes  64.00 MiB  c3dabcae:0  file.blob
+```
 
 ### Which failures are worth retrying
 

@@ -435,7 +435,8 @@ Acceptance:  A hybrid run with `--max-peer-rate 10MiB/s --web-seed-speed-limit
 Category:    webseed
 Priority:    P1
 Effort:      L
-Status:      **layer 1 done**, layers 2 and 3 open
+Status:      **layers 1 and 2 done**, layer 3 partial: the detection is done and
+             the automatic binding is [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own)
 
 Problem:     Scenario 2. Three torrents with different info hashes each contain
              a bit-identical `file.blob`. One is 60% done and stalled, one is
@@ -537,8 +538,169 @@ Layer 1:     **done.** A source URL may be `file:`, and everything else about a
              B, so the two need separate invocations. And nothing derives the
              equivalence: the caller names the path.
 
-Layers 2 and 3 stay open, and the two-step above is what the operator can drive
-in the meantime.
+Layer 2:     **done.** Scenario 2 is one invocation.
+
+             Two things were missing and both are small. A binding applies to
+             every torrent in the invocation, and `file.blob` is index 0 in A
+             and C and index 1 in B, so `--web-seed-for` now takes an optional
+             info hash prefix: `<40 hex>:file:N=URL`. The rule is mechanical,
+             exactly forty hexadecimal characters followed by a colon, and a
+             hash naming no torrent in the run is a usage error rather than a
+             binding that quietly does nothing. The binding table takes the
+             same thing as a `torrent` field on a `[[source]]`.
+
+             The second was ordering. `-j 1` ran the sources one at a time but
+             not in the order they were given: every plan was its own task
+             queuing on a semaphore, and which task reached the semaphore first
+             was up to the runtime. The plans are now a queue taken by a fixed
+             pool of workers, so `-j 1` is a sequence a caller can depend on,
+             which is what lets torrent A read the file torrent C writes.
+             `sources_start_in_the_order_they_were_given` is the test.
+
+             The `one_invocation` case of `scripts/check-local-source.ps1` is
+             the acceptance, and it is the acceptance sentence run as one
+             command:
+
+             ```bash
+             bit-cli download C.torrent A.torrent B.torrent --dir out -j 1 \
+               --web-seed-only --no-torrent-web-seed --web-seed-mode exact \
+               --web-seed-for '<HASH_C>:file:0=file:///cdn/a3f1b2c4-signed-blob.dat' \
+               --web-seed-for '<HASH_A>:file:0=file:///out/payload_c/a/b/c/file.blob' \
+               --web-seed-for '<HASH_B>:file:1=file:///out/payload_c/a/b/c/file.blob'
+             ```
+
+             ```
+             sources_from_cdn 1
+             distinct_hashes  1
+             from_web_seeds   192.00 MiB
+             from_peers       0 B
+             from_resume      12.00 MiB
+             elapsed_ms       930
+             ```
+
+             Exactly one source read the CDN copy, which is what "fetched
+             once" means when the CDN is a real one: the other two read what
+             torrent C wrote. Three info hashes, three piece lengths, one 64
+             MiB payload, one distinct hash across all three output
+             directories.
+
+             The declaration is verified rather than trusted. Every piece a
+             `file:` source serves is hash-checked against the torrent that
+             asked for it before the session sees it, which is what the
+             `wrong_bytes` case measures with a file of exactly the right
+             length. So a wrong `--web-seed-for` costs a failed source, not a
+             corrupt payload, and no separate verification step is needed for
+             the assertion this entry proposed.
+
+             Closing it found [T-139](#t-139-a-resumed-download-charges-its-existing-bytes-to-the-swarm):
+             the three pre-placed files were reported as coming from peers on a
+             run with `--web-seed-only`, which disables peers.
+
+Layer 3:     **the detection is done, and the answer for this fixture is that
+             nothing is provable.**
+
+             `bit_cli_core::equivalence` decides whether two files in two
+             torrents are the same from the metadata alone, and
+             `bit-cli files <TORRENT> --against <OTHER>` reports it.
+
+             The rule the entry states in the abstract has a consequence it
+             does not draw. A `.torrent` hashes fixed-size pieces of the whole
+             payload rather than of each file, so two files can be compared by
+             hash only where the pieces cover the same bytes of each. That
+             needs the same piece length, because a 2 MiB hash and a 1 MiB hash
+             are hashes of different amounts of data, and the same offset
+             modulo it, or piece k of one covers different bytes of the file
+             than piece k of the other.
+
+             **The three-torrent fixture is built from three different piece
+             lengths, which is exactly the case where that cannot hold.** Run
+             against it, nothing is proven:
+
+             ```
+             $ bit-cli files torrent_a.torrent --against torrent_b.torrent \
+                 --against torrent_c.torrent
+
+             INDEX  EVIDENCE  PROVEN  OTHER       OTHER PATH
+             0      length    -       c2806b5a:1  media/file.blob
+             0      length    -       31084dc6:0  a/b/c/file.blob
+             1      length    -       31084dc6:1  a/extra.bin
+             2      length    -       c2806b5a:2  notes/changelog.txt
+             ```
+
+             Four candidates and zero proofs, and **two of the four are not the
+             same bytes at all**: `deep/other.bin` against `a/extra.bin` and
+             `readme.txt` against `notes/changelog.txt` are equal in length and
+             nothing else. That is why the evidence is reported rather than a
+             yes or a no, and it is what a length-only heuristic would have got
+             wrong.
+
+             Against a pair built to line up, the same code proves the whole
+             file:
+
+             ```
+             INDEX  EVIDENCE      PROVEN     OTHER       OTHER PATH
+             0      piece-hashes  64.00 MiB  c3dabcae:0  file.blob
+             ```
+
+             Both halves are the `equivalence` case of
+             `scripts/check-local-source.ps1`, which requires zero proofs
+             across the fixture and exactly one proof of exactly the shared
+             file's length across the aligned pair. Seven unit tests in
+             `equivalence::tests` cover the rest: a differing hash is an answer
+             rather than a missing proof, a differing length is not a match at
+             all, and a file shorter than one piece can only ever be a
+             candidate.
+
+             What is left of layer 3 is turning a proof into a source
+             automatically, which is a scheduling question rather than an
+             identity one: the donor torrent has to finish the file before the
+             others can read it. `-j 1` and an explicit binding do that today
+             and are what layer 2 closed. Doing it without the caller naming
+             the path needs the run to attach a source to a torrent that has
+             already started, which nothing in `cmd::download` can do yet. That
+             residue is [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own).
+
+### T-140 A proven shared file is not turned into a source on its own
+
+Source:      came out of closing T-133 layer 2
+Category:    webseed
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `bit-cli files --against` proves two torrents hold the same file,
+             and `--web-seed-for '<HASH>:file:N=file:///...'` uses one torrent's
+             copy in another. Nothing joins the two: the caller reads the proof
+             and writes the binding.
+Relevance:   [T-133](#t-133-two-torrents-holding-the-same-file-cannot-share-its-bytes)
+             layer 3 asks for Scenario 2 with no flags at all. What ships needs
+             three flags and the output directory known in advance.
+Approach:    Two pieces, and only the second is hard.
+
+             1. **Compute the bindings.** For every pair of torrents in one
+                invocation, run `equivalence::matches`, keep the proofs, and
+                pick a donor per equivalence class: the torrent that already
+                has the most of that file on disk, or the first one given.
+                That is a few lines against the code that exists.
+             2. **Attach a source to a torrent that has already started.**
+                Sources attach in `one_inner` before `watch` runs, so a
+                receiver torrent would need its source when the donor
+                completes, not when the run starts. Either the receiver waits
+                for the donor, which `-j 1` already does and which serialises
+                a run that did not have to be, or `watch` learns to attach a
+                source mid-run.
+
+             The second one is the design decision. A source attached mid-run
+             is a new bridge and a new peer in a live session, which the engine
+             supports; what does not exist is the plumbing to build one after
+             `attach_sources` has returned, and the accounting to fold it into
+             a report that has already reported its sources.
+Acceptance:  Three torrents built from one payload **with the same piece
+             length** and different surrounding files, added in one invocation
+             with no `--web-seed-for` at all, and the report shows the shared
+             file's bytes fetched once and written into all three output
+             directories, with all three hashing equal and the report naming
+             which torrent donated it.
 
 ### T-134 v1 and v2 info hashes are not reconciled
 
@@ -747,6 +909,42 @@ Five unit tests cover the state machine without a network:
 `a_timed_outage_closes_on_the_clock_rather_than_on_a_request_count`, and
 `a_timed_outage_starts_when_the_failure_window_does`.
 
+### T-139 A resumed download charges its existing bytes to the swarm
+
+Source:      came out of closing T-133 layer 2
+Category:    cli
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `from_peers` was `progress_bytes - from_web_seeds`, and
+             `progress_bytes` is everything the torrent has rather than
+             everything this run fetched. So a download that resumed 45 MiB of
+             a 64 MiB file reported 45 MiB from peers with no peer in the
+             swarm, and a run with `--web-seed-only` reported peer bytes at all.
+Relevance:   PROMPT section 3 asks that "bytes attributed to peers and to web
+             seeds are reported separately and sum to the total". They did sum
+             to the total. One of the two was wrong, which is worse than a
+             number that does not add up, because it adds up.
+Approach:    Read `progress_bytes` once, after the hash check on add and
+             before anything is fetched, and subtract it as well.
+Acceptance:  A run whose payload is already complete reports every byte as
+             resumed and none from peers or from web seeds.
+
+**Done.** `TorrentReport` and `DownloadReport` carry `from_resume`, the text
+output prints `already on disk` when it is non-zero, and `torrent_completed`
+carries `from_resume` beside the other two. The three now partition the total
+rather than two of them splitting it.
+
+It turned up in the `one_invocation` case of
+`scripts/check-local-source.ps1`, where three torrents were given every file
+except the shared one and the report charged the pre-placed 5, 3, and 4 MiB to
+peers on a run with `--web-seed-only`, which disables peers entirely.
+
+`bytes_already_on_disk_are_reported_as_resumed_rather_than_from_peers` is the
+test: a payload already complete on disk, no tracker, no DHT, no LSD, no
+source. 3000 bytes resumed, zero from peers, zero from web seeds.
+
 ---
 
 ## Part 3: the harness
@@ -824,8 +1022,10 @@ it depends on which layer:
 
 - Layer 1, a `file:` source, needs no state: the caller names the path.
 - Layers 2 and 3 need no state either **when the torrents are added in one
-  invocation**, which is how the scenario is written. Equivalence is computed
-  from the metainfo the run already has.
+  invocation**, which is how the scenario is written. That is now what
+  happens: the bindings are per torrent, `-j 1` orders them, and
+  `bit-cli files --against` computes the equivalence from the metainfo the
+  run already has.
 - A store is only needed to carry equivalence *between* invocations, so that
   torrent B added tomorrow knows about torrent A's file from today. That is
   the same shape as [T-016](disk-io.md)'s resume cache and the same shape as
@@ -854,7 +1054,7 @@ optimisation that a cold run reproduces by reading the payload.
 | Scenario | Works today | Needs | Size |
 | --- | --- | --- | --- |
 | 1. DDL for one selected file, resumed | **Yes, in full.** Binding, resume, rename, selection, redirects, and a signature that expires mid-run, all run and recorded above | nothing | none |
-| 2. Three torrents, one shared file | **As a two-step**: torrent C finishes the file, A and B read C's copy over a `file:` source, run and recorded under T-133 | [T-133](#t-133-two-torrents-holding-the-same-file-cannot-share-its-bytes) layers 2 and 3, for one invocation with no path named | L |
+| 2. Three torrents, one shared file | **Yes, in one invocation.** `-j 1` with a `--web-seed-for` per torrent: C reads the CDN copy, A and B read what C wrote, one distinct hash across three info hashes. Run and recorded under T-133 | [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own), for the same thing with no path named | M |
 | 3. DDL for one file, rest via swarm | **Yes, in full** | nothing | none |
 | 4. Remapping and encoding | **Yes, in full**, through `exact`, `prefix`, `template`, per-source headers, and the status overrides | nothing | none |
 | 5. All of it, with per-method control | Per-source caps, headers, auth, priority, and status policy: yes. Per-method caps and picker control: no | [T-132](#t-132-the-swarm-cannot-be-rate-limited-separately-from-http-sources), [T-134](#t-134-v1-and-v2-info-hashes-are-not-reconciled), [T-135](#t-135-source-selection-cannot-be-steered-by-method-or-by-priority-at-run-time), [T-136](#t-136-nothing-states-the-end-to-end-integrity-guarantee) | M to L |

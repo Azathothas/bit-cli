@@ -10,6 +10,7 @@ pub mod alloc;
 pub mod bench;
 pub mod config;
 pub mod engine;
+pub mod equivalence;
 pub mod error;
 pub mod exit;
 pub mod layout;
