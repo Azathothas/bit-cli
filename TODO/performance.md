@@ -199,7 +199,7 @@ Closed:      Both caps hold, and the pinned 9.0.0 does carry the fix.
 
 ### T-032 The piece selector strategy is not implemented
 
-Source:      PROMPT.md A3.6
+Source:      the operator's brief
 Category:    performance
 Priority:    P1
 Effort:      L
@@ -331,7 +331,7 @@ overshoot. Neither has been reached here; both are worth knowing.
 
 ### T-033 --split, -x, and -k do not reach the fetch path
 
-Source:      PROMPT.md A3.6; premise disproved 2026-08-21, see the correction below
+Source:      the operator's brief; premise disproved 2026-08-21, see the correction below
 Category:    performance
 Priority:    P3
 Effort:      S

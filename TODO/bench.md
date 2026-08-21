@@ -8,7 +8,7 @@ largest unbuilt piece.
 
 ### T-090 bit-cli bench is not implemented
 
-Source:      PROMPT.md A3.11
+Source:      the operator's brief
 Category:    bench
 Priority:    P0
 Effort:      XL
@@ -306,7 +306,7 @@ inside the disk budget as bytes on disk.
 
 ### T-091 Bench reports do not capture their environment
 
-Source:      PROMPT.md A3.11
+Source:      the operator's brief
 Category:    bench
 Priority:    P0
 Effort:      M
@@ -383,7 +383,7 @@ closes the gap. Recorded in [T-085](create-seed.md), which has the same shape.
 
 ### T-092 bench swarm has no synthetic load generator
 
-Source:      PROMPT.md A3.11
+Source:      the operator's brief
 Category:    bench
 Priority:    P1
 Effort:      XL
@@ -589,7 +589,7 @@ Exit 1, one failure, `bench/swarm-20260821T063418798Z.json`.
 
 ### T-093 --baseline comparison is not implemented
 
-Source:      PROMPT.md A3.11
+Source:      the operator's brief
 Category:    bench
 Priority:    P2
 Effort:      S
@@ -638,7 +638,7 @@ document `bit-cli` wrote could be read back. Both now accept either form.
 
 ### T-094 Trace output has no measured cost
 
-Source:      PROMPT.md A3.12
+Source:      the operator's brief
 Category:    bench
 Priority:    P2
 Effort:      S

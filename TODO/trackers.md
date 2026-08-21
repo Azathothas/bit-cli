@@ -239,7 +239,7 @@ dead tier. What the corpus adds is that a `--respect-tiers` flag would be
 cheap, and one fact that changes where the work is. `nanotorrent`'s patch 0008
 records that **librqbit flattens `announce_list` tiers into a `HashSet`**, so
 tier order is not available from the session at all without patching it.
-`bit-cli`'s own `tracker.rs:116` keeps the tier index for the `trackers`
+`bit-cli`'s own `tracker.rs:115` keeps the tier index for the `trackers`
 command, so the divergence is real for the command and *forced* for the
 download path. Those are two different situations and this entry currently
 reads as though they were one. Note also that promoting a working tracker to

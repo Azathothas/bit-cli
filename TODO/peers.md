@@ -419,7 +419,7 @@ Acceptance:  `bit-cli trackers <TORRENT> --json` on a dual-stack host reports
 
 ### T-023 The listen port is chosen without checking both address families
 
-Source:      carried from the first session, PROMPT.md S.1
+Source:      carried from the first session
 Category:    peers
 Priority:    P1
 Effort:      S
@@ -441,7 +441,7 @@ Acceptance:  `cargo test -p bit-cli-core engine::tests` passes, including
 
 ### T-024 Per-peer choke and unchoke history is not reported
 
-Source:      PROMPT.md A3.4b
+Source:      the operator's brief
 Category:    peers
 Priority:    P2
 Effort:      M

@@ -436,7 +436,7 @@ Acceptance:  `bit-cli webseed list <TORRENT> --json` carries
 
 ### T-042 Peak RSS is not captured in any report
 
-Source:      PROMPT.md A3.11
+Source:      the operator's brief
 Category:    memory
 Priority:    P1
 Effort:      S

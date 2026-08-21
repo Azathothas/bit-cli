@@ -166,7 +166,7 @@ in CI.
 
 ### T-120 THIRD_PARTY.md is not generated
 
-Source:      PROMPT.md A6
+Source:      the operator's brief
 Category:    licensing
 Priority:    P1
 Effort:      S
@@ -223,7 +223,7 @@ kind of thing that makes a local regeneration disagree with a clean one. The
 
 ### T-121 No cargo-deny configuration
 
-Source:      PROMPT.md A6, A7
+Source:      the operator's brief
 Category:    licensing
 Priority:    P1
 Effort:      S

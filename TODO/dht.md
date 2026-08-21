@@ -79,7 +79,7 @@ Acceptance:  `bit-cli download <MAGNET> --web-seed-only --web-seed <URL>` exits
 
 ### T-052 DHT is not reported
 
-Source:      PROMPT.md A3.12
+Source:      the operator's brief
 Category:    dht
 Priority:    P3
 Effort:      M
@@ -122,9 +122,11 @@ Relevance:   BEP 33 is the one that earns its place. It answers "how many
              by default.
 Approach:    BEP 33 answers a `get_peers` with two bloom filters, one for
              seeders and one for leechers, and the arithmetic is the whole
-             trick. `fx-torrent/src/bloom_filter.rs` is 100-odd lines: `:5`
-             `has_bits` and `:20` `set_bits` take the **first 4 bytes of the
-             key as two little-endian `u16` indices**; `:46` `len()` estimates
+             trick. `fx-torrent/src/bloom_filter.rs` is 229 lines with the
+             implementation in the first 130 and eight tests after: `:5`
+             `has_bits` and `:20` `set_bits` take the
+             **first 4 bytes of the key as two little-endian `u16`
+             indices**; `:46` `len()` estimates
              the population as `-(m/k) * ln(zero/m)` with `k = 2`; `:93`
              `count_zero_bits` uses a 16-entry nibble table. The DHT side is
              `fx-torrent/src/dht/tracker.rs:449` `scrape_peers` and `:2469`

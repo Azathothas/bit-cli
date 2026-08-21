@@ -11,7 +11,7 @@ upstream category, and dropping them to match a list would lose them.
 
 ### T-110 The --jsonl event stream is incomplete
 
-Source:      PROMPT.md A3.10
+Source:      the operator's brief
 Category:    cli
 Priority:    P1
 Effort:      M
@@ -71,7 +71,7 @@ and `bench_sample` were added by later entries.
 
 ### T-111 piece_verified and file_completed are derived from polling
 
-Source:      PROMPT.md A3.10
+Source:      the operator's brief
 Category:    cli
 Priority:    P2
 Effort:      M
@@ -91,7 +91,7 @@ Acceptance:  Each `piece_verified` event says how its timestamp was obtained.
 
 ### T-112 --log-file does not write or rotate anything
 
-Source:      PROMPT.md A3.2
+Source:      the operator's brief
 Category:    cli
 Priority:    P1
 Effort:      M
@@ -151,7 +151,7 @@ volume rather than the rotation:
 
 ### T-113 Metalink is not implemented
 
-Source:      PROMPT.md A3.4c, decision 7.7
+Source:      the operator's brief, decision 7.7
 Category:    cli
 Priority:    P1
 Effort:      L
@@ -351,7 +351,7 @@ Two other real-document findings, both now tests.
 
 ### T-114 -i/--input-file batch input is not implemented
 
-Source:      PROMPT.md A3.8
+Source:      the operator's brief
 Category:    cli
 Priority:    P2
 Effort:      M
@@ -372,7 +372,7 @@ Acceptance:  An `aria2` input file with three sources and per-entry `dir` and
 
 ### T-115 Hooks do not fire for every documented trigger
 
-Source:      PROMPT.md A3.7
+Source:      the operator's brief
 Category:    cli
 Priority:    P2
 Effort:      S
@@ -395,7 +395,7 @@ Acceptance:  `bit-cli download a.torrent b.torrent -j 2 --on-complete <CMD>`
 
 ### T-116 -O/--index-out cannot rename a file
 
-Source:      PROMPT.md A3.7
+Source:      the operator's brief
 Category:    cli
 Priority:    P3
 Effort:      S
@@ -412,7 +412,7 @@ Acceptance:  `bit-cli download <TORRENT> -O 0=renamed.bin` writes the first
 
 ### T-117 --schema-version has no schema behind it
 
-Source:      PROMPT.md A3.10
+Source:      the operator's brief
 Category:    cli
 Priority:    P1
 Effort:      M
@@ -527,7 +527,7 @@ changes meaning, which has not happened.
 
 ### T-118 The short-flag table is not checked in CI
 
-Source:      PROMPT.md A3.2; premise disproved 2026-08-21, see the correction below
+Source:      the operator's brief; premise disproved 2026-08-21, see the correction below
 Category:    cli
 Priority:    P3
 Effort:      S
@@ -1134,9 +1134,8 @@ Problem:     `BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema`
              A field that only appears on a path the sample did not take is
              silently deleted from the document.
 Relevance:   That command is the documented way to update the schema, and it is
-             in `PROMPT.md`, in `CHANGELOG.md`, and in the panic message the
-             check itself prints. Following the instruction makes the document
-             worse.
+             in `CHANGELOG.md` and in the panic message the check itself
+             prints. Following the instruction makes the document worse.
 Approach:    Merge rather than replace. Read the committed file, union its rows
              with the rendered ones, and write the union sorted. A row that is
              genuinely gone then needs deleting on purpose, which is the right
@@ -1261,7 +1260,7 @@ Problem:     `cmd::peers::tests::a_sampled_swarm_carries_what_came_from_each_pee
              fails, the peer is marked dead with one error, and `librqbit` does
              not retry it for ten seconds, which is twice the test's own
              `--duration 5s`. Every assertion after the dial then fails.
-Relevance:   [T-148](#t-148-the-peer-probe-test-asserted-an-exit-code-inside-its-own-retry-loop)
+Relevance:   [T-148](bench.md#t-148-the-peer-probe-test-asserted-an-exit-code-inside-its-own-retry-loop)
              is the precedent, and this is the same mistake in another test: a
              fixture whose readiness is assumed rather than waited for. A test
              that fails one run in twenty turns CI red on somebody else's push

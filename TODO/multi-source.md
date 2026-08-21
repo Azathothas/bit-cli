@@ -1071,7 +1071,7 @@ Problem:     `from_peers` was `progress_bytes - from_web_seeds`, and
              everything this run fetched. So a download that resumed 45 MiB of
              a 64 MiB file reported 45 MiB from peers with no peer in the
              swarm, and a run with `--web-seed-only` reported peer bytes at all.
-Relevance:   PROMPT section 3 asks that "bytes attributed to peers and to web
+Relevance:   The testing policy asks that "bytes attributed to peers and to web
              seeds are reported separately and sum to the total". They did sum
              to the total. One of the two was wrong, which is worse than a
              number that does not add up, because it adds up.

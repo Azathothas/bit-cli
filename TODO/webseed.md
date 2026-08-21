@@ -16,7 +16,7 @@ rather than a defect list.
 
 ### T-001 Measure the loopback bridge against a raw curl ceiling
 
-Source:      PROMPT.md section 2.2 (the operator's decision gate)
+Source:      the operator's decision gate
 Category:    webseed
 Priority:    P0
 Effort:      M
@@ -501,7 +501,7 @@ and none of them is what `--web-seed-connections` does.
 
 ### T-002 Measure Candidate A-prime, the in-process virtual peer
 
-Source:      PROMPT.md section 2.5
+Source:      the operator's brief
 Category:    webseed
 Priority:    P1
 Effort:      L
@@ -600,7 +600,7 @@ than as a fork.
 
 ### T-003 The piece picker cannot be told to prefer HTTP
 
-Source:      `--prefer-web-seed`, PROMPT.md A3.4
+Source:      `--prefer-web-seed`, the operator's brief
 Category:    webseed
 Priority:    P1
 Effort:      M
@@ -695,7 +695,7 @@ never applied. See [T-035](performance.md).
 
 ### T-004 BEP 17 style is not auto-detected, only declared
 
-Source:      PROMPT.md A3.4, `--web-seed-style auto`
+Source:      the operator's brief, `--web-seed-style auto`
 Category:    webseed
 Priority:    P2
 Effort:      S
@@ -823,7 +823,7 @@ records what still needs a real mirror rather than a stub.
 
 ### T-006 Prove the failure matrix against a real mirror
 
-Source:      PROMPT.md section 3, matrix items 5 to 7
+Source:      the testing matrix, items 5 to 7
 Category:    webseed
 Priority:    P1
 Effort:      M

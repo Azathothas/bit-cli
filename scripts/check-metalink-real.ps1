@@ -107,9 +107,9 @@ $Root = (Resolve-Path $Root).Path
 if (-not [System.IO.Path]::IsPathRooted($ReportDir)) { $ReportDir = Join-Path $repo $ReportDir }
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
 
-# A browser user agent, because some mirrors refuse anything else. PROMPT
-# section 3: if a site blocks this, say so and name it. That is what the exit-2
-# paths below do.
+# A browser user agent, because some mirrors refuse anything else. The testing
+# policy in TODO/RULES.md: if a site blocks this, say so and name it. That is
+# what the exit-2 paths below do.
 $userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
 
 # ---------------------------------------------------------------------------

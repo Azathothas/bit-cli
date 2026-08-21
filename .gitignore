@@ -1,10 +1,10 @@
 # Build output
 /target/
 
-# Session working files (see PROMPT.md handling in the handoff)
-/PROMPT.md
-
-# Reference material cloned for study. Never committed.
+# Reference material cloned for study. Never committed to `main`.
+#
+# It lives on the `references` branch instead, which scripts/git-sync.ps1
+# pushes for you. See TODO/RULES.md.
 /reference/
 
 # Scratch: downloads, fixtures, payloads, intermediate state
@@ -29,7 +29,7 @@
 #
 #   git add -f bench/soak-20260821T012428252Z.json
 #
-# That is the rule from PROMPT.md 0: a comparative claim without a committed
+# That is the rule in TODO/RULES.md: a comparative claim without a committed
 # benchmark does not ship. This ignores the other ninety runs, not that one.
 /bench/*.json
 /bench/*.csv

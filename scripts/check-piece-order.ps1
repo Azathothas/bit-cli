@@ -23,7 +23,7 @@
 # The loop variable is `$connectionCount` rather than `$connections`, because
 # PowerShell resolves variable names case-insensitively and `$connections`
 # **is** the `-Connections` parameter: the first iteration would overwrite the
-# array it is iterating. See PROMPT.md rule 0 on this, it has bitten here
+# array it is iterating. See TODO/RULES.md on this, it has bitten here
 # before.
 #
 # **Connections are the variable that matters.** A selector decides which piece

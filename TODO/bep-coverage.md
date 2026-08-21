@@ -11,6 +11,7 @@ Implemented means there is a test. Inherited means `librqbit` provides it and
 | 3  | The BitTorrent protocol | inherited |
 | 5  | DHT | inherited, not reported (T-052) |
 | 6  | Fast extension | not implemented (T-100) |
+| 7  | IPv6 tracker extension | implemented in `tracker.rs` |
 | 9  | Metadata from peers (magnet) | inherited |
 | 10 | Extension protocol | implemented in the bridge |
 | 11 | PEX | inherited; `--no-pex` reaches nothing (T-181) |
@@ -38,7 +39,7 @@ Implemented means there is a test. Inherited means `librqbit` provides it and
 | MSE/PE | Peer encryption | not implemented (T-163) |
 | WebTorrent | WebRTC peers, WSS trackers | not implemented (T-168) |
 
-**Four rows changed on 2026-08-21 and each was wrong in the same direction:
+**Five rows changed on 2026-08-21 and each was wrong in the same direction:
 the table described intent rather than the tree.**
 
 - **BEP 29 said "inherited, off by default".** There is no uTP in `bit-cli` at
@@ -56,6 +57,11 @@ the table described intent rather than the tree.**
   clause of [T-081](create-seed.md).
 - **BEP 53 was absent.** `torrent/magnet.rs:39` and `:211` parse the `so=`
   index-range file selection out of a magnet.
+- **BEP 7 was absent.** `tracker.rs:493` reads the `peers6` key at 18 bytes
+  per entry beside the 6-byte `peers`, with a test at `:872`
+  `ipv6_peers_come_back_bracketed`. Worth naming rather than leaving implicit,
+  because [T-022](peers.md) and [T-023](peers.md) are both about IPv6 and
+  neither could point at the one piece of it that works.
 - **BEP 33, 44, 51 and 54, MSE/PE and WebTorrent were absent.** Six gaps the
   corpus named that no row admitted to. They have entries now rather than
   silence.

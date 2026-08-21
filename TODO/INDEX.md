@@ -3,6 +3,10 @@
 Every item, one line each. Work through this file; each entry closes with the
 acceptance command from its own page, actually run, with the output recorded.
 
+**Read [PROGRESS.md](PROGRESS.md) first** for what the last session did and
+where to resume, and [RULES.md](RULES.md) for how this repository is worked on,
+including the only sanctioned way to commit and push.
+
 Nothing here closes as "won't fix", "upstream problem", or "out of scope".
 Upstream has no interest in this work, so there is nowhere to defer to. An item
 that is genuinely blocked stays open with the blocker named and what would
@@ -27,24 +31,22 @@ MIT, `intermodal` CC0-1.0). Entries below cite it as
 else did and never evidence that `bit-cli` does it; where an entry now rests on
 one, it says which. `reference/` is gitignored and is never committed.
 
-**Two source files these entries name no longer exist, and their `Source:`
-lines still stand.** A `Source:` line records where an entry came from, not a
-path a reader must be able to open — the same rule the `rqbit` issue JSON has
-always been read under.
+**`TODO/` is the authoritative record.** There is no other document that
+binds. The operator's working brief, which earlier revisions of these files
+cited by section number, is retired: it was never tracked, it was superseded by
+this directory, and everything in it that still binds is written down here. The
+`Source:` lines that named it now say "the operator's brief", because what a
+`Source:` line records is where an entry came from rather than a path a reader
+must be able to open. That is the same rule the `rqbit` issue JSON has always
+been read under, and the JSON is not on disk either.
 
-- `PROMPT.md` was the operator's working brief: section 0 the ground rules,
-  section 3 the testing policy, section 5 Phase B, section 7 the settled
-  decisions, section 9 the aria2 parity checklist, sections A3 and A6 the CLI
-  surface. It is gone from the working tree and was always gitignored. Thirty-seven
-  `Source:` lines across this directory name one of its sections. Everything in
-  it that still binds is now written down here: the ground rules and the testing
-  policy are in this file and in the entries that apply them, decision 7.3
-  (librqbit stays the base) and 7.4 (no daemon, no RPC) are quoted where they
-  are used, and **section 9's aria2 parity checklist is written out in
-  [phase-c.md](phase-c.md)**, which was the last thing it held that nothing else
-  did. Nothing was lost with it.
-- The `aria2-next` documentation tree and the `rqbit` issue JSON are not in the
-  new corpus. The findings they produced are written into the entries.
+Two things it held that nothing else did are now written out in full:
+the aria2 parity checklist is in [phase-c.md](phase-c.md), and the rules that
+govern how this repository is worked on are in [RULES.md](RULES.md).
+
+[PROGRESS.md](PROGRESS.md) is the session state: what the last session did and
+what this one is doing. It carries no history, it is rewritten every session,
+and it is the first file to read.
 
 Category counts from the triage, which is why the files are sized the way they
 are: bep 66, seeding 48, trackers 41, peers 40, windows 38, disk-io 37,
@@ -389,9 +391,178 @@ block it and what would unblock it.
 
 ## Start here
 
-What is settled and what is next, in the order that unblocks the most. The
-first six are done or mostly done, item seven is where the open P0 work is,
-item eight is the operator's own list, and item nine is Metalink.
+The work order, re-derived on 2026-08-21 with the twenty-two tree corpus in
+hand. Four questions decide it, and they are asked in this order because a
+later answer never outranks an earlier one.
+
+### 1. Correctness in the one feature this project exists for
+
+`bit-cli` exists to attach arbitrary HTTP sources to an existing `.torrent`.
+A defect in that path outranks every feature below it, including the P0s,
+because a P0 that takes the process down is visible and a wrong answer that
+reports success is not.
+
+Six items, and the first two are the whole argument.
+
+1. **[T-171](metainfo.md)** — `url_list` accepts a bencoded string or a list;
+   `http_seeds` four lines below it accepts a list only, so a torrent whose
+   `httpseeds` is a bare string yields **zero** HTTP sources with no error and
+   no warning. A web seed tool silently reading none of the seeds a torrent
+   names is the worst failure available here. `torrent/metainfo.rs:306` is the
+   accessor, `torrent/bencode.rs:339` and `:305` are why it returns empty, and
+   `gosh-dl/src/torrent/metainfo.rs:391` is one parser serving both keys.
+   Effort S.
+2. **[T-005](webseed.md)** — one permanent status on one file retires the
+   **whole** source. `README.md` says a mirror holding part of a payload is a
+   first-class case and not an error, and this is the code contradicting it at
+   exactly the moment the claim is tested. `torrent/webseed-peer.go:57`
+   removes only that file's pieces instead. Raised from P3 to P2 for this
+   reason. Effort M, and [T-167](bep-coverage.md) below makes it smaller.
+3. **[T-181](cli-surface.md)** — four flags parse and reach no code, P1 by this
+   file's own definition. `--no-pex` is the one to fix first even though it is
+   the one that cannot be built: a user passing it believes peer exchange is
+   off and their address keeps being gossiped. Warn today, the way
+   `cmd/seed.rs:105` already does for `--superseed`.
+4. **[T-177](disk-io.md)** and **[T-174](metainfo.md)** — two missing fixtures,
+   both for arithmetic that is only ever exercised on the easy case. A piece
+   straddling a file boundary, and a piece length that is not a multiple of
+   16 KiB. fx-torrent 98 is what the first costs: in a multi-file album only
+   the first file plays, every byte transferred. vortex PR 124 is the second:
+   a double panic in a destructor. `vortex/bittorrent/src/file_store.rs` has
+   eight test names that are the specification. Effort S each, and if the
+   arithmetic is already right they cost one test apiece.
+5. **[T-179](webseed.md)** — smart ban. Not a defect on its own, and it is what
+   [T-164](peers.md) and [T-005](webseed.md) both need in order to name a
+   culprit rather than guess one. With several sources filling one piece,
+   `torrent/smartban/smartban.go` in 83 lines turns "a source is bad" from a
+   guess into a fact.
+
+### 2. The open P0 items, and why each is still P0
+
+6. **[T-020](peers.md)**, the only open P0. Two defects; one fixed. What keeps
+   it P0 is not the socket count. `bench swarm` found that while the pending
+   handshake set is full the target **cannot complete a handshake for any info
+   hash, including one it is serving**, and goes on reporting itself as
+   seeding: 8,388,608 bytes, then 100 connected and 0 handshaked, then
+   connected, 0 handshaked, 0 bytes. A stranded socket is a resource; a
+   listener that accepts and never answers is an outage no health check sees.
+   The soak adds that `CLOSE_WAIT` is zero at every one of 1,064 samples, so
+   this needs the churn shape and does not appear under a deployment-shaped
+   load. [T-164](peers.md) is adjacent and cheap: vortex 125 is a peer
+   reconnecting every 20 seconds and burning a slot, which is the same
+   resource seen from the other side.
+7. **[T-040](memory.md)**, partial, and the open question is answered.
+   0.804 MiB an hour, linear, r squared 0.73 over 525 samples, with the
+   descriptors half disproved outright. What is left is attribution and not
+   wall clock: completions run at a constant 228.5 an hour, so elapsed time
+   and completed work are collinear and 0.804 MiB per hour fits exactly as
+   well as 3.6 KiB per download. **Two shorter runs at different leech rates**,
+   not a longer one. Both commands are in the entry.
+8. **[T-090](bench.md)**, partial, with **[T-092](bench.md)** as the residue.
+   All six subcommands are built. T-092 does not close on one acceptance
+   clause and two unbuilt halves, all three named in the entry.
+
+### 3. What the corpus has made cheap
+
+Somebody else has already written and tested these. Effort here is reading and
+adapting rather than designing.
+
+9. **[T-167](bep-coverage.md)**, BEP 54 `lt_donthave`. The protocol is one
+   BEP 10 extended message carrying a 4-byte piece index that clears one bit;
+   `fx-torrent/src/peer/extension/donthave.rs` is 99 lines including its
+   tests. It is the cheapest correctness win in the corpus, and it turns
+   T-005's reconnect into a message. **Do this before T-005.**
+10. **[T-064](trackers.md)**, BEP 15 backoff — nine lines at
+    `torrent/tracker/udp/timeout.go:9`, with a second, shorter ladder at
+    `mtorrent/mtorrent-core/src/trackers/udp.rs:150`. The entry's decision to
+    diverge stands; what it owes is the documented total budget, which both
+    references state and this one does not.
+11. **[T-004](webseed.md)**, BEP 17 auto-detection — now smaller than it looks.
+    The style is determined by **which metainfo key the URL came from**, which
+    is what BEP 17 and BEP 19 specify and needs no probe, and `bit-cli` already
+    keys `httpseeds` sources correctly. Only the `--web-seed` command-line case
+    needs the probe.
+12. **[T-176](create-seed.md)**, three lints. Two are threshold changes against
+    numbers the corpus supplies, and one is splitting a message that is
+    currently false.
+13. **[T-100](bep-coverage.md)**, BEP 6 — the algorithm at
+    `vortex/.../peer_connection.rs:89`, the receive-side bug that makes it
+    silently inert at `torrent/peerconn.go:1047`, a canonical test vector, and
+    a documented divergence in aria2 so a mismatch is not debugged twice.
+14. **[T-081](create-seed.md)**, BEP 52 — `nanotorrent`'s 618-line v2 and
+    hybrid creator is built **on librqbit**, the same base, for the same
+    reason. Three independent implementations to check the spec against, real
+    v1/v2/hybrid fixtures in two trees, and one construction in the corpus that
+    is wrong in a way that passes its own tests.
+15. **[T-018](disk-io.md)** and **[T-083](create-seed.md)** — coalescing with
+    tests at `TorrentNG/crates/rt-storage/src/elevator.rs:223`, and the full
+    choke algorithm at `vortex/bittorrent/src/torrent.rs:488`, from which the
+    report shape T-083 wants simply follows.
+
+### 4. Which BEP gaps cost interoperability today, and which are completeness
+
+The distinction the coverage table could not make until now.
+
+**They cost reach today.**
+
+16. **[T-163](peers.md)**, MSE/PE. The largest single loss of reachable swarm
+    in the list: a peer configured to *require* encryption will not exchange
+    traffic with a plaintext-only client at all. Blocked on the same librqbit
+    seam as [T-002](webseed.md) and [T-102](bep-coverage.md), and
+    `nanotorrent`'s patches 0003 and 0005 are the shape of the upstream change.
+    High value, not startable.
+17. **[T-166](peers.md)**, BEP 10 id direction. P1 and effort S. If it is wrong
+    the failure is total and silent against qBittorrent, and `bit-cli`'s bridge
+    is tested only against itself, which is the arrangement that hides it. A
+    test either proves it or finds it. **Cheapest high-consequence item in the
+    file.**
+18. **[T-103](bep-coverage.md)**, the `.utf-8` key variants. uTorrent writes
+    `name` and `name.utf-8` with different encodings, and preferring the
+    `.utf-8` spelling is a read-side rule, not the Shift-JIS work the entry
+    leads with.
+
+**They are completeness.**
+
+19. [T-101](bep-coverage.md) uTP, [T-102](bep-coverage.md) BEP 55,
+    [T-168](bep-coverage.md) WebTorrent, [T-169](dht.md) BEP 33 and 51,
+    [T-170](dht.md) BEP 44, [T-082](create-seed.md) BEP 16. None of these
+    stops `bit-cli` talking to a peer it can otherwise reach. uTP is
+    politeness, BEP 55 raises the reachable set rather than enabling it, and
+    BEP 52's own advocates say it is not widely used — mkbrr
+    [Issue 112](https://github.com/autobrr/mkbrr/issues/112) is a v2 request
+    whose author writes that it is not really used by many people.
+20. [multi-source.md](multi-source.md) is the operator's five scenarios and
+    four of the five work in full. Read that file before starting any of T-130
+    to T-143; the work left is smaller than the entry count suggests.
+
+### What this ordering changed
+
+The previous order put the long-run failures at item seven and Metalink at
+item nine, and it was written when the only correctness question in the web
+seed path was performance. Three things moved it.
+
+**The headline feature had a silent parse bug in it.** T-171 was above every
+P0 the moment it was found, and it was found by reading two adjacent functions.
+
+**A P0 is not automatically first.** T-020 is real and it is a churn-shaped
+failure that a deployment-shaped load does not produce, which the soak
+established over 1,064 samples. T-171 is a normal-path failure that produces a
+wrong answer and reports success. The second outranks the first.
+
+**Several items got cheaper without changing.** T-167, T-064, T-004 and T-176
+are the same work they were, against reference code that is now readable, and
+that moves them up the list without any argument about their value.
+
+Nothing moved down for being hard. [T-163](peers.md) is blocked and stays high,
+with the blocker named, because the rule in this file is that a blocked item
+stays open rather than sinking.
+
+## What is settled, and what each closing measured
+
+The record below is what has already been closed and what the closing
+measured. It is not the work order; it is the evidence the work order rests
+on. Items one to six are done or mostly done, item seven is the long-run
+cluster, item eight is the operator's own list, and item nine is Metalink.
 
 1. [T-084](create-seed.md) is **done**. `bit-cli create`, `verify`, and `seed`
    round trip byte for byte through `aria2c` 1.37.0 for v1, `--private`, and

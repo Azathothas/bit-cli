@@ -10,10 +10,10 @@ library must not assume a process lifetime, and state must be addressable.
 
 ## The aria2 parity checklist
 
-`PROMPT.md` section 9 held an aria2 parity checklist and that file no longer
-exists, so the checklist is written out here. It was entirely unstarted when it
-was written and it is entirely unstarted now. Nothing in it is Phase A or B
-work: every item needs a process that outlives an invocation.
+The operator's retired brief held an aria2 parity checklist, so it is written
+out here. It was entirely unstarted when it was written and it is entirely
+unstarted now. Nothing in it is Phase A or B work: every item needs a process
+that outlives an invocation.
 
 **The RPC surface is 36 methods.** `reference/aria2_rust/docs/comprehensive_gap_analysis.md:390`
 carries the list under "RPC Method Coverage (36/36)", one row per C++ method
@@ -124,7 +124,7 @@ Acceptance:  A daemon restarted mid-download resumes every torrent at the
 
 ### T-204 Persistent attached web seeds
 
-Source:      PROMPT.md S.2, the deleted `src/webseed/state.rs`
+Source:      the operator's brief, the deleted `src/webseed/state.rs`
 Category:    phase-c
 Priority:    P2 within Phase C
 Effort:      M
@@ -211,7 +211,7 @@ Acceptance:  `bit-cli status --follow` streams events from a daemon.
 
 ### T-209 Watch directories, RSS, cluster mode, and the control service
 
-Source:      decision 7.4, PROMPT.md 2.5
+Source:      decision 7.4
 Category:    phase-c
 Priority:    P3 within Phase C
 Effort:      XL

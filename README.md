@@ -1331,6 +1331,7 @@ not there, and the entry that closes it is named.
 | --- | --- | --- | --- |
 | 3 | The BitTorrent protocol | inherited | the session; `tracker.rs:9` for the announce half |
 | 5 | DHT | inherited | `--no-dht` reaches `enable_dht`, `swarm.rs:160` |
+| 7 | IPv6 tracker extension | yes | `peers6` at `tracker.rs:493`, 18 bytes per entry |
 | 9 | Metadata from peers | inherited | magnets resolve through the session |
 | 10 | Extension protocol | yes | `webseed/bridge.rs:83`, `:708` |
 | 11 | PEX | inherited | no `bit-cli` code; `--no-pex` does not reach it, [T-181](TODO/cli-surface.md) |
@@ -1412,6 +1413,40 @@ cargo run -p bit-cli-core --example loopback-fileserver -- --root .
 
 Each prints its URL on the first line of stdout and logs every request to
 stderr. The last recorded run is in `TODO/create-seed.md` under T-084.
+
+## Working on this
+
+`TODO/` is the authoritative record of what is done, what is not, and why.
+
+- [TODO/PROGRESS.md](TODO/PROGRESS.md) is the session state: what the last
+  session did and where to resume. It carries no history and is rewritten every
+  session.
+- [TODO/INDEX.md](TODO/INDEX.md) is every item on one line each, with the work
+  order under "Start here" and a counts table that is exact against the rows.
+- [TODO/RULES.md](TODO/RULES.md) is how the repository is worked on: the
+  process rules, the testing rules, the settled decisions, and the git
+  protocol.
+
+**`scripts/git-sync.ps1` is the only sanctioned way to commit and push.** It
+pins the identity, refuses a commit message carrying AI attribution, keeps
+`reference/` out of `main`, runs the gates before the push, and mirrors the
+research corpus to the `references` branch.
+
+```bash
+pwsh -NoProfile -File scripts/git-sync.ps1 -Message "Subject line" -Body "..."
+```
+
+```bash
+pwsh -NoProfile -File scripts/git-sync.ps1 -Check
+```
+
+The research corpus is twenty-two upstream BitTorrent implementations, indexed
+by `reference/RESEARCH.md`. It is gitignored on `main` and lives on the
+`references` branch. On a fresh clone:
+
+```bash
+pwsh -NoProfile -File scripts/git-sync.ps1 -FetchReferences
+```
 
 ## Licence and attribution
 

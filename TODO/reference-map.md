@@ -52,6 +52,37 @@ Forgetting which pile a file came from is how a copyleft function ends up in an
 MIT tree. That risk is why this table exists, and with a wholly permissive
 corpus the table is now a record rather than a fence.
 
+## One tree the index names as kept and that is not on disk
+
+`intermodal/book/` is listed in `RESEARCH.md` section G as deliberately
+retained, and `intermodal/README.md` points at
+`book/src/bittorrent/bep-support.md` by name. Neither is on disk: `intermodal/`
+holds `LICENSE`, `README.md`, `benches`, `build.rs` and `src`. Checked with
+`Test-Path` during the doc pass of 2026-08-21, which is the whole reason to
+check a path before citing it. **No `bit-cli` document cites anything under it**
+and none ever did.
+
+**Nothing in it is lost, and it was generated rather than authored.** The book
+is an mdBook whose CLI pages are produced at build time from `intermodal`'s own
+`clap` definitions, so the half that documented `imdl` is a rendering of
+`intermodal/src/`, which **is** on disk and is what
+[create-seed.md](create-seed.md) already cites for the `create` option surface.
+The four pages worth anything to `bit-cli` are each covered better here than
+they were there:
+
+| Page | Where the same ground is covered |
+| --- | --- |
+| `bep-support.md`, a BEP 0 to 55 matrix | [bep-coverage.md](bep-coverage.md), which now carries 29 rows and gives every one a symbol in this tree or the entry id that closes it. A status column for somebody else's tool is strictly less. |
+| `piece-length-selection.md`, `piece-length.md` | `crates/bit-cli-core/src/torrent/piece_length.rs:1-14` states the trade in full: metadata size against transfer granularity, the BEP 9 exchange cost, lossy links, and web seed scope granularity. `RESEARCH.md` section B tabulates five algorithms with their bounds, and [T-176](create-seed.md) carries the ceilings and why they are what they are. |
+| `udp-tracker-protocol.md`, the BEP 15 wire format | `crates/bit-cli-core/src/tracker.rs` implements it, with a test asserting the announce request is exactly 98 bytes. [T-064](trackers.md) and [T-180](trackers.md) carry the retry and parse questions the prose would not have answered. |
+| `metainfo-utilities.md`, `distributing-large-data-sets.md`, `prior-art.md` | Surveys of other tools. No bearing on anything here. |
+
+So the correction is to `RESEARCH.md` section G's retained list and to
+`intermodal`'s own trimmed README, not to any entry. Both are left as written,
+because they are the corpus's record of its own cleaning and editing them here
+would make this file disagree with the tree it describes. This paragraph is the
+correction.
+
 `cargo deny` refuses copyleft dependencies outright, and
 `scripts/check-licence-gate.ps1` proves it against a probe crate. That gate is
 what makes the boundary mechanical.
@@ -66,7 +97,7 @@ about "the pinned 9.0.0" was verified against the registry cache at
 
 ### T-122 The copyleft and unlicensed reference trees are deleted
 
-Source:      PROMPT.md section 2.4, closed by the operator on 2026-08-21
+Source:      the operator's decision, closed on 2026-08-21
 Category:    licensing
 Priority:    P2
 Effort:      S

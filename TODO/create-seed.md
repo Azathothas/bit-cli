@@ -67,7 +67,7 @@ the condition is the final flush testing `remaining_piece_length > 0 && length
 
 ### T-081 BEP 52 v2 and hybrid torrents are not implemented
 
-Source:      https://github.com/ikatson/rqbit/issues/546 (open), PROMPT.md A3.4a
+Source:      https://github.com/ikatson/rqbit/issues/546 (open); the operator's brief
 Category:    create
 Priority:    P1
 Effort:      XL
@@ -235,7 +235,7 @@ against `bit-cli`.
 
 ### T-082 BEP 16 superseeding is not implemented
 
-Source:      PROMPT.md A3.4b
+Source:      the operator's brief
 Category:    seeding
 Priority:    P2
 Effort:      M
@@ -279,7 +279,7 @@ small.
 
 ### T-083 Seeding does not report choke state or disconnect reasons
 
-Source:      PROMPT.md A3.4b
+Source:      the operator's brief
 Category:    seeding
 Priority:    P2
 Effort:      M
@@ -316,7 +316,7 @@ is the reason to report the state rather than only compute it.
 
 ### T-084 The create round trip has not been proven against another client
 
-Source:      PROMPT.md A3.4a, section 3 matrix item 14
+Source:      the operator's brief, testing matrix item 14
 Category:    create
 Priority:    P0
 Effort:      M
@@ -451,7 +451,7 @@ Remaining:   1. `--version hybrid` is not covered because it does not exist.
 
 ### T-085 Creation determinism is not proven across platforms
 
-Source:      PROMPT.md A3.4a, section 3 matrix item 15
+Source:      the operator's brief, testing matrix item 15
 Category:    create
 Priority:    P1
 Effort:      S
