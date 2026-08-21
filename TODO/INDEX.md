@@ -255,15 +255,27 @@ assertion that turned out to be the test rather than the code. A red job does
 not cost one defect, it costs every defect behind it, and that is the argument
 for never leaving one.
 
-**Run 32459406311 is green on all sixteen jobs**, against the commit that
-closes T-160. Everything in this file was checked against that tree: `bench
-swarm`, the T-040 answer, the deleted reference trees, and the T-160 fix. Its
-only annotation is [T-161](cli-surface.md), a build action still targeting
-Node.js 20.
+**Run 32461172199 is green on all sixteen jobs**, against the commit that closes
+[T-162](webseed.md). That tree carries `bench swarm`, the T-040 answer, the
+deleted reference trees, and the fixes for both tests that turned a job red this
+session. Its only annotation is [T-161](cli-surface.md), a build action still
+targeting Node.js 20.
 
-Naming a run rather than "the latest" is deliberate. A line that says which
-commit it describes stays true; one that says "the head" is wrong by the next
-push. Check the current one with `gh run list --limit 1`.
+Naming a run rather than "the latest" is deliberate, and so is not claiming it
+is the newest. A line that says which commit a run describes stays true; one
+that says "the head" is wrong by the next push, and this one was, once. Check
+the current run with `gh run list --limit 1`.
+
+**Two of this session's pushes turned a job red, and both were
+documentation-only commits.** [T-160](cli-surface.md) on `ubuntu-latest` and
+[T-162](webseed.md) on `macos-latest`. Neither was a defect in `bit-cli`: one
+test dialled a seeder it had not waited for, and two asserted that a loaded
+runner cannot fail a request any way but the one they were testing. A commit
+that changes only Markdown is the cleanest proof available that a test is wrong
+rather than the tree, and this session got that proof twice. The lesson is
+narrower than "CI is flaky": a green matrix says nothing about the races a
+suite still holds, because this one was green for sixteen jobs immediately
+before each of them.
 
 Between those two runs one job went red, and what turned it red is worth
 keeping: run 32458314378 was a **documentation-only commit** and
