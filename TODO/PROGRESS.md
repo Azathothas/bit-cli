@@ -17,10 +17,10 @@ The work order: [INDEX.md](INDEX.md), "Start here".
 - **Gates:** `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   clean, `cargo fmt --all --check` clean, `cargo deny check` reports advisories,
   bans, licenses and sources all ok.
-- **CI:** see the last run named in the git log. Run **32478382564** turned
-  `Test (macos-latest)` red on a documentation-only push and that is
-  [T-182](cli-surface.md), fixed. Check the current state with
-  `gh run list --limit 1`.
+- **CI:** green on all sixteen jobs at run **32479072800**, against commit
+  `8abee2a`. The run before it, 32478382564, turned `Test (macos-latest)` red
+  on a documentation-only push, which is [T-182](cli-surface.md) and is fixed.
+  Check the current state with `gh run list --limit 1`.
 - **Entries:** 141 items. 63 open, 4 partial, 1 blocked, 63 done, 10 deferred
   to Phase C.
 

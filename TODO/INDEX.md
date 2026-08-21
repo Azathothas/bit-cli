@@ -343,8 +343,15 @@ assertion that turned out to be the test rather than the code. A red job does
 not cost one defect, it costs every defect behind it, and that is the argument
 for never leaving one.
 
-**Run 32461172199 is green on all sixteen jobs**, against the commit that closes
-[T-162](webseed.md). That tree carries `bench swarm`, the T-040 answer, the
+**Run 32479072800 is green on all sixteen jobs**, against commit `8abee2a`,
+which closes [T-182](cli-surface.md). That tree carries the whole doc
+reconciliation, the twenty-two tree corpus folded into these entries,
+`TODO/RULES.md`, `TODO/PROGRESS.md` and `scripts/git-sync.ps1`. Its only
+annotation is [T-161](cli-surface.md), a build action still targeting
+Node.js 20.
+
+**Run 32461172199 was green on all sixteen jobs**, against the commit that
+closes [T-162](webseed.md). That tree carries `bench swarm`, the T-040 answer, the
 deleted reference trees, and the fixes for both tests that turned a job red this
 session. Its only annotation is [T-161](cli-surface.md), a build action still
 targeting Node.js 20.
@@ -354,7 +361,14 @@ is the newest. A line that says which commit a run describes stays true; one
 that says "the head" is wrong by the next push, and this one was, once. Check
 the current run with `gh run list --limit 1`.
 
-**Two of this session's pushes turned a job red, and both were
+**A third documentation-only push turned a job red on 2026-08-21**, run
+32478382564, `Test (macos-latest)`. That is [T-182](cli-surface.md), fixed: a
+test asserted `peak_rss >= rss`, and on Darwin those two numbers come from two
+kernel subsystems that share no accounting basis, so nothing ordered them.
+Fifteen jobs were green, including the same test on the other two platforms.
+Four now, counting [T-148](bench.md), which was found locally.
+
+**Two earlier pushes turned a job red, and both were
 documentation-only commits.** [T-160](cli-surface.md) on `ubuntu-latest` and
 [T-162](webseed.md) on `macos-latest`. Neither was a defect in `bit-cli`: one
 test dialled a seeder it had not waited for, and two asserted that a loaded
