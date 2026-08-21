@@ -210,6 +210,64 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         }
     }
 
+    // A selection whose boundary pieces straddle into files it did not choose,
+    // so `torrents[].partial` and `verify`'s `not_selected` are documented
+    // rather than only implemented. Its own fixture, because the one above has
+    // no piece outside any selection: every file of a two-file torrent at this
+    // piece length touches both pieces. See `TODO/disk-io.md`, T-184.
+    let selection_fixture = TorrentFixture::straddling();
+    let selection_dir = selection_fixture.dir();
+    let selection_server = FileServer::start(selection_dir.clone());
+    let selection_source = format!("{}payload/", selection_server.base);
+    let selection_out = selection_dir.join("out");
+    let (_, out) = capture(
+        &[
+            "--json",
+            "download",
+            selection_fixture.path_str(),
+            "--dir",
+            selection_out.to_str().unwrap(),
+            "--web-seed",
+            &selection_source,
+            "--web-seed-mode",
+            "prefix",
+            "--web-seed-only",
+            "--no-torrent-web-seed",
+            "--no-tracker",
+            "--allow-overwrite",
+            "--port",
+            "0",
+            "--select-file",
+            "1",
+            "--stop-after",
+            "20s",
+        ],
+        selection_dir.clone(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli download <TORRENT> --select-file <INDEX> --json",
+        &out,
+    );
+    let (_, out) = capture(
+        &[
+            "--json",
+            "verify",
+            selection_fixture.path_str(),
+            "--data",
+            selection_out.join("album").to_str().unwrap(),
+            "--select-file",
+            "1",
+            "--per-piece",
+        ],
+        selection_dir.clone(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli verify <TORRENT> --select-file <INDEX> --per-piece --json",
+        &out,
+    );
+
     // A Metalink, which is the only source kind that resolves its own torrent
     // and then checks the payload against a second description of it. Its own
     // fixture and its own server, because the document has to name the

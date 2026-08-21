@@ -965,7 +965,7 @@ Source:      split out of [T-177](#t-177-a-piece-that-spans-a-file-boundary-has-
 Category:    disk-io
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**, with the premise corrected below
 
 Problem:     `--select-file` downloads a subset of a multi-file torrent. A
              piece that straddles a boundary between a selected file and an
@@ -1023,4 +1023,130 @@ Acceptance:  A three-file fixture whose boundaries all fall inside pieces, at
              one. The distinction between "unverifiable" and "bad" is the part
              a test has to pin: they are different words for the caller and the
              same symptom on the wire.
+
+**The premise is wrong, and the measurement is what found it. The correction
+goes here rather than over the text above**, the way
+[T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-file) and
+[T-021](peers.md) established.
+
+This entry says a selection "may hold pieces it can never prove, and `seed`
+will offer them". It can prove them, and `seed` offers exactly what it can
+serve. The unselected half of a boundary piece is not discarded and does not
+have nowhere to go: it is written into the file it belongs to, because a piece
+is verified against its whole hash and the write path is addressed by file
+offset with no notion of a selection. So the piece verifies, the session holds
+it honestly, and a seeder announcing it is telling the truth.
+
+[T-013](#t-013-selecting-a-subset-of-files-still-creates-all-of-them)'s own
+closing said so in one line and this entry was written without reading it:
+"a piece that spans a selected file and an unselected one still writes into
+both, and both are created because both were written." One command would have
+checked it. That is another entry written from a specification rather than from
+the binary, which is the common cause `INDEX.md` already names for the three
+whose titles are now known false.
+
+**What the measurement found instead is worse, and nothing said it.** A fixture
+of three files at the odd piece length
+[T-177](#t-177-a-piece-that-spans-a-file-boundary-has-no-adversarial-fixture)
+uses, `a.bin` 3,000,000, `b.bin` 1,000,000 and `c.bin` 3,000,000, has piece 0
+inside `a.bin`, piece 1 straddling a/b, piece 2 straddling b/c and piece 3
+inside `c.bin`. Selecting `b.bin` alone:
+
+```
+have=[false, true, true, false]   progress=3,973,120   finished=true
+a.bin: 3,000,000 bytes of 3,000,000, correct=false, zero_bytes=1,990,558
+b.bin: 1,000,000 bytes of 1,000,000, correct=true
+c.bin: 1,959,680 bytes of 3,000,000, correct=false
+```
+
+`a.bin` lands at its **full length** holding 1,013,440 real bytes and the rest
+zeroes. In a directory listing it is indistinguishable from a complete file.
+`c.bin` lands short. Which of the two happens depends on where the boundary
+write ended, so the same flag produces a file that looks finished and a file
+that looks truncated in one run, and before this neither was mentioned
+anywhere.
+
+**Reported, because it cannot be prevented.** Not writing those bytes would
+make the boundary piece unverifiable, which is what the entry wrongly believed
+already happened; writing them beside the file contradicts
+[T-013](#t-013-selecting-a-subset-of-files-still-creates-all-of-them), which
+exists because creating files a caller did not ask for was the defect. So they
+are written where they belong and named. `download --json` gains
+`torrents[].partial`, one row per unselected file a boundary piece writes into:
+`{index, path, bytes, on_disk, length}`. The three lengths are separate on
+purpose, and `on_disk == length` is the row worth reading. The same thing goes
+to stderr, before anything is fetched, so a caller about to see files it did
+not ask for knows why they are there.
+
+`Layout::selection_spill` computes it with no I/O. Only the **first and last**
+piece of an unselected file can be shared with another file, because every
+piece between them lies entirely inside it, so it is a walk of the file list
+rather than of the piece list. That is
+`FluxDown/native/engine/src/bt_partfile.rs`'s observation in
+`boundary_segments`; what that tree does with the bytes, a sidecar partfile, is
+position 2 above and is not taken.
+
+**`verify` could not tell "outside the selection" from "wrong".** It has no
+selection of its own, so verifying what a `--select-file` download wrote
+reported every piece outside the selection as a failure and exited non-zero.
+That is true of the bytes and wrong about the run: nothing ever asked to fetch
+them. `verify --select-file` and `--exclude-file` list them under
+`not_selected`, leave them unread rather than hashing bytes nobody asked for,
+count `pieces_ok` against what was asked for, and measure `have_share` against
+`selected` rather than `total`. Without that last part a selection that arrived
+intact reported 55 per cent.
+
+The flags are `crate::selection`, shared with `download`, because a second copy
+of an index parser is a second set of off-by-one bugs. The one difference is
+the file count: `verify` has the metainfo on disk before it parses a flag and
+passes it, so `--exclude-file` alone resolves to its complement here.
+`download` may be handed a magnet and passes `None`, which is why the same flag
+does nothing there. That is [T-185](cli-surface.md), filed while measuring
+this.
+
+**Acceptance, in its corrected form.** The entry asked for `verify` to name the
+boundary pieces as unverifiable and for `seed` not to announce them. Both are
+the wrong way round, and the tests assert what is true instead:
+
+```
+$ cargo test -p bit-cli --lib -- a_selection_reports a_download_with_no_selection a_selection_separates a_boundary_piece_under an_exclusion_alone a_seeder_of_a_selection
+test selection::tests::an_exclusion_alone_needs_the_file_count ... ok
+test selection::tests::an_exclusion_alone_is_every_other_file_when_the_count_is_known ... ok
+test cmd::verify::tests::an_exclusion_alone_selects_the_complement ... ok
+test cmd::download::tests::a_download_with_no_selection_reports_no_partial_files ... ok
+test cmd::download::tests::a_selection_reports_the_files_its_boundary_pieces_write_into ... ok
+test cmd::verify::tests::a_boundary_piece_under_a_selection_verifies ... ok
+test cmd::verify::tests::a_selection_separates_pieces_nobody_asked_for_from_pieces_that_are_wrong ... ok
+test cmd::seed::tests::a_seeder_of_a_selection_holds_the_boundary_pieces_and_says_so ... ok
+test result: ok. 8 passed; 0 failed
+```
+
+`TorrentFixture::straddling` is the small version of the same shape, three
+files at a 1024 byte piece length with both boundaries inside a piece, chosen
+so the two outcomes differ: `a.bin` lands at 1500 of 1500 holding 476 real
+bytes and `c.bin` at 872 of 1500. The download test asserts the report and then
+asserts the disk agrees with it, because the first alone is a claim about
+arithmetic. `a_boundary_piece_under_a_selection_verifies` is the corrected
+premise stated as a test: pieces 1 and 2 each hold bytes of a file nobody
+selected and both verify. `a_seeder_of_a_selection_holds_the_boundary_pieces_and_says_so`
+is the `seed` half: 2048 bytes of 3700, `complete: false`, which is exactly the
+two boundary pieces.
+
+**One thing that test found on the way, and it is not this entry's.** `seed
+--data` is the session's download directory, so a multi-file torrent's payload
+is expected at `<data>/<name>/`; `verify --data` accepts either the parent or
+the torrent directory and picks whichever holds the first file. Pointing `seed`
+at the torrent directory reports `have: 0` and warns "this is a partial seed",
+which is the wrong reason for the right observation. Filed as
+[T-186](cli-surface.md).
+
+**Position 3 stays rejected and position 1 turns out to need no code.** A
+selection whose boundary pieces are not whole is the common case, so refusing it
+refuses the common case. And announcing only whole pieces the selection covers,
+the recommendation, is already what happens: the announced set is the hash
+check's result, the boundary pieces are in it, and they belong there because
+their bytes are all present. The rule the web seed bridge uses for its own
+bitfield is a different rule for a different reason: a **source** scoped to part
+of a payload genuinely cannot serve a piece it holds half of, because the other
+half is on a mirror it does not control.
 

@@ -189,6 +189,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-181](cli-surface.md) | P1 | cli | **done** | Four flags are accepted in silence and reach no code |
 | [T-183](cli-surface.md) | P1 | cli | **done** | --web-seed-list-url is read, only into a refusal |
+| [T-185](cli-surface.md) | P1 | cli | open | --exclude-file on its own selects nothing and downloads everything |
+| [T-186](cli-surface.md) | P3 | cli | open | seed --data and verify --data resolve the payload differently |
 | [T-182](cli-surface.md) | P1 | ci | **done** | A macOS test asserted an invariant across two kernel subsystems |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
@@ -217,8 +219,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-143 items: 133 to work through, and 10 deferred to Phase C.
-55 open, 4 partial, 2 blocked, 72 done.
+145 items: 135 to work through, and 10 deferred to Phase C.
+57 open, 4 partial, 2 blocked, 72 done.
 
 **Two entries were closed because another one needed them.**
 [T-005](webseed.md) added two fields to a report, which made the schema check

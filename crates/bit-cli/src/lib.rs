@@ -18,6 +18,7 @@ pub mod output;
 pub mod schema;
 #[cfg(test)]
 mod schema_gen;
+pub mod selection;
 pub mod source;
 pub mod swarm;
 

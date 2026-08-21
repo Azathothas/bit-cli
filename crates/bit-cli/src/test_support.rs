@@ -101,6 +101,35 @@ impl TorrentFixture {
         )
     }
 
+    /// Three files at a 1024 byte piece length, chosen so that **both** file
+    /// boundaries fall strictly inside a piece.
+    ///
+    /// - piece 0 is inside `a.bin`
+    /// - piece 1 straddles `a.bin` and `b.bin`
+    /// - piece 2 straddles `b.bin` and `c.bin`
+    /// - piece 3 is inside `c.bin`
+    ///
+    /// So `--select-file 1` needs pieces 1 and 2 and nothing else, and both of
+    /// them reach into a file nobody asked for. The lengths make the two
+    /// outcomes differ on purpose: `a.bin` lands at 1500 bytes, its **full**
+    /// length, holding 476 real ones, and `c.bin` lands at 872 of its 1500. One
+    /// looks complete in a directory listing and one looks truncated. See
+    /// `TODO/disk-io.md`, T-184.
+    ///
+    /// `create` sorts by path, so the indices are `a.bin` 0, `b.bin` 1,
+    /// `c.bin` 2.
+    pub fn straddling() -> Self {
+        Self::build(
+            "album",
+            true,
+            &[
+                ("a.bin", 1500usize, 0xA1u8),
+                ("b.bin", 700, 0xB2),
+                ("c.bin", 1500, 0xC3),
+            ],
+        )
+    }
+
     /// A torrent whose deepest path is past the 260 character limit the
     /// classic Windows API imposes, once an output directory is in front of
     /// it.

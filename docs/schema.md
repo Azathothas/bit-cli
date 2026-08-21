@@ -135,7 +135,7 @@ From `bit-cli magnet <TORRENT> --json`.
 
 What a hash check of existing data found, piece by piece.
 
-From `bit-cli verify <TORRENT> --dir <DIR> --json`.
+From `bit-cli verify <TORRENT> --select-file <INDEX> --per-piece --json`.
 
 | field | type |
 | --- | --- |
@@ -157,10 +157,17 @@ From `bit-cli verify <TORRENT> --dir <DIR> --json`.
 | `info_hash` | string |
 | `kind` | string |
 | `name` | string |
+| `not_selected[]` | integer |
+| `per_piece[].bytes` | integer |
+| `per_piece[].not_selected` | bool |
+| `per_piece[].ok` | bool |
+| `per_piece[].piece` | integer |
 | `piece_count` | integer |
 | `pieces_bad` | integer |
 | `pieces_ok` | integer |
 | `schema_version` | string |
+| `selected.bytes` | integer |
+| `selected.human` | string |
 | `total.bytes` | integer |
 | `total.human` | string |
 
@@ -323,6 +330,14 @@ From `bit-cli download <TORRENT> --web-seed <URL> --json`.
 | `torrents[].metalink.version` | string |
 | `torrents[].name` | string |
 | `torrents[].output_directory` | string |
+| `torrents[].partial[].bytes.bytes` | integer |
+| `torrents[].partial[].bytes.human` | string |
+| `torrents[].partial[].index` | integer |
+| `torrents[].partial[].length.bytes` | integer |
+| `torrents[].partial[].length.human` | string |
+| `torrents[].partial[].on_disk.bytes` | integer |
+| `torrents[].partial[].on_disk.human` | string |
+| `torrents[].partial[].path` | string |
 | `torrents[].peers_seen` | integer |
 | `torrents[].shared[].bytes_proven.bytes` | integer |
 | `torrents[].shared[].bytes_proven.human` | string |

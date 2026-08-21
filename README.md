@@ -1188,6 +1188,36 @@ added. Two things follow.
 `--select-file 0` writes one file and leaves the rest off the disk, rather than
 creating eleven empty ones beside the one you asked for.
 
+With one exception, and it is the torrent's shape rather than a choice. A piece
+is verified against its whole hash, so a piece straddling the boundary between
+a file you selected and one you did not cannot be proved without both halves.
+Those bytes are fetched and written into the file they belong to, which leaves
+a file you did not ask for holding a few hundred kilobytes of payload and
+nothing else. It can even land at its full length, which is what makes it worth
+saying rather than leaving to be discovered:
+
+```bash
+bit-cli download album.torrent --select-file 1 --json
+```
+
+reports every one of them under `torrents[].partial`, with how much of each is
+real, how long it ends up on disk, and how long the torrent says it is, and
+says the same on stderr. A torrent whose file boundaries fall on piece edges
+has none.
+
+`verify` takes the same selection, and needs it to give the right answer:
+
+```bash
+bit-cli verify album.torrent --data out/album --select-file 1 --json
+```
+
+Without it, every piece outside the selection is reported as a failure and the
+command exits non-zero, which is true of the bytes and wrong about the run:
+nothing ever asked to fetch them. With it they are listed under `not_selected`,
+the counts are against what was asked for, and a selection that arrived intact
+is complete. The boundary pieces themselves verify and a `bit-cli seed` over
+that directory offers them, because their bytes really are all there.
+
 `--max-open-files` is a real cap. Files close on a least-recently-opened basis
 when it is reached, so a torrent with twenty thousand files needs the cap in
 descriptors and not twenty thousand:

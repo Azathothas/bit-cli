@@ -508,6 +508,18 @@ async fn attach_with(
     specs: Vec<SourceSpec>,
     piece_length: u32,
 ) -> Attached {
+    attach_selected(source, download_dir, torrent_dir, specs, piece_length, None).await
+}
+
+/// [`attach_with`] downloading only the named file indices.
+async fn attach_selected(
+    source: &Path,
+    download_dir: &Path,
+    torrent_dir: &Path,
+    specs: Vec<SourceSpec>,
+    piece_length: u32,
+    only_files: Option<Vec<usize>>,
+) -> Attached {
     let torrent_path = torrent_dir.join("fixture.torrent");
     make_torrent_with(source, &torrent_path, piece_length).await;
 
@@ -517,6 +529,7 @@ async fn attach_with(
             torrent_path.to_str().unwrap(),
             &AddOptions {
                 overwrite: true,
+                only_files,
                 ..Default::default()
             },
         )

@@ -1094,6 +1094,21 @@ pub struct VerifyArgs {
     /// Report the result of every piece, not just the failures.
     #[arg(long)]
     pub per_piece: bool,
+
+    /// Verify only the files a `--select-file` download asked for. Accepts
+    /// ranges: 1-5,8.
+    ///
+    /// A piece the selection does not cover is reported as not selected rather
+    /// than as bad, and does not fail the run. Without this, verifying what
+    /// `download --select-file` wrote reports every piece outside the
+    /// selection as a failure, which is true of the bytes and wrong about the
+    /// run. See `TODO/disk-io.md`, T-184.
+    #[arg(long, value_name = "INDEX", value_delimiter = ',')]
+    pub select_file: Vec<String>,
+
+    /// Skip these files, as `--select-file`'s complement.
+    #[arg(long, value_name = "INDEX", value_delimiter = ',')]
+    pub exclude_file: Vec<String>,
 }
 
 /// `bit-cli create`.

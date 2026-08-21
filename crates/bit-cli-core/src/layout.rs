@@ -191,6 +191,90 @@ impl Layout {
         out
     }
 
+    /// Pieces a selection of files needs, as one sorted list of indices.
+    ///
+    /// A piece is needed when any selected file holds even one byte of it,
+    /// because a piece is verified against its whole hash and a file that
+    /// starts in the middle of one cannot be had without it. Indices outside
+    /// the file list are ignored rather than refused: what to do about a bad
+    /// index is the caller's decision and the flags that carry one already
+    /// make it.
+    pub fn pieces_for_selection(&self, selected: &[usize]) -> Vec<u32> {
+        let mut out: Vec<u32> = selected
+            .iter()
+            .filter_map(|index| self.files.get(*index))
+            .filter(|file| file.length > 0)
+            .flat_map(|file| self.pieces_overlapping(&file.range()))
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// What a selection writes into the files it did not select.
+    ///
+    /// A piece that straddles the boundary between a selected file and an
+    /// unselected one carries bytes of both, and the piece cannot be verified
+    /// without them, so those bytes are fetched and written whatever the
+    /// selection said. The unselected file lands on disk holding them and
+    /// nothing else, which is the surprise this reports: its length can equal
+    /// its full length while almost all of it is zeroes.
+    ///
+    /// Only the **first and last** piece of an unselected file can be shared
+    /// with another file, because every piece between them lies entirely
+    /// inside it. That is `FluxDown/native/engine/src/bt_partfile.rs`'s
+    /// observation in `boundary_segments`, and it is what makes this a walk of
+    /// the file list rather than of the piece list. That tree keeps the bytes
+    /// in a sidecar; this one reports them where they landed. See
+    /// `TODO/disk-io.md`, T-184.
+    ///
+    /// Empty when the selection is every file, when no boundary straddles, or
+    /// when the torrent has one file.
+    pub fn selection_spill(&self, selected: &[usize]) -> Vec<Spill> {
+        let chosen: std::collections::HashSet<usize> = selected.iter().copied().collect();
+        let needed: std::collections::HashSet<u32> =
+            self.pieces_for_selection(selected).into_iter().collect();
+
+        let mut out = Vec::new();
+        for (index, file) in self.files.iter().enumerate() {
+            if chosen.contains(&index) || file.length == 0 {
+                continue;
+            }
+            let pieces = self.pieces_overlapping(&file.range());
+            let (first, last) = (pieces.start, pieces.end.saturating_sub(1));
+            let mut candidates = vec![first];
+            if last != first {
+                candidates.push(last);
+            }
+            let mut bytes = 0u64;
+            let mut written_to = 0u64;
+            for piece in candidates {
+                if !needed.contains(&piece) {
+                    continue;
+                }
+                let Some(range) = self.piece_range(piece) else {
+                    continue;
+                };
+                let start = range.start.max(file.offset);
+                let end = range.end.min(file.offset + file.length);
+                if start >= end {
+                    continue;
+                }
+                bytes += end - start;
+                written_to = written_to.max(end - file.offset);
+            }
+            if bytes > 0 {
+                out.push(Spill {
+                    file: index,
+                    bytes,
+                    written_to,
+                    length: file.length,
+                });
+            }
+        }
+        out
+    }
+
     /// Every piece index that overlaps `range`.
     pub fn pieces_overlapping(&self, range: &Range<u64>) -> Range<u32> {
         if self.piece_length == 0 || range.start >= range.end {
@@ -200,6 +284,26 @@ impl Layout {
         let last = ((range.end - 1) / u64::from(self.piece_length)) as u32;
         first..last.saturating_add(1).min(self.piece_count())
     }
+}
+
+/// An unselected file a boundary piece writes into.
+///
+/// The three lengths are separate on purpose. `bytes` is how much of the file
+/// is real payload, `written_to` is how long the file ends up on disk, and
+/// `length` is how long the torrent says it is. A file where `written_to`
+/// equals `length` looks complete in a directory listing and is not, which is
+/// the whole reason this is reported. See `TODO/disk-io.md`, T-184.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Spill {
+    /// Index of the file within the torrent.
+    pub file: usize,
+    /// Bytes of it a boundary piece actually writes.
+    pub bytes: u64,
+    /// Length the file ends up with on disk: the end of the last written
+    /// range. Everything before it that was not written is a hole.
+    pub written_to: u64,
+    /// Length the torrent says the file is.
+    pub length: u64,
 }
 
 /// A contiguous byte range inside one file of a torrent.
@@ -223,6 +327,158 @@ impl FileSlice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fixture `TODO/disk-io.md` T-184 measures against: three files at
+    /// the odd piece length T-177 uses, with the middle one selected.
+    ///
+    /// Piece 0 is inside `a.bin`, piece 1 straddles a/b, piece 2 straddles
+    /// b/c, and piece 3 is inside `c.bin`. So selecting `b.bin` needs pieces 1
+    /// and 2 and nothing else, and both of them reach into a file nobody asked
+    /// for.
+    fn straddling() -> Layout {
+        Layout::from_lengths(
+            "album",
+            true,
+            121 * 16384 + 4096,
+            [
+                ("a.bin".to_string(), 3_000_000),
+                ("b.bin".to_string(), 1_000_000),
+                ("c.bin".to_string(), 3_000_000),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_selection_needs_every_piece_its_files_touch() {
+        let layout = straddling();
+        assert_eq!(layout.piece_count(), 4);
+        assert_eq!(layout.pieces_for_selection(&[1]), vec![1, 2]);
+        assert_eq!(layout.pieces_for_selection(&[0]), vec![0, 1]);
+        assert_eq!(layout.pieces_for_selection(&[2]), vec![2, 3]);
+        assert_eq!(layout.pieces_for_selection(&[0, 1, 2]), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn an_index_past_the_file_list_selects_no_piece() {
+        let layout = straddling();
+        assert!(layout.pieces_for_selection(&[9]).is_empty());
+        assert_eq!(layout.pieces_for_selection(&[1, 9]), vec![1, 2]);
+    }
+
+    /// The measured numbers, so the report and the disk agree.
+    ///
+    /// `a.bin` ends up 3,000,000 bytes on disk, its full length, holding
+    /// 1,013,440 real bytes and the rest zeroes. `c.bin` ends up 1,959,680
+    /// bytes, short of its 3,000,000. One looks complete and one looks
+    /// truncated, and neither is what the caller asked for.
+    #[test]
+    fn a_selection_spills_into_the_files_around_it() {
+        let layout = straddling();
+        let spill = layout.selection_spill(&[1]);
+        assert_eq!(
+            spill,
+            vec![
+                Spill {
+                    file: 0,
+                    bytes: 1_013_440,
+                    written_to: 3_000_000,
+                    length: 3_000_000
+                },
+                Spill {
+                    file: 2,
+                    bytes: 1_959_680,
+                    written_to: 1_959_680,
+                    length: 3_000_000
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn selecting_everything_spills_nowhere() {
+        let layout = straddling();
+        assert!(layout.selection_spill(&[0, 1, 2]).is_empty());
+    }
+
+    /// A torrent whose boundaries land on piece edges has no spill at all,
+    /// which is why this was never noticed: the fixtures that exercise
+    /// `--select-file` are all aligned.
+    #[test]
+    fn an_aligned_torrent_spills_nowhere() {
+        let layout = Layout::from_lengths(
+            "aligned",
+            true,
+            1024,
+            [
+                ("a.bin".to_string(), 4096),
+                ("b.bin".to_string(), 1024),
+                ("c.bin".to_string(), 2048),
+            ],
+        );
+        for selection in [vec![0], vec![1], vec![2], vec![0, 2]] {
+            assert!(
+                layout.selection_spill(&selection).is_empty(),
+                "{selection:?} spilled on an aligned torrent"
+            );
+        }
+    }
+
+    /// A file wholly inside one piece that a neighbour also needs is spilled
+    /// into end to end, which is the case where `first` and `last` are the
+    /// same piece.
+    #[test]
+    fn a_file_smaller_than_a_piece_is_spilled_into_whole() {
+        let layout = Layout::from_lengths(
+            "tiny",
+            true,
+            4096,
+            [
+                ("a.bin".to_string(), 1000),
+                ("b.bin".to_string(), 500),
+                ("c.bin".to_string(), 1000),
+            ],
+        );
+        assert_eq!(layout.piece_count(), 1);
+        assert_eq!(
+            layout.selection_spill(&[0]),
+            vec![
+                Spill {
+                    file: 1,
+                    bytes: 500,
+                    written_to: 500,
+                    length: 500
+                },
+                Spill {
+                    file: 2,
+                    bytes: 1000,
+                    written_to: 1000,
+                    length: 1000
+                },
+            ],
+            "one piece covers the whole torrent, so selecting any file fetches all of it"
+        );
+    }
+
+    /// A zero-length file occupies no bytes, so no piece touches it and
+    /// nothing is ever written into it.
+    #[test]
+    fn a_zero_length_file_is_never_spilled_into() {
+        let layout = Layout::from_lengths(
+            "empty",
+            true,
+            1024,
+            [
+                ("a.bin".to_string(), 1500),
+                ("empty.bin".to_string(), 0),
+                ("c.bin".to_string(), 1500),
+            ],
+        );
+        let spill = layout.selection_spill(&[0]);
+        assert!(
+            !spill.iter().any(|s| s.file == 1),
+            "a zero-length file cannot hold spill: {spill:?}"
+        );
+    }
 
     fn multi() -> Layout {
         Layout::from_lengths(

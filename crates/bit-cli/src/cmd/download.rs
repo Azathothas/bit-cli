@@ -74,6 +74,11 @@ pub struct TorrentReport {
     /// Empty unless two torrents in one invocation hold the same file.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shared: Vec<SharedFile>,
+    /// Files `--select-file` did not choose that a boundary piece wrote into
+    /// anyway. Empty without a selection, and empty for a torrent whose file
+    /// boundaries fall on piece edges. See `TODO/disk-io.md`, T-184.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub partial: Vec<PartialFile>,
     /// Announces this run sent itself: `completed` when the download
     /// finished and `stopped` when it ended. Empty when the torrent has no
     /// trackers or `--no-tracker` was given.
@@ -245,6 +250,26 @@ pub struct SharedFile {
     /// Whole pieces whose hashes were compared, all of which agreed.
     pub pieces_compared: u32,
     pub bytes_proven: Size,
+}
+
+/// One file a selection did not choose, holding bytes anyway.
+///
+/// A piece that straddles the boundary between a selected file and an
+/// unselected one carries bytes of both and cannot be verified without them,
+/// so the unselected file is written into whatever the selection said. What
+/// lands is a file holding those bytes and nothing else.
+///
+/// `bytes` is how much of it is real, `on_disk` is how long it ends up, and
+/// `length` is how long the torrent says it is. `on_disk` equal to `length` is
+/// the case worth reporting: the file looks complete in a directory listing
+/// and is almost entirely zeroes. See `TODO/disk-io.md`, T-184.
+#[derive(Debug, Clone, Serialize)]
+pub struct PartialFile {
+    pub index: usize,
+    pub path: String,
+    pub bytes: Size,
+    pub on_disk: Size,
+    pub length: Size,
 }
 
 /// One forced re-dial: the peer state was thrown away and the peer list
@@ -938,6 +963,7 @@ async fn one(
                 renamed: Vec::new(),
                 shared: Vec::new(),
                 announced: Vec::new(),
+                partial: Vec::new(),
                 metalink: None,
                 attribution: None,
                 code: error.code(),
@@ -1020,6 +1046,23 @@ async fn one_inner(
             }),
         ))
         .await;
+
+    // A selection whose boundary pieces straddle into a file it did not choose
+    // writes into that file, because a piece cannot be verified without every
+    // byte of it. Said here, before anything is fetched, so a caller who is
+    // about to see files it did not ask for knows why they are there. See
+    // `TODO/disk-io.md`, T-184.
+    for partial in partial_files(&layout, options) {
+        let _ = tx
+            .send(Msg::Warn(format!(
+                "{} was not selected, and a piece it shares with a selected file writes {} into it, leaving a {} file where the torrent says {}",
+                partial.path,
+                format_size(partial.bytes.0),
+                format_size(partial.on_disk.0),
+                format_size(partial.length.0)
+            )))
+            .await;
+    }
 
     // What the hash check found already on disk, read once the check has
     // finished and before anything is fetched.
@@ -1178,6 +1221,7 @@ async fn one_inner(
     );
     report.shared = shared;
     report.announced = announced;
+    report.partial = partial_files(&layout, options);
     // Set here rather than passed into `finish`, which already takes nine
     // arguments and does not otherwise know the ledger exists.
     report.attribution = (!sources.is_empty()).then(|| ledger.stats());
@@ -1673,6 +1717,36 @@ fn payload_path(
     Some(root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR)))
 }
 
+/// Files the selection did not choose that a boundary piece writes into.
+///
+/// Reported rather than prevented, and the reason is that preventing it is not
+/// possible: a piece is verified against its whole hash, so the bytes of an
+/// unselected file that share a piece with a selected one have to be fetched
+/// and have to be written somewhere for the piece to be provable. Writing them
+/// into the file they belong to is the cheapest place, and it is what
+/// `TODO/disk-io.md` T-013's closing already predicted would happen.
+///
+/// What was missing is saying so. See `TODO/disk-io.md`, T-184.
+fn partial_files(layout: &Layout, options: &Options) -> Vec<PartialFile> {
+    let Some(selected) = &options.only_files else {
+        return Vec::new();
+    };
+    layout
+        .selection_spill(selected)
+        .into_iter()
+        .filter_map(|spill| {
+            let file = layout.file(spill.file)?;
+            Some(PartialFile {
+                index: spill.file,
+                path: file.display_path(),
+                bytes: Size(spill.bytes),
+                on_disk: Size(spill.written_to),
+                length: Size(spill.length),
+            })
+        })
+        .collect()
+}
+
 /// Read verified bytes back out of the payload the session is writing.
 ///
 /// This is where the correct bytes for a disputed block come from. Reading
@@ -1917,6 +1991,7 @@ fn finish(
         renamed,
         shared: Vec::new(),
         announced: Vec::new(),
+        partial: Vec::new(),
         metalink: None,
         attribution: None,
         code: stopped.code(),
@@ -1988,75 +2063,13 @@ pub(crate) fn cache_windows(specs: &[SourceSpec]) -> usize {
 
 /// Resolve `--select-file` and `--exclude-file` into explicit indices.
 ///
-/// `None` means every file, which is not the same as an empty list: an empty
-/// list would download nothing.
+/// The file count is not passed, because a source may be a magnet and the file
+/// list does not exist until its metadata resolves. That is what makes
+/// `--exclude-file` on its own do nothing here, which is
+/// `TODO/cli-surface.md`, T-185. `verify` passes the count and gets the
+/// complement.
 fn selection(args: &crate::cli::SelectionArgs) -> Result<Option<Vec<usize>>> {
-    if args.select_file.is_empty() && args.exclude_file.is_empty() {
-        return Ok(None);
-    }
-    let parse = |values: &[String], flag: &str| -> Result<Vec<usize>> {
-        let mut out = Vec::new();
-        for value in values {
-            for term in value.split(',') {
-                let term = term.trim();
-                if term.is_empty() {
-                    continue;
-                }
-                match term.split_once('-') {
-                    None => out.push(term.parse::<usize>().map_err(|_| index_error(flag, term))?),
-                    Some((start, "")) => {
-                        // An open-ended range needs the file count, which is
-                        // not known until the metadata resolves. Refuse rather
-                        // than guessing at an upper bound.
-                        let _ = start;
-                        return Err(Error::usage(format!(
-                            "--{flag} `{term}`: an open-ended range needs the file count; list the indices or use a closed range"
-                        )));
-                    }
-                    Some((start, end)) => {
-                        let start: usize =
-                            start.trim().parse().map_err(|_| index_error(flag, term))?;
-                        let end: usize = end.trim().parse().map_err(|_| index_error(flag, term))?;
-                        if start > end {
-                            return Err(Error::usage(format!("--{flag} `{term}` runs backwards")));
-                        }
-                        out.extend(start..=end);
-                    }
-                }
-            }
-        }
-        Ok(out)
-    };
-
-    let selected = parse(&args.select_file, "select-file")?;
-    let excluded: HashSet<usize> = parse(&args.exclude_file, "exclude-file")?
-        .into_iter()
-        .collect();
-    if selected.is_empty() {
-        // Only exclusions were given, and the file count is not known yet, so
-        // the exclusion is applied once the metadata resolves. Until then
-        // there is nothing to narrow.
-        return Ok(None);
-    }
-    let mut out: Vec<usize> = selected
-        .into_iter()
-        .filter(|i| !excluded.contains(i))
-        .collect();
-    out.sort_unstable();
-    out.dedup();
-    if out.is_empty() {
-        return Err(Error::usage(
-            "--select-file and --exclude-file together select no files at all",
-        ));
-    }
-    Ok(Some(out))
-}
-
-fn index_error(flag: &str, term: &str) -> Error {
-    Error::usage(format!(
-        "--{flag} `{term}` is not a file index or an index range"
-    ))
-    .with("value", term.to_string())
+    crate::selection::resolve(&args.select_file, &args.exclude_file, None)
 }
 
 /// Resolve and report without fetching anything.
@@ -2683,6 +2696,123 @@ mod tests {
         out
     }
 
+    /// `TODO/disk-io.md` T-184, and it pins the corrected premise as much as
+    /// the fix.
+    ///
+    /// The entry expected a selection to leave pieces that "can never be
+    /// proved". It does not: the unselected half of a boundary piece is
+    /// written into the unselected file, so the piece verifies and the session
+    /// holds it honestly. What actually happens is that files nobody selected
+    /// land on disk, one of them at its **full** length, and before this
+    /// nothing said so.
+    #[test]
+    fn a_selection_reports_the_files_its_boundary_pieces_write_into() {
+        let fixture = TorrentFixture::straddling();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let source = format!("{}payload/", server.base);
+        let out = fixture.dir().join("out");
+        let report = crate::test_support::run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--select-file",
+                "1",
+                "--stop-after",
+                "30s",
+            ],
+            fixture.dir(),
+        );
+        let torrent = &report["torrents"][0];
+        assert_eq!(torrent["stopped"], "completed", "{torrent}");
+
+        // Only the two pieces the selection covers were fetched: 1024 + 1024.
+        assert_eq!(
+            torrent["downloaded"]["bytes"].as_u64().unwrap(),
+            2048,
+            "a selection fetches the pieces its files touch and no others"
+        );
+
+        let partial = torrent["partial"].as_array().expect("a partial array");
+        let rows: Vec<(u64, u64, u64, String)> = partial
+            .iter()
+            .map(|row| {
+                (
+                    row["bytes"]["bytes"].as_u64().unwrap(),
+                    row["on_disk"]["bytes"].as_u64().unwrap(),
+                    row["length"]["bytes"].as_u64().unwrap(),
+                    row["path"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (476, 1500, 1500, "a.bin".to_string()),
+                (872, 872, 1500, "c.bin".to_string()),
+            ],
+            "the report has to name both unselected files and say how much of each is real"
+        );
+
+        // And the disk agrees with the report, which is the half that would
+        // otherwise be a claim about arithmetic rather than about behaviour.
+        let base = out.join("album");
+        assert_eq!(
+            std::fs::metadata(base.join("a.bin")).unwrap().len(),
+            1500,
+            "a.bin lands at its full length while holding 476 real bytes, which is why this is reported at all"
+        );
+        assert_eq!(std::fs::metadata(base.join("c.bin")).unwrap().len(), 872);
+        let selected = std::fs::read(base.join("b.bin")).unwrap();
+        assert_eq!(selected, vec![0xB2u8; 700], "the selected file is whole");
+    }
+
+    /// The same run without a selection reports nothing, so the field is not
+    /// noise on every download.
+    #[test]
+    fn a_download_with_no_selection_reports_no_partial_files() {
+        let fixture = TorrentFixture::straddling();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let source = format!("{}payload/", server.base);
+        let out = fixture.dir().join("out");
+        let report = crate::test_support::run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+            ],
+            fixture.dir(),
+        );
+        let torrent = &report["torrents"][0];
+        assert_eq!(torrent["stopped"], "completed", "{torrent}");
+        assert!(
+            torrent.get("partial").is_none(),
+            "an unselected run has no partial files: {torrent}"
+        );
+    }
+
     fn selection_args(select: &[&str], exclude: &[&str]) -> SelectionArgs {
         SelectionArgs {
             select_file: select.iter().map(ToString::to_string).collect(),
@@ -2691,58 +2821,21 @@ mod tests {
         }
     }
 
+    /// The parsing itself is `crate::selection`'s and tested there. What this
+    /// pins is the one thing that belongs to `download`: it resolves with no
+    /// file count, because a source may be a magnet.
     #[test]
-    fn no_selection_flags_means_every_file() {
+    fn download_resolves_a_selection_without_the_file_count() {
         assert_eq!(selection(&selection_args(&[], &[])).unwrap(), None);
-    }
-
-    #[test]
-    fn indices_and_ranges_both_select() {
         assert_eq!(
-            selection(&selection_args(&["0"], &[])).unwrap(),
-            Some(vec![0])
+            selection(&selection_args(&["1-3"], &["2"])).unwrap(),
+            Some(vec![1, 3])
         );
-        assert_eq!(
-            selection(&selection_args(&["1-3"], &[])).unwrap(),
-            Some(vec![1, 2, 3])
-        );
-        assert_eq!(
-            selection(&selection_args(&["1-3", "7"], &[])).unwrap(),
-            Some(vec![1, 2, 3, 7])
-        );
-    }
-
-    #[test]
-    fn an_exclusion_narrows_a_selection() {
-        assert_eq!(
-            selection(&selection_args(&["0-4"], &["2"])).unwrap(),
-            Some(vec![0, 1, 3, 4])
-        );
-    }
-
-    #[test]
-    fn selecting_nothing_at_all_is_a_usage_error_rather_than_an_empty_download() {
-        let err = selection(&selection_args(&["1-2"], &["1-2"])).unwrap_err();
+        // `TODO/cli-surface.md`, T-185: an exclusion alone needs the count and
+        // does not get one here, so it selects everything.
+        assert_eq!(selection(&selection_args(&[], &["1"])).unwrap(), None);
+        let err = selection(&selection_args(&["3-"], &[])).unwrap_err();
         assert_eq!(err.code(), ExitCode::Usage);
-    }
-
-    #[test]
-    fn a_bad_index_names_the_flag_and_the_value() {
-        let err = selection(&selection_args(&["two"], &[])).unwrap_err();
-        assert_eq!(err.code(), ExitCode::Usage);
-        assert!(err.message().contains("select-file"), "{}", err.message());
-        assert_eq!(err.context()["value"], "two");
-    }
-
-    #[test]
-    fn a_backwards_range_is_refused() {
-        let err = selection(&selection_args(&["5-2"], &[])).unwrap_err();
-        assert!(err.message().contains("backwards"), "{}", err.message());
-    }
-
-    #[test]
-    fn an_open_ended_range_says_why_it_cannot_be_resolved_yet() {
-        let err = selection(&selection_args(&["2-"], &[])).unwrap_err();
         assert!(err.message().contains("file count"), "{}", err.message());
     }
 

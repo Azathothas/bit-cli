@@ -28,6 +28,10 @@ pub struct PieceResult {
     pub piece: u32,
     pub ok: bool,
     pub bytes: u64,
+    /// Whether the selection covers this piece. Absent without a selection,
+    /// where every piece is covered. See `TODO/disk-io.md`, T-184.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub not_selected: bool,
 }
 
 /// One file's result.
@@ -47,6 +51,14 @@ pub struct Report {
     pub name: String,
     pub data_dir: String,
     pub total: Size,
+    /// Bytes the pieces a selection covers hold, when one was given.
+    ///
+    /// `have_share` is measured against this rather than against `total`: a
+    /// selection that verified perfectly is complete, and reporting it as a
+    /// share of the whole torrent would say 57 per cent of a run that got
+    /// everything it asked for. See `TODO/disk-io.md`, T-184.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected: Option<Size>,
     pub piece_count: u32,
     pub pieces_ok: u32,
     pub pieces_bad: u32,
@@ -54,6 +66,16 @@ pub struct Report {
     pub have: Size,
     pub have_share: String,
     pub bad_pieces: Vec<u32>,
+    /// Pieces the selection does not cover, when one was given.
+    ///
+    /// These are neither ok nor bad. Nothing was ever asked to fetch them, so
+    /// the bytes on disk are whatever a boundary piece happened to write and a
+    /// hash over them means nothing. Verifying what
+    /// `download --select-file` wrote without saying so reports every one of
+    /// them as a failure, which is true of the bytes and wrong about the run.
+    /// See `TODO/disk-io.md`, T-184.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_selected: Vec<u32>,
     pub files: Vec<FileResult>,
     /// Files whose on-disk path is not the path in the torrent, and why.
     ///
@@ -75,7 +97,10 @@ impl Report {
             field("data", &self.data_dir),
             field(
                 "pieces ok",
-                format!("{} of {}", self.pieces_ok, self.piece_count),
+                match self.not_selected.is_empty() {
+                    true => format!("{} of {}", self.pieces_ok, self.piece_count),
+                    false => format!("{} of {} selected", self.pieces_ok, self.piece_count),
+                },
             ),
             field(
                 "have",
@@ -85,6 +110,12 @@ impl Report {
         ];
         if !self.bad_pieces.is_empty() {
             out.push(field("failed pieces", summarize_indices(&self.bad_pieces)));
+        }
+        // Said separately from the failures, because they are a different
+        // fact: nothing was ever asked to fetch these, so whatever is on disk
+        // for them is not evidence about anything.
+        if !self.not_selected.is_empty() {
+            out.push(field("not selected", summarize_indices(&self.not_selected)));
         }
         // A caller that does not know a file was renamed is looking in the
         // wrong place, which reads as a missing file rather than as a rename.
@@ -252,8 +283,24 @@ pub fn run(
         })
         .collect();
 
+    // A selection given here is the same selection a `--select-file` download
+    // was given. The pieces it covers are the ones that run was ever asked to
+    // fetch, so they are the only ones whose hashes say anything about it.
+    // Unlike `download`, this command has the metainfo on disk before it
+    // parses a flag, so an exclusion on its own resolves to its complement
+    // here. See `TODO/cli-surface.md`, T-185.
+    let selected = crate::selection::resolve(
+        &args.select_file,
+        &args.exclude_file,
+        Some(layout.files.len()),
+    )?;
+    let wanted: Option<std::collections::HashSet<u32>> = selected
+        .as_ref()
+        .map(|files| layout.pieces_for_selection(files).into_iter().collect());
+
     let mut pieces_ok = 0u32;
     let mut bad_pieces = Vec::new();
+    let mut not_selected = Vec::new();
     let mut per_piece = Vec::new();
     let mut have = 0u64;
 
@@ -262,6 +309,21 @@ pub fn run(
             continue;
         };
         let length = range.end - range.start;
+        // A piece outside the selection is not read at all. Reading it would
+        // cost a hash over bytes nobody asked for, and on a large torrent
+        // verified one file at a time that is the whole payload.
+        if wanted.as_ref().is_some_and(|set| !set.contains(&piece)) {
+            not_selected.push(piece);
+            if args.per_piece {
+                per_piece.push(PieceResult {
+                    piece,
+                    ok: false,
+                    bytes: length,
+                    not_selected: true,
+                });
+            }
+            continue;
+        }
         let data = reader.read(range.start, length)?;
         let expected =
             meta.info().pieces.get(piece as usize).ok_or_else(|| {
@@ -282,23 +344,36 @@ pub fn run(
                 piece,
                 ok,
                 bytes: length,
+                not_selected: false,
             });
         }
     }
 
-    let piece_count = layout.piece_count();
+    // The denominator is what was asked for. Without this a selection that
+    // verified perfectly would report `pieces ok 2 of 4` and exit non-zero,
+    // which is the wrong answer twice over.
+    let piece_count = layout.piece_count() - not_selected.len() as u32;
+    let wanted_bytes: u64 = match &wanted {
+        None => layout.total_length,
+        Some(set) => set
+            .iter()
+            .filter_map(|piece| layout.piece_size(*piece))
+            .sum(),
+    };
     let report = Report {
         info_hash: meta.info_hash().hex(),
         name: layout.name.clone(),
         data_dir: root.display().to_string(),
         total: Size(layout.total_length),
+        selected: wanted.is_some().then_some(Size(wanted_bytes)),
         piece_count,
         pieces_ok,
         pieces_bad: piece_count - pieces_ok,
         complete: pieces_ok == piece_count && piece_count > 0,
         have: Size(have),
-        have_share: percent_of(have, layout.total_length),
+        have_share: percent_of(have, wanted_bytes),
         bad_pieces,
+        not_selected,
         files,
         renamed: reader.renames(),
         per_piece,
@@ -371,6 +446,186 @@ pub fn payload_path(root: &Path, layout: &Layout, index: usize) -> Option<PathBu
 mod tests {
     use crate::test_support::{TorrentFixture, run_err, run_json};
     use bit_cli_core::ExitCode;
+
+    /// What `download --select-file` leaves on disk, verified two ways.
+    ///
+    /// Without the selection every piece outside it is a failure, which is
+    /// true of the bytes and wrong about the run: nothing was ever asked to
+    /// fetch them. With the selection they are named separately and the run
+    /// is complete. See `TODO/disk-io.md`, T-184.
+    #[test]
+    fn a_selection_separates_pieces_nobody_asked_for_from_pieces_that_are_wrong() {
+        let fixture = TorrentFixture::straddling();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let source = format!("{}payload/", server.base);
+        let out = fixture.dir().join("out");
+        let report = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--select-file",
+                "1",
+                "--stop-after",
+                "30s",
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(report["torrents"][0]["stopped"], "completed");
+        let data = out.join("album");
+
+        // Told nothing, verify reports the two pieces outside the selection as
+        // failures and exits non-zero.
+        let blind = run_err(
+            &[
+                "verify",
+                "--data",
+                data.to_str().unwrap(),
+                fixture.path_str(),
+            ],
+            fixture.dir(),
+            ExitCode::HashMismatch,
+        );
+        assert!(blind.contains("2 of 4 pieces failed"), "{blind}");
+
+        // Told the selection, the same bytes are complete.
+        let doc = run_json(
+            &[
+                "verify",
+                "--data",
+                data.to_str().unwrap(),
+                "--select-file",
+                "1",
+                fixture.path_str(),
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(doc["complete"], true, "{doc}");
+        assert_eq!(doc["pieces_ok"], 2);
+        assert_eq!(doc["pieces_bad"], 0);
+        assert_eq!(
+            doc["piece_count"], 2,
+            "the denominator is what was asked for"
+        );
+        assert_eq!(
+            doc["not_selected"],
+            serde_json::json!([0, 3]),
+            "the pieces outside the selection are named rather than counted as failures"
+        );
+        // `have_share` is measured against the selection, not the torrent: a
+        // run that got everything it asked for is not 55 per cent complete.
+        assert_eq!(doc["have"]["bytes"], 2048);
+        assert_eq!(doc["selected"]["bytes"], 2048);
+        assert_eq!(doc["total"]["bytes"], 3700);
+        assert_eq!(doc["have_share"], "100.00%");
+    }
+
+    /// The boundary pieces themselves verify, which is the part of T-184's
+    /// premise the measurement disproved.
+    ///
+    /// Pieces 1 and 2 each hold bytes of a file the selection did not choose.
+    /// The entry expected them to be unprovable; they are not, because those
+    /// bytes are fetched and written for the piece's sake whatever the
+    /// selection said. A seeder announcing them is telling the truth.
+    #[test]
+    fn a_boundary_piece_under_a_selection_verifies() {
+        let fixture = TorrentFixture::straddling();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let source = format!("{}payload/", server.base);
+        let out = fixture.dir().join("out");
+        run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--select-file",
+                "1",
+                "--stop-after",
+                "30s",
+            ],
+            fixture.dir(),
+        );
+        let doc = run_json(
+            &[
+                "verify",
+                "--data",
+                out.join("album").to_str().unwrap(),
+                "--select-file",
+                "1",
+                "--per-piece",
+                fixture.path_str(),
+            ],
+            fixture.dir(),
+        );
+        let per_piece = doc["per_piece"].as_array().unwrap();
+        let states: Vec<(u64, bool, bool)> = per_piece
+            .iter()
+            .map(|row| {
+                (
+                    row["piece"].as_u64().unwrap(),
+                    row["ok"].as_bool().unwrap(),
+                    row["not_selected"].as_bool().unwrap_or(false),
+                )
+            })
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                (0, false, true),
+                (1, true, false),
+                (2, true, false),
+                (3, false, true)
+            ],
+            "pieces 1 and 2 straddle into files nobody selected and still verify"
+        );
+    }
+
+    /// An exclusion on its own works here, because this command has the file
+    /// list before it parses a flag. `download` does not, which is
+    /// `TODO/cli-surface.md` T-185.
+    #[test]
+    fn an_exclusion_alone_selects_the_complement() {
+        let fixture = TorrentFixture::multi_file();
+        let doc = run_json(
+            &[
+                "verify",
+                "--data",
+                fixture.payload_dir().to_str().unwrap(),
+                "--exclude-file",
+                "1",
+                fixture.path_str(),
+            ],
+            fixture.dir(),
+        );
+        // `album` is `disc 1/a.flac` (1500) and `notes.nfo` (500) at a 1024
+        // byte piece length, so excluding the second file still needs both
+        // pieces: the boundary at 1500 is inside piece 1.
+        assert_eq!(doc["complete"], true, "{doc}");
+        assert!(
+            doc.get("not_selected").is_none(),
+            "every piece is still needed: {doc}"
+        );
+    }
 
     #[test]
     fn a_complete_payload_verifies_and_exits_zero() {

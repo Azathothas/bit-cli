@@ -1858,3 +1858,134 @@ one-line list, and asserts the torrent finishes, that its single source has
 fix the run exits on a usage error, so the assertion that fails first is the
 exit code.
 
+
+### T-185 --exclude-file on its own selects nothing and downloads everything
+
+Source:      found while measuring [T-184](disk-io.md), 2026-08-21
+Category:    cli
+Priority:    P1
+Effort:      S
+Status:      open
+
+Problem:     `--exclude-file <INDEX>` skips files. Used **without**
+             `--select-file` it does nothing at all: `selection` in
+             `crates/bit-cli/src/cmd/download.rs` returns `None` the moment the
+             selected list is empty, `None` means every file, and the excluded
+             set is dropped on the floor. The comment above that `return`
+             says the exclusion "is applied once the metadata resolves", and
+             nothing anywhere applies it. `options.only_files` has exactly one
+             reader, the `AddOptions` built in `one_inner`, and it receives
+             `None`.
+Relevance:   This is the `INDEX.md` P1 definition verbatim, and it is the third
+             of its family after [T-181](#t-181-four-flags-are-accepted-in-silence-and-reach-no-code)
+             and [T-183](#t-183---web-seed-list-url-is-read-only-into-a-refusal).
+             It is a different shape from both, which is why neither audit
+             found it: the field **is** read, and the reader **can** succeed.
+             What is wrong is that one branch of the function that computes the
+             value discards half its input. A flag that works when paired with
+             another flag and silently does nothing alone is invisible to any
+             check that asks whether a field reaches code.
+
+             The cost is not a missing file, it is a fetched one.
+             `--exclude-file` is how a caller skips the 40 GiB extras track in a
+             torrent it wants 200 MiB of, so the failure mode is a download
+             that is two orders of magnitude larger than asked for and reports
+             `completed`.
+Approach:    The excluded set alone needs the file count, which is the reason it
+             was left. Both halves of that are available:
+
+             1. **A local `.torrent`, a fetched one, or a Metalink.** `run`
+                already parses the metainfo into `metas` before any plan starts,
+                for [T-140](multi-source.md)'s donation proof. The count is
+                there, so the exclusion resolves before `add` and nothing is
+                ever fetched.
+             2. **A magnet.** No file list until the metadata resolves.
+                `librqbit` 9.0.0 has `Api::api_torrent_action_update_only_files`
+                at `src/api.rs:337`, so the selection can be narrowed after
+                `wait_until_initialized` and before anything is asked for. A
+                magnet has no payload to fetch before that point, so nothing is
+                wasted.
+
+             Refusing a magnet outright is the cheaper option and is worse: it
+             would make the flag work for one source kind and error on another,
+             which is the asymmetry `--select-file` does not have.
+
+             While this is open, `--select-file` with an **open-ended** range,
+             `--select-file 3-`, is refused for the same missing count. Both
+             halves of the count problem have the same two answers, so decide
+             them together.
+Acceptance:  A two-file torrent served by one mirror, downloaded with
+             `--exclude-file` naming one file and no `--select-file`, finishes
+             with only the other file under `--dir`, and the mirror is never
+             asked for the excluded file's URL.
+
+**Measured, not read.** A `sharing_pair` donor fixture is `extra-a.txt` (1024
+bytes) and `shared.bin` (4096) at a 1024 byte piece length, so every file is a
+whole number of pieces and no boundary straddles: what lands on disk is exactly
+what was selected, with none of [T-184](disk-io.md)'s boundary writes to
+confuse it. `create` sorts by path, so index 0 is `extra-a.txt`.
+
+```
+$ bit-cli --json download donor.torrent --dir out --web-seed-only \
+    --web-seed http://127.0.0.1:PORT/payload/ --web-seed-mode prefix \
+    --no-torrent-web-seed --no-tracker --port 0 --exclude-file 1 --stop-after 20s
+stopped=completed
+files on disk: ["donor/extra-a.txt", "donor/shared.bin"]
+
+$ ... --select-file 0 ...
+stopped=completed
+files on disk: ["donor/extra-a.txt"]
+```
+
+The first run excluded index 1 and downloaded it anyway. The second selected
+index 0 and got exactly that, which is the control: the selection machinery
+works and only the exclusion-alone path is dead. An earlier run of the first
+command against a mirror missing that file failed with
+`http://127.0.0.1:PORT/donor/extra-a.txt: 404`, which is the same finding from
+the other side: the run asked a mirror for the file it had been told to skip.
+
+### T-186 seed --data and verify --data resolve the payload differently
+
+Source:      found while building [T-184](disk-io.md)'s acceptance, 2026-08-21
+Category:    cli
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     A multi-file torrent lays its files under a directory named after
+             itself, so a payload can be pointed at two ways: at the parent, or
+             at the torrent directory. `verify --data` accepts either and picks
+             whichever holds the first file, which its `resolve_root` says in
+             so many words. `seed --data` sets the session's download directory
+             and only ever looks at `<data>/<name>/`, so the torrent directory
+             is refused with no message that says so.
+Relevance:   The two commands read the same layout, written by the same
+             `download`, and their `--data` flags carry the same name and the
+             same help text. A caller who verified a payload one way and seeds
+             it the other gets a seeder holding nothing.
+
+             What makes it worth a P3 rather than nothing is the message.
+             Pointed at the torrent directory, `seed` reports `have: 0` and
+             warns "only 0 B of 3.61 KiB is present, so this is a partial
+             seed", which is the right observation with the wrong reason. A
+             partial seed is legitimate and the warning is the one a partial
+             seed gets, so nothing distinguishes "you have half the payload"
+             from "you named the wrong directory".
+Approach:    Give `seed` the resolution `verify` already has. It is one call,
+             and the two commands would agree by construction rather than by
+             both being right separately.
+
+             The alternative, warning when nothing is found and a sibling
+             directory would have worked, is a special case where a shared
+             function is available, and it leaves the two flags meaning two
+             things.
+
+             Watch the direction: `verify` picks whichever candidate holds the
+             **first file**, and a run that legitimately holds nothing at all
+             has no first file to find. That is why `seed` cannot simply take
+             the same function without deciding what it does when neither
+             candidate exists, which today is what `--data` said.
+Acceptance:  `bit-cli seed <MULTI> --data out/<name>` and
+             `--data out` report the same `have` for the same payload on disk,
+             and a `seed` that finds nothing where a sibling directory holds
+             the payload says which directory it looked in.

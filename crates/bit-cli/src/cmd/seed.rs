@@ -624,6 +624,78 @@ mod tests {
 
     /// A seeder is the long-lived process, so its own high-water marks are
     /// what a soak test reads. See `TODO/memory.md`, T-040.
+    /// Seeding what `download --select-file` left behind.
+    ///
+    /// `TODO/disk-io.md` T-184 expected a seeder to announce pieces it could
+    /// not prove. It does not, and the reason is that there are none: the
+    /// unselected half of a boundary piece is written into the unselected file
+    /// for the piece's sake, so the piece verifies and the hash check finds
+    /// it. What the seeder holds is exactly pieces 1 and 2 of four, 2048 bytes
+    /// of 3700, and it says so.
+    #[test]
+    fn a_seeder_of_a_selection_holds_the_boundary_pieces_and_says_so() {
+        let fixture = crate::test_support::TorrentFixture::straddling();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let source = format!("{}payload/", server.base);
+        let out = fixture.dir().join("out");
+        crate::test_support::run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--select-file",
+                "1",
+                "--stop-after",
+                "30s",
+            ],
+            fixture.dir(),
+        );
+
+        let report = crate::test_support::run_json_code(
+            &[
+                "seed",
+                fixture.path_str(),
+                // The parent, not the torrent directory: `seed --data` is the
+                // session's download directory and a multi-file torrent lays
+                // its files under a directory named after itself. `verify
+                // --data` takes either, which is a difference between two
+                // commands that read the same layout.
+                "--data",
+                out.to_str().unwrap(),
+                "--port",
+                "0",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--stop-after",
+                "3s",
+            ],
+            fixture.dir(),
+            // Nothing connects, so the run stops on its deadline. What it
+            // holds is decided by the hash check and reported either way.
+            ExitCode::Timeout,
+        );
+        assert_eq!(
+            report["have"]["bytes"], 2048,
+            "a seeder holds both boundary pieces, which is 2048 of 3700 bytes: {report}"
+        );
+        assert_eq!(report["total"]["bytes"], 3700);
+        assert_eq!(
+            report["complete"], false,
+            "and it does not claim to hold the rest"
+        );
+    }
+
     #[test]
     fn a_seed_report_carries_what_the_process_cost() {
         let report = build(
