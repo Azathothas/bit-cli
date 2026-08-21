@@ -10,7 +10,14 @@
 //! `GetProcessMemoryInfo`, `GetProcessTimes`, `GetProcessHandleCount`,
 //! `GlobalMemoryStatusEx`, `RtlGetVersion`, and `GetIfTable` on Windows;
 //! `/proc/self/status`, `/proc/self/stat`, `/proc/self/fd`, `/proc/meminfo`,
-//! `/proc/sys/kernel`, `/etc/os-release`, and `/sys/class/net` on Linux.
+//! `/proc/sys/kernel`, `/etc/os-release`, and `/sys/class/net` on Linux;
+//! `getrusage`, `proc_pidinfo`, and `sysctlbyname` on the Apple platforms.
+//!
+//! Three platforms and three implementations, because `cfg(unix)` is a family
+//! rather than a platform. Reading `/proc` under `cfg(unix)` compiles on macOS
+//! and finds nothing there, and what came out was not an absent number but a
+//! wrong one: a Mac reported as a Linux box with no memory. See
+//! `TODO/cli-surface.md`, T-145.
 //!
 //! Nothing here fails a run. A field that cannot be read is `None`, with the
 //! reason recorded in `unavailable`, because a missing NIC speed is not a
@@ -244,16 +251,31 @@ fn cpu_brand() -> Option<String> {
     // The extended leaves are only read after the maximum leaf says they
     // exist. A processor that does not carry a brand string falls through to
     // the platform reader.
-    if __get_cpuid_max(0x8000_0000).0 < 0x8000_0004 {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(48);
-    for leaf in 0x8000_0002u32..=0x8000_0004 {
-        let result = __cpuid(leaf);
-        for word in [result.eax, result.ebx, result.ecx, result.edx] {
-            bytes.extend_from_slice(&word.to_le_bytes());
+    //
+    // The `unsafe` block is required at the declared MSRV and redundant on a
+    // current toolchain: `__cpuid` and `__get_cpuid_max` were `unsafe fn` when
+    // 1.88 shipped and are safe now, and `-D warnings` would fail on the
+    // `unused_unsafe` the newer compiler reports. Writing both and allowing
+    // the lint is what compiles under either, which the `MSRV` job is there to
+    // catch. Drop the block and the allowance together when the MSRV passes
+    // the release that made them safe.
+    #[allow(unused_unsafe)]
+    // SAFETY: `CPUID` needs no preconditions beyond running on x86, which the
+    // `cfg` above guarantees, and the extended leaves are read only after the
+    // maximum-leaf query says they exist.
+    let bytes = unsafe {
+        if __get_cpuid_max(0x8000_0000).0 < 0x8000_0004 {
+            return None;
         }
-    }
+        let mut bytes = Vec::with_capacity(48);
+        for leaf in 0x8000_0002u32..=0x8000_0004 {
+            let result = __cpuid(leaf);
+            for word in [result.eax, result.ebx, result.ecx, result.edx] {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+        }
+        bytes
+    };
     let text = String::from_utf8_lossy(&bytes)
         .trim_end_matches('\0')
         .trim()
@@ -622,7 +644,14 @@ mod platform {
     }
 }
 
-#[cfg(unix)]
+/// `/proc` is a Linux interface, not a unix one.
+///
+/// This module was written `#[cfg(unix)]`, so on macOS every read here missed
+/// and the report said the host was Linux with an unknown kernel, no memory,
+/// and a process using no CPU. Wrong numbers are worse than absent ones: the
+/// `unavailable` list existed and was populated, and the `os.name` beside it
+/// still said `Linux`. See `TODO/cli-surface.md`, T-145.
+#[cfg(all(unix, not(target_vendor = "apple")))]
 mod platform {
     use super::{Cpu, Host, Nic, Os, Process, cpu_brand, format_link_speed, logical_cores};
     use crate::units::Size;
@@ -823,6 +852,275 @@ mod platform {
             .ok()
             .map(|text| text.trim().to_string())
             .filter(|text| !text.is_empty())
+    }
+}
+
+/// The Apple platforms, which have neither `/proc` nor the Windows API.
+///
+/// Everything here comes from libSystem, so there is no new dependency and no
+/// extra link flag: `getrusage(2)` for processor time and the resident
+/// high-water mark, `proc_pidinfo(3)` for resident size now and the open
+/// descriptor count, and `sysctlbyname(3)` for the machine.
+///
+/// Written because `Test (macos-latest)` was reporting a Mac as a Linux box
+/// with no memory and a process that had used no CPU. See
+/// `TODO/cli-surface.md`, T-145.
+#[cfg(target_vendor = "apple")]
+mod platform {
+    use super::{Cpu, Host, Os, Process, cpu_brand, logical_cores};
+    use crate::units::Size;
+
+    /// `RUSAGE_SELF`: this process, summed over its threads.
+    const RUSAGE_SELF: i32 = 0;
+    /// `PROC_PIDLISTFDS`: the open descriptor table.
+    const PROC_PIDLISTFDS: i32 = 1;
+    /// `PROC_PIDTASKINFO`: one `proc_taskinfo` for the whole task.
+    const PROC_PIDTASKINFO: i32 = 4;
+    /// `sizeof(struct proc_fdinfo)`, which is two 32 bit fields.
+    const PROC_FDINFO_SIZE: i32 = 8;
+
+    /// `struct timeval`. `tv_sec` is a 64 bit `time_t` and `tv_usec` a 32 bit
+    /// `suseconds_t`, so the struct is padded out to 16 bytes.
+    #[repr(C)]
+    #[derive(Default)]
+    struct Timeval {
+        sec: i64,
+        usec: i32,
+        _pad: i32,
+    }
+
+    impl Timeval {
+        const fn millis(&self) -> u64 {
+            (self.sec as u64) * 1000 + (self.usec as u64) / 1000
+        }
+    }
+
+    /// `struct rusage` from `<sys/resource.h>`. Only the first three fields
+    /// are read; the rest are here so the struct is the size the kernel writes.
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rusage {
+        utime: Timeval,
+        stime: Timeval,
+        /// The resident high-water mark. **In bytes on Darwin**, where Linux
+        /// reports the same field in kilobytes.
+        maxrss: i64,
+        ixrss: i64,
+        idrss: i64,
+        isrss: i64,
+        minflt: i64,
+        majflt: i64,
+        nswap: i64,
+        inblock: i64,
+        oublock: i64,
+        msgsnd: i64,
+        msgrcv: i64,
+        nsignals: i64,
+        nvcsw: i64,
+        nivcsw: i64,
+    }
+
+    /// `struct proc_taskinfo` from `<sys/proc_info.h>`, 96 bytes.
+    #[repr(C)]
+    #[derive(Default)]
+    struct ProcTaskInfo {
+        virtual_size: u64,
+        resident_size: u64,
+        total_user: u64,
+        total_system: u64,
+        threads_user: u64,
+        threads_system: u64,
+        policy: i32,
+        faults: i32,
+        pageins: i32,
+        cow_faults: i32,
+        messages_sent: i32,
+        messages_received: i32,
+        syscalls_mach: i32,
+        syscalls_unix: i32,
+        csw: i32,
+        threadnum: i32,
+        numrunning: i32,
+        priority: i32,
+    }
+
+    // The layouts above are transcribed from the system headers, and a
+    // transcription that is one field out does not fail: it reads the wrong
+    // offset and reports a plausible wrong number. These fail the build
+    // instead. 16 is `timeval` padded to its 8 byte alignment, 144 is two of
+    // those plus fourteen longs, and 96 is six 64 bit fields plus twelve 32
+    // bit ones.
+    const _: () = assert!(size_of::<Timeval>() == 16);
+    const _: () = assert!(size_of::<Rusage>() == 144);
+    const _: () = assert!(size_of::<ProcTaskInfo>() == 96);
+
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+        fn getpid() -> i32;
+        fn proc_pidinfo(
+            pid: i32,
+            flavor: i32,
+            arg: u64,
+            buffer: *mut core::ffi::c_void,
+            buffersize: i32,
+        ) -> i32;
+        fn sysctlbyname(
+            name: *const core::ffi::c_char,
+            oldp: *mut core::ffi::c_void,
+            oldlenp: *mut usize,
+            newp: *const core::ffi::c_void,
+            newlen: usize,
+        ) -> i32;
+    }
+
+    pub(super) fn process() -> Process {
+        let mut out = Process::default();
+
+        let mut usage = Rusage::default();
+        // SAFETY: `usage` is a live, correctly shaped `struct rusage` and the
+        // call writes nothing else.
+        if unsafe { getrusage(RUSAGE_SELF, &raw mut usage) } == 0 {
+            out.cpu_user_ms = usage.utime.millis();
+            out.cpu_system_ms = usage.stime.millis();
+            out.cpu_ms = out.cpu_user_ms + out.cpu_system_ms;
+            out.peak_rss_bytes = usage.maxrss.max(0) as u64;
+        }
+        if out.peak_rss_bytes == 0 {
+            out.unavailable.push("peak_rss_bytes".into());
+        }
+
+        match task_info() {
+            Some(info) => out.rss_bytes = info.resident_size,
+            None => out.unavailable.push("rss_bytes".into()),
+        }
+
+        match open_descriptors() {
+            Some(count) => out.open_handles = count,
+            None => out.unavailable.push("open_handles".into()),
+        }
+        out
+    }
+
+    fn task_info() -> Option<ProcTaskInfo> {
+        let mut info = ProcTaskInfo::default();
+        let size = size_of::<ProcTaskInfo>() as i32;
+        // SAFETY: the buffer is a live `proc_taskinfo` and its true size is
+        // passed, so the kernel cannot write past it.
+        let written =
+            unsafe { proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, (&raw mut info).cast(), size) };
+        (written == size).then_some(info)
+    }
+
+    /// How many descriptors this process holds.
+    ///
+    /// `proc_pidinfo` with a null buffer answers with the number of bytes the
+    /// table would take, which is the documented way to ask for the size. That
+    /// is one `proc_fdinfo` per descriptor, so the count is the quotient.
+    fn open_descriptors() -> Option<u64> {
+        // SAFETY: a null buffer with a zero size asks for the length and
+        // writes nothing.
+        let bytes = unsafe { proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+        (bytes > 0).then(|| (bytes / PROC_FDINFO_SIZE) as u64)
+    }
+
+    /// A `sysctl` value that is a NUL-terminated string.
+    fn sysctl_string(name: &str) -> Option<String> {
+        let key = std::ffi::CString::new(name).ok()?;
+        let mut len: usize = 0;
+        // SAFETY: a null value pointer asks for the length and writes only
+        // through `len`.
+        if unsafe {
+            sysctlbyname(
+                key.as_ptr(),
+                std::ptr::null_mut(),
+                &raw mut len,
+                std::ptr::null(),
+                0,
+            )
+        } != 0
+            || len == 0
+        {
+            return None;
+        }
+        let mut buffer = vec![0u8; len];
+        // SAFETY: `buffer` holds exactly the `len` bytes the call above asked
+        // for, and `len` is passed back unchanged.
+        if unsafe {
+            sysctlbyname(
+                key.as_ptr(),
+                buffer.as_mut_ptr().cast(),
+                &raw mut len,
+                std::ptr::null(),
+                0,
+            )
+        } != 0
+        {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&buffer)
+            .trim_end_matches('\0')
+            .trim()
+            .to_string();
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// A `sysctl` value that is a 64 bit integer.
+    fn sysctl_u64(name: &str) -> Option<u64> {
+        let key = std::ffi::CString::new(name).ok()?;
+        let mut value: u64 = 0;
+        let mut len = size_of::<u64>();
+        // SAFETY: the buffer is a live `u64` and its true size is passed.
+        let ok = unsafe {
+            sysctlbyname(
+                key.as_ptr(),
+                (&raw mut value).cast(),
+                &raw mut len,
+                std::ptr::null(),
+                0,
+            )
+        };
+        (ok == 0 && len == size_of::<u64>()).then_some(value)
+    }
+
+    pub(super) fn host() -> Host {
+        let mut unavailable = Vec::new();
+        let version = sysctl_string("kern.osrelease").unwrap_or_else(|| {
+            unavailable.push("os.version".into());
+            "unknown".into()
+        });
+        let memory_total = sysctl_u64("hw.memsize").unwrap_or_else(|| {
+            unavailable.push("memory_total".into());
+            0
+        });
+        // Link speeds would come from `getifaddrs` plus an `SIOCGIFMEDIA`
+        // ioctl per interface, and nothing measured here compares them across
+        // machines yet. Saying it is not read beats reporting an empty list as
+        // though the machine had no interfaces.
+        unavailable.push("network".into());
+
+        Host {
+            os: Os {
+                name: sysctl_string("kern.ostype").unwrap_or_else(|| "Darwin".into()),
+                version,
+                // `kern.osproductversion` is the number people know the system
+                // by, `26.1` rather than the Darwin kernel's own `25.x`.
+                distribution: sysctl_string("kern.osproductversion")
+                    .map(|product| format!("macOS {product}")),
+            },
+            cpu: Cpu {
+                // `cpu_brand` reads CPUID and answers on Intel Macs. Apple
+                // silicon has no CPUID, and `machdep.cpu.brand_string` is
+                // where the name lives on both.
+                model: cpu_brand()
+                    .or_else(|| sysctl_string("machdep.cpu.brand_string"))
+                    .unwrap_or_else(|| "unknown".into()),
+                architecture: std::env::consts::ARCH.to_string(),
+                logical_cores: logical_cores(),
+            },
+            memory_total: Size(memory_total),
+            network: Vec::new(),
+            unavailable,
+        }
     }
 }
 

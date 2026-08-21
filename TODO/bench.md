@@ -513,3 +513,53 @@ Acceptance:  The test passes on `ubuntu-latest`, `windows-latest`, and
 
 The deadline is eight seconds against the seeder's own `--stop-after 10s`, so
 the loop cannot outlive its subject.
+
+### T-149 The last window of a leech bench was never counted
+
+Source:      CI run 32437262089, `Test (windows-latest)`, 2026-08-21
+Category:    bench
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `cmd::bench::tests::a_leech_measures_the_transfer_the_hashing_and_the_disk`
+             failed on `windows-latest` and passed everywhere else:
+
+             ```
+             panicked at crates\bit-cli\src\cmd\bench.rs:2142:47:
+             called `Option::unwrap()` on a `None` value
+             ```
+
+             The value is `summary.hashing.pieces`, and `hashing` is `None`
+             when nothing was hashed. Something had been: the payload landed
+             and its hash was checked.
+
+             The sampling loop reads `engine.storage_counts()` at the top of
+             its body and decides whether to stop at the bottom. Work between
+             the last read and the break is in no interval at all. The
+             iteration that ends the loop is exactly the one in which the last
+             pieces were verified, so on a run that finishes inside one
+             `--metrics-interval` most of the hashing is the part that is
+             dropped.
+Relevance:   This is a benchmark under-reporting its subject, which is worse
+             than a flaky test. Every `bench leech` report has been missing its
+             final window of disk operations and piece verification, and the
+             shorter the run the larger the share. It is the same lesson
+             [T-117](cli-surface.md) recorded for `bench_sample` at a different
+             scale: a measurement whose resolution is its own sample interval
+             says nothing about a run shorter than one.
+Approach:    Read the counters once more after the loop and before
+             `recorder.stop()`, and fold the delta in. `observe_disk` and
+             `observe_hashing` are plain accumulators with no window gate, so
+             the last delta lands in the measured window where it belongs.
+Acceptance:  The test passes on all three runners in one run, and a `bench
+             leech` short enough to finish in one interval still reports the
+             pieces it verified.
+
+```
+$ cargo test -p bit-cli --lib a_leech_measures_the_transfer_the_hashing_and_the_disk
+test result: ok. 1 passed; 0 failed
+```
+
+The test was not changed. It was asserting something true that the report had
+stopped carrying.

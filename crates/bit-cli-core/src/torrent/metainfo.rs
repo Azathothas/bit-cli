@@ -455,14 +455,10 @@ fn parse_info(root: &Value) -> Result<Info> {
         ))
         .with("pieces_bytes", raw_pieces.len()));
     }
-    let pieces: Vec<[u8; 20]> = raw_pieces
-        .chunks_exact(20)
-        .map(|chunk| {
-            let mut hash = [0u8; 20];
-            hash.copy_from_slice(chunk);
-            hash
-        })
-        .collect();
+    // The length was checked to be a multiple of 20 just above, so the
+    // remainder here is always empty.
+    let (chunks, _) = raw_pieces.as_chunks::<20>();
+    let pieces: Vec<[u8; 20]> = chunks.to_vec();
 
     let (files, multi_file) = match info.get("files").and_then(Value::as_list) {
         Some(entries) => {

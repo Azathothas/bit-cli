@@ -627,11 +627,12 @@ impl Engine {
         handle
             .with_metadata(|metadata| {
                 let raw = metadata.info.info().pieces.as_ref();
-                Arc::new(
-                    raw.chunks_exact(20)
-                        .filter_map(|chunk| <[u8; 20]>::try_from(chunk).ok())
-                        .collect::<Vec<[u8; 20]>>(),
-                )
+                // `as_chunks` gives the array type directly, so there is no
+                // fallible conversion per hash to write and none to discard.
+                // A trailing partial hash is not a hash and is dropped, which
+                // is what `chunks_exact` did too.
+                let (hashes, _) = raw.as_chunks::<20>();
+                Arc::new(hashes.to_vec())
             })
             .ok()
     }

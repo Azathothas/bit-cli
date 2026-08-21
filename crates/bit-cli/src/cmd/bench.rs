@@ -1424,6 +1424,32 @@ async fn drive_leech(
             break;
         }
     }
+
+    // One last read of the storage counters before the window closes.
+    //
+    // The loop reads them at the top of its body and decides whether to stop
+    // at the bottom, so the work between the last read and the break is not in
+    // any interval. On a short run that is most of the run: the download that
+    // ends the loop is the one that verified the last pieces, and without this
+    // the report carried no `hashing` block at all and
+    // `a_leech_measures_the_transfer_the_hashing_and_the_disk` failed on
+    // whichever runner finished inside one `--metrics-interval`. See
+    // TODO/bench.md, T-149.
+    let last = engine.storage_counts();
+    let disk = last.since(&storage);
+    recorder.observe_disk(&bit_cli_core::bench::report::Disk {
+        read_ops: disk.read_ops,
+        read_bytes: Size(disk.read_bytes),
+        read_time: Millis(disk.read_nanos / 1_000_000),
+        write_ops: disk.write_ops,
+        write_bytes: Size(disk.write_bytes),
+        write_time: Millis(disk.write_nanos / 1_000_000),
+    });
+    recorder.observe_hashing(
+        disk.verify_pieces,
+        disk.verify_bytes,
+        Duration::from_nanos(disk.verify_nanos),
+    );
     recorder.stop();
 
     if !recorder.measured_anything() {

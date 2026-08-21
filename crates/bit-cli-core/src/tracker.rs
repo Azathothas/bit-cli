@@ -651,8 +651,11 @@ pub fn parse_udp_announce(reply: &[u8]) -> Result<TrackerResult> {
     let interval = u32::from_be_bytes(reply[8..12].try_into().unwrap_or([0; 4]));
     let leechers = u32::from_be_bytes(reply[12..16].try_into().unwrap_or([0; 4]));
     let seeders = u32::from_be_bytes(reply[16..20].try_into().unwrap_or([0; 4]));
-    let peers = reply[20..]
-        .chunks_exact(6)
+    // Six bytes per peer, four of address and two of port. A trailing partial
+    // entry is not a peer and is dropped.
+    let (entries, _) = reply[20..].as_chunks::<6>();
+    let peers = entries
+        .iter()
         .map(|chunk| {
             let ip = Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
             let port = u16::from_be_bytes([chunk[4], chunk[5]]);
