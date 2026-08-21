@@ -2208,3 +2208,263 @@ async fn a_block_that_straddles_a_boundary_is_fetched_as_one_request_per_file() 
         "a block spanning two files has to come back as the two files' bytes in order"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Per-file narrowing: `TODO/webseed.md` T-005.
+//
+// A permanent status on one file used to retire the whole source, including
+// the files it was serving correctly a moment earlier. That contradicts the
+// scope model this project exists for, where a mirror holding part of a
+// payload is a first-class case and not an error.
+// ---------------------------------------------------------------------------
+
+/// Two files, sized so each one covers whole pieces of its own.
+///
+/// `a.bin` is four whole pieces and `b.bin` is four more, so losing `b.bin`
+/// costs exactly the pieces `b.bin` covers and nothing that `a.bin` covers.
+/// A boundary that straddles is [T-177](../../../TODO/disk-io.md)'s fixture
+/// and is a different question from this one.
+const PARTIAL_MIRROR_FILES: &[(&str, usize)] = &[
+    ("a.bin", (PIECE_LENGTH * 4) as usize),
+    ("b.bin", (PIECE_LENGTH * 4) as usize),
+];
+
+/// Write the payload under `root/album`, and a mirror root holding only the
+/// files named in `mirrored`.
+fn partial_mirror(src: &Path, mirror: &Path, mirrored: &[&str]) -> Vec<(String, Vec<u8>)> {
+    let album = src.join("album");
+    std::fs::create_dir_all(&album).unwrap();
+    std::fs::create_dir_all(mirror.join("album")).unwrap();
+    let mut out = Vec::new();
+    for (index, (name, length)) in PARTIAL_MIRROR_FILES.iter().enumerate() {
+        let bytes = content(*length, 71 + index as u64);
+        std::fs::write(album.join(name), &bytes).unwrap();
+        if mirrored.contains(name) {
+            std::fs::write(mirror.join("album").join(name), &bytes).unwrap();
+        }
+        out.push(((*name).to_string(), bytes));
+    }
+    out
+}
+
+/// The headline case. A mirror that 404s one file keeps serving the other.
+///
+/// The partial mirror is the **only** source, deliberately. With a second
+/// source present, whether the partial one is ever asked for the missing file
+/// is a race the session decides, and a test that depends on losing that race
+/// is the mistake [RULES.md](RULES.md) records three times over: a test waits
+/// on the condition it is about, never on a guess. Alone, the partial mirror
+/// is asked for everything, so the 404 is certain.
+///
+/// The torrent cannot complete from one partial mirror, and that is not what
+/// this asserts. What it asserts is that the source survives the 404, gives up
+/// exactly the pieces the missing file touches, and goes on serving the file
+/// it does hold. Before T-005 the first 404 on `b.bin` retired it whole and it
+/// stopped serving `a.bin` too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mirror_that_404s_one_file_keeps_serving_the_other() {
+    let src = tempfile::tempdir().unwrap();
+    let partial_root = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let files = partial_mirror(src.path(), partial_root.path(), &["a.bin"]);
+
+    let (partial, _p) = serve(partial_root.path().to_path_buf(), ServeMode::Ranges).await;
+    let run = attach(
+        &src.path().join("album"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&partial)],
+    )
+    .await;
+
+    let narrowed = run.statuses[0].clone();
+    assert!(
+        wait_for(Duration::from_secs(60), || !narrowed
+            .gone_files()
+            .is_empty())
+        .await,
+        "the mirror never reported the file it does not hold: {:?}",
+        run.reasons()
+    );
+
+    let gone = narrowed.gone_files();
+    assert_eq!(
+        gone.len(),
+        1,
+        "the partial mirror has to report exactly the one file it does not hold: {gone:?}"
+    );
+    assert_eq!(gone[0].file, 1, "b.bin is file index 1");
+    assert!(
+        gone[0].reason.contains("404"),
+        "the reason has to name what the mirror said: {}",
+        gone[0].reason
+    );
+    assert_eq!(
+        gone[0].pieces_dropped, 4,
+        "b.bin covers four whole pieces, so four are given up and no more"
+    );
+    assert_eq!(narrowed.pieces_dropped(), 4);
+
+    // It keeps serving what it does hold: a.bin is four whole pieces, and the
+    // torrent stops there because nothing else has the other four.
+    assert!(
+        wait_for(Duration::from_secs(60), || {
+            narrowed.served_bytes() >= files[0].1.len() as u64
+        })
+        .await,
+        "the narrowed source served {} of a.bin's {} bytes, so it did not go on serving the file it holds: {:?}",
+        narrowed.served_bytes(),
+        files[0].1.len(),
+        run.reasons()
+    );
+    assert_ne!(
+        narrowed.state(),
+        BridgeState::Failed,
+        "a mirror missing one file of two is still a mirror"
+    );
+    assert!(
+        !run.finished(),
+        "nothing held b.bin, so the torrent cannot have completed"
+    );
+    run.engine.stop().await;
+}
+
+/// The acceptance's own shape: the narrowed mirror plus one that has the rest,
+/// and the run completes.
+///
+/// Which source serves which piece is the session's business and this does not
+/// assert it. What it asserts is that a mirror narrowing itself mid-run does
+/// not cost the run: the payload lands byte for byte and nothing is retired
+/// that still had something to give.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_narrowed_mirror_and_a_complete_one_finish_the_torrent() {
+    let src = tempfile::tempdir().unwrap();
+    let partial_root = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let files = partial_mirror(src.path(), partial_root.path(), &["a.bin"]);
+
+    let (partial, _p) = serve(partial_root.path().to_path_buf(), ServeMode::Ranges).await;
+    let (complete, _c) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+
+    let run = attach(
+        &src.path().join("album"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&partial), whole(&complete)],
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(120), || run.finished()).await,
+        "did not complete: {:?}",
+        run.reasons()
+    );
+    for (name, bytes) in &files {
+        assert_eq!(
+            std::fs::read(out.path().join("album").join(name)).unwrap(),
+            *bytes,
+            "{name}"
+        );
+    }
+    assert!(
+        !run.failed(),
+        "no source should have been retired: {:?}",
+        run.reasons()
+    );
+    run.engine.stop().await;
+}
+
+/// The other end of the same rule: a source with nothing left is retired.
+///
+/// Narrowing is not a way to keep a dead mirror alive. When every file a
+/// source claimed turns out to be gone it has no pieces to announce, and a
+/// bridge with an empty bitfield is worse than no bridge: the session would
+/// hold a peer slot open for a peer that can never answer anything.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mirror_that_404s_every_file_is_still_retired() {
+    let src = tempfile::tempdir().unwrap();
+    let empty_root = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    partial_mirror(src.path(), empty_root.path(), &[]);
+
+    let (nothing, _n) = serve(empty_root.path().to_path_buf(), ServeMode::Ranges).await;
+    let run = attach(
+        &src.path().join("album"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&nothing)],
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(60), || run.failed()).await,
+        "a source holding nothing has to be retired, not narrowed forever: {:?}",
+        run.reasons()
+    );
+    let reasons = run.reasons();
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("every piece this source covered is gone")),
+        "the last error has to say the source ran out rather than name one file: {reasons:?}"
+    );
+    assert!(!run.finished(), "nothing could have completed the torrent");
+    run.engine.stop().await;
+}
+
+/// Narrowing does not spend the source's error budget.
+///
+/// `--web-seed-max-errors` counts consecutive failures and trips the cooldown
+/// that [T-137](../../../TODO/multi-source.md) built. A file that is
+/// permanently gone is not a run of errors, it is one fact learned once, and
+/// counting it would retire the source through the back door after enough
+/// files went missing to reach the budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_file_that_is_gone_does_not_spend_the_error_budget() {
+    let src = tempfile::tempdir().unwrap();
+    let partial_root = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    partial_mirror(src.path(), partial_root.path(), &["a.bin"]);
+
+    let (partial, _p) = serve(partial_root.path().to_path_buf(), ServeMode::Ranges).await;
+
+    // One error is the whole budget, so if the 404 were counted the source
+    // would cool down on it and stop serving `a.bin` as well. The mirror is
+    // alone for the same reason as the test above: with a second source the
+    // 404 might never happen.
+    let mut narrow = whole(&partial);
+    narrow.limits.max_errors = 1;
+    let run = attach(
+        &src.path().join("album"),
+        out.path(),
+        tmp.path(),
+        vec![narrow],
+    )
+    .await;
+
+    let narrowed = run.statuses[0].clone();
+    assert!(
+        wait_for(Duration::from_secs(60), || !narrowed
+            .gone_files()
+            .is_empty())
+        .await,
+        "the mirror never reported the file it does not hold: {:?}",
+        run.reasons()
+    );
+    assert_eq!(narrowed.gone_files().len(), 1);
+    assert_eq!(
+        run.fetchers[0].stats().cooldowns(),
+        0,
+        "a file that is gone is one fact, not a run of errors"
+    );
+    assert_ne!(
+        narrowed.state(),
+        BridgeState::Cooling,
+        "the source has to still be usable for the file it does hold"
+    );
+    run.engine.stop().await;
+}

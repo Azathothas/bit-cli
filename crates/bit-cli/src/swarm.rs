@@ -393,6 +393,23 @@ impl AttachedSource {
         (count, waited, reasons)
     }
 
+    /// Files this source turned out not to hold, deduplicated by index.
+    ///
+    /// Every connection to one source finds the same missing file
+    /// independently, because each has its own bitfield to narrow, so the
+    /// per-connection lists repeat. A caller asked about a mirror and wants
+    /// the mirror's answer, which is the same rule the byte accounting
+    /// follows: one row per source however many connections it uses.
+    pub fn gone_files(&self) -> Vec<bit_cli_core::webseed::bridge::GoneFile> {
+        let mut seen = std::collections::BTreeMap::new();
+        for status in &self.statuses {
+            for gone in status.gone_files() {
+                seen.entry(gone.file).or_insert(gone);
+            }
+        }
+        seen.into_values().collect()
+    }
+
     /// The request pipeline across every connection.
     ///
     /// The depths are summed rather than maxed: each connection is its own
@@ -452,6 +469,19 @@ pub struct SourceReport {
     /// `disconnected`, `link`, `stalled`, or `cooldown`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub reconnect_reasons: BTreeMap<String, u64>,
+    /// Files this source turned out not to hold, with why.
+    ///
+    /// A permanent failure on one file narrows the source rather than retiring
+    /// it, so a mirror serving eleven files of twelve stays a usable mirror.
+    /// The byte counts cannot tell that from a mirror that holds all twelve,
+    /// which is why the narrowing is reported rather than only logged. See
+    /// `TODO/webseed.md`, T-005.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gone_files: Vec<bit_cli_core::webseed::bridge::GoneFile>,
+    /// Pieces given up across every file lost. Subtract it from
+    /// `whole_pieces` for what the source still announces.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub pieces_dropped: u64,
     /// How many times this source spent its error budget.
     ///
     /// One with `--web-seed-cooldown` at zero is the source being retired.
@@ -505,6 +535,13 @@ impl AttachedSource {
                 .into_iter()
                 .map(|(reason, count)| (reason.to_string(), count))
                 .collect(),
+            gone_files: self.gone_files(),
+            pieces_dropped: self
+                .statuses
+                .iter()
+                .map(|status| status.pieces_dropped())
+                .max()
+                .unwrap_or(0),
             cooldowns: self.fetcher.stats().cooldowns(),
             cooldown_until: self
                 .fetcher

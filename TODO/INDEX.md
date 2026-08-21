@@ -75,7 +75,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-002](webseed.md) | P1 | webseed | **done** | Measure Candidate A-prime, the in-process virtual peer |
 | [T-003](webseed.md) | P1 | webseed | **done** | The piece picker cannot be told to prefer HTTP |
 | [T-004](webseed.md) | P2 | webseed | open | BEP 17 style is not auto-detected, only declared |
-| [T-005](webseed.md) | P2 | webseed | open | A source restricted mid-run cannot be re-scoped |
+| [T-005](webseed.md) | P2 | webseed | **done** | A source restricted mid-run cannot be re-scoped |
 | [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
 | [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
 | [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
@@ -182,7 +182,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-154](cli-surface.md) | P2 | cli | open | A Metalink named by URL is not recognised |
 | [T-155](cli-surface.md) | P3 | cli | open | --hash-check-only drops the metalink report |
 | [T-156](cli-surface.md) | P3 | cli | open | A dry run writes a different shape under the same document kind |
-| [T-158](cli-surface.md) | P2 | cli | open | Regenerating the schema deletes fields the sample did not produce |
+| [T-158](cli-surface.md) | P2 | cli | **done** | Regenerating the schema deletes fields the sample did not produce |
 | [T-159](cli-surface.md) | P3 | cli | open | Subcommand flags are filed under "Report options" in the help |
 | [T-160](cli-surface.md) | P1 | ci | **done** | A peers test raced its own seeder |
 | [T-161](cli-surface.md) | P3 | ci | open | A CI action still targets Node.js 20, which is deprecated *(four call sites, not two)* |
@@ -218,7 +218,16 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 143 items: 133 to work through, and 10 deferred to Phase C.
-58 open, 4 partial, 2 blocked, 69 done.
+56 open, 4 partial, 2 blocked, 71 done.
+
+**Two entries were closed because another one needed them.**
+[T-005](webseed.md) added two fields to a report, which made the schema check
+fail, and following the documented way to regenerate `docs/schema.md` deleted
+two rows it should have kept. That is [T-158](cli-surface.md), and shipping
+T-005 without fixing it would have meant committing a document a tool corrupts.
+The rows lost were `sources[].error` and `cooldowns`, and neither pair matches
+what T-158 recorded the last two times, which is that entry's own point about
+the count: the number is a property of the run and the mechanism is the defect.
 
 **Two were added by building others**, which is the usual way this list grows.
 [T-184](disk-io.md) came out of [T-177](disk-io.md)'s fixture: a piece that

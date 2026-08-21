@@ -724,6 +724,180 @@ mod tests {
             .join(crate::schema::SCHEMA_PATH)
     }
 
+    /// The field path a schema row names, or `None` if the line is not a row.
+    ///
+    /// Rows are `| `path` | type |`, and the path is what identifies a field:
+    /// the type is this run's measurement of it and may legitimately change.
+    fn row_path(line: &str) -> Option<String> {
+        let rest = line.strip_prefix("| `")?;
+        let (path, _) = rest.split_once('`')?;
+        Some(path.to_string())
+    }
+
+    /// Every field row in `text`, keyed by the section it appears under.
+    ///
+    /// The key is the `##` heading and the `###` heading together, because a
+    /// document kind and an event type may share a name and their field lists
+    /// are different things.
+    fn rows_by_section(text: &str) -> BTreeMap<(String, String), BTreeMap<String, String>> {
+        let mut out: BTreeMap<(String, String), BTreeMap<String, String>> = BTreeMap::new();
+        let mut part = String::new();
+        let mut section = String::new();
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("## ") {
+                part = rest.to_string();
+                section.clear();
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("### ") {
+                section = rest.to_string();
+                continue;
+            }
+            if let Some(path) = row_path(line) {
+                out.entry((part.clone(), section.clone()))
+                    .or_default()
+                    .insert(path, line.to_string());
+            }
+        }
+        out
+    }
+
+    /// Take the rows pending for one section and write them merged.
+    fn flush_section(
+        out: &mut String,
+        previous: &BTreeMap<(String, String), BTreeMap<String, String>>,
+        part: &str,
+        section: &str,
+        pending: &mut Vec<String>,
+    ) {
+        if pending.is_empty() {
+            return;
+        }
+        let mut merged: BTreeMap<String, String> = previous
+            .get(&(part.to_string(), section.to_string()))
+            .cloned()
+            .unwrap_or_default();
+        for row in pending.drain(..) {
+            if let Some(path) = row_path(&row) {
+                merged.insert(path, row);
+            }
+        }
+        for row in merged.values() {
+            out.push_str(row);
+            out.push('\n');
+        }
+    }
+
+    /// Union the committed field rows into the rendered ones, section by
+    /// section.
+    ///
+    /// The read side of this check is a **containment** check on purpose: a
+    /// row the committed file has and this run did not produce is not a
+    /// failure, because these runs are timed and a download that beats its own
+    /// report tick emits no `progress`, and a run with no failing source emits
+    /// no `error`. The writer used to be a plain overwrite, so following the
+    /// instruction the check itself prints deleted exactly those rows. Two
+    /// went missing the last time anyone looked, and the number is a property
+    /// of the run rather than of the tree.
+    ///
+    /// Merging makes the writer as tolerant as the reader. A field that is
+    /// genuinely gone now has to be deleted on purpose, which is the right
+    /// cost for removing something from a versioned contract. Where both sides
+    /// carry a path, this run's type wins: the committed one is a record of an
+    /// older measurement and this one is current.
+    ///
+    /// See `TODO/cli-surface.md`, T-158.
+    fn merge_schema(committed: &str, rendered: &str) -> String {
+        let previous = rows_by_section(committed);
+        let mut out = String::new();
+        let mut part = String::new();
+        let mut section = String::new();
+        let mut pending: Vec<String> = Vec::new();
+
+        for line in rendered.lines() {
+            let is_row = row_path(line).is_some();
+            if !is_row {
+                flush_section(&mut out, &previous, &part, &section, &mut pending);
+            }
+            if let Some(rest) = line.strip_prefix("## ") {
+                part = rest.to_string();
+                section.clear();
+            } else if let Some(rest) = line.strip_prefix("### ") {
+                section = rest.to_string();
+            }
+            match is_row {
+                true => pending.push(line.to_string()),
+                false => {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+        }
+        flush_section(&mut out, &previous, &part, &section, &mut pending);
+        out
+    }
+
+    /// Merging keeps a row this run did not produce, and adds the ones it did.
+    ///
+    /// The regression is the whole entry: following the documented way to
+    /// update `docs/schema.md` used to delete a documented field. See
+    /// `TODO/cli-surface.md`, T-158.
+    #[test]
+    fn regenerating_the_schema_keeps_rows_this_run_did_not_produce() {
+        let committed = "## Documents\n\n### `download`\n\n| field | type |\n| --- | --- |\n| `kept` | string |\n| `shared` | integer |\n\n## Events\n\n### `download`\n\n| field | type |\n| --- | --- |\n| `other_section` | string |\n";
+        let rendered = "## Documents\n\n### `download`\n\n| field | type |\n| --- | --- |\n| `added` | integer |\n| `shared` | string |\n";
+        let merged = merge_schema(committed, rendered);
+
+        assert!(
+            merged.contains("| `kept` | string |"),
+            "a row this run did not produce has to survive:\n{merged}"
+        );
+        assert!(
+            merged.contains("| `added` | integer |"),
+            "a row this run did produce has to be added:\n{merged}"
+        );
+        assert!(
+            merged.contains("| `shared` | string |"),
+            "where both carry a path, this run's type wins:\n{merged}"
+        );
+        assert!(
+            !merged.contains("| `shared` | integer |"),
+            "the older type must not survive beside the newer one:\n{merged}"
+        );
+        assert!(
+            !merged.contains("other_section"),
+            "a row from a different section must not leak in:\n{merged}"
+        );
+
+        // Rows stay sorted by path, which is the order `fields` produces, so
+        // merging does not churn the diff.
+        let added = merged.find("| `added`").unwrap();
+        let kept = merged.find("| `kept`").unwrap();
+        let shared = merged.find("| `shared`").unwrap();
+        assert!(added < kept && kept < shared, "{merged}");
+
+        // The separator row is not a field row and has to survive as prose.
+        assert!(merged.contains("| --- | --- |"), "{merged}");
+    }
+
+    /// Merging twice changes nothing the first merge did not.
+    ///
+    /// This is the acceptance in T-158's own words: regenerating twice in a
+    /// row leaves every row that either run produced, and `git diff` is empty
+    /// when nothing changed.
+    #[test]
+    fn regenerating_the_schema_is_idempotent() {
+        let (documents, events) = collect();
+        let rendered = render(&documents, &events);
+        let once = merge_schema(&rendered, &rendered);
+        let twice = merge_schema(&once, &rendered);
+        assert_eq!(once, twice, "a second regeneration must be a no-op");
+        assert_eq!(
+            once, rendered,
+            "merging a render into itself has to reproduce it exactly"
+        );
+    }
+
     /// The committed contract matches what the program writes.
     ///
     /// Adding a field to a report changes the generated text, so this fails
@@ -737,8 +911,18 @@ mod tests {
         let path = schema_path();
 
         if std::env::var_os("BIT_CLI_UPDATE_SCHEMA").is_some() {
+            // Merged with what is already committed rather than written over
+            // it. See [`merge_schema`] and `TODO/cli-surface.md`, T-158.
+            // Line endings normalised first, for the same reason the read side
+            // normalises them: the file is checked in as LF and git may hand it
+            // over as CRLF, and a merge that compared the two forms would keep
+            // both copies of every row.
+            let merged = match std::fs::read_to_string(&path) {
+                Ok(committed) => merge_schema(&committed.replace("\r\n", "\n"), &rendered),
+                Err(_) => rendered.clone(),
+            };
             std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
-            std::fs::write(&path, &rendered).expect("write the schema");
+            std::fs::write(&path, &merged).expect("write the schema");
             return;
         }
 

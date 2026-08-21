@@ -133,6 +133,27 @@ impl FetchError {
     }
 }
 
+/// A failed read, and the file it was addressed to.
+///
+/// Separate from [`FetchError`] rather than a field on it, because the file is
+/// a property of the request that failed and not of the failure: the same
+/// status means the same thing whichever file produced it, and every other
+/// caller of [`Fetcher::read`] has no use for the attribution.
+#[derive(Debug, Clone)]
+pub struct ReadFailure {
+    pub error: FetchError,
+    /// The file index the failing request addressed, when it was addressed to
+    /// one. `None` means the failure is the source's rather than a file's.
+    pub file: Option<usize>,
+}
+
+impl ReadFailure {
+    /// A failure that cannot be attributed to one file.
+    fn whole_source(error: FetchError) -> Self {
+        Self { error, file: None }
+    }
+}
+
 impl std::fmt::Display for FetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -563,26 +584,56 @@ impl Fetcher {
     /// asking for bytes this source was never bound to gets a binding error
     /// rather than an HTTP one.
     pub async fn read(&self, offset: u64, length: u64) -> std::result::Result<Vec<u8>, FetchError> {
+        self.read_block(offset, length)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    /// [`Self::read`], naming the file a failure came from.
+    ///
+    /// A byte range may span several files, so a failed read is a failure of
+    /// one of them and not of the source. Which one is what makes a per-file
+    /// retirement possible: a mirror that answers 404 for one file of twelve
+    /// should lose that file's pieces and keep serving the other eleven. See
+    /// `TODO/webseed.md`, T-005.
+    ///
+    /// `file` is `None` when the failure was not addressed to one file: a
+    /// scope error, a range the torrent does not cover, or a BEP 17 source,
+    /// which addresses pieces rather than files and so has no per-file request
+    /// to attribute anything to.
+    pub async fn read_block(
+        &self,
+        offset: u64,
+        length: u64,
+    ) -> std::result::Result<Vec<u8>, ReadFailure> {
         // BEP 17 addresses pieces, not files, so it does not go through the
         // per-file window path at all.
         if self.binding.spec.style == Style::Hoffman {
-            return self.read_hoffman(offset, length).await;
+            return self
+                .read_hoffman(offset, length)
+                .await
+                .map_err(ReadFailure::whole_source);
         }
         let requests = self
             .binding
             .request_urls(&self.layout, &self.info_hash, offset..offset + length)
-            .map_err(|e| FetchError::permanent(e.to_string()))?;
+            .map_err(|e| ReadFailure::whole_source(FetchError::permanent(e.to_string())))?;
 
         let covered: u64 = requests.iter().map(|r| r.length).sum();
         if covered != length {
-            return Err(FetchError::permanent(format!(
+            return Err(ReadFailure::whole_source(FetchError::permanent(format!(
                 "asked for {length} bytes at {offset}, but the torrent only covers {covered}"
-            )));
+            ))));
         }
 
         let mut out = Vec::with_capacity(length as usize);
         for request in requests {
-            self.read_one(&request, &mut out).await?;
+            if let Err(error) = self.read_one(&request, &mut out).await {
+                return Err(ReadFailure {
+                    error,
+                    file: Some(request.file),
+                });
+            }
         }
         Ok(out)
     }
@@ -710,11 +761,20 @@ impl Fetcher {
                     return Ok(data);
                 }
                 Err(err) if err.is_retryable() => last = Some(err),
-                Err(err) => {
-                    self.stats
-                        .record_error(limits.max_errors, limits.cooldown());
-                    return Err(err);
-                }
+                // A permanent failure does not spend the error budget.
+                //
+                // That budget is `--web-seed-max-errors` and it exists to
+                // retire a source that keeps failing **transiently**, with
+                // `--web-seed-cooldown` deciding when it may come back. See
+                // `TODO/multi-source.md`, T-130 and T-137. A permanent failure
+                // is not a run of bad luck, it is one fact learned once, and
+                // it already has its own outcome: the source is retired, or,
+                // when the failure is attributable to one file, narrowed to
+                // what it can still serve. Counting it here as well charged it
+                // twice, and with a small budget one 404 on one file of twelve
+                // put the whole mirror into cooldown through the back door.
+                // See `TODO/webseed.md`, T-005.
+                Err(err) => return Err(err),
             }
         }
         self.stats
@@ -1026,11 +1086,20 @@ impl Fetcher {
                     return Ok(data);
                 }
                 Err(err) if err.is_retryable() => last = Some(err),
-                Err(err) => {
-                    self.stats
-                        .record_error(limits.max_errors, limits.cooldown());
-                    return Err(err);
-                }
+                // A permanent failure does not spend the error budget.
+                //
+                // That budget is `--web-seed-max-errors` and it exists to
+                // retire a source that keeps failing **transiently**, with
+                // `--web-seed-cooldown` deciding when it may come back. See
+                // `TODO/multi-source.md`, T-130 and T-137. A permanent failure
+                // is not a run of bad luck, it is one fact learned once, and
+                // it already has its own outcome: the source is retired, or,
+                // when the failure is attributable to one file, narrowed to
+                // what it can still serve. Counting it here as well charged it
+                // twice, and with a small budget one 404 on one file of twelve
+                // put the whole mirror into cooldown through the back door.
+                // See `TODO/webseed.md`, T-005.
+                Err(err) => return Err(err),
             }
         }
         self.stats

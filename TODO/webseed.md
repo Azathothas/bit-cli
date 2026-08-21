@@ -761,7 +761,7 @@ Source:      design gap; corroborated by `reference/RESEARCH.md` section D, 2026
 Category:    webseed
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     Scopes are resolved once, before the first request. A mirror that
              turns out to hold less than it claimed is dropped whole rather
@@ -820,6 +820,135 @@ this gets smaller.
 
 These are pass or fail, not measured. Each has a covering test today; the entry
 records what still needs a real mirror rather than a stub.
+
+**Built on the reconnect, not on `lt_donthave`.** This entry's note said BEP 54
+would turn the reconnect into a message and that
+[T-167](bep-coverage.md) should come first. T-167 turned out to be blocked:
+`librqbit` 9.0.0 has `on_have` and no inverse, and every extension message it
+does not know reaches a catch-all that logs and ignores. Sending one would be a
+log line per retracted piece and no change to what the session requests. The
+blocker is written up there. So this was built the way its own Approach
+described, and T-167 becomes an optimisation of a path that has to exist
+anyway.
+
+**The rule is now: a permanent failure on a request addressed to one file is
+that file's, not the source's.**
+
+The question the code asks is *which file did this request name*, not *which
+status came back*. `Fetcher::read_block` (`webseed/fetch.rs`) returns a
+`ReadFailure` carrying the `RangeRequest`'s file index, because
+`request_urls` already fans a byte range out into one request per file and the
+failing one knows which it was. `file` is `None` for a failure that is not
+addressed to one file: a scope error, a range the torrent does not cover, or a
+BEP 17 source, which addresses **pieces** rather than files and so has nothing
+to attribute. Those retire the source whole, as before.
+
+Keying on the request rather than on a status list is the more defensible of
+the two. A `403` may be one path a CDN denies or credentials that are wrong for
+the whole mirror, and narrowing handles both: if it is mirror-wide, every file
+404s or 403s in turn and the source ends with nothing left, which retires it
+anyway. It costs one request per file to find that out, and it buys the
+partial-mirror case this project exists for. `torrent/webseed-peer.go:57`
+`webseedFileUnavailable` handles 403, 404, 410 and 451 and removes only that
+file's pieces via `:71` `removeFilePieces`, which is the same rule arrived at
+from the other direction.
+
+**What a narrowing does.** `BridgeError::FileGone` is a fourth variant beside
+`Source`, `Link` and `Stalled`. `bridge::run` drops every piece the file
+touches, records it, and reconnects **with no backoff**:
+
+- Every piece the file touches by even one byte, because a piece is verified
+  against its whole hash and a source missing any part of it cannot serve it at
+  all. That is the same rule the announced bitfield already used, which carries
+  only pieces a scope covers in full. `BridgeParams::piece_touches` is the
+  test, and a zero-length file touches nothing.
+- No backoff, because nothing is wrong with the mirror or with the link. The
+  sooner the session sees the smaller bitfield the sooner it stops waiting on
+  pieces this source will not send. The reconnect is still counted, under the
+  reason `file_gone`, so a report can tell it from a link failure.
+- The wire has no way to retract a bit already announced, which is why this is
+  a reconnect and not a message.
+
+When the last piece goes, the source is retired with a reason that says so
+rather than naming one file:
+`every piece this source covered is gone; the last was file N: ...`. A bridge
+with an empty bitfield is worse than no bridge, because the session holds a
+peer slot open for a peer that can never answer.
+
+**A file that is gone no longer spends the error budget, and that was a second
+defect underneath the first.** `--web-seed-max-errors` counts consecutive
+failures and trips the `--web-seed-cooldown` that [T-137](multi-source.md)
+built. `fetch_with_retry` called `record_error` on **every** failure including
+permanent ones. That was invisible while a permanent failure retired the source
+outright, and the moment narrowing arrived it meant a mirror missing one file
+of twelve went into cooldown through the back door: narrowed **and** charged.
+
+The budget now counts a transient failure that exhausted its retries, which is
+what it was built for. A permanent failure already has its own outcome,
+retirement or narrowing, and does not need charging twice.
+`a_file_that_is_gone_does_not_spend_the_error_budget` sets `max_errors` to 1,
+so the old behaviour cooled the source on the first 404.
+
+**Reported, because the byte counts cannot show it.** `SourceReport` gains
+`gone_files`, an array of `{file, pieces_dropped, reason}`, and
+`pieces_dropped`. Both are omitted when empty, so a run with no narrowing looks
+exactly as it did. A mirror serving eleven files of twelve and one serving all
+twelve produce the same `served_bytes` when the other eleven were enough, and
+these two fields are the difference. `docs/schema.md` carries them under
+`source_failed`, where the generator's own `--web-seed <404 URL>` scenario
+produces a source that narrows every file and then runs out.
+
+Deduplicated by file index across connections: every connection to one source
+finds the same missing file independently, because each has its own bitfield to
+narrow. A caller asked about a mirror and wants the mirror's answer, which is
+the rule the byte accounting already follows.
+
+**Four tests, and the first two are alone on purpose.**
+
+`a_mirror_that_404s_one_file_keeps_serving_the_other` gives the partial mirror
+no company. With a second source present, whether the partial one is ever asked
+for the missing file is a race the session decides, and the first draft of this
+test lost it: the complete mirror served everything and the 404 never happened.
+A test that depends on winning a race is the mistake [RULES.md](RULES.md)
+records three times over. Alone, the mirror is asked for everything, so the 404
+is certain. The torrent cannot complete from one partial mirror and the test
+does not ask it to; what it asserts is that the source survives, gives up
+exactly the four pieces `b.bin` covers, and goes on to serve all of `a.bin`.
+
+`a_file_that_is_gone_does_not_spend_the_error_budget` is alone for the same
+reason. `a_mirror_that_404s_every_file_is_still_retired` is the other end of the
+rule. `a_narrowed_mirror_and_a_complete_one_finish_the_torrent` is this entry's
+acceptance in its own words, and it deliberately asserts only that the run
+completes byte for byte and nothing is retired: which source serves which piece
+is the session's business.
+
+**Proven by reverting the fix.** With `retryable_failure` putting every
+permanent failure back into `BridgeError::Source`, all four fail, and the
+diagnostic is the defect stated plainly:
+
+```
+$ cargo test -p bit-cli-core --test webseed_e2e -- a_mirror_that_404s a_file_that_is_gone a_narrowed_mirror
+the mirror never reported the file it does not hold:
+  ["http://127.0.0.1:54716/album/b.bin: 404, the composed URL does not exist on this mirror"]
+test result: FAILED. 0 passed; 4 failed
+
+$ cargo test -p bit-cli-core --test webseed_e2e   # with the fix
+test a_mirror_that_404s_one_file_keeps_serving_the_other ... ok
+test a_mirror_that_404s_every_file_is_still_retired ... ok
+test a_narrowed_mirror_and_a_complete_one_finish_the_torrent ... ok
+test a_file_that_is_gone_does_not_spend_the_error_budget ... ok
+```
+
+**Two things from `torrent/webseed-peer.go` that this does not take, and why.**
+`:46` `convict(err, time.Minute)` suspends a source for a term rather than
+killing it, and `bit-cli` already has that as `--web-seed-cooldown`
+([T-137](multi-source.md)), so the two designs agree and nothing was needed.
+`torrent/webseed/client.go:270` treats **503 as backpressure rather than
+death**, and `bit-cli` already classifies 5xx as transient
+(`webseed/fetch.rs` `classify_status`), so a 503 retries by default. What a
+caller can still do is `--web-seed-fatal-status 503`, which makes it permanent
+on purpose. That is the caller's decision and it now narrows rather than
+retires, which is the better of the two outcomes for a mistake.
 
 ### T-006 Prove the failure matrix against a real mirror
 

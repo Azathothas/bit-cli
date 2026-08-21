@@ -166,6 +166,28 @@ pub struct BridgeStatus {
     reconnect_wait_ms: AtomicU64,
     /// Those reconnects by why the last attempt ended, newest count last.
     reconnect_reasons: Mutex<std::collections::BTreeMap<&'static str, u64>>,
+    /// Files this source turned out not to hold, with why, in the order they
+    /// were found.
+    ///
+    /// A permanent failure on one file narrows the source rather than retiring
+    /// it, and a caller has to be able to see that happen: a mirror serving
+    /// eleven files of twelve is a different thing from one serving all
+    /// twelve, and the byte counts alone cannot tell them apart. See
+    /// `TODO/webseed.md`, T-005.
+    gone_files: Mutex<Vec<GoneFile>>,
+    /// Pieces given up across every file lost.
+    pieces_dropped: AtomicU64,
+}
+
+/// One file a source turned out not to hold.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GoneFile {
+    /// File index within the torrent.
+    pub file: usize,
+    /// Pieces the source stopped announcing because of it.
+    pub pieces_dropped: usize,
+    /// What the mirror said, which is the status and the URL.
+    pub reason: String,
 }
 
 impl Default for BridgeStatus {
@@ -184,6 +206,8 @@ impl Default for BridgeStatus {
             reconnects: AtomicU64::new(0),
             reconnect_wait_ms: AtomicU64::new(0),
             reconnect_reasons: Mutex::new(std::collections::BTreeMap::new()),
+            gone_files: Mutex::new(Vec::new()),
+            pieces_dropped: AtomicU64::new(0),
         }
     }
 }
@@ -289,6 +313,32 @@ impl BridgeStatus {
     }
 
     /// Charge one reconnect to a reason, with the wait that preceded it.
+    /// Record that a file turned out not to be there.
+    fn record_file_gone(&self, file: usize, pieces_dropped: usize, reason: &str) {
+        self.pieces_dropped
+            .fetch_add(pieces_dropped as u64, Ordering::Relaxed);
+        if let Ok(mut gone) = self.gone_files.lock() {
+            gone.push(GoneFile {
+                file,
+                pieces_dropped,
+                reason: reason.to_string(),
+            });
+        }
+    }
+
+    /// Files this source turned out not to hold, in the order they were found.
+    pub fn gone_files(&self) -> Vec<GoneFile> {
+        self.gone_files
+            .lock()
+            .map(|gone| gone.clone())
+            .unwrap_or_default()
+    }
+
+    /// Pieces given up across every file lost.
+    pub fn pieces_dropped(&self) -> u64 {
+        self.pieces_dropped.load(Ordering::Relaxed)
+    }
+
     fn record_reconnect(&self, reason: &'static str, waited: Duration) {
         self.reconnects.fetch_add(1, Ordering::Relaxed);
         self.reconnect_wait_ms.fetch_add(
@@ -390,6 +440,12 @@ pub struct BridgeParams {
     pub concurrency: usize,
     /// Client string sent in the extended handshake.
     pub client: String,
+    /// Byte range of each file in the torrent, in index order.
+    ///
+    /// Kept so a source that loses one file can work out which pieces that
+    /// file touches without carrying the whole layout. See
+    /// `TODO/webseed.md`, T-005.
+    pub file_spans: Vec<std::ops::Range<u64>>,
 }
 
 impl BridgeParams {
@@ -414,7 +470,32 @@ impl BridgeParams {
             pieces: binding.scope.whole_pieces(layout),
             concurrency,
             client: format!("bit-cli/{}", crate::VERSION),
+            file_spans: layout
+                .files
+                .iter()
+                .map(|file| file.offset..file.offset + file.length)
+                .collect(),
         }
+    }
+
+    /// Whether piece `piece` overlaps file `file` by even one byte.
+    ///
+    /// One byte is the right threshold: a piece is verified against its whole
+    /// hash, so a source missing any part of it cannot serve it at all. That
+    /// is the same rule the announced bitfield already uses, which carries
+    /// only pieces a scope covers **in full**.
+    pub fn piece_touches(&self, piece: u32, file: usize) -> bool {
+        let Some(span) = self.file_spans.get(file) else {
+            return false;
+        };
+        if span.start >= span.end {
+            // A zero-length file occupies no bytes, so no piece touches it and
+            // losing it costs nothing.
+            return false;
+        }
+        let start = u64::from(piece) * u64::from(self.piece_length);
+        let end = start + u64::from(self.piece_length);
+        start < span.end && span.start < end
     }
 
     /// Whether this source can serve the whole torrent.
@@ -432,6 +513,10 @@ impl BridgeParams {
 enum BridgeError {
     /// The source is unusable. Give up on it.
     Source(String),
+    /// One file is permanently gone from this source, and the rest may still
+    /// be there. Drop the pieces that file touches and reconnect with the
+    /// smaller bitfield. See `TODO/webseed.md`, T-005.
+    FileGone { file: usize, reason: String },
     /// The connection to the session failed. Reconnect later.
     Link(String),
     /// One request failed in a way that could still recover: the mirror is
@@ -466,6 +551,10 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
         return;
     }
 
+    // Owned and mutable, because a source can lose a file mid-run and the
+    // piece list it announces has to shrink with it. See `TODO/webseed.md`,
+    // T-005.
+    let mut params = params;
     let mut delay = RECONNECT_BASE;
     loop {
         status.set_state(BridgeState::Connecting);
@@ -480,6 +569,7 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
             Err(BridgeError::Source(_)) => "source",
             Err(BridgeError::Link(_)) => "link",
             Err(BridgeError::Stalled(_)) => "stalled",
+            Err(BridgeError::FileGone { .. }) => "file_gone",
         };
         match outcome {
             Ok(()) => delay = RECONNECT_BASE,
@@ -487,6 +577,45 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
                 status.set_error(Some(reason));
                 status.set_state(BridgeState::Failed);
                 return;
+            }
+            Err(BridgeError::FileGone { file, reason }) => {
+                // The source is healthy and smaller. Drop every piece the file
+                // touches, because a piece needs all of its bytes and this
+                // source can no longer supply that file's share of them, then
+                // reconnect straight away with the smaller bitfield.
+                //
+                // The wire has no way to retract a bit already announced,
+                // which is why this is a reconnect rather than a message. BEP
+                // 54 `lt_donthave` is that message and
+                // `TODO/bep-coverage.md` T-167 records why it cannot be used
+                // here: `librqbit` 9.0.0 has no receive side for it.
+                let before = params.pieces.len();
+                // Computed against a copy of the piece list, because
+                // `piece_touches` reads the rest of `params` while `retain`
+                // holds the piece list mutably.
+                let keep: Vec<u32> = params
+                    .pieces
+                    .iter()
+                    .copied()
+                    .filter(|piece| !params.piece_touches(*piece, file))
+                    .collect();
+                params.pieces = keep;
+                let dropped = before - params.pieces.len();
+                status.record_file_gone(file, dropped, &reason);
+                if params.pieces.is_empty() {
+                    status.set_error(Some(format!(
+                        "every piece this source covered is gone; the last was file {file}: {reason}"
+                    )));
+                    status.set_state(BridgeState::Failed);
+                    return;
+                }
+                status.set_error(Some(reason));
+                // No backoff. Nothing is wrong with the mirror or the link,
+                // and the sooner the session sees the smaller bitfield the
+                // sooner it stops waiting on pieces this source will not send.
+                delay = RECONNECT_BASE;
+                status.record_reconnect(ended, Duration::ZERO);
+                continue;
             }
             Err(BridgeError::Link(reason)) => status.set_error(Some(reason)),
             Err(BridgeError::Stalled(reason)) => {
@@ -803,6 +932,20 @@ struct BlockFailure {
     reason: String,
     /// Whether the source could still answer a later request.
     recoverable: bool,
+    /// The file the failing request was addressed to, when it was addressed to
+    /// one. A permanent failure with a file named narrows the source to what
+    /// it can still serve rather than retiring it. See `TODO/webseed.md`,
+    /// T-005.
+    file: Option<usize>,
+}
+
+impl From<crate::webseed::fetch::ReadFailure> for BlockFailure {
+    fn from(failure: crate::webseed::fetch::ReadFailure) -> Self {
+        let file = failure.file;
+        let mut out = Self::from(failure.error);
+        out.file = file;
+        out
+    }
 }
 
 impl From<FetchError> for BlockFailure {
@@ -816,6 +959,7 @@ impl From<FetchError> for BlockFailure {
         Self {
             reason,
             recoverable,
+            file: None,
         }
     }
 }
@@ -826,24 +970,34 @@ impl BlockFailure {
         Self {
             reason: reason.into(),
             recoverable: false,
+            file: None,
         }
     }
 }
 
 /// Turn a block failure into the reason a connection ended.
 fn retryable_failure(failure: BlockFailure) -> BridgeError {
-    match failure.recoverable {
-        true => BridgeError::Stalled(failure.reason),
-        false => BridgeError::Source(failure.reason),
+    match (failure.recoverable, failure.file) {
+        (true, _) => BridgeError::Stalled(failure.reason),
+        // A permanent failure on a request addressed to one file is that
+        // file's, not the source's. `bit-cli` exists to treat a mirror holding
+        // part of a payload as a first-class case, and retiring the whole
+        // source over one file contradicts that in the one place it matters.
+        (false, Some(file)) => BridgeError::FileGone {
+            file,
+            reason: failure.reason,
+        },
+        (false, None) => BridgeError::Source(failure.reason),
     }
 }
 
 /// The text inside a [`BridgeError`], whichever kind it is.
 fn reason_of(err: BridgeError) -> String {
     match err {
-        BridgeError::Source(reason) | BridgeError::Link(reason) | BridgeError::Stalled(reason) => {
-            reason
-        }
+        BridgeError::Source(reason)
+        | BridgeError::Link(reason)
+        | BridgeError::Stalled(reason)
+        | BridgeError::FileGone { reason, .. } => reason,
     }
 }
 
@@ -881,9 +1035,9 @@ async fn fetch_and_send(
         .acquire()
         .await
         .map_err(|e| BlockFailure::local(e.to_string()))?;
-    let block = match fetcher.read(offset, u64::from(length)).await {
+    let block = match fetcher.read_block(offset, u64::from(length)).await {
         Ok(block) => block,
-        Err(err) => return Err(BlockFailure::from(err)),
+        Err(failure) => return Err(BlockFailure::from(failure)),
     };
 
     if !pending

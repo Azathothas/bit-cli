@@ -1127,7 +1127,7 @@ Source:      `docs/schema.md`, found during the doc pass of 2026-08-21
 Category:    cli
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema`
              overwrites `docs/schema.md` with exactly what that run produced.
@@ -1202,6 +1202,83 @@ produce is not. That asymmetry is right, and its comment explains why: these
 runs are timed, so a download that beats its own report tick emits no
 `progress`. The gap is that the **writer** does not share the reader's
 asymmetry. The check tolerates extra rows and the generator deletes them.
+
+**Fixed by giving the writer the reader's tolerance, which is what the entry
+already said the fix was.**
+
+`merge_schema` in `crates/bit-cli/src/schema_gen.rs` reads the committed file,
+indexes its field rows by the section they sit under, and unions them into what
+this run rendered. Where both carry a path, **this run's type wins**: the
+committed one is a record of an older measurement and this one is current.
+Where only the committed file has a path, the row survives.
+
+The section key is the `##` heading and the `###` heading together, not the
+`###` alone. A document kind and an event type may share a name, and their
+field lists are different things; keying on the inner heading alone would let
+one section's rows leak into the other's. The test asserts that directly with a
+row that exists only under `## Events`.
+
+**A field that is genuinely gone now has to be deleted on purpose.** That is
+the right cost for removing something from a versioned contract, and it is the
+trade this entry named.
+
+**Found again by following the instruction, on this session's own change.**
+Adding `gone_files` and `pieces_dropped` to `SourceReport` for
+[T-005](webseed.md) made the contract check fail, correctly, naming the four
+new rows. Regenerating the way the panic message says removed two:
+
+```
+$ diff /tmp/committed.md docs/schema.md     # the old overwriting writer
+535d534
+< | `sources[].error` | string |
+793d791
+< | `cooldowns` | integer |
+794a793,795
+> | `gone_files[].file` | integer |
+> | `gone_files[].pieces_dropped` | integer |
+> | `gone_files[].reason` | string |
+798a800
+> | `pieces_dropped` | integer |
+```
+
+Two rows lost, and neither is the `sources[].error` pair this entry recorded
+before: `cooldowns` is new to the list. That is the entry's own point about the
+count made a third time. **The number of rows lost is a property of the run**,
+so it was one, then two of one kind, then two of two kinds. The mechanism is
+the defect.
+
+With the merging writer, the same regeneration on the same tree:
+
+```
+$ diff /tmp/committed.md docs/schema.md     # the merging writer
+794a795,797
+> | `gone_files[].file` | integer |
+> | `gone_files[].pieces_dropped` | integer |
+> | `gone_files[].reason` | string |
+798a802
+> | `pieces_dropped` | integer |
+```
+
+Additions only. `sources[].error` and `cooldowns` survive.
+
+**Two tests, and they are the acceptance in its own words.**
+
+`regenerating_the_schema_keeps_rows_this_run_did_not_produce` is the unit case
+on hand-written input: a row only the committed file has survives, a row only
+this run produced is added, a path both carry takes this run's type and not
+both, a row from another section does not leak in, and the merged rows stay
+sorted by path so merging does not churn the diff.
+
+`regenerating_the_schema_is_idempotent` is "regenerating twice in a row leaves
+every row that either run produced, and `git diff` is empty when nothing
+changed", stated as two equalities: merging a render into itself reproduces it
+exactly, and merging again changes nothing.
+
+**What was not changed.** The read-side check stays a containment check, and
+its asymmetry stays deliberate: these runs are timed, so a download that
+finishes before its second report tick emits no `progress` and requiring
+equality would make the contract check flaky. The two halves are now tolerant
+in the same direction, which is all that was ever wrong.
 
 ### T-159 Subcommand flags are filed under "Report options" in the help
 

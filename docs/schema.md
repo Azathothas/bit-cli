@@ -792,10 +792,14 @@ From `bit-cli download <TORRENT> --web-seed <404 URL> --jsonl`.
 | `connections` | integer |
 | `cooldowns` | integer |
 | `error` | string |
+| `gone_files[].file` | integer |
+| `gone_files[].pieces_dropped` | integer |
+| `gone_files[].reason` | string |
 | `http_bytes` | integer |
 | `http_requests` | integer |
 | `index` | integer |
 | `origin` | string |
+| `pieces_dropped` | integer |
 | `retries` | integer |
 | `scope` | string |
 | `seq` | integer |
