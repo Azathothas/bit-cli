@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use reqwest::header::{
-    ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap, HeaderName,
-    HeaderValue, RANGE, USER_AGENT,
+    ACCEPT_ENCODING, ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap,
+    HeaderName, HeaderValue, RANGE, USER_AGENT,
 };
 use reqwest::{Response, StatusCode};
 use tokio::sync::{Mutex, Semaphore};
@@ -530,6 +530,20 @@ impl Fetcher {
             })?;
             headers.insert(name, value);
         }
+        // A web seed asks for a byte range and hashes what comes back against
+        // the torrent, so the bytes on the wire have to be the bytes on the
+        // server. A transcoding proxy that re-encodes the body changes what a
+        // range means, and the result is a correct request returning wrong
+        // bytes from a healthy mirror: the piece fails its hash and the mirror
+        // is blamed. Set on every request rather than only the first, because
+        // any of them can meet a proxy. See `TODO/webseed.md`, T-004.
+        //
+        // Inserted after the caller's own headers and only when absent, so
+        // `--web-seed-header Accept-Encoding: gzip` still wins. A caller who
+        // sets it has said what they want.
+        headers
+            .entry(ACCEPT_ENCODING)
+            .or_insert(HeaderValue::from_static("identity"));
         let agent = binding
             .spec
             .user_agent

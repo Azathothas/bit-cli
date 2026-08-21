@@ -564,6 +564,8 @@ From `bit-cli webseed test <TORRENT> --web-seed <URL> --json`.
 | `sources[].request_url` | string |
 | `sources[].scope` | string |
 | `sources[].status` | integer |
+| `sources[].style` | string |
+| `sources[].style_decided_by` | string |
 | `sources[].total_ms` | integer |
 | `sources[].ttfb_ms` | integer |
 | `sources[].url` | string |

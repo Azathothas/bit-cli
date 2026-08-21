@@ -165,7 +165,12 @@ async fn handle_request(
         .map(str::to_string)
         .unwrap_or(target);
 
-    let path = root.join(percent_decode(target.trim_start_matches('/')));
+    // The query string is not part of the path. A real GetRight server ignores
+    // a query it does not understand and serves the entity, which is what
+    // makes BEP 17 detection a question about the **length** of the answer
+    // rather than about its status. See `TODO/webseed.md`, T-004.
+    let (target_path, _query) = target.split_once('?').unwrap_or((target.as_str(), ""));
+    let path = root.join(percent_decode(target_path.trim_start_matches('/')));
     let Ok(body) = std::fs::read(&path) else {
         return respond(&mut stream, 404, "Not Found", None, b"missing").await;
     };
@@ -542,6 +547,13 @@ async fn attach_selected(
     let set = BindingSet::resolve(&layout, &info_hash, &specs).unwrap();
     let target = engine.bridge_target().unwrap();
     let peer_id = handle.shared().peer_id;
+
+    // The same step `swarm::attach_sources` takes: decide the wire style before
+    // the first real request, so a command-line source left at `auto` is
+    // addressed the way the server expects. See `TODO/webseed.md`, T-004.
+    let mut set = set;
+    bit_cli_core::webseed::probe::resolve_auto_styles(&mut set, &info_hash).await;
+    let set = set;
 
     let mut statuses = Vec::new();
     let mut fetchers = Vec::new();
@@ -1072,6 +1084,178 @@ async fn a_bep_17_source_downloads_a_torrent() {
         "the BEP 17 path served nothing"
     );
     run.engine.stop().await;
+}
+
+/// `TODO/webseed.md` T-004. A BEP 17 seed named on the command line, with no
+/// `--web-seed-style`, is detected and downloads.
+///
+/// This is the only case the entry left: a source out of `httpseeds` is keyed
+/// BEP 17 by the key it came from and one out of `url-list` is keyed BEP 19,
+/// which is what both BEPs specify and costs no request. A command-line URL
+/// has no key to read, so it is asked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_command_line_bep_17_source_is_detected_without_the_flag() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let data = content(200 * 1024, 61);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    let (base, served) = serve(src.path().to_path_buf(), ServeMode::Hoffman).await;
+    let mut spec = SourceSpec::new(format!("{base}movie.bin"), Origin::CommandLine);
+    spec.mode = bit_cli_core::webseed::Mode::Exact;
+    assert_eq!(
+        spec.style,
+        bit_cli_core::webseed::Style::Auto,
+        "the point of this test is that nothing declared a style"
+    );
+
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![spec],
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(60), || run.finished()).await,
+        "a detected BEP 17 source should complete a torrent: {:?}",
+        run.reasons()
+    );
+    assert_eq!(std::fs::read(out.path().join("movie.bin")).unwrap(), data);
+    assert!(served.load(Ordering::Relaxed) > 0);
+    run.engine.stop().await;
+}
+
+/// The other half, and the one a detector biased towards BEP 17 would break:
+/// an ordinary GetRight mirror left at `auto` stays GetRight.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_command_line_getright_source_is_not_mistaken_for_bep_17() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let data = content(200 * 1024, 67);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    let (base, _served) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&base)],
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(60), || run.finished()).await,
+        "a GetRight mirror should still complete: {:?}",
+        run.reasons()
+    );
+    assert_eq!(std::fs::read(out.path().join("movie.bin")).unwrap(), data);
+    run.engine.stop().await;
+}
+
+/// The detector on its own, against both server kinds.
+///
+/// The GetRight stub answers the BEP 17 probe with the whole entity, because a
+/// server that does not understand a query parameter serves the resource
+/// anyway. So the discriminator is the **length** of the answer and not its
+/// status, which is the part a stub that 404s on any query would not have
+/// tested.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_style_probe_tells_a_hoffman_seed_from_a_getright_one() {
+    let src = tempfile::tempdir().unwrap();
+    let data = content(200 * 1024, 71);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    let (hoffman_base, _) = serve(src.path().to_path_buf(), ServeMode::Hoffman).await;
+    let (getright_base, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+
+    let layout = Arc::new(Layout::from_lengths(
+        "movie.bin",
+        false,
+        PIECE_LENGTH,
+        [("movie.bin".to_string(), data.len() as u64)],
+    ));
+    let hash = "0".repeat(40);
+
+    for (base, expected) in [(hoffman_base, true), (getright_base, false)] {
+        let mut spec = SourceSpec::new(format!("{base}movie.bin"), Origin::CommandLine);
+        spec.mode = bit_cli_core::webseed::Mode::Exact;
+        let set = BindingSet::resolve(&layout, &hash, &[spec]).unwrap();
+        let answer = bit_cli_core::webseed::probe::speaks_hoffman(&set.bindings[0], &hash)
+            .await
+            .unwrap();
+        assert_eq!(answer, expected, "{base}");
+    }
+}
+
+/// A source that cannot be reached at all keeps the answer `auto` gave before
+/// the probe existed, rather than being refused over a failed probe.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_that_cannot_be_probed_falls_back_to_getright() {
+    let layout = Arc::new(Layout::from_lengths(
+        "movie.bin",
+        false,
+        PIECE_LENGTH,
+        [("movie.bin".to_string(), 200 * 1024)],
+    ));
+    let hash = "0".repeat(40);
+    // Port 9 is discard, and nothing listens on it here.
+    let mut spec = SourceSpec::new("http://127.0.0.1:9/movie.bin", Origin::CommandLine);
+    spec.mode = bit_cli_core::webseed::Mode::Exact;
+    spec.limits.connect_timeout_ms = 500;
+    spec.limits.timeout_ms = 1000;
+    let mut set = BindingSet::resolve(&layout, &hash, &[spec]).unwrap();
+
+    let decisions = bit_cli_core::webseed::probe::resolve_auto_styles(&mut set, &hash).await;
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].style, bit_cli_core::webseed::Style::GetRight);
+    assert!(
+        decisions[0].probe_error.is_some(),
+        "a probe that could not be made says so: {:?}",
+        decisions[0]
+    );
+    assert_eq!(
+        set.bindings[0].spec.style,
+        bit_cli_core::webseed::Style::GetRight
+    );
+}
+
+/// A source whose style the caller declared is never probed, and a source from
+/// a metainfo key is decided by the key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_declared_style_and_a_metainfo_key_cost_no_request() {
+    use bit_cli_core::webseed::probe::StyleSource;
+
+    let layout = Arc::new(Layout::from_lengths(
+        "movie.bin",
+        false,
+        PIECE_LENGTH,
+        [("movie.bin".to_string(), 200 * 1024)],
+    ));
+    let hash = "0".repeat(40);
+
+    // Nothing listens on port 9, so any probe would take a timeout and fail.
+    // These resolve instantly and correctly, which is the assertion.
+    let mut declared = SourceSpec::new("http://127.0.0.1:9/movie.bin", Origin::CommandLine);
+    declared.style = bit_cli_core::webseed::Style::Hoffman;
+    let mut from_key = SourceSpec::new("http://127.0.0.1:9/movie.bin", Origin::TorrentUrlList);
+    from_key.mode = bit_cli_core::webseed::Mode::Exact;
+
+    let mut set = BindingSet::resolve(&layout, &hash, &[declared, from_key]).unwrap();
+    let started = std::time::Instant::now();
+    let decisions = bit_cli_core::webseed::probe::resolve_auto_styles(&mut set, &hash).await;
+    assert_eq!(decisions.len(), 2);
+    assert_eq!(decisions[0].style, bit_cli_core::webseed::Style::Hoffman);
+    assert_eq!(decisions[0].decided_by, StyleSource::Declared);
+    assert_eq!(decisions[1].style, bit_cli_core::webseed::Style::GetRight);
+    assert_eq!(decisions[1].decided_by, StyleSource::MetainfoKey);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "neither source should have been asked anything"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

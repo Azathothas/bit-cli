@@ -669,13 +669,21 @@ async fn attach_sources_with(
     let tracked = ledger.is_some();
     let ledger = ledger.unwrap_or_else(|| Arc::new(BlockLedger::new(layout.piece_length)));
     let info_hash = handle.info_hash().as_string();
-    let set = BindingSet::resolve(layout, &info_hash, specs)?;
+    let mut set = BindingSet::resolve(layout, &info_hash, specs)?;
     if require {
         set.require_coverage(peers_available)?;
     }
     if specs.is_empty() {
         return Ok((Vec::new(), set, ledger));
     }
+    // Decide the wire style before the first real request. Only a
+    // command-line source with `--web-seed-style auto` costs a probe: a
+    // metainfo source is keyed by which list it came from, and a declared
+    // style is taken as given. Getting this wrong produces a 404 or a
+    // wrong-length body from a healthy server, which reads as a broken mirror.
+    // See `TODO/webseed.md`, T-004.
+    bit_cli_core::webseed::probe::resolve_auto_styles(&mut set, &info_hash).await;
+    let set = set;
 
     let target = engine.bridge_target().ok_or_else(|| {
         Error::network(

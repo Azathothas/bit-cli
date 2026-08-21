@@ -355,8 +355,22 @@ pub struct FileServer {
 }
 
 impl FileServer {
-    /// Serve `root` on loopback.
+    /// Serve `root` on loopback, speaking BEP 19: ranged GETs against a path.
     pub fn start(root: impl Into<PathBuf>) -> Self {
+        Self::start_with(root, false)
+    }
+
+    /// Serve `root` on loopback speaking BEP 17 instead.
+    ///
+    /// A Hoffman seed takes `?info_hash=&piece=&ranges=` and answers 200 with
+    /// exactly the bytes named, and refuses a request that carries none of
+    /// them. The piece length is the fixtures' 1024. See `TODO/webseed.md`,
+    /// T-004.
+    pub fn start_hoffman(root: impl Into<PathBuf>) -> Self {
+        Self::start_with(root, true)
+    }
+
+    fn start_with(root: impl Into<PathBuf>, hoffman: bool) -> Self {
         use std::io::{Read, Write};
 
         let root = root.into();
@@ -415,6 +429,11 @@ impl FileServer {
                         .and_then(|spec| spec.split_once('-'))
                         .map(|(a, b)| (a.to_string(), b.to_string()));
 
+                    // A query string is not part of the path. A BEP 19 server
+                    // that does not understand one serves the resource anyway,
+                    // which is what makes the BEP 17 probe a question about
+                    // the length of the answer rather than its status.
+                    let (path, query) = path.split_once('?').unwrap_or((path, ""));
                     let relative = percent_decode(path.trim_start_matches('/'));
                     let mut target = root.clone();
                     for part in relative.split('/').filter(|p| !p.is_empty()) {
@@ -426,6 +445,50 @@ impl FileServer {
                         );
                         return;
                     };
+
+                    if hoffman {
+                        let mut piece: Option<usize> = None;
+                        let mut span: Option<(usize, usize)> = None;
+                        let mut has_hash = false;
+                        for pair in query.split('&') {
+                            match pair.split_once('=') {
+                                Some(("piece", value)) => piece = value.parse().ok(),
+                                Some(("ranges", value)) => {
+                                    span = value.split_once('-').and_then(|(a, b)| {
+                                        Some((a.parse().ok()?, b.parse().ok()?))
+                                    });
+                                }
+                                Some(("info_hash", value)) => has_hash = !value.is_empty(),
+                                _ => {}
+                            }
+                        }
+                        let (Some(piece), Some((begin, end)), true) = (piece, span, has_hash)
+                        else {
+                            let _ = stream.write_all(
+                                b"HTTP/1.1 400 Bad Request
+Content-Length: 0
+Connection: close
+
+",
+                            );
+                            return;
+                        };
+                        let start = piece * 1024 + begin;
+                        let stop = (piece * 1024 + end).min(body.len().saturating_sub(1));
+                        let slice = body.get(start..=stop).unwrap_or(&[]).to_vec();
+                        let head = format!(
+                            "HTTP/1.1 200 OK
+Content-Length: {}
+Connection: close
+
+",
+                            slice.len()
+                        );
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.write_all(&slice);
+                        let _ = stream.flush();
+                        return;
+                    }
 
                     let total = body.len();
                     let response = match range {

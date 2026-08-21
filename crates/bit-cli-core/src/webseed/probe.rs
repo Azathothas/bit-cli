@@ -25,7 +25,7 @@ use crate::error::{Error, Result};
 use crate::layout::Layout;
 use crate::time::Timestamp;
 use crate::units::{Size, format_rate, format_size};
-use crate::webseed::binding::{Auth, Binding};
+use crate::webseed::binding::{Auth, Binding, BindingSet, Style};
 use crate::webseed::fetch::default_user_agent;
 
 /// Redirect hops followed before giving up.
@@ -95,6 +95,12 @@ pub struct SourceTest {
     pub origin: String,
     pub scope: String,
     pub mode: String,
+    /// The wire style this probe addressed the source with, after `auto` was
+    /// resolved. See `TODO/webseed.md`, T-004.
+    pub style: Style,
+    /// How that style was decided. Absent when the caller did not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_decided_by: Option<StyleSource>,
     /// Whether the source can serve this torrent.
     pub ok: bool,
     /// `HEAD` or `GET`.
@@ -161,6 +167,8 @@ impl SourceTest {
             origin: binding.spec.origin.as_str().to_string(),
             scope: binding.scope.selector.clone(),
             mode: binding.spec.mode.as_str().to_string(),
+            style: binding.spec.style,
+            style_decided_by: None,
             ok: false,
             method,
             status: None,
@@ -219,7 +227,19 @@ pub async fn test_source(
             format!("file index {file} is not in the torrent"),
         );
     };
-    let request_url = match binding.url_for(layout, info_hash, entry.offset, entry.length.max(1)) {
+    // BEP 17 addresses the torrent by piece, not by file, so a Hoffman source
+    // has to be probed with the URL a download would actually build. Probing
+    // it with the BEP 19 form measures a 404 and reports a healthy mirror as
+    // broken. See `TODO/webseed.md`, T-004.
+    let composed = match binding.spec.style {
+        Style::Hoffman => {
+            let piece = layout.piece_at(entry.offset).unwrap_or(0);
+            crate::webseed::fetch::hoffman_url(&binding.spec.url, info_hash, piece, 0, 1)
+                .map_err(|e| Error::binding(e.to_string()))
+        }
+        _ => binding.url_for(layout, info_hash, entry.offset, entry.length.max(1)),
+    };
+    let request_url = match composed {
         Ok(url) => url,
         Err(e) => {
             return SourceTest::failed(
@@ -354,14 +374,30 @@ pub async fn test_source(
             .and_then(|v| v.parse().ok()),
     };
 
-    let range_support = match (use_head, status.as_u16()) {
-        (_, 206) => RangeSupport::Yes,
-        (true, 200) => match headers.get(ACCEPT_RANGES).and_then(|v| v.to_str().ok()) {
+    // BEP 17 carries the sub-range in the query string and never sends a
+    // `Range` header, so a Hoffman source answers 200 with exactly the bytes
+    // asked for. Judging it by `Range` support and by the file's length would
+    // call every healthy Hoffman seed broken: it does not honour `Range`,
+    // correctly, and the one byte it returned is not the length of the file.
+    // See `TODO/webseed.md`, T-004.
+    let hoffman = binding.spec.style == Style::Hoffman;
+    let range_support = match (hoffman, use_head, status.as_u16()) {
+        // The probe asked for one byte of piece 0 through the query. Getting
+        // one byte back is the sub-range mechanism working, which is what
+        // `Range` support means for a source that speaks this style.
+        (true, _, 200) => match content_length {
+            Some(1) => RangeSupport::Yes,
+            Some(_) => RangeSupport::No,
+            None => RangeSupport::Unknown,
+        },
+        (true, _, _) => RangeSupport::Unknown,
+        (_, _, 206) => RangeSupport::Yes,
+        (_, true, 200) => match headers.get(ACCEPT_RANGES).and_then(|v| v.to_str().ok()) {
             Some(value) if value.eq_ignore_ascii_case("bytes") => RangeSupport::Yes,
             Some(_) => RangeSupport::No,
             None => RangeSupport::Unknown,
         },
-        (false, 200) => RangeSupport::No,
+        (_, false, 200) => RangeSupport::No,
         _ => RangeSupport::Unknown,
     };
 
@@ -376,7 +412,12 @@ pub async fn test_source(
         false => None,
     };
 
-    let length_matches = content_length.map(|len| len == entry.length);
+    // Not asked of a Hoffman source: what came back is one byte of a piece,
+    // not an entity whose length can be compared with a file's.
+    let length_matches = match hoffman {
+        true => None,
+        false => content_length.map(|len| len == entry.length),
+    };
     let ok =
         status.is_success() && length_matches != Some(false) && range_support != RangeSupport::No;
     let error = match (status.is_success(), length_matches, range_support) {
@@ -385,6 +426,10 @@ pub async fn test_source(
             "the server says {} bytes but the torrent says {}",
             content_length.unwrap_or(0),
             entry.length
+        )),
+        (_, _, RangeSupport::No) if hoffman => Some(format!(
+            "the source was addressed as BEP 17 and answered {} bytes to a one byte piece request",
+            content_length.unwrap_or(0)
         )),
         (_, _, RangeSupport::No) => Some("the server does not honour Range".to_string()),
         _ => None,
@@ -397,6 +442,8 @@ pub async fn test_source(
         origin: binding.spec.origin.as_str().to_string(),
         scope: binding.scope.selector.clone(),
         mode: binding.spec.mode.as_str().to_string(),
+        style: binding.spec.style,
+        style_decided_by: None,
         ok,
         method,
         status: Some(status.as_u16()),
@@ -574,6 +621,8 @@ fn test_local(
         origin: binding.spec.origin.as_str().to_string(),
         scope: binding.scope.selector.clone(),
         mode: binding.spec.mode.as_str().to_string(),
+        style: binding.spec.style,
+        style_decided_by: None,
         ok: long_enough,
         method: "READ",
         status: None,
@@ -800,7 +849,183 @@ fn headers(binding: &Binding) -> reqwest::header::HeaderMap {
         value.set_sensitive(true);
         headers.insert(reqwest::header::AUTHORIZATION, value);
     }
+    // The same reason the fetch path sets it: a transcoding proxy changes what
+    // a byte range means, so a probe that measured range support through one
+    // measured the proxy. See `TODO/webseed.md`, T-004.
     headers
+        .entry(reqwest::header::ACCEPT_ENCODING)
+        .or_insert(reqwest::header::HeaderValue::from_static("identity"));
+    headers
+}
+
+/// Which style a source turned out to speak, and how that was decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StyleSource {
+    /// The caller said so with `--web-seed-style`.
+    Declared,
+    /// The metainfo key the URL came from said so. `httpseeds` is BEP 17 and
+    /// `url-list` is BEP 19, which is what both BEPs specify and needs no
+    /// request.
+    MetainfoKey,
+    /// A probe answered. Only a command-line source reaches this, because it
+    /// is the one case with no key to read.
+    Probe,
+}
+
+impl StyleSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Declared => "declared",
+            Self::MetainfoKey => "metainfo_key",
+            Self::Probe => "probe",
+        }
+    }
+}
+
+/// Decide whether a source speaks BEP 17, by asking it.
+///
+/// BEP 17 addresses the torrent by piece: one request per piece with the
+/// sub-range inside it as a query parameter. So a Hoffman seed handed
+/// `?info_hash=...&piece=0&ranges=0-0` answers with **one byte**, and that is
+/// the whole discriminator. A GetRight seed given the same URL either refuses
+/// it, because the path is a directory or the query makes the path wrong, or
+/// ignores the query and returns the entity, which is not one byte unless the
+/// torrent's first file is itself one byte long.
+///
+/// `Ok(true)` is Hoffman, `Ok(false)` is GetRight, and an error is a source
+/// that could not be asked. A caller treats the error as GetRight, because
+/// that is what `auto` did before this existed and it is the style a mirror
+/// serving plain files speaks.
+///
+/// One request, one byte, no retries. See `TODO/webseed.md`, T-004.
+pub async fn speaks_hoffman(binding: &Binding, info_hash: &str) -> Result<bool> {
+    let url = crate::webseed::fetch::hoffman_url(&binding.spec.url, info_hash, 0, 0, 1)
+        .map_err(|e| Error::binding(e.to_string()))?;
+    let client = probe_client(binding)?;
+    let mut request = client.get(&url).headers(headers(binding));
+    if let Auth::Basic { user, password } = &binding.spec.auth {
+        request = request.basic_auth(user, Some(password));
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| Error::network(crate::webseed::fetch::transport_reason(&url, &e)))?;
+    if !response.status().is_success() {
+        return Ok(false);
+    }
+    // Read the body rather than trusting `Content-Length`: a server that sends
+    // the whole entity with no length header would otherwise look like a
+    // one-byte answer. The read is bounded by the client timeout and by the
+    // fact that nothing here is asked for a second range.
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| Error::network(format!("{url}: reading the probe response: {e}")))?;
+    Ok(body.len() == 1)
+}
+
+/// What a source's style was resolved to, and how.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StyleDecision {
+    pub index: usize,
+    pub url: String,
+    pub style: Style,
+    pub decided_by: StyleSource,
+    /// Why the probe could not be made, when one was tried and failed. The
+    /// source falls back to BEP 19, which is what `auto` did before this
+    /// existed, so this is a note rather than a failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe_error: Option<String>,
+}
+
+/// Resolve every `Style::Auto` in a binding set, probing only where it has to.
+///
+/// Three of the four cases cost nothing. An explicit `--web-seed-style` is
+/// taken as given; a source from `httpseeds` is BEP 17 and one from `url-list`
+/// is BEP 19, which is what the two BEPs specify; and a `file:` source cannot
+/// speak a wire style at all. Only a command-line HTTP source has no key to
+/// read, and that is the one this asks. See `TODO/webseed.md`, T-004.
+///
+/// Probes run together rather than in turn, because a run with eight sources
+/// should not wait eight timeouts to start.
+pub async fn resolve_auto_styles(set: &mut BindingSet, info_hash: &str) -> Vec<StyleDecision> {
+    let mut decisions: Vec<StyleDecision> = Vec::new();
+    let mut probes = Vec::new();
+    for (position, binding) in set.bindings.iter().enumerate() {
+        let spec = &binding.spec;
+        if spec.style != Style::Auto {
+            decisions.push(StyleDecision {
+                index: binding.index,
+                url: spec.url.clone(),
+                style: spec.style,
+                decided_by: StyleSource::Declared,
+                probe_error: None,
+            });
+            continue;
+        }
+        // A `file:` source reads bytes off the filesystem, so there is no wire
+        // style to speak and nothing to ask. BEP 19 is the honest label: a
+        // range of a file is what it serves.
+        if spec.origin.is_from_torrent() || crate::webseed::local::is_file_url(&spec.url) {
+            decisions.push(StyleDecision {
+                index: binding.index,
+                url: spec.url.clone(),
+                style: Style::GetRight,
+                decided_by: StyleSource::MetainfoKey,
+                probe_error: None,
+            });
+            continue;
+        }
+        probes.push(position);
+    }
+
+    // Together rather than in turn: a run with eight sources should not wait
+    // eight timeouts before it starts. The binding is cloned into each task
+    // because the set is borrowed mutably below.
+    let mut tasks = tokio::task::JoinSet::new();
+    for position in &probes {
+        let binding = set.bindings[*position].clone();
+        let hash = info_hash.to_string();
+        let position = *position;
+        tasks.spawn(async move { (position, speaks_hoffman(&binding, &hash).await) });
+    }
+    let mut answers: Vec<(usize, Result<bool>)> = Vec::with_capacity(probes.len());
+    while let Some(finished) = tasks.join_next().await {
+        match finished {
+            Ok(answer) => answers.push(answer),
+            Err(e) => {
+                // A panicked probe is a bug here rather than a bad mirror, and
+                // it must not take the run down. There is no position to
+                // attribute it to once the task is gone, so nothing is
+                // recorded and the source keeps `auto`'s old answer.
+                debug_assert!(false, "style probe panicked: {e}");
+            }
+        }
+    }
+
+    for (position, answer) in answers {
+        let binding = &mut set.bindings[position];
+        let (style, probe_error) = match answer {
+            Ok(true) => (Style::Hoffman, None),
+            Ok(false) => (Style::GetRight, None),
+            // A source that could not be asked keeps the answer `auto` gave
+            // before this existed. Getting it wrong here costs a 404 from a
+            // healthy server; refusing the source over a failed probe costs
+            // the source.
+            Err(e) => (Style::GetRight, Some(e.to_string())),
+        };
+        binding.spec.style = style;
+        decisions.push(StyleDecision {
+            index: binding.index,
+            url: binding.spec.url.clone(),
+            style,
+            decided_by: StyleSource::Probe,
+            probe_error,
+        });
+    }
+    decisions.sort_by_key(|decision| decision.index);
+    decisions
 }
 
 /// Make sure `rustls` has a cryptography provider before a config is built.

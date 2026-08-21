@@ -74,7 +74,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-001](webseed.md) | P0 | webseed | **done** | Measure the loopback bridge against a raw curl ceiling |
 | [T-002](webseed.md) | P1 | webseed | **done** | Measure Candidate A-prime, the in-process virtual peer |
 | [T-003](webseed.md) | P1 | webseed | **done** | The piece picker cannot be told to prefer HTTP |
-| [T-004](webseed.md) | P2 | webseed | open | BEP 17 style is not auto-detected, only declared |
+| [T-004](webseed.md) | P2 | webseed | **done** | BEP 17 style is not auto-detected, only declared |
 | [T-005](webseed.md) | P2 | webseed | **done** | A source restricted mid-run cannot be re-scoped |
 | [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
 | [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
@@ -220,7 +220,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 145 items: 135 to work through, and 10 deferred to Phase C.
-57 open, 4 partial, 2 blocked, 72 done.
+56 open, 4 partial, 2 blocked, 73 done.
 
 **Two entries were closed because another one needed them.**
 [T-005](webseed.md) added two fields to a report, which made the schema check

@@ -259,12 +259,26 @@ pub fn collect(
             }
         }
         if let Some(meta) = meta {
+            // Which key a URL came from **is** its style: BEP 19 specifies
+            // `url-list` and BEP 17 specifies `httpseeds`. That is the one
+            // signal for style that needs no network round trip, so it is
+            // taken here and the two lists are never merged. An explicit
+            // `--web-seed-style` still wins, because a caller who named a
+            // style has said something about the server the metainfo cannot.
+            // See `TODO/webseed.md`, T-004.
+            let declared = shared.style != bit_cli_core::webseed::Style::Auto;
             for url in meta.url_list() {
-                specs.push(shared.spec(url, Origin::TorrentUrlList, Scope::all(), Mode::Auto));
+                let mut spec = shared.spec(url, Origin::TorrentUrlList, Scope::all(), Mode::Auto);
+                if !declared {
+                    spec.style = bit_cli_core::webseed::Style::GetRight;
+                }
+                specs.push(spec);
             }
             for url in meta.http_seeds() {
                 let mut spec = shared.spec(url, Origin::TorrentHttpSeeds, Scope::all(), Mode::Auto);
-                spec.style = bit_cli_core::webseed::Style::Hoffman;
+                if !declared {
+                    spec.style = bit_cli_core::webseed::Style::Hoffman;
+                }
                 specs.push(spec);
             }
         }

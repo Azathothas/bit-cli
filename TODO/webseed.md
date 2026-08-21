@@ -699,7 +699,7 @@ Source:      the operator's brief, `--web-seed-style auto`
 Category:    webseed
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `--web-seed-style auto` resolves to BEP 19 for every
              command-line source. Sources from the torrent's `httpseeds` key
@@ -754,6 +754,99 @@ healthy mirror.
 
 Related and separate: `bit-cli` reads `url-list` as a string or a list and
 reads `httpseeds` as a list only, which is [T-171](metainfo.md).
+
+**Closed 2026-08-21T16:36Z, on the entry's own smaller reading.** Four cases,
+and three of them cost nothing:
+
+- **A declared `--web-seed-style` is taken as given.** It was not, quite: the
+  `httpseeds` collection set BEP 17 unconditionally, so
+  `--web-seed-style getright` was overwritten for exactly the sources a caller
+  would most want to override. Both metainfo lists now key their style only
+  when the shared style is `auto`.
+- **A source from `httpseeds` is BEP 17 and one from `url-list` is BEP 19**,
+  which is what the two BEPs specify and needs no request. The `httpseeds` half
+  already worked; `url-list` sources were left at `auto`, which behaves as
+  BEP 19 but does not say so, so `webseed list` now reports `getright` for
+  them and a test asserts it.
+- **A `file:` source has no wire style**, so it resolves to BEP 19 with nothing
+  asked. It reads a range out of a file, which is what BEP 19 is.
+- **A command-line HTTP source is the only case with no key to read**, and it
+  is asked.
+
+**The probe is one request and one byte.** `probe::speaks_hoffman` asks
+`{url}?info_hash=…&piece=0&ranges=0-0`. A Hoffman seed answers 200 with exactly
+one byte, because that is what BEP 17 says a piece sub-range request returns. A
+GetRight seed either refuses the URL or, more usually, ignores the query it does
+not understand and serves the entity, which is not one byte. So the
+discriminator is the **length of the answer** rather than its status, and the
+stub server in the tests was changed to strip the query and serve the resource
+so that the harder branch is the one exercised. The body is read rather than the
+`Content-Length` trusted, because a server that omits the header would otherwise
+look like a one-byte answer.
+
+It gets one thing wrong, and the case is worth naming rather than hiding: a
+torrent whose first in-scope file is exactly one byte long is indistinguishable
+this way. The fallback is BEP 19, which is what `auto` did before this existed.
+
+**A failed probe is not a failed source.** A mirror that cannot be reached keeps
+BEP 19 and the decision records `probe_error`. Getting the style wrong costs a
+404 from a healthy server; refusing the source over a probe that timed out costs
+the source, and `--web-seed-style` is the override either way.
+
+Probes for several sources run together in a `JoinSet`. Sequentially, a run with
+eight unreachable mirrors would wait eight timeouts before the first byte.
+
+**`webseed test` had to be fixed to match, and that was a second defect.** It
+composed the probe URL with `Binding::url_for`, which is the BEP 19 form
+whatever the style, so a Hoffman source was probed with a URL it does not
+answer and reported as broken. It now builds the BEP 17 URL for a Hoffman
+source, and judges the answer by BEP 17's rules: `Range` support is whether the
+query sub-range worked rather than whether a `Range` header was honoured, and
+the file-length comparison is not made at all, because one byte of a piece is
+not an entity whose length can be compared with a file's. Before this, every
+healthy Hoffman seed was reported `ok: false` twice over. `SourceTest` gains
+`style` and `style_decided_by`, which is the entry's acceptance verbatim.
+
+**`Accept-Encoding: identity` on every web seed request and every probe**, which
+is the second half of this entry and is not about style at all. A transcoding
+proxy that re-encodes the body changes what a byte range means, so a correct
+request returns wrong bytes from a healthy mirror and the piece fails its hash.
+Set only when the caller has not set it, so `--web-seed-header` still wins.
+
+**Acceptance, run:**
+
+```
+$ cargo test -p bit-cli --lib -- a_command_line_hoffman a_command_line_getright a_declared_style
+test cmd::webseed::tests::a_declared_style_is_taken_as_given ... ok
+test cmd::webseed::tests::a_command_line_hoffman_source_is_reported_as_hoffman_without_the_flag ... ok
+test cmd::webseed::tests::a_command_line_getright_source_is_reported_as_getright ... ok
+test result: ok. 3 passed; 0 failed
+```
+
+`FileServer::start_hoffman` is the BEP 17 stub that makes the first of those a
+real probe rather than a unit test of a URL builder.
+
+Five more in `webseed_e2e.rs`: a detected BEP 17 source downloads a torrent
+byte for byte with no flag, a GetRight mirror left at `auto` still completes,
+the probe itself is asserted against both server kinds, an unreachable source
+falls back with `probe_error` set, and a declared style and a metainfo key are
+asserted to resolve in under a second against a port nothing listens on, which
+is how "costs no request" is measured rather than claimed.
+
+**Proven by breaking it.** With `speaks_hoffman` always answering false, which
+is what `auto` did before this entry:
+
+```
+$ cargo test -p bit-cli-core --test webseed_e2e -- a_command_line_bep_17 a_command_line_getright the_style_probe
+test the_style_probe_tells_a_hoffman_seed_from_a_getright_one ... FAILED
+test a_command_line_getright_source_is_not_mistaken_for_bep_17 ... ok
+test a_command_line_bep_17_source_is_detected_without_the_flag ... FAILED
+test result: FAILED. 1 passed; 2 failed
+```
+
+The BEP 17 download does not fail fast: it runs the full 60 seconds and times
+out, because a source addressed with the wrong style is a source the session
+waits on. That is the symptom this entry describes, reproduced.
 
 ### T-005 A source restricted mid-run cannot be re-scoped
 

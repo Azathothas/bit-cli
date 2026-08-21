@@ -604,6 +604,15 @@ pub fn test(
     let deadline = crate::swarm::optional_duration(&global.timeout, "timeout")?;
     let runtime = runtime()?;
     let info_hash = meta.info_hash().hex();
+    // Resolve `auto` first, so the probe below addresses each source the way a
+    // download would. Probing a BEP 17 seed with a BEP 19 URL measures a 404
+    // and reports a healthy mirror as broken, which is the failure this whole
+    // entry is about. See `TODO/webseed.md`, T-004.
+    let mut set = set;
+    let styles = runtime.block_on(bit_cli_core::webseed::probe::resolve_auto_styles(
+        &mut set, &info_hash,
+    ));
+    let set = set;
     // Sources are probed in parallel. Each probe is one request to a different
     // host, so they do not contend, and a real torrent carries enough of them
     // that doing this one at a time takes minutes: the Arch Linux ISO torrent
@@ -655,12 +664,19 @@ pub fn test(
         .into_iter()
         .enumerate()
         .map(|(index, result)| {
-            result.unwrap_or_else(|| {
+            let mut test = result.unwrap_or_else(|| {
                 bit_cli_core::webseed::probe::SourceTest::unfinished(
                     &set.bindings[index],
                     "the run reached --timeout before this source answered",
                 )
-            })
+            });
+            // How the style was decided, which the probe itself has no way to
+            // know: it is handed a binding whose style is already resolved.
+            test.style_decided_by = styles
+                .iter()
+                .find(|decision| decision.index == test.index)
+                .map(|decision| decision.decided_by);
+            test
         })
         .collect();
 
@@ -957,6 +973,10 @@ mod tests {
             .find(|s| s["origin"] == "torrent_url_list")
             .expect("a source from url-list");
         assert_eq!(get_right["url"], "https://getright.example.com/pub/");
+        assert_eq!(
+            get_right["style"], "getright",
+            "`url-list` is BEP 19 by the key it came from, which is what BEP 19 specifies"
+        );
 
         let hoffman = sources
             .iter()
@@ -964,6 +984,29 @@ mod tests {
             .expect("a source from httpseeds");
         assert_eq!(hoffman["url"], "https://hoffman.example.com/");
         assert_eq!(hoffman["style"], "hoffman");
+    }
+
+    /// `--web-seed-style` overrides what the key says, for both keys.
+    ///
+    /// A caller who names a style has said something about the server that the
+    /// metainfo cannot, and before this the `httpseeds` keying overwrote it.
+    /// See `TODO/webseed.md`, T-004.
+    #[test]
+    fn a_declared_style_overrides_the_metainfo_key_for_both_lists() {
+        let fixture = TorrentFixture::web_seed_keys_as_strings();
+        let doc = run_json(
+            &[
+                "webseed",
+                "list",
+                fixture.path_str(),
+                "--web-seed-style",
+                "getright",
+            ],
+            fixture.dir(),
+        );
+        for source in doc["sources"].as_array().unwrap() {
+            assert_eq!(source["style"], "getright", "{source}");
+        }
     }
 
     #[test]
@@ -1226,6 +1269,92 @@ mod tests {
             ExitCode::Usage,
         );
         assert!(err.contains("not one of the declared sources"), "{err}");
+    }
+
+    /// The acceptance for `TODO/webseed.md` T-004: a BEP 17 seed named on the
+    /// command line, with no `--web-seed-style`, is reported as `hoffman`.
+    ///
+    /// The style is decided before the probe runs, so the probe addresses the
+    /// source the way a download would. Addressing a BEP 17 seed with a BEP 19
+    /// URL measures a refusal and reports a healthy mirror as broken, which is
+    /// the failure this entry is about.
+    #[test]
+    fn a_command_line_hoffman_source_is_reported_as_hoffman_without_the_flag() {
+        let fixture = TorrentFixture::single_file();
+        let server = crate::test_support::FileServer::start_hoffman(fixture.payload_dir());
+        let source = format!("{}payload.bin", server.base);
+        let report = run_json(
+            &[
+                "webseed",
+                "test",
+                fixture.path_str(),
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "exact",
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(report["source_count"], 1);
+        let probed = &report["sources"][0];
+        assert_eq!(probed["style"], "hoffman", "{probed}");
+        assert_eq!(probed["style_decided_by"], "probe", "{probed}");
+        assert_eq!(probed["ok"], true, "{probed}");
+        assert_eq!(report["usable"], 1);
+    }
+
+    /// The same command against an ordinary mirror keeps BEP 19, so the
+    /// detector is not simply answering "hoffman".
+    #[test]
+    fn a_command_line_getright_source_is_reported_as_getright() {
+        let fixture = TorrentFixture::single_file();
+        let server = crate::test_support::FileServer::start(fixture.payload_dir());
+        let source = format!("{}payload.bin", server.base);
+        let report = run_json(
+            &[
+                "webseed",
+                "test",
+                fixture.path_str(),
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "exact",
+            ],
+            fixture.dir(),
+        );
+        let probed = &report["sources"][0];
+        assert_eq!(probed["style"], "getright", "{probed}");
+        assert_eq!(probed["style_decided_by"], "probe", "{probed}");
+        assert_eq!(probed["ok"], true, "{probed}");
+    }
+
+    /// `--web-seed-style` still decides, and costs no probe.
+    #[test]
+    fn a_declared_style_is_taken_as_given() {
+        let fixture = TorrentFixture::single_file();
+        let server = crate::test_support::FileServer::start_hoffman(fixture.payload_dir());
+        let source = format!("{}payload.bin", server.base);
+        let report = run_json(
+            &[
+                "webseed",
+                "test",
+                fixture.path_str(),
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "exact",
+                "--web-seed-style",
+                "hoffman",
+            ],
+            fixture.dir(),
+        );
+        let probed = &report["sources"][0];
+        assert_eq!(probed["style"], "hoffman");
+        assert_eq!(probed["style_decided_by"], "declared", "{probed}");
+        assert_eq!(probed["ok"], true, "{probed}");
     }
 
     /// `--timeout` bounds the whole command, and every declared source is
