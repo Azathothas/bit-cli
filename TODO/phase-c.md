@@ -8,6 +8,47 @@ library must not assume a process lifetime, and state must be addressable.
 
 **Do not work on this file.** It exists to keep the ideas out of the code.
 
+## The aria2 parity checklist
+
+`PROMPT.md` section 9 held an aria2 parity checklist and that file no longer
+exists, so the checklist is written out here. It was entirely unstarted when it
+was written and it is entirely unstarted now. Nothing in it is Phase A or B
+work: every item needs a process that outlives an invocation.
+
+**The RPC surface is 36 methods.** `reference/aria2_rust/docs/comprehensive_gap_analysis.md:390`
+carries the list under "RPC Method Coverage (36/36)", one row per C++ method
+with the Rust handler that answers it: the `aria2.addUri` / `addTorrent` /
+`addMetalink` family, `remove` and `forceRemove`, `pause` / `forcePause` /
+`pauseAll` / `forcePauseAll` and their `unpause` counterparts,
+`purgeDownloadResult` and `removeDownloadResult`, the `get*` readers
+(`getUris`, `getFiles`, `getPeers`, `getServers`, `getOption`,
+`getGlobalOption`, `getVersion`), the `tell*` readers (`tellStatus`,
+`tellActive`, `tellWaiting`, `tellStopped`), `changeOption`,
+`changeGlobalOption`, `changePosition`, and the rest. That file is the
+checklist for [T-201](#t-201-json-rpc-and-xml-rpc-with-aria2-method-parity):
+it is a method-by-method table rather than prose, so parity is countable rather
+than argued. Its own status line is worth copying too — the method surface is
+complete and external compatibility stays `PARTIAL` until a browser-extension
+and original-client interoperability matrix is reproducibly green, which is the
+difference between implementing 36 names and being a drop-in.
+
+**What a real migrant actually missed is shorter than the method list.**
+gosh-dl [Issue 11](https://github.com/goshitsarch-eng/gosh-dl/issues/11)
+(CLOSED) is one user moving off aria2 RPC, and the two things they named were
+**batch pause and resume** and **`.aria2` control files**, the second because
+without it there is no resume from breakpoint. Those are
+[T-202](#t-202-queue-management-across-invocations) and
+[T-203](#t-203-session-save-and-restore), and the issue is the evidence that
+those two outrank the other thirty-four methods for anyone actually migrating.
+Build them first.
+
+**The `.aria2` control file is a format, not just a feature.** It sits beside
+the payload and holds the bitfield and the per-file progress, which is what
+makes an aria2 download resumable after a kill. `bit-cli` has no state file at
+all by decision, and [T-016](disk-io.md) is blocked for the same reason, so
+this is where the daemonless decision and aria2 parity actually collide.
+Whoever un-defers Phase C has to answer it deliberately rather than inherit it.
+
 ---
 
 ### T-200 Session daemon
@@ -32,7 +73,7 @@ Acceptance:  `bit-cli daemon start` runs, `bit-cli add <SOURCE>` returns
 
 ### T-201 JSON-RPC and XML-RPC, with aria2 method parity
 
-Source:      decision 7.4, PROMPT.md 9.10
+Source:      decision 7.4, and the aria2 parity checklist above
 Category:    phase-c
 Priority:    P1 within Phase C
 Effort:      XL

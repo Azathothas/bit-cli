@@ -8,25 +8,49 @@ safety-critical half and have to survive `reference/` being deleted. See
 
 **No tracked file cites a path under `reference/`, and none depends on
 anything there.** Every finding a `TODO/` entry rests on is written into that
-entry, which is what T-122 below closed. `reference/` and `PROMPT.md` are both
-untracked working material, and a reader with neither can still work through
-this list.
+entry, which is what T-122 below closed. A corpus citation in a `TODO/` entry
+names where somebody else solved a problem; it is never evidence that `bit-cli`
+solves it. `reference/` is untracked working material and a reader without it
+can still work through this list.
 
-## Licences
+## The corpus as it stands
+
+The operator replaced the four-tree corpus with **twenty-two upstream
+implementations** on 2026-08-21, indexed by `reference/RESEARCH.md`. That file
+is the entry point: three tiers by usefulness, then cross-cutting sections A to
+H. Section D maps `bit-cli` TODO ids to the best source for each, section C
+lists eleven metainfo shapes a parser has to survive, section F is the licence
+determination, section G records what was removed during cleaning and why.
+
+| Tree | Licence |
+| --- | --- |
+| `intermodal` | CC0-1.0 |
+| every other tree: `torrent`, `nanotorrent`, `TorrentNG`, `superseedr`, `fx-torrent`, `mkbrr`, `gosh-dl`, `vortex`, `rustorrent`, `mtorrent`, `n0-mainline`, `seedchamp`, `aria2_rust`, `FluxDown`, `aquatic`, `torrust-actix`, `create-torrent`, `parse-torrent`, `bqti`, `dht-spider`, `tc` | MIT |
+
+Twenty-one MIT and one CC0-1.0. Every one is permissive and compatible with
+`bit-cli`'s MIT licence and its permissive-only `deny.toml`, so **nothing in
+this corpus needs deleting** and the deletion that T-122 records does not apply
+to any of it. `RESEARCH.md` section F carries the per-tree evidence, read from
+the licence file on disk in every case except `nanotorrent` and `mtorrent`,
+which carry no `LICENSE` file and declare MIT in their manifest instead.
+
+Two to handle with care, both recorded in section F: `tc`, whose README and
+`LICENSE` disagree, and `vortex`, whose badge and `LICENCE.txt` disagree. In
+both cases the file on disk is MIT. Confirm before reusing anything from
+either.
+
+**Two records this replaces.** `fx-torrent` was recorded here as Apache-2.0;
+its own `LICENSE` file is MIT, and the Apache determination was wrong. And this
+file described a four-tree corpus of `intermodal`, `fx-torrent`, the `aria2`
+documentation and the `rqbit` issue JSON. That corpus is gone, superseded
+rather than deleted, and the `aria2-next` and `rqbit` trees it named are not
+present. The `rqbit` issue corpus is still the source of most entry `Source:`
+lines below and in every other file here; those lines record where an entry
+came from and stay true whether or not the JSON is on disk.
 
 Forgetting which pile a file came from is how a copyleft function ends up in an
-MIT tree.
-
-| Tree | Licence | What is allowed |
-| --- | --- | --- |
-| `intermodal` | CC0-1.0 | Copy and adapt directly. The only one. |
-| `fx-torrent` | Apache-2.0 | Permissive. Copying triggers the NOTICE and attribution terms; nothing has been copied. |
-| `rqbit` | n/a, data | The issue and PR JSON corpus, not code. |
-| `aria2-next` | documentation | Quote sparingly, with attribution. |
-
-Every tree still here is permissive or is not code. That is the whole point of
-the 2026-08-21 pass: the boundary is now a property of what is on disk rather
-than of what a reader remembers.
+MIT tree. That risk is why this table exists, and with a wholly permissive
+corpus the table is now a record rather than a fence.
 
 `cargo deny` refuses copyleft dependencies outright, and
 `scripts/check-licence-gate.ps1` proves it against a probe crate. That gate is
@@ -78,10 +102,15 @@ own:
 | [T-102](bep-coverage.md) | a NAT traversal crate | BEP 55, and the `librqbit` type that blocks it |
 | [T-207](phase-c.md), [T-209](phase-c.md) | a status command's mode enum | decision 7.4 and the aria2 parity list |
 
-What was **not** deleted: `intermodal` (CC0-1.0), `fx-torrent` (Apache-2.0),
-the `aria2` documentation, and the `rqbit` issue corpus, which is JSON rather
-than code. Those are permissive or are data, they are still cited, and the
-reason this entry existed does not apply to them.
+What was **not** deleted: `intermodal` (CC0-1.0), `fx-torrent`, the `aria2`
+documentation, and the `rqbit` issue corpus, which is JSON rather than code.
+Those are permissive or are data, they are still cited, and the reason this
+entry existed does not apply to them.
 
-`reference/README.md` survives with the four trees' sections removed. It stays
-untracked, because it is a working document and not a deliverable.
+Two corrections to this entry as it was written, neither of which changes what
+it did. `fx-torrent` is **MIT**, not Apache-2.0: its `LICENSE` file says so and
+the earlier determination was wrong. And the corpus this entry describes was
+replaced on 2026-08-21 by the twenty-two trees above, so the `aria2-next` and
+`rqbit` directories it names are no longer on disk. The entry stays **done**:
+what it closed was the removal of four incompatible trees and the rewriting of
+the four entries that cited them, and both of those happened.

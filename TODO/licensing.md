@@ -22,17 +22,32 @@ stand, is in [reference-map.md](reference-map.md), T-122.
 | --- | --- | --- | --- |
 | `kist` | MIT OR Apache-2.0 | Yes, under MIT | `LICENSE-MIT` in the fork base |
 | intermodal | CC0-1.0 | Yes, adapt directly | its `LICENSE` |
-| fx-torrent | Apache-2.0 | Yes, with the notice terms | its `LICENSE`, `license = "Apache-2.0"` in `Cargo.toml` |
-| aria2 documentation | documentation | Quote sparingly, with attribution | the manual's own terms |
+| the other twenty-one reference trees | MIT | Yes, with the MIT notice | each tree's own licence file; `reference/RESEARCH.md` section F |
 | `rqbit` issue and PR corpus | n/a, data | It is JSON, not code | the GitHub API |
 
-**fx-torrent is Apache-2.0**, the only permissively licensed BitTorrent
-implementation kept in the corpus, so it is the one tree that could legally be
-copied from or depended on. Nothing has been. Copying would attach Apache-2.0
-section 4's requirements: the licence text, the `NOTICE` contents, and a
-statement of changes, all of which `cargo about` would then have to carry into
-`THIRD_PARTY.md`. Depending on it as a crate is the cheaper route if it is ever
-wanted, and `cargo deny`'s allow-list already permits Apache-2.0.
+**Every reference tree is permissive.** The corpus is twenty-two trees:
+`intermodal` under CC0-1.0 and twenty-one under MIT.
+[reference-map.md](reference-map.md) lists them and `reference/RESEARCH.md`
+section F carries the per-tree evidence. Copying from any of them attaches the
+MIT notice requirement and nothing more, which `cargo about` already handles for
+every dependency; `intermodal` attaches nothing at all.
+
+**fx-torrent was recorded here as Apache-2.0 and it is MIT.** Its `LICENSE`
+file is the plain MIT text. The Apache determination was wrong, and the
+paragraph that followed it — about Apache-2.0 section 4's licence-text,
+`NOTICE` and statement-of-changes requirements — described obligations that do
+not apply. Nothing was copied from it under either reading, so the error
+attached no obligation that went unmet. It is corrected rather than deleted
+because a licence determination that was once wrong is worth leaving visible:
+the lesson is to read the file rather than the badge or the manifest, which is
+the same lesson `vortex` and `tc` carry in section F.
+
+**Two trees state their licence only in a manifest.** `nanotorrent` and
+`mtorrent` carry no `LICENSE` file, and both declare `license = "MIT"` in
+`Cargo.toml`. Those two manifests were kept back from the corpus's manifest
+sweep for exactly that reason. A manifest is weaker evidence than a licence
+file, and the `fx-torrent` error above is what that weakness looks like when it
+goes wrong, so treat both as MIT and check upstream before copying from either.
 
 ### The four that were deleted
 
