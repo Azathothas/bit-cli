@@ -1284,7 +1284,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    webseed
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     When a piece fails its hash, `bit-cli` knows the piece failed and
              does not know **who supplied the wrong bytes**. A piece is filled
@@ -1344,3 +1344,109 @@ Acceptance:  A run with two sources for one torrent, one of which serves wrong
              in `--json`, retires it, and completes from the other. The healthy
              source is asserted to still be active at the end, because
              retiring both is the failure this entry exists to prevent.
+
+**Built as a block-to-source ledger, resolved against the payload the session
+has already verified.** `webseed/ledger.rs` is the corpus shape:
+`record(source, key, data)` stores a SHA-1 of every block against the source
+that supplied it, and `check(key, correct)` returns **every** source whose
+recorded hash differs from the correct bytes, not the last one to answer.
+It holds no block data and fetches nothing, which is `smartban.go`'s own rule.
+
+**Where the correct bytes come from is the part this tree had to answer for
+itself.** The corpus reference is called from a client's piece-write path,
+which has the verified data in hand; `bit-cli` is the source side and never
+sees it. The answer is the disk. Once the session reports a piece in its
+bitfield it has hash-checked that piece, so the bytes on disk are the truth by
+definition, and `storage::read_range` reads them back. Nothing is fetched
+twice, which is what the entry asked for.
+
+**Only a disputed block is ever read back, and in a healthy run that is none of
+them.** A block whose recorded hashes all agree cannot convict anybody: the
+piece verified, so the bytes everyone sent for it were the right ones. So the
+pass is a `have` dump the watch loop already takes, plus one 16 KiB read per
+block two sources actually disagreed about. `resolve_reads_only_the_disputed_blocks`
+pins that: eight blocks recorded, one disputed, exactly one read issued.
+
+**The ledger is bounded and says when the bound cost something.** 256 pieces,
+oldest evicted first, and `forget_settled` drops every piece the session has
+verified and nobody disagreed about, so in a healthy run it holds the pieces in
+flight and nothing else. `LedgerStats.evicted` is the one number worth reading:
+it counts pieces that could no longer have been attributed if they had turned
+out wrong. It is reported as `torrents[].attribution` in `--json`.
+`forgetting_a_piece_gives_its_slot_back` exists because the first draft dropped
+the map entry and left the order entry, which would have shrunk the ledger by
+one for the rest of the run on every forget.
+
+**A conviction retires the source, through the path T-005 already built.**
+`SourceStats` gains a `banned` slot, set from outside the fetch path and read
+by the bridge at the top of its serve loop and again before it re-dials. It
+lives on `SourceStats` rather than on a bridge because a source is one mirror
+however many connections it is presented over, and a mirror caught lying on one
+connection is the same mirror on all of them. The bridge returns
+`BridgeError::Source`, which is the variant that retires a bridge for good.
+The pre-dial check is not redundant: a conviction landing while a bridge sits in
+its reconnect backoff would otherwise be answered by connecting again.
+
+**Reported without a new event type.** `SourceReport` gains `convictions`, an
+array of `{source, piece, begin, length, served, correct}`, omitted when empty.
+A convicted source is a failed source, so the existing `source_failed` event
+carries the whole report including that array, and its `docs/schema.md`
+description now says a conviction is one of the two ways a source goes out. A
+second event carrying a subset of the same `SourceReport` would have been two
+names for one fact, and it would have cost the property
+[T-117](cli-surface.md) bought: `schema::NOT_YET_COVERED` is still empty.
+
+**Recorded after the cancel race is won, which is not a detail.**
+`fetch_and_send` already drops a block the session cancelled while it was in
+flight. Recording before that would let a block that never entered a piece
+convict the source that fetched it.
+
+**The acceptance is two mirrors of one payload, one of which lies once.**
+`a_mirror_that_serves_wrong_bytes_is_named_and_the_healthy_one_is_not` adds
+`ServeMode::CorruptOnce`: wrong bytes the first time each range is asked for,
+right bytes on every later request for it. That is the shape this entry exists
+for. A mirror wrong forever is caught by the piece never verifying, which
+`corrupt_data_never_completes_the_torrent` already pinned. A mirror wrong once
+breaks a piece, the retry repairs it, and by the time the payload is correct
+nothing on the wire remembers who broke it.
+
+Measured on that fixture, 640 KiB in twenty 32 KiB pieces: the honest mirror
+served 655,360 bytes and the liar 327,680, the ledger recorded 60 blocks and
+resolved 10 pieces with nothing evicted, and every one of the liar's 20 blocks
+was convicted. Both mirrors served, which is what makes it the split-piece case
+rather than one mirror quietly serving everything; the test asserts that too.
+
+**Proven by breaking it.** With `check` returning every recorded source instead
+of comparing hashes, which is "blame everyone who contributed to the piece":
+
+```
+$ cargo test -p bit-cli-core --test webseed_e2e -- a_mirror_that_serves_wrong_bytes two_honest_mirrors
+test a_mirror_that_serves_wrong_bytes_is_named_and_the_healthy_one_is_not ... FAILED
+test two_honest_mirrors_filling_one_payload_convict_nobody ... ok
+only the mirror that lied should be convicted:
+  left: {0, 1}
+ right: {1}
+```
+
+Every row against source 0 in that output has `served` equal to `correct`,
+which is the honest mirror being retired for its neighbour's bytes. Note which
+test does **not** catch it: two honest mirrors never disagree, so `check` is
+never called and the negative test passes against a broken implementation. The
+positive case is the one with teeth, and a suite with only the negative one
+would have shipped this.
+
+**What it does not do.** It cannot attribute a block a real swarm peer supplied,
+because only bridges record. [T-164](peers.md) is that half and needs the same
+machinery from the peer side; `BlockLedger` is keyed on a `usize` source index
+rather than a URL so it can take a peer key too. And a piece that never
+verifies is never resolved, because there are no correct bytes anywhere: that is
+the corpus's own limit, stated in this entry as "the caller owes it correct
+bytes from somewhere", and it is why `a_piece_the_session_does_not_hold_is_left_alone`
+asserts the reader is never even called.
+
+**The cost is one SHA-1 per block served, and it is paid only by `download`.**
+`attach_sources` is unchanged and hands no ledger to its bridges, so `bench`
+measures the fetch path without it; `attach_sources_tracked` is the one
+`download` calls. The gosh-dl PR 7 hazard the entry names did not arise: the
+ledger counts nothing that a progress report reads, and `served_bytes` is still
+charged once, past `pending.remove()`.

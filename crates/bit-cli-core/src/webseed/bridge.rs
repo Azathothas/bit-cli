@@ -446,6 +446,17 @@ pub struct BridgeParams {
     /// file touches without carrying the whole layout. See
     /// `TODO/webseed.md`, T-005.
     pub file_spans: Vec<std::ops::Range<u64>>,
+    /// Index of this source in the binding set, so a block can be attributed
+    /// to the mirror that served it.
+    pub source: usize,
+    /// Where blocks this source puts on the wire are recorded.
+    ///
+    /// Shared with every other source on the same torrent: attribution is a
+    /// statement about which of them sent a block, so it cannot be made from
+    /// inside one of them. `None` leaves the bridge exactly as it was, which
+    /// is what the protocol tests and `bench` use. See `TODO/webseed.md`,
+    /// T-179.
+    pub ledger: Option<Arc<crate::webseed::ledger::BlockLedger>>,
 }
 
 impl BridgeParams {
@@ -475,7 +486,15 @@ impl BridgeParams {
                 .iter()
                 .map(|file| file.offset..file.offset + file.length)
                 .collect(),
+            source: binding.index,
+            ledger: None,
         }
+    }
+
+    /// Record every block this source serves in a shared ledger.
+    pub fn with_ledger(mut self, ledger: Arc<crate::webseed::ledger::BlockLedger>) -> Self {
+        self.ledger = Some(ledger);
+        self
     }
 
     /// Whether piece `piece` overlaps file `file` by even one byte.
@@ -557,6 +576,14 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
     let mut params = params;
     let mut delay = RECONNECT_BASE;
     loop {
+        // Checked before dialling as well as inside the connection, because a
+        // conviction landing while this bridge sits in its reconnect backoff
+        // would otherwise be answered by connecting again.
+        if let Some(reason) = fetcher.stats().banned() {
+            status.set_error(Some(reason));
+            status.set_state(BridgeState::Failed);
+            return;
+        }
         status.set_state(BridgeState::Connecting);
         let outcome = serve(&params, &fetcher, &status).await;
         status.set_local_port(0);
@@ -709,6 +736,15 @@ async fn serve(
     let served: HashSet<u32> = params.pieces.iter().copied().collect();
 
     loop {
+        // A source convicted of serving wrong bytes stops here rather than at
+        // the next fetch: the conviction is made outside this task, and a
+        // mirror that is already known bad must not answer one more request
+        // while it waits to be asked. `Source` is the variant that retires a
+        // bridge for good, which is what a conviction means.
+        if let Some(reason) = fetcher.stats().banned() {
+            return Err(BridgeError::Source(reason));
+        }
+
         // Drain what is already buffered before waiting for more.
         while let Some(frame) = frames.take_frame().map_err(BridgeError::Link)? {
             // A frame's message id follows the four byte length prefix, and a
@@ -765,6 +801,7 @@ async fn serve(
                         status.clone(),
                         pending.clone(),
                         out_tx.clone(),
+                        params.ledger.clone().map(|ledger| (params.source, ledger)),
                     ));
                 }
                 Message::Cancel(request) => {
@@ -1016,6 +1053,12 @@ fn reason_of(err: BridgeError) -> String {
 }
 
 /// Fetch one block over HTTP and queue it, unless the session cancelled it.
+/// Which source a block is recorded against, and where it is recorded.
+///
+/// `None` for a bridge with no ledger, which is every caller but `download`.
+type Attribution = Option<(usize, Arc<crate::webseed::ledger::BlockLedger>)>;
+
+#[allow(clippy::too_many_arguments)]
 async fn serve_block(
     key: BlockKey,
     offset: u64,
@@ -1024,17 +1067,29 @@ async fn serve_block(
     status: Arc<BridgeStatus>,
     pending: Arc<Mutex<HashSet<BlockKey>>>,
     out: mpsc::Sender<Vec<u8>>,
+    attribution: Attribution,
 ) -> Result<(), BlockFailure> {
     // The clock starts when the request was taken off the wire, not when this
     // task gets a permit: time spent waiting for the concurrency limit is
     // time the session was waiting, and hiding it would report a pipeline
     // that answers faster than it does.
     let started = std::time::Instant::now();
-    let outcome = fetch_and_send(key, offset, limiter, fetcher, &status, pending, out).await;
+    let outcome = fetch_and_send(
+        key,
+        offset,
+        limiter,
+        fetcher,
+        &status,
+        pending,
+        out,
+        attribution,
+    )
+    .await;
     status.request_settled(started.elapsed());
     outcome
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_and_send(
     key: BlockKey,
     offset: u64,
@@ -1043,6 +1098,7 @@ async fn fetch_and_send(
     status: &BridgeStatus,
     pending: Arc<Mutex<HashSet<BlockKey>>>,
     out: mpsc::Sender<Vec<u8>>,
+    attribution: Attribution,
 ) -> Result<(), BlockFailure> {
     let (index, begin, length) = key;
     let _permit = limiter
@@ -1060,6 +1116,14 @@ async fn fetch_and_send(
         .remove(&key)
     {
         return Ok(());
+    }
+
+    // Recorded after the cancel race is won and before the bytes go out, so
+    // the ledger holds exactly the blocks that reached the session. A block
+    // fetched and then dropped never entered a piece and must not be able to
+    // convict anyone. See `TODO/webseed.md`, T-179.
+    if let Some((source, ledger)) = &attribution {
+        ledger.record(*source, key, &block);
     }
 
     let message = Message::Piece(Piece::from_data(index, begin, &block));

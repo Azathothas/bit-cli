@@ -79,7 +79,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
 | [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
 | [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
-| [T-179](webseed.md) | P2 | webseed | open | A bad piece cannot be attributed to the source that filled it |
+| [T-179](webseed.md) | P2 | webseed | **done** | A bad piece cannot be attributed to the source that filled it |
 | [T-009](webseed.md) | P1 | webseed | **done** | A source cannot be attached over more than one connection |
 | [T-141](webseed.md) | P1 | webseed | **done** | --web-seed-connect-timeout does not bound a connect that never answers |
 | [T-162](webseed.md) | P1 | bench | **done** | Two bench webseed tests assumed a loaded runner cannot also fail |
@@ -218,7 +218,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 143 items: 133 to work through, and 10 deferred to Phase C.
-56 open, 4 partial, 2 blocked, 71 done.
+55 open, 4 partial, 2 blocked, 72 done.
 
 **Two entries were closed because another one needed them.**
 [T-005](webseed.md) added two fields to a report, which made the schema check

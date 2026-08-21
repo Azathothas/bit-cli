@@ -18,6 +18,7 @@ use bit_cli_core::units::{format_rate, format_size, parse_duration, parse_rate};
 use bit_cli_core::webseed::binding::{BindingSet, SourceSpec};
 use bit_cli_core::webseed::bridge::{BridgeParams, BridgeState, BridgeStatus};
 use bit_cli_core::webseed::fetch::{Fetcher, Verify};
+use bit_cli_core::webseed::ledger::{BlockLedger, Conviction};
 use serde::Serialize;
 
 use crate::cli::{Global, LimitArgs, TrackerArgs, WebSeedArgs};
@@ -284,6 +285,9 @@ pub struct AttachedSource {
     /// The one fetcher every connection shares, kept so the run can report
     /// what went over HTTP against what reached the session.
     fetcher: Arc<Fetcher>,
+    /// Blocks this source was convicted of serving wrong, in the order they
+    /// were resolved. See `TODO/webseed.md`, T-179.
+    convictions: std::sync::Mutex<Vec<Conviction>>,
 }
 
 impl AttachedSource {
@@ -292,6 +296,34 @@ impl AttachedSource {
         for task in &self.tasks {
             task.abort();
         }
+    }
+
+    /// Convict this source of serving the wrong bytes for one block.
+    ///
+    /// The first conviction retires the source; the rest are still recorded,
+    /// because a mirror that got six blocks wrong and a mirror that got one
+    /// wrong are different mirrors and the report should say which it was.
+    fn convict(&self, conviction: Conviction) {
+        self.fetcher
+            .stats()
+            .ban(format!("{} {conviction}", self.url));
+        self.convictions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(conviction);
+    }
+
+    /// Blocks this source was convicted of serving wrong.
+    pub fn convictions(&self) -> Vec<Conviction> {
+        self.convictions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Whether this source has been convicted of serving wrong bytes.
+    pub fn is_banned(&self) -> bool {
+        self.fetcher.stats().banned().is_some()
     }
 
     /// How many connections this source is presented over.
@@ -495,6 +527,14 @@ pub struct SourceReport {
     /// Milliseconds left of that wait.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cooldown_remaining_ms: Option<u64>,
+    /// Blocks this source was proved to have served wrong.
+    ///
+    /// Proved rather than suspected: each row is a block whose recorded hash
+    /// differs from the bytes the session went on to verify, so it names the
+    /// mirror that broke the piece and not merely one that contributed to it.
+    /// A source with one of these is retired. See `TODO/webseed.md`, T-179.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub convictions: Vec<Conviction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -554,6 +594,7 @@ impl AttachedSource {
                 .stats()
                 .cooldown_remaining()
                 .map(|left| left.as_millis().min(u128::from(u64::MAX)) as u64),
+            convictions: self.convictions(),
             error: self.error(),
         }
     }
@@ -584,6 +625,36 @@ pub async fn attach_sources(
     specs: &[SourceSpec],
     options: &AttachOptions,
 ) -> Result<(Vec<AttachedSource>, BindingSet)> {
+    attach_sources_with(engine, handle, layout, specs, options, None)
+        .await
+        .map(|(sources, set, _)| (sources, set))
+}
+
+/// [`attach_sources`], recording every block served in a shared ledger.
+///
+/// One ledger for the torrent rather than one per source: which mirror sent a
+/// block is a statement none of them can make about itself. The ledger is
+/// returned so the caller can resolve it against pieces the session has
+/// verified. See `TODO/webseed.md`, T-179.
+pub async fn attach_sources_tracked(
+    engine: &Engine,
+    handle: &Handle,
+    layout: &Arc<Layout>,
+    specs: &[SourceSpec],
+    options: &AttachOptions,
+) -> Result<(Vec<AttachedSource>, BindingSet, Arc<BlockLedger>)> {
+    let ledger = Arc::new(BlockLedger::new(layout.piece_length));
+    attach_sources_with(engine, handle, layout, specs, options, Some(ledger)).await
+}
+
+async fn attach_sources_with(
+    engine: &Engine,
+    handle: &Handle,
+    layout: &Arc<Layout>,
+    specs: &[SourceSpec],
+    options: &AttachOptions,
+    ledger: Option<Arc<BlockLedger>>,
+) -> Result<(Vec<AttachedSource>, BindingSet, Arc<BlockLedger>)> {
     let AttachOptions {
         require,
         peers_available,
@@ -591,13 +662,19 @@ pub async fn attach_sources(
         trace,
         verify,
     } = *options;
+    // A ledger exists either way, so the returned type does not change with
+    // the caller. Only a tracked attach hands it to the bridges, which is what
+    // decides whether anything is recorded: `bench` measures the fetch path
+    // and must not pay a hash per block to do it.
+    let tracked = ledger.is_some();
+    let ledger = ledger.unwrap_or_else(|| Arc::new(BlockLedger::new(layout.piece_length)));
     let info_hash = handle.info_hash().as_string();
     let set = BindingSet::resolve(layout, &info_hash, specs)?;
     if require {
         set.require_coverage(peers_available)?;
     }
     if specs.is_empty() {
-        return Ok((Vec::new(), set));
+        return Ok((Vec::new(), set, ledger));
     }
 
     let target = engine.bridge_target().ok_or_else(|| {
@@ -611,7 +688,7 @@ pub async fn attach_sources(
     let mut attached = Vec::with_capacity(set.bindings.len());
     for binding in &set.bindings {
         let limits = &binding.spec.limits;
-        let params = BridgeParams::for_binding(
+        let mut params = BridgeParams::for_binding(
             target,
             handle.info_hash(),
             session_peer_id,
@@ -619,6 +696,9 @@ pub async fn attach_sources(
             binding,
             limits.per_connection_concurrency(),
         );
+        if tracked {
+            params = params.with_ledger(ledger.clone());
+        }
         let whole_pieces = params.pieces.len();
         // One fetcher for the whole source, however many connections it is
         // presented over. That is what shares the window cache between them
@@ -654,9 +734,39 @@ pub async fn attach_sources(
             statuses,
             tasks,
             fetcher,
+            convictions: std::sync::Mutex::new(Vec::new()),
         });
     }
-    Ok((attached, set))
+    Ok((attached, set, ledger))
+}
+
+/// Resolve every disputed piece the session has verified, and retire the
+/// sources the verified bytes convict.
+///
+/// The correct bytes come off the disk, from the piece the session has already
+/// hash-checked, so nothing is fetched a second time. Only a block two sources
+/// disagreed about is ever read, which in a healthy run is none of them: the
+/// whole pass costs one `have` dump and nothing else.
+///
+/// Returns the convictions made on this pass, so the caller can report them as
+/// they happen rather than only at the end.
+pub fn resolve_convictions(
+    ledger: &BlockLedger,
+    sources: &[AttachedSource],
+    have: &[bool],
+    mut read: impl FnMut(u64, u32) -> Option<Vec<u8>>,
+) -> Vec<Conviction> {
+    let convictions = ledger.resolve(have, &mut read);
+    // Settled pieces are dropped after the disputed ones are resolved rather
+    // than before, so a pass never spends its budget forgetting pieces it
+    // still needed.
+    ledger.forget_settled(have);
+    for conviction in &convictions {
+        if let Some(source) = sources.iter().find(|s| s.index == conviction.source) {
+            source.convict(conviction.clone());
+        }
+    }
+    convictions
 }
 
 /// Loopback ports the attached bridges have connected from.

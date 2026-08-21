@@ -1021,6 +1021,43 @@ pub fn payload_root(directory: &Path, layout: &Layout) -> PathBuf {
     }
 }
 
+/// Read a byte range back out of a payload already on disk.
+///
+/// `root` is [`payload_root`] and `disk_paths` is [`crate::paths::plan`]'s, so
+/// this reads what the session actually wrote rather than what the torrent
+/// asked for. A range that crosses a file boundary is read from each file in
+/// turn, which is what makes it usable for a piece.
+///
+/// `None` when any part of the range could not be read: the file is not there
+/// yet, is short, or the read failed. A caller checking bytes against a hash
+/// has to be able to tell "the payload says otherwise" from "the payload could
+/// not be read", because only the first of those is evidence about anything.
+///
+/// This exists for the one caller that needs correct bytes for a block after
+/// the session has verified the piece holding it. See `TODO/webseed.md`,
+/// T-179.
+pub fn read_range(
+    root: &Path,
+    layout: &Layout,
+    disk_paths: &[String],
+    range: std::ops::Range<u64>,
+) -> Option<Vec<u8>> {
+    let wanted = range.end.checked_sub(range.start)?;
+    let mut out = Vec::with_capacity(wanted as usize);
+    for slice in layout.split_by_file(range) {
+        let relative = disk_paths.get(slice.file)?;
+        let path = root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let file = File::open(&path).ok()?;
+        let mut buf = vec![0u8; slice.length as usize];
+        pread_exact(&file, slice.offset, &mut buf).ok()?;
+        out.extend_from_slice(&buf);
+    }
+    // `split_by_file` truncates a range that runs past the payload, so a short
+    // result is a range the torrent does not cover rather than a read that
+    // failed. Either way it is not the bytes the caller asked for.
+    (out.len() as u64 == wanted).then_some(out)
+}
+
 /// A payload file is already there and the run was not told it could use it.
 ///
 /// This is a type rather than a message so the caller can classify it by

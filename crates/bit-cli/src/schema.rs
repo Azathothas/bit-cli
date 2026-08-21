@@ -118,7 +118,7 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
     ),
     (
         "source_failed",
-        "A source spent its error budget and is out for the run.",
+        "A source is out for the run: it spent its error budget, or it was proved to have served bytes the session then verified as something else. `sources[].convictions` says which, and names the block.",
     ),
     (
         "source_cooling",

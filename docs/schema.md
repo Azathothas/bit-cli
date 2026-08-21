@@ -285,6 +285,10 @@ From `bit-cli download <TORRENT> --web-seed <URL> --json`.
 | `torrents[].announced[].at_ms` | integer |
 | `torrents[].announced[].event` | string |
 | `torrents[].announced[].trackers` | integer |
+| `torrents[].attribution.evicted` | integer |
+| `torrents[].attribution.pieces_held` | integer |
+| `torrents[].attribution.recorded` | integer |
+| `torrents[].attribution.resolved` | integer |
 | `torrents[].code` | string |
 | `torrents[].downloaded.bytes` | integer |
 | `torrents[].downloaded.human` | string |
@@ -781,7 +785,7 @@ From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`.
 
 ### `source_failed`
 
-A source spent its error budget and is out for the run.
+A source is out for the run: it spent its error budget, or it was proved to have served bytes the session then verified as something else. `sources[].convictions` says which, and names the block.
 
 From `bit-cli download <TORRENT> --web-seed <404 URL> --jsonl`.
 

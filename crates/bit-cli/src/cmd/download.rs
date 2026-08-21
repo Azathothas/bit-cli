@@ -22,6 +22,7 @@ use bit_cli_core::torrent::Metainfo;
 use bit_cli_core::units::{Size, format_rate, format_size};
 use bit_cli_core::webseed::binding::SourceSpec;
 use bit_cli_core::webseed::fetch::Verify;
+use bit_cli_core::webseed::ledger::LedgerStats;
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -82,6 +83,16 @@ pub struct TorrentReport {
     /// only when the source was a Metalink. See `TODO/cli-surface.md`, T-113.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metalink: Option<MetalinkReport>,
+    /// What the block-to-source ledger did, for a run with HTTP sources.
+    ///
+    /// `evicted` is the one number worth reading on a healthy run: it counts
+    /// pieces whose records were dropped before they could be resolved, so it
+    /// is how many pieces could no longer have been attributed if they had
+    /// turned out wrong. Absent when the run attached no sources, because a
+    /// ledger with nothing to record says nothing.
+    /// See `TODO/webseed.md`, T-179.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<LedgerStats>,
     /// The exit code this torrent's outcome produces.
     ///
     /// A run's code is the worst of its torrents'. Without this, a torrent
@@ -928,6 +939,7 @@ async fn one(
                 shared: Vec::new(),
                 announced: Vec::new(),
                 metalink: None,
+                attribution: None,
                 code: error.code(),
                 error: Some(error.to_string()),
             }
@@ -1089,7 +1101,7 @@ async fn one_inner(
         apply_max_total(&declared, options.max_total),
         options.prefer,
     );
-    let (sources, _set) = swarm::attach_sources(
+    let (sources, _set, ledger) = swarm::attach_sources_tracked(
         engine,
         &handle,
         &layout,
@@ -1124,6 +1136,7 @@ async fn one_inner(
         &handle,
         &layout,
         &sources,
+        &ledger,
         plan,
         options,
         tx,
@@ -1165,6 +1178,9 @@ async fn one_inner(
     );
     report.shared = shared;
     report.announced = announced;
+    // Set here rather than passed into `finish`, which already takes nine
+    // arguments and does not otherwise know the ledger exists.
+    report.attribution = (!sources.is_empty()).then(|| ledger.stats());
     if let Some(metalink) = &plan.metalink {
         let (metalink_report, code) = check_metalink(metalink, engine, &handle, options, &report);
         if let Some(checksum) = &metalink_report.checksum {
@@ -1239,6 +1255,9 @@ async fn watch(
     handle: &bit_cli_core::engine::Handle,
     layout: &Arc<Layout>,
     sources: &[AttachedSource],
+    // Where every block a source served is recorded, so a piece that failed
+    // can name the mirror that broke it. See `TODO/webseed.md`, T-179.
+    ledger: &bit_cli_core::webseed::ledger::BlockLedger,
     plan: &Plan,
     options: &Options,
     tx: &mpsc::Sender<Msg>,
@@ -1372,6 +1391,36 @@ async fn watch(
                     }),
                 ))
                 .await;
+        }
+
+        // Attribution runs before the failure reporting below, so a source
+        // convicted on this tick is retired and reported as failed on this
+        // tick rather than the next. The correct bytes come off the disk, from
+        // a piece the session has already hash-checked, so nothing is fetched
+        // twice; and only a block two sources disagreed about is ever read,
+        // which in a healthy run is none of them. See `TODO/webseed.md`,
+        // T-179.
+        if let Some(have) = have.as_deref() {
+            let convicted = swarm::resolve_convictions(ledger, sources, have, |offset, length| {
+                read_payload(engine, handle, options, layout, offset, length)
+            });
+            // Warned here and reported as an event below, by the
+            // `source_failed` the retirement produces. A second event carrying
+            // a subset of the same `SourceReport` would be two names for one
+            // fact, and `sources[].convictions` already carries the piece, the
+            // offset and both hashes.
+            for conviction in convicted {
+                let url = sources
+                    .iter()
+                    .find(|s| s.index == conviction.source)
+                    .map(|s| s.url.clone())
+                    .unwrap_or_default();
+                let _ = tx
+                    .send(Msg::Warn(format!(
+                        "web seed {url} {conviction}, so it is retired"
+                    )))
+                    .await;
+            }
         }
 
         for source in sources {
@@ -1624,6 +1673,34 @@ fn payload_path(
     Some(root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR)))
 }
 
+/// Read verified bytes back out of the payload the session is writing.
+///
+/// This is where the correct bytes for a disputed block come from. Reading
+/// them off the disk rather than fetching them again is the whole reason smart
+/// ban costs nothing: the session has already hash-checked the piece holding
+/// them, so the bytes on disk are the truth by definition, and a source whose
+/// recorded hash disagrees with them is proved wrong rather than suspected.
+///
+/// `None` when the range could not be read, which leaves the piece for the
+/// next pass. See `TODO/webseed.md`, T-179.
+fn read_payload(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    options: &Options,
+    layout: &Layout,
+    offset: u64,
+    length: u32,
+) -> Option<Vec<u8>> {
+    let planned = engine.path_plan(handle)?;
+    let root = bit_cli_core::storage::payload_root(&options.directory, layout);
+    bit_cli_core::storage::read_range(
+        &root,
+        layout,
+        &planned.disk_paths,
+        offset..offset + u64::from(length),
+    )
+}
+
 /// Where this torrent's files were actually written, when that is not where
 /// the torrent said.
 ///
@@ -1841,6 +1918,7 @@ fn finish(
         shared: Vec::new(),
         announced: Vec::new(),
         metalink: None,
+        attribution: None,
         code: stopped.code(),
         error: snapshot.error.clone(),
     }

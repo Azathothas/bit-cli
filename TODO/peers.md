@@ -671,6 +671,18 @@ Approach:    The proposal in that issue is the shape. Auto-block on a protocol
              [T-179](webseed.md), smart ban: with several sources filling one
              piece, a failed hash names a set of peers and not one peer. Build
              that first, or this blocks whichever peer is convenient.
+
+             **T-179 is done, and it built the half that is not peer-specific.**
+             `webseed/ledger.rs` records a hash of every block against whoever
+             supplied it and convicts every supplier whose hash differs from
+             the bytes the session went on to verify, reading those bytes back
+             off the disk rather than fetching them again. It is keyed on a
+             `usize` source index rather than a URL for this entry's sake, so a
+             peer key fits without changing the type. What is missing on the
+             peer side is the recording hook: `bit-cli` sees a bridge put a
+             block on the wire and does not see a peer's block arrive, because
+             that path is inside `librqbit`. Name that seam here before pricing
+             this, the way [T-167](bep-coverage.md) had to.
 Acceptance:  A synthetic peer that fails a piece hash twice is not redialled
              for the rest of the run, `bit-cli peers --json` names it with the
              reason, and the freed slot measurably goes to another peer.

@@ -19,6 +19,7 @@ use bit_cli_core::layout::Layout;
 use bit_cli_core::webseed::binding::{BindingSet, Origin, SourceSpec};
 use bit_cli_core::webseed::bridge::{self, BridgeParams, BridgeState, BridgeStatus};
 use bit_cli_core::webseed::fetch::Fetcher;
+use bit_cli_core::webseed::ledger::BlockLedger;
 use bit_cli_core::webseed::scope::Scope;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -38,6 +39,15 @@ enum ServeMode {
     NotFound,
     /// Honour `Range` but return the wrong bytes.
     Corrupt,
+    /// Return the wrong bytes the first time each range is asked for, and the
+    /// right ones on every later request for it.
+    ///
+    /// This is the shape smart ban exists for. A mirror that is wrong forever
+    /// is caught by the piece never verifying; one that is wrong once breaks a
+    /// piece, the retry repairs it, and by the time the payload is correct
+    /// nothing on the wire remembers who broke it. See `TODO/webseed.md`,
+    /// T-179.
+    CorruptOnce,
     /// Speak BEP 17: `?info_hash=&piece=&ranges=` instead of a `Range` header.
     Hoffman,
     /// Redirect once, then serve properly from the new location.
@@ -172,8 +182,19 @@ async fn handle_request(
         return respond(&mut stream, 416, "Range Not Satisfiable", None, b"").await;
     }
     let mut slice = body[start..=end].to_vec();
-    if mode == ServeMode::Corrupt {
-        // Flip every byte, so the data is the right length and hashes wrong.
+    // Corrupted the same way in both modes: flip every byte, so the data is
+    // the right length and hashes wrong. `CorruptOnce` reuses the set that
+    // `ExpiringSignature` keys by target and range, so the lie follows the
+    // range rather than the connection and each range is lied about once.
+    let corrupt = match mode {
+        ServeMode::Corrupt => true,
+        ServeMode::CorruptOnce => refused
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(format!("{target} {start}-{end}")),
+        _ => false,
+    };
+    if corrupt {
         for byte in &mut slice {
             *byte = !*byte;
         }
@@ -398,11 +419,48 @@ struct Attached {
     statuses: Vec<Arc<BridgeStatus>>,
     fetchers: Vec<Arc<Fetcher>>,
     layout: Arc<Layout>,
+    /// Every block every source served, keyed by block. See
+    /// `TODO/webseed.md`, T-179.
+    ledger: Arc<BlockLedger>,
 }
 
 impl Attached {
     fn finished(&self) -> bool {
         self.handle.stats().finished
+    }
+
+    /// Resolve the ledger against what the session has verified, reading the
+    /// correct bytes back out of the payload on disk.
+    ///
+    /// This is what `download`'s watch loop does once a tick, written out here
+    /// so the test drives the same two calls rather than a copy of them.
+    fn resolve(&self, out: &Path) -> Vec<bit_cli_core::webseed::ledger::Conviction> {
+        let Some(have) = self.engine.have_pieces(&self.handle) else {
+            return Vec::new();
+        };
+        let paths: Vec<String> = self
+            .layout
+            .files
+            .iter()
+            .map(bit_cli_core::layout::LayoutFile::display_path)
+            .collect();
+        let planned = bit_cli_core::paths::plan(&paths);
+        let root = bit_cli_core::storage::payload_root(out, &self.layout);
+        let convicted = self.ledger.resolve(&have, |offset, length| {
+            bit_cli_core::storage::read_range(
+                &root,
+                &self.layout,
+                &planned.disk_paths,
+                offset..offset + u64::from(length),
+            )
+        });
+        self.ledger.forget_settled(&have);
+        for conviction in &convicted {
+            self.fetchers[conviction.source]
+                .stats()
+                .ban(conviction.to_string());
+        }
+        convicted
     }
 
     fn served(&self) -> u64 {
@@ -474,9 +532,11 @@ async fn attach_with(
 
     let mut statuses = Vec::new();
     let mut fetchers = Vec::new();
+    let ledger = Arc::new(BlockLedger::new(layout.piece_length));
     for binding in &set.bindings {
         let params =
-            BridgeParams::for_binding(target, handle.info_hash(), peer_id, &layout, binding, 4);
+            BridgeParams::for_binding(target, handle.info_hash(), peer_id, &layout, binding, 4)
+                .with_ledger(ledger.clone());
         let fetcher = Arc::new(
             Fetcher::new(binding.clone(), layout.clone(), info_hash.clone(), 4, false).unwrap(),
         );
@@ -492,6 +552,7 @@ async fn attach_with(
         statuses,
         fetchers,
         layout,
+        ledger,
     }
 }
 
@@ -762,6 +823,170 @@ async fn two_scoped_sources_cover_a_torrent_between_them() {
             "both sources should have served something"
         );
     }
+    run.engine.stop().await;
+}
+
+/// The acceptance for `TODO/webseed.md` T-179.
+///
+/// Two mirrors of one payload, one of which lies once about every range it is
+/// asked for. Pieces are filled from both, so a failed piece names neither of
+/// them on the wire; the ledger names the one that lied, and only that one.
+///
+/// The healthy mirror still being usable at the end is the assertion that
+/// matters most: retiring both is the failure this entry exists to prevent,
+/// and "the piece failed, so blame everyone who touched it" would pass every
+/// other check here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mirror_that_serves_wrong_bytes_is_named_and_the_healthy_one_is_not() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    // Twenty pieces of 32 KiB, so a piece is filled from several blocks and
+    // the two mirrors have plenty to divide between them.
+    let data = content(640 * 1024, 37);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    let (honest, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let (liar, _) = serve(src.path().to_path_buf(), ServeMode::CorruptOnce).await;
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&honest), whole(&liar)],
+    )
+    .await;
+    assert_eq!(run.layout.piece_count(), 20);
+
+    // The ledger is resolved on a tick, exactly as `download`'s watch loop
+    // does it. Waiting on the conviction rather than on a duration: the run
+    // is over when the liar has been named, whenever that is.
+    let convicted: Arc<std::sync::Mutex<Vec<bit_cli_core::webseed::ledger::Conviction>>> =
+        Arc::default();
+    let named = {
+        let convicted = convicted.clone();
+        wait_for(Duration::from_secs(120), || {
+            let mut found = convicted.lock().unwrap();
+            found.extend(run.resolve(out.path()));
+            !found.is_empty()
+        })
+        .await
+    };
+    let convicted = convicted.lock().unwrap().clone();
+    assert!(
+        named,
+        "the mirror that served wrong bytes was never named: served {:?}, reasons {:?}",
+        run.statuses
+            .iter()
+            .map(|s| s.served_bytes())
+            .collect::<Vec<_>>(),
+        run.reasons()
+    );
+
+    // Source 1 is the liar. Every conviction has to be against it, because a
+    // conviction against source 0 is a healthy mirror retired for someone
+    // else's bytes.
+    let guilty: std::collections::BTreeSet<usize> = convicted.iter().map(|c| c.source).collect();
+    assert_eq!(
+        guilty,
+        std::collections::BTreeSet::from([1]),
+        "only the mirror that lied should be convicted: {convicted:?}"
+    );
+    for conviction in &convicted {
+        assert_ne!(
+            conviction.served, conviction.correct,
+            "a conviction records two hashes that differ"
+        );
+        assert!(conviction.piece < 20, "{conviction:?}");
+    }
+
+    // Both mirrors served, which is what makes this the case the entry is
+    // about: a piece filled from two sources at once. With one of them idle
+    // the pieces would never have been split and "blame whoever filled it"
+    // would give the same answer as attribution does. Measured on this
+    // fixture: the honest mirror serves 655,360 bytes and the liar 327,680,
+    // and every one of the liar's blocks is convicted.
+    for (index, status) in run.statuses.iter().enumerate() {
+        assert!(
+            status.served_bytes() > 0,
+            "mirror {index} served nothing, so no piece was split"
+        );
+    }
+
+    // The liar is retired and the honest mirror is not.
+    assert!(
+        wait_for(Duration::from_secs(30), || {
+            run.statuses[1].state() == BridgeState::Failed
+        })
+        .await,
+        "a convicted mirror is retired: {:?}",
+        run.statuses[1].state()
+    );
+    assert_ne!(
+        run.statuses[0].state(),
+        BridgeState::Failed,
+        "the healthy mirror must survive its neighbour lying: {:?}",
+        run.statuses[0].error()
+    );
+
+    // And the payload still arrives, from the mirror that was telling the
+    // truth all along.
+    assert!(
+        wait_for(Duration::from_secs(120), || {
+            run.resolve(out.path());
+            run.finished()
+        })
+        .await,
+        "the honest mirror should finish the torrent on its own: {:?}",
+        run.reasons()
+    );
+    assert_eq!(std::fs::read(out.path().join("movie.bin")).unwrap(), data);
+    run.engine.stop().await;
+}
+
+/// The other half of T-179, and the one a wrong implementation passes the
+/// first half of: two honest mirrors filling the same pieces convict nobody.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_honest_mirrors_filling_one_payload_convict_nobody() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let data = content(320 * 1024, 41);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+
+    let (one, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let (two, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let run = attach(
+        &src.path().join("movie.bin"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&one), whole(&two)],
+    )
+    .await;
+
+    let mut convicted = Vec::new();
+    let done = wait_for(Duration::from_secs(120), || {
+        convicted.extend(run.resolve(out.path()));
+        run.finished()
+    })
+    .await;
+    convicted.extend(run.resolve(out.path()));
+    assert!(
+        done,
+        "two mirrors should finish a torrent: {:?}",
+        run.reasons()
+    );
+    assert!(
+        convicted.is_empty(),
+        "two mirrors serving the same correct bytes convict nobody: {convicted:?}"
+    );
+    for status in &run.statuses {
+        assert_ne!(status.state(), BridgeState::Failed, "{:?}", status.error());
+    }
+    // The ledger recorded work and let it go again, rather than doing nothing
+    // at all: a ledger that records nothing also convicts nobody.
+    let stats = run.ledger.stats();
+    assert!(stats.recorded > 0, "{stats:?}");
+    assert_eq!(stats.evicted, 0, "nothing should be evicted: {stats:?}");
     run.engine.stop().await;
 }
 

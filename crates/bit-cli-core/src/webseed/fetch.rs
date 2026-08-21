@@ -255,6 +255,14 @@ pub struct SourceStats {
     /// when a request has already failed, never on the path a byte travels,
     /// and it is never held across an await.
     retries_by_status: std::sync::Mutex<std::collections::BTreeMap<u16, u64>>,
+    /// Why this source was convicted of serving wrong bytes, once it has been.
+    ///
+    /// Set from outside the fetch path, by whoever resolved a disputed piece
+    /// against the verified payload. It lives here rather than on the bridge
+    /// because a source is one mirror however many connections it is presented
+    /// over, and a mirror caught lying on one connection is the same mirror on
+    /// all of them. See `TODO/webseed.md`, T-179.
+    banned: std::sync::Mutex<Option<String>>,
 }
 
 impl SourceStats {
@@ -272,6 +280,26 @@ impl SourceStats {
             .lock()
             .map(|by_status| by_status.clone())
             .unwrap_or_default()
+    }
+
+    /// Convict this source of serving wrong bytes, with the reason.
+    ///
+    /// The first conviction is the one kept. A mirror that got two blocks
+    /// wrong is retired by the first of them, and overwriting the reason with
+    /// the second would report a later symptom as the cause.
+    pub fn ban(&self, reason: impl Into<String>) {
+        let mut banned = self.banned.lock().unwrap_or_else(|e| e.into_inner());
+        if banned.is_none() {
+            *banned = Some(reason.into());
+        }
+    }
+
+    /// Why this source was convicted, if it was.
+    pub fn banned(&self) -> Option<String> {
+        self.banned
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
