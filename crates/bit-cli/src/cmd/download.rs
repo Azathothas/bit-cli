@@ -1019,11 +1019,17 @@ async fn watch(
                 // failure here drops back to the natural order rather than
                 // failing a run over a preference.
                 if let Some(driver) = ordering.as_mut() {
-                    let advanced = match engine.have_pieces(handle) {
-                        Some(have) => driver.advance(&have).await,
-                        None => Ok(driver.pointing_at()),
+                    let keep = match engine.have_pieces(handle) {
+                        // Pointing at nothing means nothing is missing, so the
+                        // window has no more work and the stream is released.
+                        Some(have) => matches!(driver.advance(&have).await, Ok(Some(_))),
+                        // No bitfield yet is not a reason to give up: the
+                        // torrent may still be hash-checking, and a tick that
+                        // lands in that window used to disable the ordering
+                        // for the whole run.
+                        None => true,
                     };
-                    if !matches!(advanced, Ok(Some(_))) {
+                    if !keep {
                         ordering = None;
                     }
                 }

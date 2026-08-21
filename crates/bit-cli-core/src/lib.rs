@@ -14,6 +14,7 @@ pub mod equivalence;
 pub mod error;
 pub mod exit;
 pub mod layout;
+pub mod metalink;
 pub mod paths;
 pub mod piece_order;
 pub mod span;

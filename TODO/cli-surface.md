@@ -155,7 +155,7 @@ Source:      PROMPT.md A3.4c, decision 7.7
 Category:    cli
 Priority:    P1
 Effort:      L
-Status:      open
+Status:      partial: the parser is built and tested, nothing calls it yet
 
 Problem:     `source.rs` classifies `.meta4` and `.metalink` and reports that
              they need resolving. Nothing resolves them. `quick-xml` is already
@@ -176,6 +176,63 @@ Approach:    RFC 5854 for `.meta4`, plus the older `.metalink`. Parse the
 Acceptance:  `bit-cli download release.meta4` resolves the torrent, registers
              every listed mirror, downloads, and verifies against the
              Metalink's own checksum. Run against a real `.meta4`.
+
+**The parser is done and the wiring is not.** `bit_cli_core::metalink` reads
+both versions in one pass over `quick-xml` events, which is the half of this
+with all the format knowledge in it:
+
+| | Metalink 4, RFC 5854, `.meta4` | Metalink 3, `.metalink` |
+| --- | --- | --- |
+| files | `<file>` under `<metalink>` | `<file>` under `<files>` |
+| hashes | `<hash type="sha-256">` | `<hash type="sha256">` under `<verification>` |
+| mirrors | `<url>` | `<url type="http">` under `<resources>` |
+| torrent | `<metaurl mediatype="torrent">` | `<url type="bittorrent">` |
+| preference | `priority`, **lower** first | `preference`, **higher** first |
+
+Both come out of the parser under version 4's rule, so a caller sorting by
+`priority` gets the document's intent whichever file it read, and `sha-256` and
+`sha256` normalise to one spelling.
+
+Four things it refuses or drops on purpose, each with a test:
+
+- A `<metaurl>` that is not a torrent is dropped rather than registered as a
+  mirror. It names another document, so a source pointed at it would serve XML
+  as payload.
+- The per-piece `<hash piece="0">` entries under `<pieces>` are not whole-file
+  checksums and are not collected as if they were. Without that a version 3
+  file comes out with four checksums, two of which are one piece each.
+- `ftp:` mirrors are kept out of the source list and counted, because a source
+  this cannot fetch from is worse than one it never had.
+- A document that simply stops is refused. `check_end_names` catches a
+  mismatched closing tag and not an EOF, so the parser counts depth and fails
+  at zero-plus-open. A truncated mirror list that parses is the "plausible
+  wrong answer" this repository keeps finding.
+
+```
+$ cargo test -p bit-cli-core --lib metalink
+test result: ok. 15 passed; 0 failed
+```
+
+**What is left**, and why this stays open rather than closing:
+
+1. `source::load_local` still returns "a metalink has to be resolved to its
+   torrent first". It has to fetch `torrents[0]` over HTTP and parse the
+   `.torrent` out of the response, which is the same path `Kind::Url` already
+   takes through `source::fetch_torrent`.
+2. `download` has to register `mirrors_by_priority()` as web seed specs, which
+   is a `Vec<SourceSpec>` built the way `--web-seed` builds one, and report how
+   many the document had against how many were usable.
+3. The checksum has to be verified after the download, against
+   `best_checksum()`, and the result reported. `sha2` and `md-5` are already
+   dependencies.
+4. The part the entry calls "the part that matters": comparing the Metalink's
+   whole-file checksum against what the torrent's piece hashes imply, and
+   saying loudly when they disagree. That needs the payload on disk, so it is
+   the same pass as 3.
+5. The acceptance's run against a real `.meta4`.
+
+None of that needs a decision. It is wiring, and it is the next thing to pick
+up.
 
 ### T-114 -i/--input-file batch input is not implemented
 

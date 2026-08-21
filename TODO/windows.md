@@ -417,9 +417,18 @@ Acceptance:  `paths::tests::the_escaping_shapes_are_the_same_on_every_host`
 The new test names nine shapes that escape and five that do not, so the
 boundary is written down rather than inferred: `a:b:c` escapes because `a:` is
 a drive designator whatever follows it, and `1:x` and `::x` do not because
-neither starts with a letter. Both answers match what the Windows parser gave
-before the change, so this is the same behaviour made portable rather than a
-new rule.
+neither starts with a letter. Every one of those matches what the Windows
+parser gave before, so for them this is the same behaviour made portable.
+
+**One answer did change, and it changed to the right one.** A component with a
+backslash inside it, `fooar`, was an escape on Windows before, because
+`Path::components` splits it into two and the old rule read anything but a
+single `Normal` as an escape. It is not an escape: joined onto the output
+directory it lands inside it. What is wrong with it is the separator, which is
+`illegal-character`, and that is now the only reason reported. `librqbit`'s own
+validation rejects a separator inside a component before this is reached, so
+the case is belt and braces either way, but the reason it reports is now the
+true one.
 
 The two `bit-cli` tests were not touched. They asserted the right answer; the
 planner gave the wrong one on one platform.

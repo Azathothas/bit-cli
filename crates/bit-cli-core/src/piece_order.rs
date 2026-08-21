@@ -76,7 +76,9 @@ impl InOrder {
         }
     }
 
-    /// Which piece the priority window currently starts at.
+    /// Which piece the priority window currently starts at, for a caller that
+    /// wants to report it. `None` before the first advance and once the
+    /// torrent is complete.
     pub fn pointing_at(&self) -> Option<u32> {
         self.at
     }

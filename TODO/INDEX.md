@@ -115,7 +115,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-110](cli-surface.md) | P1 | cli | **done** | The --jsonl event stream is incomplete |
 | [T-111](cli-surface.md) | P2 | cli | open | piece_verified and file_completed are derived from polling |
 | [T-112](cli-surface.md) | P1 | cli | **done** | --log-file does not write or rotate anything |
-| [T-113](cli-surface.md) | P1 | cli | open | Metalink is not implemented |
+| [T-113](cli-surface.md) | P1 | cli | partial | Metalink is not implemented |
 | [T-114](cli-surface.md) | P2 | cli | open | -i/--input-file batch input is not implemented |
 | [T-115](cli-surface.md) | P2 | cli | partial | Hooks do not fire for every documented trigger |
 | [T-116](cli-surface.md) | P3 | cli | open | -O/--index-out cannot rename a file |
@@ -222,7 +222,7 @@ red above them.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 |
-| P1 | 5 | 0 | 0 | 39 |
+| P1 | 4 | 1 | 0 | 39 |
 | P2 | 24 | 1 | 1 | 10 |
 | P3 | 11 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
