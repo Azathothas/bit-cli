@@ -18,19 +18,28 @@ The work order: [INDEX.md](INDEX.md), "Start here".
 - **Gates:** `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   clean, `cargo fmt --all --check` clean, `cargo deny check` reports advisories,
   bans, licenses and sources all ok.
-- **CI:** green on all sixteen jobs at every one of this session's four pushes:
-  runs **32488138363**, **32490561687**, **32491624786** and **32493508597**,
-  the last against commit `22f84bc`. Naming the runs rather than "the latest"
-  is deliberate: a line that says which commit a run describes stays true.
-  Check the current state with `gh run list --limit 1`.
+- **CI:** green on all sixteen jobs at run **32494881198**, against commit
+  `14ffbab`. The four pushes before it were green too:
+  **32488138363**, **32490561687**, **32491624786** and **32493508597**.
+  Naming a run and the commit it describes is deliberate: that line stays true,
+  where "the latest" is wrong by the next push.
+
+  One run, **32494443596**, shows as **cancelled** rather than green, and it is
+  not a failure. Fifteen of its sixteen jobs had passed when the next push
+  superseded it and the workflow's concurrency group cancelled the sixteenth.
+  The lesson is small and worth keeping: pushing again while a run is in flight
+  costs the record of that run, so leave a run alone unless the next push is
+  worth more than reading it.
+
+  The push carrying this file starts a run of its own. Read it before starting
+  work: `gh run list --limit 1`.
 - **Entries:** 143 items. 56 open, 4 partial, 2 blocked, 71 done, 10 deferred
   to Phase C.
 
 ## What the last session did
 
 Worked the "Start here" order in [INDEX.md](INDEX.md) and finished it. Eight
-entries closed, one moved to blocked, two new ones filed. Four pushes, each
-with its own CI run.
+entries closed, one moved to blocked, two new ones filed, over six pushes.
 
 **Two silent wrong answers in the web seed path, which is what the order put
 first, and both were real.**
