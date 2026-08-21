@@ -1797,10 +1797,14 @@ Relevance:   This is the P1 definition in `INDEX.md` verbatim, and it is worse
              fifth appearing, which is why that test's own entry now says what
              it is weak about.
 
-             The flag is also undocumented. It appears in no table in
-             `README.md` and in no row of `docs/flags.md`, which is how it
-             stayed unnoticed: nothing described it, so nothing contradicted
-             what it did.
+             The flag is also undocumented: it appears nowhere in `README.md`.
+             That is how it stayed unnoticed, because nothing described it and
+             so nothing contradicted what it did. `docs/flags.md` is not the
+             gap, and saying so would mislead: that file is **short flags
+             only**, by its own opening line and by the rule it exists to
+             enforce, and no long flag has a row in it. The sibling
+             `--web-seed-file` is undocumented in `README.md` too, so this is
+             one instance of a wider gap rather than a hole around one flag.
 Approach:    Give the commands that use the network a real fetcher, and leave
              the ones that must not with the refusal. The fetch itself is
              shared with `--tracker-list-url`, because the two flags read the

@@ -869,6 +869,13 @@ touches, records it, and reconnects **with no backoff**:
 - The wire has no way to retract a bit already announced, which is why this is
   a reconnect and not a message.
 
+A narrowing that drops nothing is refused rather than retried. It cannot happen
+as the code stands, because `serve` refuses a request for a piece this source
+did not announce, so any request that can fail is for an announced piece and a
+request that names a file overlaps it. The guard is there because the
+alternative to one is a reconnect loop with no delay in it, and a hot loop is a
+worse way to find out an invariant moved than an error is.
+
 When the last piece goes, the source is retired with a reason that says so
 rather than naming one file:
 `every piece this source covered is gone; the last was file N: ...`. A bridge

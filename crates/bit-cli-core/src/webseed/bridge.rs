@@ -602,6 +602,20 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
                 params.pieces = keep;
                 let dropped = before - params.pieces.len();
                 status.record_file_gone(file, dropped, &reason);
+                if dropped == 0 {
+                    // Cannot happen as the code stands: `serve` refuses a
+                    // request for a piece this source did not announce, so any
+                    // request that can fail is for an announced piece, and a
+                    // request that names a file overlaps it. Guarded anyway,
+                    // because the alternative to a guard here is a reconnect
+                    // loop with no delay in it, and a hot loop is a worse way
+                    // to find out that the invariant moved than an error is.
+                    status.set_error(Some(format!(
+                        "file {file} is gone and no announced piece touches it, so this source cannot narrow: {reason}"
+                    )));
+                    status.set_state(BridgeState::Failed);
+                    return;
+                }
                 if params.pieces.is_empty() {
                     status.set_error(Some(format!(
                         "every piece this source covered is gone; the last was file {file}: {reason}"
