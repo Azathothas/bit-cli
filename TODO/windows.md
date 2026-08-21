@@ -307,8 +307,8 @@ tests against **librqbit 8.1.1**, and its `PATCHES.md` states the consequence
 in full: `pread_exact` called `File::seek_read` once and **discarded the byte
 count**, so at or past EOF `Ok(0)` was reported as success with the caller's
 buffer untouched. `FileOps::initial_check` therefore never saw a file as
-missing or empty and hash-checked every piece — a fresh 6.5 GiB torrent spent
-about eleven seconds SHA-1'ing files holding nothing — and any short read
+missing or empty and hash-checked every piece: a fresh 6.5 GiB torrent spent
+about eleven seconds SHA-1'ing files holding nothing, and any short read
 hashed, streamed **or served to a peer** whatever stale bytes were in the
 buffer. The same patch fixes `pwrite_all`, which re-wrote the whole buffer at
 the same offset on every pass while subtracting the written count from
@@ -544,7 +544,7 @@ Approach:    `nanotorrent/patches/0010-windows-pread-pwrite-exact.patch` maps
              the one to take.
 
              Reporting it upstream is the clean fix and is out of `bit-cli`'s
-             hands. Meanwhile `bit-cli` already owns a storage wrapper — the
+             hands. Meanwhile `bit-cli` already owns a storage wrapper, the
              one [T-010](disk-io.md), [T-011](disk-io.md) and
              [T-013](disk-io.md) were closed with, which opens a payload file
              on first touch and holds the descriptor pool. A write that has

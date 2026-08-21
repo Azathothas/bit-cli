@@ -34,8 +34,8 @@ every dependency; `intermodal` attaches nothing at all.
 
 **fx-torrent was recorded here as Apache-2.0 and it is MIT.** Its `LICENSE`
 file is the plain MIT text. The Apache determination was wrong, and the
-paragraph that followed it — about Apache-2.0 section 4's licence-text,
-`NOTICE` and statement-of-changes requirements — described obligations that do
+paragraph that followed it, about Apache-2.0 section 4's licence-text,
+`NOTICE` and statement-of-changes requirements, described obligations that do
 not apply. Nothing was copied from it under either reading, so the error
 attached no obligation that went unmet. It is corrected rather than deleted
 because a licence determination that was once wrong is worth leaving visible:

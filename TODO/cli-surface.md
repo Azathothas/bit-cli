@@ -564,18 +564,18 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 303 filtered out
 ```
 
 The third of those is the one A3.2 actually asked for: it holds the reserved
-list — `d` dir, `o` out/output, `j` max-concurrent-downloads, `u`
+list: `d` dir, `o` out/output, `j` max-concurrent-downloads, `u`
 max-upload-rate, `q` quiet, `c` continue, `V` check-integrity, `O` index-out,
-`l` log-file — and requires any flag carrying one of those letters to name the
+`l` log-file. It requires any flag carrying one of those letters to name the
 matching id or not exist.
 
 **One clause of the Acceptance is genuinely unmet, and it is the reason this
 stays open rather than closing.** The Acceptance says a test "regenerates it
 and fails on drift". The test *asserts* and does not regenerate: it fails with
 the exact row to add, which a reader then pastes in. That is a deliberate
-difference and probably the better one — see [T-158](#t-158-regenerating-the-schema-deletes-fields-the-sample-did-not-produce),
+difference and probably the better one, see [T-158](#t-158-regenerating-the-schema-deletes-fields-the-sample-did-not-produce),
 where the regenerating half of the schema check deletes rows the sample did not
-produce — but the entry asked for regeneration and did not get it, so the
+produce, but the entry asked for regeneration and did not get it, so the
 honest state is open with the gap narrowed to one clause. Dropped from P2 to
 P3: nothing is unprotected.
 
@@ -1170,7 +1170,7 @@ $ git checkout -- docs/schema.md
 Both are the same field seen from the two document shapes, and both are real:
 a source that errored carries an `error` string. The sample simply had no
 erroring source on this machine on this run. Note what that means for the
-count — the number of rows lost is a property of the run rather than of the
+count: the number of rows lost is a property of the run rather than of the
 tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
@@ -1369,10 +1369,10 @@ Problem:     Four flags parse, are carried into a struct, and are never read
 
              The check is one command: every `pub` field in `cli.rs` grepped
              for outside that file. Six fields have no reader. Two of the six
-             are already owned — `index_out` by
+             are already owned, `index_out` by
              [T-116](#t-116--o--index-out-cannot-rename-a-file) and
              `on_piece_verified` by
-             [T-115](#t-115-hooks-do-not-fire-for-every-documented-trigger) —
+             [T-115](#t-115-hooks-do-not-fire-for-every-documented-trigger),
              and these four are owned by nothing.
 Relevance:   This is the P1 definition in `INDEX.md` verbatim: "a documented
              capability does not work, or a flag does nothing." It is also the
@@ -1425,8 +1425,8 @@ Approach:    Two of the four are work and two are a decision.
              switch for it: `swarm.rs:160-161` shows `--no-dht` and `--no-lsd`
              reaching `enable_dht` and `enable_lsd`, and there is no
              `enable_pex` beside them. `nanotorrent`'s
-             `patches/0004-pex-toggle.patch` adds exactly that —
-             `SessionOptions::disable_pex`, gating **both** directions — which
+             `patches/0004-pex-toggle.patch` adds exactly that:
+             `SessionOptions::disable_pex`, gating **both** directions, which
              is the shape of the upstream change needed and the evidence that
              it is a small one. Until it exists, the flag must either warn or
              refuse.
@@ -1446,7 +1446,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
              `cli.rs:2107` `every_short_flag_is_documented_in_the_flags_table`
-             is the model — it already walks the tree and fails with the exact
+             is the model: it already walks the tree and fails with the exact
              fix to apply.
 
              Then, per flag: `--max-overall-download-rate 4MiB/s` over `-j 4`
@@ -1456,3 +1456,86 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              trackers announces to all three and reports them in `--json`;
              `--no-pex` warns, naming this entry, until the upstream switch
              exists.
+
+### T-182 A macOS test asserted an invariant across two kernel subsystems
+
+Source:      CI run 32478382564, 2026-08-21
+Category:    ci
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `Test (macos-latest)` failed on a **documentation-only commit**:
+
+             ```
+             test sysinfo::tests::a_process_sample_reports_memory_cpu_and_handles ... FAILED
+             thread '...' panicked at crates/bit-cli-core/src/sysinfo.rs:1144:9:
+             assertion failed: sample.peak_rss_bytes >= sample.rss_bytes
+             ```
+
+             The other fifteen jobs were green, including `Test
+             (windows-latest)` and `Test (ubuntu-latest)` running the same
+             test.
+Relevance:   A peak below the current reading is not a peak, so the assertion
+             is asking for something a reader of the report would also assume.
+             It failed anyway, and the reason is that on Darwin the two numbers
+             do not come from the same place.
+Approach:    Read where each number comes from on each platform before
+             deciding whether the test or the code is wrong.
+Acceptance:  The assertion holds on all three platforms for a reason rather
+             than by luck, and the reason is written where the code is.
+
+**The code was wrong, not the test, and the platform is why.**
+
+`Process::sample()` fills `peak_rss_bytes` and `rss_bytes` from one source on
+two platforms and from two sources on the third:
+
+| Platform | `peak_rss_bytes` | `rss_bytes` | Same source? |
+| --- | --- | --- | --- |
+| Windows | `PROCESS_MEMORY_COUNTERS.PeakWorkingSetSize` (`sysinfo.rs:442`) | the same struct | yes |
+| Linux | `VmHWM:` in `/proc/self/status` (`sysinfo.rs:663`) | `VmRSS:` in the same read | yes |
+| macOS | `getrusage(RUSAGE_SELF).ru_maxrss` (`sysinfo.rs:986`) | `proc_pidinfo`'s Mach `resident_size` (`sysinfo.rs:993`) | **no** |
+
+`ru_maxrss` is the BSD layer's high-water mark. `resident_size` is the current
+Mach task footprint and counts pages the BSD accounting does not. They are two
+subsystems' numbers, so on Darwin the current reading can exceed the recorded
+peak, and no ordering between them is guaranteed. Windows and Linux each read
+both fields from one structure, so neither can disagree with itself this way,
+which is why fifteen jobs were green.
+
+**Fixed by clamping at the source rather than by weakening the test.**
+`peak_rss_bytes = peak_rss_bytes.max(rss_bytes)` in the Darwin path, applied
+only when `getrusage` actually succeeded, so a failed read stays in
+`unavailable` rather than being backfilled from another subsystem. The clamp is
+honest: the process has just been observed at `rss_bytes`, so its peak is at
+least that. Weakening the assertion to `#[cfg(not(target_os = "macos"))]` would
+have made the test pass and left `bench` and `soak` reports carrying a
+`peak_rss_bytes` that means one thing on two platforms and another on the
+third, which is the field [T-042](memory.md) built and [T-040](memory.md)'s
+slope rests on.
+
+The assertion now also prints both numbers on failure. The original was a bare
+`assert!` and the CI log carried no values, so the first question a reader asks
+had to be answered by reasoning about the platform rather than by reading the
+output.
+
+**The fourth documentation-only commit to turn a job red, and the fourth time
+that was the cleanest available proof the test was wrong rather than the
+tree.** [T-160](#t-160-a-peers-test-raced-its-own-seeder),
+[T-162](webseed.md) and this one all had nothing but Markdown in the diff.
+[T-148](bench.md) is the same family found locally. The rule they keep writing
+is in [RULES.md](RULES.md): a test never asserts that the machine cannot fail
+some other way. This one asserted that two kernel subsystems agree.
+
+`cfg(unix)` being a family and not a platform is the same lesson
+[T-145](#t-145-the-macos-test-job-fails-to-link) cost a red job for, where
+`posix_fallocate` was declared under `cfg(unix)` and does not exist on Darwin.
+That one was a link error and loud. This one was an assertion that held on the
+developer's machine and on two of the three runners, which is quieter and took
+a push to find.
+
+```
+$ cargo test -p bit-cli-core --lib sysinfo
+test sysinfo::tests::a_process_sample_reports_memory_cpu_and_handles ... ok
+test result: ok. 20 passed; 0 failed
+```

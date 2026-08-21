@@ -254,7 +254,7 @@ configured, outgoing connects timed out and peers were never reached.
 **T-064, UDP backoff.** Two ladders exist and both are defensible, which
 supports this entry's decision to diverge deliberately rather than copy.
 `torrent/tracker/udp/timeout.go:9` is BEP 15 as written, `15 * 2^n` clamped at
-`n = 8`, which is 3840 seconds — nine lines of code and up to 62 minutes.
+`n = 8`, which is 3840 seconds, in nine lines of code and up to 62 minutes.
 `mtorrent/mtorrent-core/src/trackers/udp.rs:150` takes `MAX_RETRANSMISSIONS = 3`
 with `:160` `timeout_sec = 15 * (1 << retransmit_n)`, so 15, 30, 60 and 120
 seconds, giving up at 225 seconds and documenting that total. `bit-cli` makes
@@ -283,8 +283,8 @@ in the corpus implements another one**. So "cannot be derived" is the right
 answer and `--scrape-url` is the right escape hatch, which is what this entry
 already proposes. Related, from aquatic
 [Issue 232](https://github.com/greatest-ape/aquatic/issues/232): there is no
-canonical announce path for a UDP tracker either — the path in a `udp://` URL
-is advisory, carried as a BEP 41 option if wanted — so a client must not
+canonical announce path for a UDP tracker either. The path in a `udp://` URL
+is advisory, carried as a BEP 41 option if wanted, so a client must not
 assume `/announce` there.
 
 ---

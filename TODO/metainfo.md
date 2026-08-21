@@ -160,9 +160,9 @@ Approach:    Pick one position per question, write it in the error, and test
              buffer**, never re-encoded. `bit-cli` already relies on that
              property; this entry is about the keys around it.
              `rustorrent/docs/DEEP_AUDIT_REPORT_2026-07-13.md` lists the full
-             adversarial set beside these two — non-canonical integers,
+             adversarial set beside these two, non-canonical integers,
              duplicate keys, excessive depth, excessive value counts, invalid
-             lengths, truncation — and is the checklist to turn into fixtures.
+             lengths and truncation, and is the checklist to turn into fixtures.
 Acceptance:  A fixture with unsorted keys and a fixture with trailing NUL
              bytes each produce the decided outcome, the error text names the
              rule rather than the symptom when one is refused, and `README.md`
@@ -196,8 +196,8 @@ Approach:    Decide, then report. The defensible reading is that an empty
              component is dropped and the drop is **reported like any other
              rename**, because that is what the existing path planner does for
              every other name it changes, and a silent drop is what the issue
-             above is complaining about. The alternative — refusing the
-             torrent — is worse, because the file is otherwise fetchable.
+             above is complaining about. The alternative, refusing the
+             torrent, is worse, because the file is otherwise fetchable.
              Two entries that collapse to one path after the drop must collide
              and be renamed by the existing collision rule rather than
              overwrite, which is the part a test has to prove.
@@ -234,7 +234,7 @@ Relevance:   vortex [PR 124](https://github.com/Nehliin/vortex/pull/124) is
              own code rather than `librqbit`'s: the web seed bridge, which
              turns a piece request into byte ranges, and the storage layer's
              span mapping. Neither has a non-power-of-two fixture.
-Approach:    A fixture, not a fix — the fix may already be right, and the point
+Approach:    A fixture, not a fix. The fix may already be right, and the point
              of the entry is that nothing proves it either way. Build a torrent
              with `piece length = 1986560` over a payload that spans several
              pieces and at least two files, and run it through `verify`, a web

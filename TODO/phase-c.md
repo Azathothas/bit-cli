@@ -27,7 +27,7 @@ with the Rust handler that answers it: the `aria2.addUri` / `addTorrent` /
 `changeGlobalOption`, `changePosition`, and the rest. That file is the
 checklist for [T-201](#t-201-json-rpc-and-xml-rpc-with-aria2-method-parity):
 it is a method-by-method table rather than prose, so parity is countable rather
-than argued. Its own status line is worth copying too — the method surface is
+than argued. Its own status line is worth copying too. The method surface is
 complete and external compatibility stays `PARTIAL` until a browser-extension
 and original-client interoperability matrix is reproducibly green, which is the
 difference between implementing 36 names and being a drop-in.

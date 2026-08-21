@@ -58,7 +58,7 @@ the table described intent rather than the tree.**
 - **BEP 53 was absent.** `torrent/magnet.rs:39` and `:211` parse the `so=`
   index-range file selection out of a magnet.
 - **BEP 7 was absent.** `tracker.rs:493` reads the `peers6` key at 18 bytes
-  per entry beside the 6-byte `peers`, with a test at `:872`
+  per entry beside the 6-byte `peers`, with a test at `:873`
   `ipv6_peers_come_back_bracketed`. Worth naming rather than leaving implicit,
   because [T-022](peers.md) and [T-023](peers.md) are both about IPv6 and
   neither could point at the one piece of it that works.
@@ -391,10 +391,10 @@ Problem:     `bit-cli` speaks TCP to peers and HTTP or UDP to trackers. A
              `wss://` tracker URL in a torrent is not announced to, and a
              WebTorrent peer cannot be reached at all.
 Relevance:   WebTorrent is a separate swarm sharing the same info hash. A
-             torrent whose `announce-list` carries `wss://` tiers — which is
+             torrent whose `announce-list` carries `wss://` tiers, which is
              the default for anything created by `create-torrent`, see
              `create-torrent/index.js:16-24`, where three `wss://` trackers sit
-             beside the `udp://` ones each in its own BEP 12 tier — has peers
+             beside the `udp://` ones each in its own BEP 12 tier, has peers
              `bit-cli` cannot see and does not report. `bit-cli trackers`
              announcing to every tracker in a torrent except the `wss://` ones
              is the visible half of that.

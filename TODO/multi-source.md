@@ -829,7 +829,7 @@ and **then** calls `AddWebSeeds(["http://localhost:3003/test.img"])`. Its
 `README` states the acceptance condition in two clauses, and the second is the
 one worth adopting here: "The seeder should start fetching from HTTP, despite
 the webseed being added after `Torrent.DownloadAll` is called. **It should
-still fetch even if the leecher does not connect**" — which is `bit-cli`'s own
+still fetch even if the leecher does not connect**", which is `bit-cli`'s own
 `--web-seed-only` case, applied to a late attachment. A late source that only
 works when a peer happens to be present is a source that works by accident.
 

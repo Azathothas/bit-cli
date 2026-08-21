@@ -111,7 +111,7 @@ Problem:     `bit-cli trackers --scrape` scrapes a tracker. There is no way to
 Relevance:   BEP 33 is the one that earns its place. It answers "how many
              seeders and leechers" from the DHT rather than from a tracker,
              which is exactly the case a torrent with dead trackers leaves
-             `bit-cli` unable to answer at all — the same case
+             `bit-cli` unable to answer at all, which is the same case
              [T-052](#t-052-dht-is-not-reported) exists for. BEP 51 is
              discovery infrastructure rather than a capability a download
              needs, and its main relevance here is that participation should

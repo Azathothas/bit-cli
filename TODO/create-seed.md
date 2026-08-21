@@ -203,15 +203,15 @@ was processed without checking it answered an outstanding request, so a bogus
 `pieces root` dereferenced a nil file.
 [PR 1066](https://github.com/anacrolix/torrent/pull/1066): a v2 file with
 `fileNumPieces % 512 == 1` leaves one hash in the last request block, and the
-BEP 52 minimum request length is two — a precise off-by-one any implementation
+BEP 52 minimum request length is two, a precise off-by-one any implementation
 will meet.
 
 **Fixtures, so this does not need building from scratch.**
 `torrent/testdata/bittorrent-v2-test.torrent` is pure v2 and
 `torrent/testdata/bittorrent-v2-hybrid-test.torrent` is hybrid.
 `superseedr/integration_tests/torrents/` holds sixteen more in `v1`, `v2` and
-`hybrid` subdirectories — `single_4k`, `single_8k`, `single_16k`, `multi_file`
-and `nested` in each — with payload descriptors in
+`hybrid` subdirectories, holding `single_4k`, `single_8k`, `single_16k`, `multi_file`
+and `nested` in each, with payload descriptors in
 `superseedr/integration_tests/test_data/`. Those are the cheapest route to v2
 coverage in `cargo test` and they cost nothing to add before any of the code.
 `superseedr/src/torrent_manager/merkle.rs` is 541 lines of which most are
@@ -311,7 +311,7 @@ Every quantity in that paragraph is a field this entry wants reported, which is
 the useful part: the report shape follows from the algorithm, and `bit-cli`
 does not have to invent one. fx-torrent
 [PR 79](https://github.com/yoep/fx-torrent/pull/79) is the hazard that comes
-with it — upload-slot bookkeeping that deadlocked the whole torrent tick — and
+with it, upload-slot bookkeeping that deadlocked the whole torrent tick, and
 is the reason to report the state rather than only compute it.
 
 ### T-084 The create round trip has not been proven against another client
@@ -615,7 +615,7 @@ Problem:     `bit-cli create` refuses on ten lints
              this, but by accident and under the wrong name: `lint.rs:213`
              keys a `BTreeSet` on `path.to_lowercase()`, so an exact duplicate
              collides too and fires `case-collision` with the message
-             "collides with another path that differs only in case" — which is
+             "collides with another path that differs only in case", which is
              false when the two paths are identical. A user reads that message
              and goes looking for a casing difference that is not there.
 Relevance:   All three are one-line checks against a table `bit-cli` already
@@ -628,7 +628,7 @@ Approach:    Two new lints and one message split.
 
              `piece-count` gains a second threshold at 65,535 with its own
              message naming µTorrent, or a separate `piece-count-uopenable`
-             lint if the two want to be cleared independently — they do, since
+             lint if the two want to be cleared independently, and they do, since
              one is a performance opinion and the other is a compatibility
              fact.
 

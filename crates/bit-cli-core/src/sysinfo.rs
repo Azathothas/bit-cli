@@ -994,6 +994,23 @@ mod platform {
             None => out.unavailable.push("rss_bytes".into()),
         }
 
+        // The two numbers come from two kernel subsystems that do not share an
+        // accounting basis. `ru_maxrss` is the BSD layer's high-water mark;
+        // `resident_size` is the current Mach task footprint, and it counts
+        // pages the BSD accounting does not, so on Darwin the current reading
+        // can exceed the recorded peak. Windows takes both from one
+        // `PROCESS_MEMORY_COUNTERS` and Linux both from one
+        // `/proc/self/status`, so neither can disagree with itself this way.
+        //
+        // A peak below a reading taken at the same instant is not a peak. The
+        // clamp is what makes `peak_rss_bytes` mean the same thing on all
+        // three platforms, which is what every report that carries it assumes.
+        // Only when the peak was read at all: a failed `getrusage` stays
+        // unavailable rather than being backfilled from another source.
+        if !out.unavailable.iter().any(|name| name == "peak_rss_bytes") {
+            out.peak_rss_bytes = out.peak_rss_bytes.max(out.rss_bytes);
+        }
+
         match open_descriptors() {
             Some(count) => out.open_handles = count,
             None => out.unavailable.push("open_handles".into()),
@@ -1141,7 +1158,17 @@ mod tests {
             "peak RSS of {} B is not a running process",
             sample.peak_rss_bytes
         );
-        assert!(sample.peak_rss_bytes >= sample.rss_bytes);
+        // Holds on all three platforms, and on Darwin only because
+        // `process()` clamps it: `ru_maxrss` and the Mach `resident_size` are
+        // two subsystems' numbers and the current reading can exceed the
+        // recorded peak. This assertion failed on `macos-latest` in CI run
+        // 32478382564 before the clamp existed. See TODO/cli-surface.md T-182.
+        assert!(
+            sample.peak_rss_bytes >= sample.rss_bytes,
+            "peak RSS {} B is below the current {} B",
+            sample.peak_rss_bytes,
+            sample.rss_bytes
+        );
         assert!(
             sample.open_handles > 0,
             "a process with no open handles has no stdout"

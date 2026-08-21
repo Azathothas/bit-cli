@@ -108,7 +108,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
 | [T-032](performance.md) | P1 | performance | **done** | The piece selector strategy is not implemented |
-| [T-033](performance.md) | P3 | performance | open | --split, -x, and -k do not reach the fetch path |
+| [T-033](performance.md) | P3 | performance | open | --split, -x, and -k do not reach the fetch path *(title disproved: they do not exist)* |
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
 | [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
 | [T-036](performance.md) | P0 | paths | **done** | A multi-file torrent with one file lands without its directory |
@@ -154,7 +154,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-149](bench.md) | P1 | bench | **done** | The last window of a leech bench was never counted |
 | [T-152](bench.md) | P1 | bench | **done** | A disk bench shorter than one sample interval reported no series at all |
 | [T-100](bep-coverage.md) | P2 | bep | open | BEP 6 fast extension is not implemented |
-| [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested |
+| [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested *(title disproved: it is not reachable)* |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
 | [T-103](bep-coverage.md) | P2 | bep | open | Filenames that are not valid UTF-8 are refused |
 | [T-167](bep-coverage.md) | P2 | bep | open | BEP 54 lt_donthave is not implemented |
@@ -171,7 +171,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-115](cli-surface.md) | P2 | cli | partial | Hooks do not fire for every documented trigger |
 | [T-116](cli-surface.md) | P3 | cli | open | -O/--index-out cannot rename a file |
 | [T-117](cli-surface.md) | P1 | cli | **done** | --schema-version has no schema behind it |
-| [T-118](cli-surface.md) | P3 | cli | open | The short-flag table is not checked in CI |
+| [T-118](cli-surface.md) | P3 | cli | open | The short-flag table is not checked in CI *(title disproved: it is, by four tests)* |
 | [T-144](cli-surface.md) | P1 | ci | **done** | The MSRV job fails: the tree needs a newer rustc than it claims |
 | [T-145](cli-surface.md) | P2 | ci | **done** | The macOS test job fails to link |
 | [T-146](cli-surface.md) | P1 | ci | **done** | CI built a Windows binary against the dynamic C runtime |
@@ -184,9 +184,10 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-158](cli-surface.md) | P2 | cli | open | Regenerating the schema deletes fields the sample did not produce |
 | [T-159](cli-surface.md) | P3 | cli | open | Subcommand flags are filed under "Report options" in the help |
 | [T-160](cli-surface.md) | P1 | ci | **done** | A peers test raced its own seeder |
-| [T-161](cli-surface.md) | P3 | ci | open | A CI action still targets Node.js 20, which is deprecated |
+| [T-161](cli-surface.md) | P3 | ci | open | A CI action still targets Node.js 20, which is deprecated *(four call sites, not two)* |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-181](cli-surface.md) | P1 | cli | open | Four flags are accepted in silence and reach no code |
+| [T-182](cli-surface.md) | P1 | ci | **done** | A macOS test asserted an invariant across two kernel subsystems |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -214,12 +215,15 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-140 items: 130 to work through, and 10 deferred to Phase C.
+141 items: 131 to work through, and 10 deferred to Phase C.
 
-**Nineteen were added on 2026-08-21 by reading the twenty-two tree corpus
-against this tree**, T-163 to T-181. Every one of them is open, so the open
-count went from 44 to 63 in a session that wrote no code, which is the correct
-direction: a gap nobody had written down was still a gap.
+**Twenty were added on 2026-08-21 by reading the twenty-two tree corpus
+against this tree**, T-163 to T-182. Nineteen of them are open, so the open
+count went from 44 to 63 in a session that set out to write no code, which is
+the correct direction: a gap nobody had written down was still a gap. The
+twentieth, [T-182](cli-surface.md), is done, and it is the one piece of code
+this session changed: a documentation-only push turned `Test (macos-latest)`
+red on an assertion that two kernel subsystems agree with each other.
 
 Seventeen of the nineteen come from `RESEARCH.md` section C and section D.
 **Two did not, and they are the two worth separating**, because they needed no
@@ -238,7 +242,12 @@ fires above **100,000**, so the band between the two numbers passes every check
 Neither half is the defect on its own.
 
 **Three entries described a state this tree is not in, and all three were
-corrected rather than closed.** [T-033](performance.md) said three aria2 flags
+corrected rather than closed.** An entry keeps its original title, because the
+title is how it has always been referred to and the history of a mistake is
+worth seeing; the correction goes underneath, the way
+[T-017](disk-io.md) and [T-021](peers.md) established. Where a title is now
+known false the row above says so, so a reader skimming the table is not
+misled by a heading nobody may rename. [T-033](performance.md) said three aria2 flags
 "parse and do nothing"; they do not exist and exit 2.
 [T-118](cli-surface.md) said neither `docs/flags.md` nor its CI check exists;
 both do, and four tests enforce them. [T-161](cli-surface.md) named two CI call
@@ -378,11 +387,11 @@ down, arrived at twice more.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 | 11 |
-| P1 | 5 | 1 | 0 | 42 | 48 |
+| P1 | 5 | 1 | 0 | 43 | 49 |
 | P2 | 36 | 1 | 1 | 12 | 50 |
 | P3 | 21 | 0 | 0 | 0 | 21 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **63** | **4** | **1** | **62** | **140** |
+| **All** | **63** | **4** | **1** | **63** | **141** |
 
 `blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4
@@ -404,7 +413,7 @@ reports success is not.
 
 Six items, and the first two are the whole argument.
 
-1. **[T-171](metainfo.md)** — `url_list` accepts a bencoded string or a list;
+1. **[T-171](metainfo.md)**. `url_list` accepts a bencoded string or a list;
    `http_seeds` four lines below it accepts a list only, so a torrent whose
    `httpseeds` is a bare string yields **zero** HTTP sources with no error and
    no warning. A web seed tool silently reading none of the seeds a torrent
@@ -412,18 +421,18 @@ Six items, and the first two are the whole argument.
    accessor, `torrent/bencode.rs:339` and `:305` are why it returns empty, and
    `gosh-dl/src/torrent/metainfo.rs:391` is one parser serving both keys.
    Effort S.
-2. **[T-005](webseed.md)** — one permanent status on one file retires the
+2. **[T-005](webseed.md)**. One permanent status on one file retires the
    **whole** source. `README.md` says a mirror holding part of a payload is a
    first-class case and not an error, and this is the code contradicting it at
    exactly the moment the claim is tested. `torrent/webseed-peer.go:57`
    removes only that file's pieces instead. Raised from P3 to P2 for this
    reason. Effort M, and [T-167](bep-coverage.md) below makes it smaller.
-3. **[T-181](cli-surface.md)** — four flags parse and reach no code, P1 by this
+3. **[T-181](cli-surface.md)**. Four flags parse and reach no code, P1 by this
    file's own definition. `--no-pex` is the one to fix first even though it is
    the one that cannot be built: a user passing it believes peer exchange is
    off and their address keeps being gossiped. Warn today, the way
    `cmd/seed.rs:105` already does for `--superseed`.
-4. **[T-177](disk-io.md)** and **[T-174](metainfo.md)** — two missing fixtures,
+4. **[T-177](disk-io.md)** and **[T-174](metainfo.md)**. Two missing fixtures,
    both for arithmetic that is only ever exercised on the easy case. A piece
    straddling a file boundary, and a piece length that is not a multiple of
    16 KiB. fx-torrent 98 is what the first costs: in a multi-file album only
@@ -431,7 +440,7 @@ Six items, and the first two are the whole argument.
    a double panic in a destructor. `vortex/bittorrent/src/file_store.rs` has
    eight test names that are the specification. Effort S each, and if the
    arithmetic is already right they cost one test apiece.
-5. **[T-179](webseed.md)** — smart ban. Not a defect on its own, and it is what
+5. **[T-179](webseed.md)**, smart ban. Not a defect on its own, and it is what
    [T-164](peers.md) and [T-005](webseed.md) both need in order to name a
    culprit rather than guess one. With several sources filling one piece,
    `torrent/smartban/smartban.go` in 83 lines turns "a source is bad" from a
@@ -472,12 +481,12 @@ adapting rather than designing.
    `fx-torrent/src/peer/extension/donthave.rs` is 99 lines including its
    tests. It is the cheapest correctness win in the corpus, and it turns
    T-005's reconnect into a message. **Do this before T-005.**
-10. **[T-064](trackers.md)**, BEP 15 backoff — nine lines at
+10. **[T-064](trackers.md)**, BEP 15 backoff. Nine lines at
     `torrent/tracker/udp/timeout.go:9`, with a second, shorter ladder at
     `mtorrent/mtorrent-core/src/trackers/udp.rs:150`. The entry's decision to
     diverge stands; what it owes is the documented total budget, which both
     references state and this one does not.
-11. **[T-004](webseed.md)**, BEP 17 auto-detection — now smaller than it looks.
+11. **[T-004](webseed.md)**, BEP 17 auto-detection, now smaller than it looks.
     The style is determined by **which metainfo key the URL came from**, which
     is what BEP 17 and BEP 19 specify and needs no probe, and `bit-cli` already
     keys `httpseeds` sources correctly. Only the `--web-seed` command-line case
@@ -485,16 +494,16 @@ adapting rather than designing.
 12. **[T-176](create-seed.md)**, three lints. Two are threshold changes against
     numbers the corpus supplies, and one is splitting a message that is
     currently false.
-13. **[T-100](bep-coverage.md)**, BEP 6 — the algorithm at
+13. **[T-100](bep-coverage.md)**, BEP 6. The algorithm at
     `vortex/.../peer_connection.rs:89`, the receive-side bug that makes it
     silently inert at `torrent/peerconn.go:1047`, a canonical test vector, and
     a documented divergence in aria2 so a mismatch is not debugged twice.
-14. **[T-081](create-seed.md)**, BEP 52 — `nanotorrent`'s 618-line v2 and
+14. **[T-081](create-seed.md)**, BEP 52. `nanotorrent`'s 618-line v2 and
     hybrid creator is built **on librqbit**, the same base, for the same
     reason. Three independent implementations to check the spec against, real
     v1/v2/hybrid fixtures in two trees, and one construction in the corpus that
     is wrong in a way that passes its own tests.
-15. **[T-018](disk-io.md)** and **[T-083](create-seed.md)** — coalescing with
+15. **[T-018](disk-io.md)** and **[T-083](create-seed.md)**. Coalescing with
     tests at `TorrentNG/crates/rt-storage/src/elevator.rs:223`, and the full
     choke algorithm at `vortex/bittorrent/src/torrent.rs:488`, from which the
     report shape T-083 wants simply follows.
@@ -528,7 +537,7 @@ The distinction the coverage table could not make until now.
     [T-170](dht.md) BEP 44, [T-082](create-seed.md) BEP 16. None of these
     stops `bit-cli` talking to a peer it can otherwise reach. uTP is
     politeness, BEP 55 raises the reachable set rather than enabling it, and
-    BEP 52's own advocates say it is not widely used — mkbrr
+    BEP 52's own advocates say it is not widely used: mkbrr
     [Issue 112](https://github.com/autobrr/mkbrr/issues/112) is a v2 request
     whose author writes that it is not really used by many people.
 20. [multi-source.md](multi-source.md) is the operator's five scenarios and

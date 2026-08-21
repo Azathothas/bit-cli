@@ -48,7 +48,7 @@ When the operator says the session is ending, in this order:
 3. Update the affected `TODO/` entries and [INDEX.md](INDEX.md), including the
    counts table, which must be exact against the rows.
 4. **Two deep reviews.** Review 1: every claim written this session against the
-   code or the path it cites. Review 2: cold, as if someone else wrote it —
+   code or the path it cites. Review 2: cold, as if someone else wrote it.
    a doc contradicting another doc, an entry id that does not exist, a cited
    path that does not resolve, counts that no longer add up.
 5. Commit and push with `scripts/git-sync.ps1`. Nothing else.
@@ -83,8 +83,20 @@ pwsh -NoProfile -File scripts/git-sync.ps1 -Message "Subject line" -Body "..."
 ```
 
 ```bash
-pwsh -NoProfile -File scripts/git-sync.ps1 -Push
+pwsh -NoProfile -File scripts/git-sync.ps1 -PushOnly
 ```
+
+```bash
+pwsh -NoProfile -File scripts/git-sync.ps1 -Check
+```
+
+Every switch: `-Message`, `-Body`, `-Path` to stage specific paths, `-Evidence`
+to force-add one benchmark past `.gitignore`, `-NoPush` to commit only,
+`-PushOnly` to push what is already committed, `-Check` to report without
+changing anything, `-FetchReferences` to restore the corpus on a fresh clone,
+`-SkipGates` for a documentation-only change where the tree is known green, and
+`-NoReferences` to skip the corpus mirror on one push. `-SkipGates` prints that
+it was used, so a transcript shows the push carried no proof.
 
 What it enforces, and why each rule exists:
 

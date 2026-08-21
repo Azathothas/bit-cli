@@ -784,8 +784,8 @@ anacrolix [PR 1051](https://github.com/anacrolix/torrent/pull/1051) (OPEN) is
 the same problem solved for the same platform: cache the writable handle so a
 16 KiB chunk write stops reopening the file, and buffer piece-completion
 persistence on a **1 s or 128 MiB checkpoint** rather than per piece, while
-keeping `complete = false` immediate. That asymmetry — batch the optimistic
-update, never batch the pessimistic one — is the safe shape for constraint 3
+keeping `complete = false` immediate. That asymmetry, batch the optimistic
+update, never batch the pessimistic one, is the safe shape for constraint 3
 above.
 
 One hazard from the same tree, because this entry adds a buffer that both a
@@ -815,8 +815,8 @@ Relevance:   fx-torrent
              [Issue 98](https://github.com/yoep/fx-torrent/issues/98) (OPEN)
              is what happens when the split is missing: pieces are written
              **entirely into the file they start in**. The reporter's symptom
-             is the memorable part — in a multi-file FLAC album, **only the
-             first file is playable** — and the issue body carries a
+             is the memorable part: in a multi-file FLAC album, **only the
+             first file is playable**, and the issue body carries a
              reproducible CC-licensed magnet. Every byte was transferred, every
              piece hashed against something, and the payload was wrong.
 

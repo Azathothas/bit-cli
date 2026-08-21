@@ -72,7 +72,7 @@ they were there:
 
 | Page | Where the same ground is covered |
 | --- | --- |
-| `bep-support.md`, a BEP 0 to 55 matrix | [bep-coverage.md](bep-coverage.md), which now carries 29 rows and gives every one a symbol in this tree or the entry id that closes it. A status column for somebody else's tool is strictly less. |
+| `bep-support.md`, a BEP 0 to 55 matrix | [bep-coverage.md](bep-coverage.md), which now carries 30 rows and gives every one a symbol in this tree or the entry id that closes it. A status column for somebody else's tool is strictly less. |
 | `piece-length-selection.md`, `piece-length.md` | `crates/bit-cli-core/src/torrent/piece_length.rs:1-14` states the trade in full: metadata size against transfer granularity, the BEP 9 exchange cost, lossy links, and web seed scope granularity. `RESEARCH.md` section B tabulates five algorithms with their bounds, and [T-176](create-seed.md) carries the ceilings and why they are what they are. |
 | `udp-tracker-protocol.md`, the BEP 15 wire format | `crates/bit-cli-core/src/tracker.rs` implements it, with a test asserting the announce request is exactly 98 bytes. [T-064](trackers.md) and [T-180](trackers.md) carry the retry and parse questions the prose would not have answered. |
 | `metainfo-utilities.md`, `distributing-large-data-sets.md`, `prior-art.md` | Surveys of other tools. No bearing on anything here. |

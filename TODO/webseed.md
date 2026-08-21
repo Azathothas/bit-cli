@@ -325,7 +325,7 @@ Acceptance:  The stall case in `bench/webseed-<timestamp>.json` ends in under
 and both bound it tighter.** vortex
 [PR 143](https://github.com/Nehliin/vortex/pull/143) mirrors libtorrent: drop
 a connection with **no activity in either direction for 15 seconds while
-requests are in flight**. The in-flight condition is the important half — an
+requests are in flight**. The in-flight condition is the important half: an
 idle connection with nothing outstanding is not stalled, it is idle, and
 dropping it is a different decision. `seedchamp/docs/design.md:197` uses a
 20 second request stall, **4 seconds in endgame**, and triggers Cancel plus
@@ -339,7 +339,7 @@ vortex [PR 142](https://github.com/Nehliin/vortex/pull/142) is the mistake to
 avoid on the way: the in-flight queue was not consulted before snubbing, so
 peers were snubbed merely for choking, and fast peers were snubbed after
 **explicitly rejecting** every request. A reject is not a timeout, and neither
-is a 503 — see [T-005](#t-005-a-source-restricted-mid-run-cannot-be-re-scoped)
+is a 503, see [T-005](#t-005-a-source-restricted-mid-run-cannot-be-re-scoped)
 on treating 503 as backpressure.
 
 ### T-008 A duplicate block request is fetched twice
@@ -738,7 +738,7 @@ seeds "typically end with specific paths", and `:479` `all_webseeds()` merges
 discarded before use.
 
 **Which hands this entry a cheaper answer than the probe.** BEP 17 and BEP 19
-are distinguished by *which metainfo key the URL came from* — that is what the
+are distinguished by *which metainfo key the URL came from*, which is what the
 two BEPs specify, and it needs no network round trip. `bit-cli` already marks
 sources from `httpseeds` as BEP 17 at collection time, so the metainfo half is
 done. What is left is genuinely only the command-line case, where there is no
@@ -785,8 +785,8 @@ refinement.**
 `bit-cli`'s whole scope model says a mirror holding part of a payload is a
 first-class case and not an error. `README.md` says so, and it is the
 difference between this tool and every other one. The retirement rule
-contradicts it: a permanent status on **one file** — 401, 403, 404, 410 or
-416 — retires the **whole source**, including the files it was serving
+contradicts it: a permanent status on **one file**, 401, 403, 404, 410 or
+416, retires the **whole source**, including the files it was serving
 correctly a moment earlier. So `bit-cli` supports partial mirrors right up to
 the moment a mirror turns out to be partial in a way the scope did not
 predict, which is the case the model is for.
@@ -798,7 +798,7 @@ everything else. That is strictly better for a partial mirror and it is not
 more code, it is different code in the same place.
 
 Two more things from the same file are worth taking while this is open.
-`torrent/webseed-peer.go:46` uses `convict(err, time.Minute)` — a source is
+`torrent/webseed-peer.go:46` uses `convict(err, time.Minute)`: a source is
 **suspended for a term** rather than killed, which is what
 [T-137](multi-source.md) already built here as `--web-seed-cooldown`, so the
 two designs agree and this entry only has to extend it from whole-source to
@@ -806,8 +806,8 @@ per-file. And `torrent/webseed/client.go:270` treats **503 as backpressure
 rather than death**, which is a status `bit-cli` should never let a user
 configure as fatal by accident.
 
-Note the wire-level obstacle in this entry's Approach — that the bridge cannot
-retract bits it has already announced, so re-scoping means a reconnect — has an
+Note the wire-level obstacle in this entry's Approach, that the bridge cannot
+retract bits it has already announced, so re-scoping means a reconnect, has an
 answer in the corpus that removes it entirely. BEP 54 `lt_donthave` is one
 extended message carrying a piece index that clears exactly one bit in the
 peer's bitfield. That is [T-167](bep-coverage.md), it is about twenty lines of
@@ -1194,7 +1194,7 @@ Approach:    `torrent/smartban/smartban.go` is 83 lines and does exactly this,
              is the accounting hazard to avoid while touching this code. In
              endgame the same piece is requested from several sources, and two
              concurrent completions both incremented the verified-byte counter,
-             so progress exceeded 100 per cent — reported by a user as
+             so progress exceeded 100 per cent, reported by a user as
              331.5 MB of 263.6 MB, or 125.8 per cent, in
              [Issue 6](https://github.com/goshitsarch-eng/gosh-dl/issues/6).
              The fix is to make the increment conditional on winning the
