@@ -254,10 +254,18 @@ assertion that turned out to be the test rather than the code. A red job does
 not cost one defect, it costs every defect behind it, and that is the argument
 for never leaving one.
 
-**Run 32457763652 is green on all sixteen jobs**, and it is the one to check
-this state against: it carries `bench swarm`, the T-040 answer, and the deleted
-reference trees. Its only annotation is [T-161](cli-surface.md), a build action
-still targeting Node.js 20.
+**Run 32459406311 is green on all sixteen jobs and is the head of `main`.** It
+carries `bench swarm`, the T-040 answer, the deleted reference trees, and the
+T-160 fix. Its only annotation is [T-161](cli-surface.md), a build action still
+targeting Node.js 20.
+
+Between those two runs one job went red, and what turned it red is worth
+keeping: run 32458314378 was a **documentation-only commit** and
+`Test (ubuntu-latest)` failed on it. Nothing about the code had changed, which
+is the cleanest available proof that the test was wrong rather than the tree.
+That is [T-160](cli-surface.md), fixed, and it had already failed once locally
+and been lost because the command reading the output matched only the summary
+line and never the test name.
 
 **Two things a measurement disproved on 2026-08-21, and both are the same
 mistake.** A `bench swarm` run reported zero peers handshaked in every leech
