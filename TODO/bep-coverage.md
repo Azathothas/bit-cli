@@ -95,6 +95,42 @@ Approach:    Needs peer protocol work in `librqbit`.
 Acceptance:  Deferred. Revisit if peer reachability shows up as a measured
              limit in `bench swarm`.
 
+**Priced on 2026-08-21, and the answer is that no NAT library helps.** The
+question that prompted this was whether `iroh` should be adopted for hole
+punching. It should not, and BEP 55 does not want one.
+
+BEP 55 is three bencode messages over connections that already exist. The
+extension is `ut_holepunch`; the message carries `msg_type`, `addr_type`,
+`addr`, `port`, and an optional `err_code`; the types are `rendezvous`,
+`connect`, and `error`; the error codes are `NoSuchPeer`, `NotConnected`,
+`NoSupport`, and `NoSelf`. A dial that fails through every route asks an
+**already-connected peer** to relay a `rendezvous` naming the unreachable
+target; that peer checks both sides advertise the extension and sends
+`connect` to each carrying the other's address; both then dial, and the two
+outbound SYNs crossing in flight open both NATs. `reference/README.md` has the
+whole flow with file and line citations into a complete 678 line
+implementation.
+
+**The swarm is the rendezvous.** That is the design, and it is why no relay
+server, no STUN, and no overlay is needed. `iroh` is a QUIC overlay with its
+own node identities and its own relays, and every peer on both ends must speak
+it: adopting it would make `bit-cli` reachable to other `bit-cli` instances
+rather than to the swarm, which is a private network wearing a BitTorrent
+costume. The same objection retires the rendezvous-server model generally.
+
+**What blocks it is the boundary this repository already knows.** The wire
+format is expressible today: `librqbit-peer-protocol` 9.0.0 carries
+`ExtendedMessage::Dyn(u8, BencodeValue)`, an escape hatch for an arbitrary
+extended message. What is missing is a way in: `PeerConnectionHandler`'s
+`on_extended_handshake` and `update_my_extended_handshake` are what would
+advertise `ut_holepunch` and route its messages, and that trait is implemented
+inside `librqbit` by the torrent state rather than by anything a dependent
+crate supplies. It is the same wall [T-002](webseed.md) measured and
+[T-135](multi-source.md) records the decision for.
+
+So this stays P3 and open, blocked on that boundary and not on a missing
+library. Nobody should reach for a NAT crate for it again.
+
 ### T-103 Filenames that are not valid UTF-8 are refused
 
 Source:      https://github.com/ikatson/rqbit/issues/452 (closed, 2025-07-09)

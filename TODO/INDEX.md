@@ -14,8 +14,11 @@ unblock it.
 ## Sources
 
 Built from the upstream `rqbit` corpus fetched on 2026-08-19 with `gh`:
-262 issues (91 open, 171 closed) and 346 pull requests, preserved under
-`reference/rqbit/` and categorised by `scripts/triage.jq`.
+262 issues (91 open, 171 closed) and 346 pull requests, categorised by
+`scripts/triage.jq`. What every reference tree was read for, and what was
+learned from each with file and line citations, is in `reference/README.md`;
+`reference-map.md` keeps the licence determinations, which have to survive that
+directory being deleted.
 
 Category counts from the triage, which is why the files are sized the way they
 are: bep 66, seeding 48, trackers 41, peers 40, windows 38, disk-io 37,
@@ -329,11 +332,27 @@ item eight is the operator's own list.
    62.60% across five paired runs. `scripts/check-prefer.ps1` is the
    measurement. It found `--web-seed-speed-limit` accepted and ignored, which
    is T-035, now a token bucket per source.
+
+   [T-032](performance.md) and [T-141](webseed.md) are **done**, and both
+   closed by disproving their own premise. `librqbit` 9.0.0's picker is not
+   rarest-first and never was: it yields the first piece of each file, then the
+   last, then the middle ascending, so `--piece-selector rarest-first` was
+   naming behaviour that does not exist. It is `default` now, `random` is gone
+   because nothing can ask for it, and `sequential` holds a `FileStream` at the
+   earliest missing piece: **zero descents in ten runs at one connection,
+   against one in every run of the default**.
+   `scripts/check-piece-order.ps1` is the measurement.
+   And `--web-seed-connect-timeout` was never broken. The fixture was: port 9
+   on Windows is the **discard** service, which accepts and never answers, so
+   the connect succeeded and the request timeout was correctly the bound.
+   Against an address that really drops the SYN the flag is the only bound in
+   play. `scripts/check-connect-timeout.ps1` drives both directions.
 7. The long-run failures. [T-017](disk-io.md), [T-030](performance.md),
    [T-021](peers.md), [T-031](performance.md), [T-037](performance.md), and
    [T-138](peers.md) are **done**. [T-020](peers.md) is the one open P0 left,
    and [T-040](memory.md) is partial: it needs six hours of wall clock and
-   nothing else. Measure before theorising: every one of these
+   nothing else. It is also the one item where the work is waiting rather than
+   thinking, so it is the first thing a session starts. Measure before theorising: every one of these
    closed that way, and every time the answer was not what the entry
    predicted.
 

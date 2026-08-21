@@ -4,19 +4,41 @@
 determination for every project it reads, copies from, or depends on, and the
 per-subsystem provenance for anything learned from a copyleft reference.
 
-Determinations were made on 2026-08-19 against the trees under `reference/`,
-which is gitignored and is deleted in Phase B.
+Determinations were made on 2026-08-19, and extended on 2026-08-21, against the
+trees under `reference/`, which is gitignored and is deleted in Phase B.
+`reference/README.md` is what those trees were read for and what was learned;
+this file is what may be done with them.
 
 ---
 
-## The four references
+## The references
 
 | Project | License | May copy code? | Verified from |
 | --- | --- | --- | --- |
 | `kist` | MIT OR Apache-2.0 | Yes, under MIT | `LICENSE-MIT` in the fork base |
-| FluxDown | AGPL-3.0 | **No** | `reference/FluxDown/LICENSE` |
-| superseedr | GPL-3.0-or-later | **No** | `reference/superseedr/LICENSE`, SPDX headers on every file |
-| intermodal | CC0-1.0 | Yes, adapt directly | `reference/intermodal/LICENSE` |
+| FluxDown | AGPL-3.0 | **No** | its `LICENSE` |
+| superseedr | GPL-3.0-or-later | **No** | its `LICENSE`, SPDX headers on every file |
+| intermodal | CC0-1.0 | Yes, adapt directly | its `LICENSE` |
+| fx-torrent | Apache-2.0 | Yes, with the notice terms | its `LICENSE`, `license = "Apache-2.0"` in `Cargo.toml` |
+| yip | AGPL-3.0-or-later | **No** | its `LICENSE`, `license = "AGPL-3.0-or-later"` in `Cargo.toml` |
+| pluto-bittorrent | **none stated** | **No** | no `LICENSE` file in the repository |
+
+Three additions on 2026-08-21, and two of them tighten rather than loosen.
+
+**fx-torrent is Apache-2.0**, the only permissively licensed BitTorrent
+implementation in the corpus, so it is the one tree that could legally be
+copied from or depended on. Nothing has been. Copying would attach Apache-2.0
+section 4's requirements: the licence text, the `NOTICE` contents, and a
+statement of changes, all of which `cargo about` would then have to carry into
+`THIRD_PARTY.md`. Depending on it as a crate is the cheaper route if it is ever
+wanted, and `cargo deny`'s allow-list already permits Apache-2.0.
+
+**yip is AGPL-3.0-or-later**, the same boundary as FluxDown and for the same
+reason: network-use disclosure would attach to the netdisk deployment.
+
+**pluto-bittorrent has no licence file at all**, which is the strictest case in
+the table. An absent licence is not permissive; it is all rights reserved.
+Read for shape, cite by line, copy nothing.
 
 ### kist
 

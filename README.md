@@ -54,9 +54,19 @@ provenance attestation. When a release exists, verify it with:
 b3sum --check bit-cli-x86_64-unknown-linux-musl.tar.xz.b3sum
 ```
 
-The Windows binary is statically linked against the C runtime, so it runs
-without a Visual C++ redistributable. `pwsh scripts/check-static.ps1` proves
-that on any build.
+Every published binary is self-contained. The Windows one is statically linked
+against the C runtime, so it runs without a Visual C++ redistributable; the two
+musl ones carry no interpreter and need no shared object at all.
+
+```bash
+pwsh scripts/check-static.ps1 -Path target/release/bit-cli
+```
+
+That reads the binary rather than trusting the build: a PE has to import no
+`VCRUNTIME`, `MSVCP`, `UCRT`, or `api-ms-win-crt-*`, and an ELF has to carry no
+`PT_INTERP` and no `DT_NEEDED`. It picks the check from the file's own magic
+bytes, so a cross-built artifact is checked the same way wherever the checking
+happens, and CI runs it on all three release targets.
 
 ## The addressing model
 

@@ -299,6 +299,23 @@ it, so the history starts here.
 
 ### Concurrency
 
+- `--piece-selector` decides what order pieces arrive in, and it has three
+  values rather than four. `sequential` and its `aria2` spelling `in-order`
+  hold the session's piece priority at the earliest piece still missing, so a
+  download is readable front to back: over ten runs at one connection, zero
+  pieces arrived before one already reported, against one in every run of the
+  default. It costs nothing at one connection and about seven percent at four,
+  and above one connection the order is not exact and cannot be, because a
+  selector decides which piece is asked for next and not which of four
+  transfers in flight finishes first. `scripts/check-piece-order.ps1` is the
+  measurement.
+- The default value is `default`, not `rarest-first`. `rarest-first` named
+  behaviour nothing here has: `librqbit` 9.0.0's picker does not count how many
+  peers hold a piece anywhere. What it does is the first piece of each file,
+  then the last, then the middle in ascending order, and `default` says so.
+  `random` is gone for the opposite reason: nothing implemented it and there is
+  no way to ask for it. `TODO/performance.md` T-032 has both, with the
+  measurement that establishes the first.
 - `download` notices a torrent finishing when it finishes, rather than on the
   next `--report-interval` tick. The watch loop woke only on the tick and
   checked completion afterwards, so a run that finished 1.1 seconds in ended at
@@ -386,14 +403,26 @@ it, so the history starts here.
 
 ### Build
 
-- Windows release binaries link the C runtime statically, so they run with no
-  Visual C++ redistributable. `scripts/check-static.ps1` verifies it and CI
-  runs it. The `x86_64-pc-windows-msvc` binary imports `kernel32`, `ntdll`,
+- Every release binary is self-contained, and the check reads the binary rather
+  than trusting the build. `scripts/check-static.ps1` picks its check from the
+  file's own magic bytes: a PE must import no `VCRUNTIME`, `MSVCP`, `MSVCR`,
+  `UCRT`, `CONCRT`, or `api-ms-win-crt-*`, and an ELF must carry no `PT_INTERP`
+  and no `DT_NEEDED`. CI and the release workflow both run it on all three
+  targets. The `x86_64-pc-windows-msvc` binary imports `kernel32`, `ntdll`,
   `combase`, `bcryptprimitives`, `api-ms-win-core-synch-l1-2-0`, `ws2_32`,
   `shell32`, `crypt32`, `bcrypt`, `userenv`, `advapi32`, and `iphlpapi`. The
   one api-set is a core OS set, not a CRT redirect. The script prints the size
   of whichever binary it checked rather than the number being pinned here,
   because a size moves with every commit and a pinned one goes stale.
+- The minimum supported Rust version is 1.88, which is the highest
+  `rust-version` in the resolved dependency graph rather than a preference. It
+  is stated in `Cargo.toml`, pinned in CI's `MSRV` job, and named in the
+  README, and a test fails if the three stop agreeing.
+- Link flags are set per target in `.cargo/config.toml` and repeated in
+  `ci.yml`, because setting the `RUSTFLAGS` environment variable **replaces**
+  per-target `rustflags` rather than adding to them. That file also records
+  which flags were considered and rejected, so nobody re-adds `opt-level=z` to
+  a profile that deliberately optimises for throughput.
 - `create` output is byte-identical on repeat runs and independent of input
   order, with paths `/`-separated and sorted by raw bytes so no locale can
   affect it.
@@ -423,3 +452,7 @@ it, so the history starts here.
 superseeding, and `-i/--input-file`. Each has an entry in
 `TODO/` with what closes it. Nothing is stubbed: a command that is not
 implemented says so and exits with a code a script can branch on.
+
+Metalink is the closest: the parser for both `.meta4` and `.metalink` is built
+and tested, and nothing calls it yet. `TODO/cli-surface.md` T-113 lists the
+five wiring steps left.
