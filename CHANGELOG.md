@@ -446,13 +446,50 @@ it, so the history starts here.
   returning, so it cannot change the info hash even for a torrent whose
   original encoding was not canonical.
 
+### Metalink
+
+- A `.meta4` (RFC 5854) or `.metalink` (Metalink 3) is a source.
+  `bit-cli download release.meta4` reads the document, fetches the `.torrent`
+  its `<metaurl>` names, registers every `<url>` mirror as a web seed source,
+  downloads, and verifies the payload against the document's own checksum.
+  Mirrors carry `origin: "metalink"` in `--json`.
+- Several `<metaurl>` entries are a mirror list for the `.torrent` itself, and
+  are tried in the document's preferred order until one parses. The failures
+  are reported as `torrent_fallbacks`, so a run says the preferred one was not
+  the one used.
+- The exact bytes fetched are handed to the session rather than the URL. Two
+  fetches of one URL can return two documents, and a report describing one
+  torrent while the session downloads another would be worse than a failure.
+- **A Metalink and a `.torrent` are two independent descriptions of one
+  payload, and both are checked.** The declared lengths are compared before a
+  byte is fetched. The document's digest is then checked against a payload the
+  session has already verified piece by piece against the torrent's own SHA-1
+  hashes, so a digest that disagrees says the Metalink is the document that is
+  wrong, and the warning says so. Either disagreement exits 7.
+- `sha-256`, `sha1`, and `md5` are computed, strongest first. An algorithm this
+  cannot compute is reported as `not_checked` with the reason, and `matched` is
+  absent rather than `true`. A checksum that was not computed is not one that
+  passed.
+- `--dry-run` reads the document with no network at all and reports the
+  mirrors, the size, the checksum, and the torrent URLs. It is the cheapest way
+  to check that a `.meta4` says what its author meant.
+- `--no-torrent-web-seed` drops a Metalink's mirrors along with the torrent's
+  own `url-list`. Both are the sources the source document declared rather than
+  the ones the caller named.
+- `ftp:` mirrors are counted and not registered, per-piece hashes under
+  `<pieces>` are not collected as whole-file checksums, and a document that
+  stops mid-element is refused rather than accepted as a shorter mirror list.
+- `pwsh scripts/check-metalink.ps1` drives ten cases on loopback and
+  `pwsh scripts/check-metalink-real.ps1` drives four against
+  `download.documentfoundation.org`. The real one records a finding: no
+  MirrorBrain instance reachable in August 2026 emits
+  `<metaurl mediatype="torrent">`, so a real document alone has nothing to
+  download from, and the error names how many mirrors it did have. See
+  `TODO/cli-surface.md` under T-113.
+
 ### Not in this release
 
-`bench swarm`, Metalink resolution, BEP 52 v2 and hybrid creation, BEP 16
-superseeding, and `-i/--input-file`. Each has an entry in
-`TODO/` with what closes it. Nothing is stubbed: a command that is not
-implemented says so and exits with a code a script can branch on.
-
-Metalink is the closest: the parser for both `.meta4` and `.metalink` is built
-and tested, and nothing calls it yet. `TODO/cli-surface.md` T-113 lists the
-five wiring steps left.
+`bench swarm`, BEP 52 v2 and hybrid creation, BEP 16 superseeding, and
+`-i/--input-file`. Each has an entry in `TODO/` with what closes it. Nothing is
+stubbed: a command that is not implemented says so and exits with a code a
+script can branch on.

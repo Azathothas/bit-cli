@@ -129,6 +129,14 @@ pub const EVENT_TYPES: &[(&str, &str)] = &[
         "`--redial-after` fired: every peer connection was dropped and the peer list dialled again.",
     ),
     (
+        "metalink_resolved",
+        "A Metalink was read and the `.torrent` it names was fetched.",
+    ),
+    (
+        "metalink_checked",
+        "The payload was checked against the Metalink's own checksum. `not_checked` says why it was not, when it was not.",
+    ),
+    (
         "piece_verified",
         "A piece arrived and its hash checked out.",
     ),
@@ -324,6 +332,13 @@ A field that a given run did not produce is not listed. Optional fields are
 omitted from the JSON rather than written as `null`, so a reader cannot mistake
 "not applicable" for "none", and several runs of the same command are folded
 together here to cover as many of them as possible.
+
+The check is containment, not equality: a row this file has and a run did not
+produce passes, because these runs are timed and a failure-only field like
+`sources[].error` appears only when a source fails. **So regenerating is
+lossy.** After running the command above, read the diff and put back any row it
+removed that is still a real field. There is no automatic way to tell a stale
+row from a rare one.
 "##;
 
 #[cfg(test)]

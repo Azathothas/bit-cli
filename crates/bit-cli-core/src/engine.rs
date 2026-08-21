@@ -422,7 +422,32 @@ impl Engine {
     /// `source` is anything `librqbit` accepts on a command line: a path, a
     /// URL, a magnet, or a bare info hash.
     pub async fn add(&self, source: &str, options: &AddOptions) -> Result<Arc<ManagedTorrent>> {
-        let response = self.add_inner(source, options).await?;
+        let add = AddTorrent::from_cli_argument(source).map_err(|e| {
+            Error::source_resolution(format!("{source}: {e}")).with("source", source.to_string())
+        })?;
+        let response = self.add_inner(source, add, options).await?;
+        response.into_handle().ok_or_else(|| {
+            Error::source_resolution(format!("{source}: the torrent was listed but not added"))
+        })
+    }
+
+    /// Add a torrent from bytes the caller already holds.
+    ///
+    /// `source` is what the caller called it, and is used only in errors and
+    /// reports. This exists for the sources the session cannot resolve itself:
+    /// a Metalink names its `.torrent` by URL, and this run has already
+    /// fetched and parsed that URL. Handing the session the URL again would
+    /// fetch it a second time, and two fetches of one URL can return two
+    /// different documents. See `TODO/cli-surface.md`, T-113.
+    pub async fn add_bytes(
+        &self,
+        source: &str,
+        torrent: Vec<u8>,
+        options: &AddOptions,
+    ) -> Result<Arc<ManagedTorrent>> {
+        let response = self
+            .add_inner(source, AddTorrent::from_bytes(torrent), options)
+            .await?;
         response.into_handle().ok_or_else(|| {
             Error::source_resolution(format!("{source}: the torrent was listed but not added"))
         })
@@ -449,7 +474,10 @@ impl Engine {
             list_only: true,
             ..Default::default()
         };
-        match self.add_inner(source, &options).await? {
+        let add = AddTorrent::from_cli_argument(source).map_err(|e| {
+            Error::source_resolution(format!("{source}: {e}")).with("source", source.to_string())
+        })?;
+        match self.add_inner(source, add, &options).await? {
             AddTorrentResponse::ListOnly(list) => {
                 let name = list
                     .info
@@ -480,10 +508,12 @@ impl Engine {
         }
     }
 
-    async fn add_inner(&self, source: &str, options: &AddOptions) -> Result<AddTorrentResponse> {
-        let add = AddTorrent::from_cli_argument(source).map_err(|e| {
-            Error::source_resolution(format!("{source}: {e}")).with("source", source.to_string())
-        })?;
+    async fn add_inner(
+        &self,
+        source: &str,
+        add: AddTorrent<'_>,
+        options: &AddOptions,
+    ) -> Result<AddTorrentResponse> {
         // A torrent's own file names decide where its bytes go, and a torrent
         // is untrusted input. The session's default storage joins those names
         // onto the output directory as given, which on Windows is enough to

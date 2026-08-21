@@ -57,7 +57,7 @@ yet, and when it does they keep the meaning below.
 | `-D` | daemon | Never. Phase C, decision 7.4. |
 | `-i` | input file | Reserved. `TODO/cli-surface.md` T-114. |
 | `-k` | min split size | Reserved. `TODO/performance.md` T-033. |
-| `-M` | metalink file | Reserved. `TODO/cli-surface.md` T-113. |
+| `-M` | metalink file | Reserved. A Metalink is a positional source here, the way `.torrent` is: `bit-cli download release.meta4`. |
 | `-m` | max tries | Reserved. |
 | `-P` | parameterized uri | Reserved. |
 | `-R` | remote time | Reserved. |

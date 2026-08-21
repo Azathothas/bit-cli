@@ -155,7 +155,7 @@ Source:      PROMPT.md A3.4c, decision 7.7
 Category:    cli
 Priority:    P1
 Effort:      L
-Status:      partial: the parser is built and tested, nothing calls it yet
+Status:      **done**
 
 Problem:     `source.rs` classifies `.meta4` and `.metalink` and reports that
              they need resolving. Nothing resolves them. `quick-xml` is already
@@ -213,26 +213,141 @@ $ cargo test -p bit-cli-core --lib metalink
 test result: ok. 15 passed; 0 failed
 ```
 
-**What is left**, and why this stays open rather than closing:
+**The wiring is done and the five steps are closed.** `bit-cli download
+release.meta4` reads the document, fetches the `.torrent` it names, registers
+every mirror as a source, downloads, and checks the payload against the
+document's own checksum.
 
-1. `source::load_local` still returns "a metalink has to be resolved to its
-   torrent first". It has to fetch `torrents[0]` over HTTP and parse the
-   `.torrent` out of the response, which is the same path `Kind::Url` already
-   takes through `source::fetch_torrent`.
-2. `download` has to register `mirrors_by_priority()` as web seed specs, which
-   is a `Vec<SourceSpec>` built the way `--web-seed` builds one, and report how
-   many the document had against how many were usable.
-3. The checksum has to be verified after the download, against
-   `best_checksum()`, and the result reported. `sha2` and `md-5` are already
-   dependencies.
-4. The part the entry calls "the part that matters": comparing the Metalink's
-   whole-file checksum against what the torrent's piece hashes imply, and
-   saying loudly when they disagree. That needs the payload on disk, so it is
-   the same pass as 3.
-5. The acceptance's run against a real `.meta4`.
+```
+$ pwsh scripts/check-metalink.ps1
+verdict: pass          (ten cases on loopback)
+$ pwsh scripts/check-metalink-real.ps1
+verdict: pass          (four cases against download.documentfoundation.org)
+```
 
-None of that needs a decision. It is wiring, and it is the next thing to pick
-up.
+Both records are committed: `bench/metalink-20260821T045751697Z.json` and
+`bench/metalink-real-20260821T045805559Z.json`.
+
+What each step turned into.
+
+1. **Resolving the torrent.** `source::resolve_metalink` reads the document,
+   takes `single_file()`, and fetches the torrent. Not `torrents[0]`:
+   `torrents_by_priority()`, and each in turn until one parses, because a
+   document that lists several torrents is a mirror list for the `.torrent`
+   itself and its first choice can be gone. The failures are kept and reported
+   as `torrent_fallbacks`, so a report says the preferred one was not the one
+   used. `source::fetch_torrent` now returns the bytes as well as the parse,
+   and `Engine::add_bytes` hands those exact bytes to the session.
+   **Fetching the URL twice was the alternative and it is wrong**: the session
+   would fetch a URL this run has already fetched, and two fetches of one URL
+   can return two documents, so the report would describe one torrent while the
+   session downloaded another.
+2. **Registering the mirrors.** `webseed_args::collect` takes an
+   `Option<&MetalinkFile>` and emits one `SourceSpec` per mirror in
+   `mirrors_by_priority()` order, with `Origin::Metalink`, which already
+   existed and had no producer.
+
+   Two things the entry did not anticipate. The composition is **`exact`**, not
+   BEP 19's `auto`: a Metalink `<url>` is the complete resource, never a
+   directory to append a name to. And `exact` on a multi-file torrent is a
+   binding error unless the scope resolves to one file, so the scope is the
+   file the document was attributed to. A document that cannot be attributed to
+   exactly one file of a multi-file torrent registers **nothing**, because a
+   mirror serving one file's bytes into a piece range nobody has identified is
+   worse than no mirror.
+
+   `--no-torrent-web-seed` drops them, and its help now says "the torrent's or
+   the metalink's". Both mean "the sources the source document declared rather
+   than the ones you named", which is one idea under one flag.
+3. **Verifying the checksum.** `Checksum::verify_file` streams the file in 256
+   KiB reads through `sha2`, `sha1`, or `md-5`. `sha2` was a declared
+   dependency of `bit-cli-core` with no user until now.
+
+   An algorithm this cannot compute is an **error, not a pass**. The report
+   carries `not_checked` with the reason, and `matched` is absent rather than
+   `true`. Every guard that stops the check writes one: a download that did not
+   finish, a file that could not be named on disk, an attribution that failed.
+   A checksum that was not computed is not a checksum that passed.
+4. **Which document is wrong.** This is the part the entry called the part that
+   matters, and it turned into two checks rather than one.
+
+   The **size** check costs nothing and runs before a byte is fetched.
+   `MetalinkFile::agreement(&Layout)` attributes the entry to a file in the
+   torrent and compares the two declared lengths. Lengths that differ mean the
+   two documents describe different files, and the caller learns it before
+   spending the bytes rather than after.
+
+   The **digest** check runs on a payload the session has already verified
+   piece by piece against the torrent's own SHA-1 hashes. That ordering is the
+   whole argument: a digest that then disagrees is evidence about the Metalink,
+   not about the bytes, and the warning says so in those words.
+   `scripts/check-metalink.ps1` proves it rather than asserting it, by hashing
+   the payload on disk against the source bytes in the mismatch case.
+
+   Both exit **7**, `HashMismatch`, and the report keeps them apart:
+   `agreement.size_agrees` and `checksum.matched`. One exit code because both
+   are the same finding, that the payload does not match what the Metalink
+   claims about it.
+5. **A real `.meta4`.** `scripts/check-metalink-real.ps1`, and it found the one
+   thing worth knowing about this format in practice.
+
+**No MirrorBrain instance reachable in August 2026 emits `<metaurl
+mediatype="torrent">`.** `download.documentfoundation.org` generates a document
+per file on demand, and the one for
+`LibreOffice_25.8.7_Win_x86-64_helppack_ast.msi` carries 58 real HTTPS mirrors
+with dense `priority` 1 to 58 and `location` codes, three whole-file checksums,
+a `<pieces>` block, and an OpenPGP `<signature>`, and **no torrent at all**.
+The same is true of `download.opensuse.org` and of every LibreOffice file
+checked. MirrorBrain emits a `<metaurl>` only when its operator has configured
+torrents, and none of them has. So the shape a user actually meets is a
+Metalink with nothing for `bit-cli download` to start from, and the message is
+built for it:
+
+```
+$ bit-cli download real.meta4
+the metalink lists no torrent for LibreOffice_25.8.7_Win_x86-64_helppack_ast.msi,
+so there is nothing to download here. It lists 58 HTTP mirror(s); pass one with
+--web-seed against a .torrent you already have.
+```
+
+`real_with_torrent` closes the loop without faking anything that could be real.
+It adds one `<metaurl>` line to the document the mirror generated and changes
+nothing else: the payload comes down over the public internet from the 58
+mirrors the mirror chose, and the digest it is verified against is the sha-256
+The Document Foundation published. Measured on the run recorded in
+`bench/metalink-real-20260821T045805559Z.json`: 3,801,088 bytes served, 58
+sources registered with `origin=metalink`, **1 of the 58 mirrors actually
+served bytes** on that run and 3 on the run before it, and the published
+sha-256 matched both times. How many mirrors take part is the swarm's
+decision and not a number this controls.
+
+Two other real-document findings, both now tests.
+
+- **Version 4 writes its per-piece hashes as bare `<hash>` children of
+  `<pieces>` with no attributes at all.** The parser's rule was version 3's,
+  which marks each child `piece="N"`, and it never saw these. They were dropped
+  anyway, by the guard that refuses a hash with an empty `type`, which is the
+  right answer for the wrong reason: one document written with a `type` on the
+  child would have put two piece hashes in `checksums` and let
+  `best_checksum()` return twenty bytes of one piece. The parser now tracks the
+  depth `<pieces>` opened at and ignores every `<hash>` inside it.
+- The OpenPGP `<signature>` block is text under an element the parser does not
+  know, and it must not become the value of the element before it.
+
+**What is not covered**, recorded rather than deferred:
+
+- A Metalink named by URL is still classified as `Kind::Url` and handed to the
+  session as a torrent, which fails on the bencode parse. Real documents are
+  served over HTTP, so this is the common way to meet one. T-154 has it.
+- A multi-file Metalink is refused with the list, by `single_file()`. Several
+  files is several downloads, and taking the first would report success for one
+  of them.
+- `--hash-check-only` returns before the checksum check, so a metalink run with
+  it reports no `metalink` block at all. The block is about what was
+  downloaded, and that flag downloads nothing, but the document's own claims
+  could still be reported. T-155 has it.
+- Language, OS, and country filtering, and `<signature>` verification. Out of
+  scope by the entry.
 
 ### T-114 -i/--input-file batch input is not implemented
 
@@ -874,3 +989,95 @@ The test names the gap rather than tolerating any gap: it compares
 `host.unavailable` to `["network"]` on Apple and to `[]` everywhere else, so a
 second field going unreadable fails the build, and so does this one being
 fixed without the expectation being updated.
+
+### T-154 A Metalink named by URL is not recognised
+
+Source:      `bit-cli` design, found closing [T-113](#t-113-metalink-is-not-implemented)
+Category:    cli
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `Kind::classify` checks the `http://` and `https://` prefixes
+             before it checks the `.meta4` and `.metalink` extensions, so
+             `bit-cli download https://example.org/release.meta4` is a
+             `Kind::Url`, is handed to the session as a `.torrent`, and fails
+             on the bencode parse with a message about the torrent rather than
+             about the metalink.
+Relevance:   Every real Metalink is served over HTTP. `MirrorBrain` generates
+             one on demand for any file it publishes, so a URL is the way a
+             caller normally meets one, and a local `.meta4` is what you get
+             after saving it by hand.
+Approach:    A fourth branch: a URL whose path ends in `.meta4` or `.metalink`
+             is a remote Metalink. `source::resolve_metalink` already takes a
+             parsed `Metalink`, so the only new code is fetching the document
+             before parsing it, which is `fetch_bytes` plus `Metalink::parse`.
+             The redirect case needs a decision the local path does not have:
+             a `MirrorBrain` document is generated per request and its
+             `<origin dynamic="true">` names the URL it came from, so nothing
+             has to be resolved relative to it, but a document with relative
+             mirror URLs would.
+Acceptance:  `bit-cli download <URL ending .meta4>` behaves exactly as the same
+             document saved to disk does, proven by running
+             `scripts/check-metalink-real.ps1` against the URL rather than the
+             saved copy and getting the same report.
+
+### T-155 --hash-check-only drops the metalink report
+
+Source:      `bit-cli` design, found closing [T-113](#t-113-metalink-is-not-implemented)
+Category:    cli
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `one_inner` returns early for `--hash-check-only`, before the
+             block that builds `TorrentReport::metalink`. So a Metalink run
+             with that flag reports nothing about the document at all: not the
+             mirror count, not the torrent it resolved, not the size
+             comparison, none of which needs a download.
+Relevance:   `--hash-check-only` over a Metalink is a reasonable thing to ask
+             for: check what is already on disk, and tell me whether the two
+             documents agree about it. The size comparison in particular is
+             computed before the early return and then thrown away.
+Approach:    Build the report at both exits rather than at one. `check_metalink`
+             already writes a `not_checked` reason for a run that did not
+             finish, so the early path needs the same call and no new branch.
+             The interesting case is a payload that is complete on disk: the
+             hash check proves it against the torrent, so the Metalink's
+             checksum could be checked there too and would be the strongest
+             thing this flag could report.
+Acceptance:  `bit-cli download release.meta4 --hash-check-only --json` over a
+             complete payload reports the `metalink` block with
+             `agreement.size_agrees` set, and either a checked digest or a
+             `not_checked` reason.
+
+### T-156 A dry run writes a different shape under the same document kind
+
+Source:      `bit-cli` design, found closing [T-113](#t-113-metalink-is-not-implemented)
+Category:    cli
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `download --dry-run --json` writes `kind: "download"` and a
+             document that shares almost no fields with a real run's:
+             `dry_run`, `directory`, and per-torrent `kind`, `needs_network`,
+             `coverage`, `trackers[]`, `web_seeds[]`, and `total_bytes`, and
+             none of `stopped`, `finished`, `sources[]`, or `total`. A consumer
+             selecting by `kind`, which is the documented way to select, gets
+             two shapes.
+Relevance:   `docs/schema.md` is generated by folding every run of a command
+             into one table per `kind`. Sampling the dry run would make the
+             `download` table a union of two documents with nothing saying
+             which fields belong to which, so the generator does not sample it
+             and the dry run's fields are undocumented.
+Approach:    Give it its own kind, `download_dry_run`, and sample it. That is a
+             breaking change to a document nothing is known to consume, and it
+             is the shape the rest of the surface already uses: `verify` writes
+             `hash_mismatch` rather than a `verify` with different fields.
+             `dry_run: true` stays, because a reader who has the document in
+             hand should not have to know the kind changed.
+Acceptance:  `bit-cli download <SOURCE> --dry-run --json | jq -r .kind` prints
+             `download_dry_run`, `DOCUMENT_KINDS` names it, and
+             `docs/schema.md` carries its field table from a run the generator
+             drives.

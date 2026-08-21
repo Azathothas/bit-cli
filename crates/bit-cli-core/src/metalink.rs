@@ -54,9 +54,13 @@
 //!
 //! See `TODO/cli-surface.md`, T-113.
 
+use std::io::Read;
+use std::path::Path;
+
 use quick_xml::events::Event;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, from_io};
+use crate::layout::{Layout, LayoutFile};
 
 /// One checksum over a whole file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +77,102 @@ impl Checksum {
     /// Whether this is an algorithm that can actually be checked here.
     pub fn is_supported(&self) -> bool {
         matches!(self.algorithm.as_str(), "sha256" | "sha1" | "md5")
+    }
+
+    /// Hash a file with this checksum's algorithm and compare.
+    ///
+    /// Streamed in fixed-size reads, so peak memory does not depend on the
+    /// payload size: the file this checks is the file that was just
+    /// downloaded, and it can be an ISO.
+    ///
+    /// An unsupported algorithm is an error rather than a pass. A checksum
+    /// that was not computed is not a checksum that matched, and returning
+    /// "fine" for one is the quiet wrong answer this repository keeps finding.
+    pub fn verify_file(&self, path: &Path) -> Result<Verified> {
+        let mut file = std::fs::File::open(path)
+            .map_err(|e| from_io(e, format!("cannot read {}", path.display())))?;
+        let mut digest = Digest::new(&self.algorithm)?;
+        let mut buffer = vec![0u8; 256 * 1024];
+        let mut bytes_hashed = 0u64;
+        loop {
+            let n = file
+                .read(&mut buffer)
+                .map_err(|e| from_io(e, format!("cannot read {}", path.display())))?;
+            if n == 0 {
+                break;
+            }
+            bytes_hashed += n as u64;
+            digest.update(&buffer[..n]);
+        }
+        let actual = digest.finish();
+        Ok(Verified {
+            algorithm: self.algorithm.clone(),
+            expected: self.value.clone(),
+            matched: actual == self.value,
+            actual,
+            bytes_hashed,
+        })
+    }
+}
+
+/// What hashing a file with one of a Metalink's checksums found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verified {
+    /// The algorithm, in this module's normalised spelling.
+    pub algorithm: String,
+    /// What the document said, lowercase hex.
+    pub expected: String,
+    /// What the bytes on disk hash to, lowercase hex.
+    pub actual: String,
+    pub matched: bool,
+    /// Bytes read. A caller comparing this against the size the torrent
+    /// declares learns whether the two documents describe the same file at
+    /// all, which is a different failure from a digest that disagrees.
+    pub bytes_hashed: u64,
+}
+
+/// One of the three digests, behind one interface.
+///
+/// An enum rather than a `Box<dyn Digest>`: `digest::DynDigest` would work and
+/// pulls a trait object into a loop that runs once per 256 KiB, and there are
+/// exactly three algorithms.
+enum Digest {
+    Sha256(sha2::Sha256),
+    Sha1(sha1::Sha1),
+    Md5(md5::Md5),
+}
+
+impl Digest {
+    fn new(algorithm: &str) -> Result<Self> {
+        use sha2::Digest as _;
+        match algorithm {
+            "sha256" => Ok(Self::Sha256(sha2::Sha256::new())),
+            "sha1" => Ok(Self::Sha1(sha1::Sha1::new())),
+            "md5" => Ok(Self::Md5(md5::Md5::new())),
+            other => Err(Error::usage(format!(
+                "the metalink's checksum uses {other}, which this cannot compute"
+            ))
+            .with("algorithm", other.to_string())),
+        }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        use sha2::Digest as _;
+        match self {
+            Self::Sha256(d) => d.update(bytes),
+            Self::Sha1(d) => d.update(bytes),
+            Self::Md5(d) => d.update(bytes),
+        }
+    }
+
+    fn finish(self) -> String {
+        use sha2::Digest as _;
+        let bytes: Vec<u8> = match self {
+            Self::Sha256(d) => d.finalize().to_vec(),
+            Self::Sha1(d) => d.finalize().to_vec(),
+            Self::Md5(d) => d.finalize().to_vec(),
+        };
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 }
 
@@ -132,12 +232,119 @@ impl MetalinkFile {
     /// Stable within a priority, so two mirrors at the same priority stay in
     /// document order and the result is the same on every run.
     pub fn mirrors_by_priority(&self) -> Vec<&Mirror> {
-        let mut out: Vec<&Mirror> = self.mirrors.iter().collect();
-        // `u32::MAX` for an absent priority, so a document that gives some
-        // mirrors a priority and not others puts the unrated ones last rather
-        // than first.
-        out.sort_by_key(|m| m.priority.unwrap_or(u32::MAX));
-        out
+        by_priority(&self.mirrors)
+    }
+
+    /// Torrents in the order the document prefers them.
+    ///
+    /// A document may list several, which is a mirror list for the `.torrent`
+    /// itself. Sorted the same way the payload mirrors are, so a caller that
+    /// falls through to the second one on a failure is following the
+    /// document's own preference rather than its element order.
+    pub fn torrents_by_priority(&self) -> Vec<&Mirror> {
+        by_priority(&self.torrents)
+    }
+
+    /// Which file in a torrent this entry describes, and whether the two
+    /// documents agree about it.
+    ///
+    /// This runs before anything is fetched and costs nothing: it compares
+    /// what the Metalink claims against what the `.torrent` claims. A size
+    /// that disagrees means the two describe different bytes, and learning
+    /// that before the download beats learning it after.
+    pub fn agreement(&self, layout: &Layout) -> Agreement {
+        let (file_index, matched_by) = self.match_file(layout);
+        let torrent_size = file_index.map(|i| layout.files[i].length);
+        let size_agrees = match (self.size, torrent_size) {
+            (Some(a), Some(b)) => Some(a == b),
+            _ => None,
+        };
+        Agreement {
+            file_index,
+            matched_by,
+            metalink_size: self.size,
+            torrent_size,
+            size_agrees,
+        }
+    }
+
+    /// The file index this entry names, by the first rule that matches exactly
+    /// one file.
+    ///
+    /// Three rules, weakest last. A single-file torrent is the whole of the
+    /// common case and needs no name at all. Otherwise the `name` attribute is
+    /// matched against the torrent's own path for a file, with and without the
+    /// torrent name in front of it, and then against the last component alone.
+    /// A rule that matches more than one file stops the search rather than
+    /// picking one: attributing a checksum to the wrong file would report a
+    /// mismatch against a file the document never mentioned.
+    fn match_file(&self, layout: &Layout) -> (Option<usize>, &'static str) {
+        if layout.files.len() == 1 {
+            return (Some(0), "only_file");
+        }
+        let wanted = self.name.replace('\\', "/");
+        let wanted = wanted.trim_start_matches('/');
+        if wanted.is_empty() {
+            return (None, "no_name");
+        }
+        let rules: [MatchRule<'_>; 3] = [
+            ("path", &|f: &LayoutFile| f.display_path() == wanted),
+            // A document may spell the path with the torrent's own name in
+            // front of it, because that is the path the file lands at on disk.
+            ("prefixed_path", &|f: &LayoutFile| {
+                format!("{}/{}", layout.name, f.display_path()) == wanted
+            }),
+            ("file_name", &|f: &LayoutFile| {
+                Some(f.file_name()) == wanted.rsplit('/').next()
+            }),
+        ];
+        for (how, matches) in rules {
+            let mut found = layout.files.iter().enumerate().filter(|(_, f)| matches(f));
+            if let Some((index, _)) = found.next() {
+                return match found.next() {
+                    None => (Some(index), how),
+                    Some(_) => (None, "ambiguous"),
+                };
+            }
+        }
+        (None, "no_match")
+    }
+}
+
+/// One way of deciding whether a file in the torrent is the one a Metalink
+/// entry names: a label for the report, and the test itself.
+type MatchRule<'a> = (&'static str, &'a dyn Fn(&LayoutFile) -> bool);
+
+/// Mirrors sorted by the document's preference, stable within a priority.
+fn by_priority(mirrors: &[Mirror]) -> Vec<&Mirror> {
+    let mut out: Vec<&Mirror> = mirrors.iter().collect();
+    // `u32::MAX` for an absent priority, so a document that gives some mirrors
+    // a priority and not others puts the unrated ones last rather than first.
+    out.sort_by_key(|m| m.priority.unwrap_or(u32::MAX));
+    out
+}
+
+/// What a Metalink and a `.torrent` say about the same file, compared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Agreement {
+    /// File index in the torrent, when the entry could be attributed to one.
+    pub file_index: Option<usize>,
+    /// Which rule matched, or why none did: `only_file`, `path`,
+    /// `prefixed_path`, `file_name`, `ambiguous`, `no_match`, `no_name`.
+    pub matched_by: &'static str,
+    /// The size the Metalink declares, when it declares one.
+    pub metalink_size: Option<u64>,
+    /// The length the torrent declares for the matched file.
+    pub torrent_size: Option<u64>,
+    /// Whether the two sizes are equal. `None` when either is missing, which
+    /// is not agreement and is not disagreement.
+    pub size_agrees: Option<bool>,
+}
+
+impl Agreement {
+    /// Whether the two documents state something that cannot both be true.
+    pub fn disagrees(&self) -> bool {
+        self.size_agrees == Some(false)
     }
 }
 
@@ -195,6 +402,13 @@ impl Metalink {
         // The element whose text we are collecting, and what to do with it.
         let mut pending: Option<Pending> = None;
         let mut depth: i64 = 0;
+        // The depth `<pieces>` opened at, while it is open. Version 4 writes
+        // its per-piece hashes as bare `<hash>` children with no attributes at
+        // all, so nothing on the child says it is a piece hash; only its
+        // parent does. Version 3 marks each child with `piece="N"` instead,
+        // and both are dropped. See the test against a real MirrorBrain
+        // document.
+        let mut pieces_at: Option<i64> = None;
         let mut buf = Vec::new();
 
         loop {
@@ -242,12 +456,14 @@ impl Metalink {
                             });
                         }
                         "size" => pending = Some(Pending::Size),
+                        "pieces" => pieces_at = pieces_at.or(Some(depth)),
                         "hash" => {
-                            // Version 3 puts a per-piece hash under
-                            // `<pieces>` with a `piece` attribute. Those are
-                            // not whole-file checksums and must not be
-                            // collected as if they were.
-                            match attribute(&start, "piece").is_some() {
+                            // A per-piece hash is not a whole-file checksum
+                            // and must not be collected as if it were. Being
+                            // inside `<pieces>` is what says so in version 4,
+                            // where the child carries no attributes; version 3
+                            // marks the child with `piece="N"` as well.
+                            match pieces_at.is_some() || attribute(&start, "piece").is_some() {
                                 true => pending = Some(Pending::Ignore),
                                 false => {
                                     pending = Some(Pending::Hash(
@@ -297,6 +513,9 @@ impl Metalink {
                     apply(file, what, &value);
                 }
                 Event::End(_) => {
+                    if pieces_at == Some(depth) {
+                        pieces_at = None;
+                    }
                     depth -= 1;
                     pending = None;
                 }
@@ -724,5 +943,264 @@ mod tests {
         assert_eq!(file.torrents.len(), 1);
         assert_eq!(file.torrents[0].url, "https://e.example.com/a.torrent");
         assert!(file.mirrors.is_empty(), "a metaurl is not a mirror");
+    }
+
+    fn layout(name: &str, files: &[(&str, u64)]) -> Layout {
+        let mut offset = 0;
+        let files: Vec<LayoutFile> = files
+            .iter()
+            .map(|(path, length)| {
+                let file = LayoutFile::new(path, offset, *length);
+                offset += *length;
+                file
+            })
+            .collect();
+        Layout {
+            name: name.to_string(),
+            multi_file: files.len() > 1,
+            files,
+            piece_length: 16384,
+            total_length: offset,
+        }
+    }
+
+    fn entry(name: &str, size: Option<u64>) -> MetalinkFile {
+        MetalinkFile {
+            name: name.to_string(),
+            size,
+            ..Default::default()
+        }
+    }
+
+    /// The overwhelming case: one file in the document, one in the torrent.
+    #[test]
+    fn a_single_file_torrent_needs_no_name_to_be_matched() {
+        let agreement = entry("whatever-the-document-called-it", Some(64))
+            .agreement(&layout("a.iso", &[("a.iso", 64)]));
+        assert_eq!(agreement.file_index, Some(0));
+        assert_eq!(agreement.matched_by, "only_file");
+        assert_eq!(agreement.size_agrees, Some(true));
+        assert!(!agreement.disagrees());
+    }
+
+    /// The size is the one cross-check that costs nothing and runs before the
+    /// download. Two documents that disagree about how long the file is
+    /// describe different bytes.
+    #[test]
+    fn a_size_that_disagrees_with_the_torrent_is_reported_before_anything_is_fetched() {
+        let agreement = entry("a.iso", Some(65)).agreement(&layout("a.iso", &[("a.iso", 64)]));
+        assert_eq!(agreement.metalink_size, Some(65));
+        assert_eq!(agreement.torrent_size, Some(64));
+        assert_eq!(agreement.size_agrees, Some(false));
+        assert!(agreement.disagrees());
+    }
+
+    /// A document with no `<size>` is neither agreement nor disagreement, and
+    /// must not be reported as either.
+    #[test]
+    fn a_missing_size_is_not_agreement() {
+        let agreement = entry("a.iso", None).agreement(&layout("a.iso", &[("a.iso", 64)]));
+        assert_eq!(agreement.size_agrees, None);
+        assert!(!agreement.disagrees());
+    }
+
+    #[test]
+    fn a_multi_file_torrent_is_matched_by_path_then_by_name() {
+        let layout = layout("rel", &[("docs/a.txt", 4), ("b.iso", 64)]);
+        assert_eq!(entry("b.iso", None).agreement(&layout).matched_by, "path");
+        assert_eq!(
+            entry("rel/docs/a.txt", None).agreement(&layout).matched_by,
+            "prefixed_path"
+        );
+        assert_eq!(
+            entry("elsewhere/b.iso", None).agreement(&layout).matched_by,
+            "file_name"
+        );
+        assert_eq!(
+            entry("b.iso", None).agreement(&layout).file_index,
+            Some(1),
+            "the index has to be the torrent's, not the document's"
+        );
+    }
+
+    /// Attributing a checksum to the wrong file would report a mismatch
+    /// against a file the document never named, so two candidates is no
+    /// candidate.
+    #[test]
+    fn two_files_with_the_same_name_are_ambiguous_rather_than_the_first_one() {
+        let layout = layout("rel", &[("x/a.iso", 4), ("y/a.iso", 64)]);
+        let agreement = entry("a.iso", Some(64)).agreement(&layout);
+        assert_eq!(agreement.file_index, None);
+        assert_eq!(agreement.matched_by, "ambiguous");
+        assert_eq!(agreement.size_agrees, None);
+    }
+
+    #[test]
+    fn a_name_that_matches_nothing_in_the_torrent_says_so() {
+        let layout = layout("rel", &[("a.iso", 4), ("b.iso", 64)]);
+        assert_eq!(
+            entry("c.iso", None).agreement(&layout).matched_by,
+            "no_match"
+        );
+        assert_eq!(entry("", None).agreement(&layout).matched_by, "no_name");
+    }
+
+    #[test]
+    fn torrents_come_out_in_the_documents_preferred_order() {
+        let text = r#"<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+          <file name="a.iso">
+            <metaurl mediatype="torrent" priority="7">https://slow.example.com/a.torrent</metaurl>
+            <metaurl mediatype="torrent" priority="1">https://fast.example.com/a.torrent</metaurl>
+          </file>
+        </metalink>"#;
+        let doc = Metalink::parse(text.as_bytes()).unwrap();
+        let order: Vec<&str> = doc
+            .single_file()
+            .unwrap()
+            .torrents_by_priority()
+            .iter()
+            .map(|m| m.url.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "https://fast.example.com/a.torrent",
+                "https://slow.example.com/a.torrent"
+            ]
+        );
+    }
+
+    /// A file in a directory of its own, kept alive by the returned handle.
+    ///
+    /// One shared directory with fixed names is a flake: `cargo test` runs
+    /// these on several threads, and two of them writing the same path means
+    /// one can hash a file the other has truncated to zero. That failed once
+    /// in the full suite and passed every time in isolation, which is the
+    /// shape of the bug.
+    fn temp_file(name: &str, bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        (dir, path)
+    }
+
+    /// The three algorithms against the empty string, whose digests are
+    /// published constants, so the dispatch is checked against something other
+    /// than itself.
+    #[test]
+    fn every_supported_algorithm_hashes_a_file() {
+        let (_dir, path) = temp_file("empty", b"");
+        for (algorithm, expected) in [
+            (
+                "sha256",
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            ("sha1", "da39a3ee5e6b4b0d3255bfef95601890afd80709"),
+            ("md5", "d41d8cd98f00b204e9800998ecf8427e"),
+        ] {
+            let checksum = Checksum {
+                algorithm: algorithm.to_string(),
+                value: expected.to_string(),
+            };
+            let verified = checksum.verify_file(&path).unwrap();
+            assert!(verified.matched, "{algorithm}: {verified:?}");
+            assert_eq!(verified.actual, expected);
+            assert_eq!(verified.bytes_hashed, 0);
+        }
+    }
+
+    #[test]
+    fn a_checksum_that_disagrees_reports_both_digests() {
+        let (_dir, path) = temp_file("payload", b"hello");
+        let checksum = Checksum {
+            algorithm: "md5".to_string(),
+            value: "00000000000000000000000000000000".to_string(),
+        };
+        let verified = checksum.verify_file(&path).unwrap();
+        assert!(!verified.matched);
+        assert_eq!(verified.expected, "00000000000000000000000000000000");
+        assert_eq!(verified.actual, "5d41402abc4b2a76b9719d911017c592");
+        assert_eq!(verified.bytes_hashed, 5);
+    }
+
+    /// The shape a real MirrorBrain 2.19.0 document has, which is what
+    /// `download.documentfoundation.org` serves for every file it publishes.
+    ///
+    /// Three things here are not in a hand-written example and all three broke
+    /// something on the way in. Version 4's per-piece hashes are bare `<hash>`
+    /// children of `<pieces>` with **no attributes at all**, so the version 3
+    /// rule of looking for `piece="N"` does not see them and only the parent
+    /// says what they are. A `<signature>` holds an OpenPGP block whose text
+    /// must not become the value of anything. And the mirrors carry
+    /// `location` and a dense `priority` run, which is the ordering a caller
+    /// depends on.
+    #[test]
+    fn a_real_mirrorbrain_document_yields_three_checksums_and_no_piece_hashes() {
+        let text = r#"<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <generator>MirrorBrain/2.19.0</generator>
+  <origin dynamic="true">http://example.org/f.msi.meta4</origin>
+  <published>2026-08-21T04:34:52Z</published>
+  <publisher><name>The Document Foundation</name><url>https://example.org</url></publisher>
+  <file name="f.msi">
+    <size>3801088</size>
+    <signature mediatype="application/pgp-signature">
+-----BEGIN PGP SIGNATURE-----
+iQIzBAABCAAdFiEEwoOeytlAj76VMcPp9DSh76/urqMFAmoBn8UACgkQ9DSh76/u
+-----END PGP SIGNATURE-----
+    </signature>
+    <hash type="md5">ba40858a0919d0b6a6f974345971f48f</hash>
+    <hash type="sha-1">21f59bdf58ac102398a804c5ccf9e282559f7966</hash>
+    <hash type="sha-256">2cb3264a09b84c7857a5de790402ebbe53beb4ab9b0a5c49dc9d2863775835d8</hash>
+    <pieces length="262144" type="sha-1">
+      <hash>eae90fb30c4aaabb5eb42c563f575e3b570dc7b6</hash>
+      <hash>7b270c82a17878a99f0d3ea010835f7f768ba25b</hash>
+    </pieces>
+    <url location="sg" priority="1">https://a.example.org/f.msi</url>
+    <url location="cn" priority="2">https://b.example.org/f.msi</url>
+  </file>
+</metalink>"#;
+        let doc = Metalink::parse(text.as_bytes()).unwrap();
+        assert_eq!(doc.version, Version::V4);
+        let file = doc.single_file().unwrap();
+        assert_eq!(file.name, "f.msi");
+        assert_eq!(file.size, Some(3_801_088));
+        // Three whole-file checksums and not five. The two `<pieces>` children
+        // are piece hashes and the signature is not a checksum at all.
+        assert_eq!(
+            file.checksums
+                .iter()
+                .map(|c| c.algorithm.as_str())
+                .collect::<Vec<_>>(),
+            ["md5", "sha1", "sha256"]
+        );
+        assert_eq!(
+            file.best_checksum().unwrap().value,
+            "2cb3264a09b84c7857a5de790402ebbe53beb4ab9b0a5c49dc9d2863775835d8"
+        );
+        assert_eq!(file.mirrors.len(), 2);
+        assert_eq!(file.mirrors[0].location.as_deref(), Some("sg"));
+        assert_eq!(
+            file.mirrors_by_priority()[0].url,
+            "https://a.example.org/f.msi"
+        );
+        // No `<metaurl>`, which is what every MirrorBrain instance reachable
+        // in August 2026 serves. The caller has to say so rather than fail
+        // obscurely. See `TODO/cli-surface.md`, T-113.
+        assert!(file.torrents.is_empty());
+    }
+
+    /// A checksum that cannot be computed is an error, not a pass. Returning
+    /// "fine" for an algorithm nothing hashed is a claim of verification that
+    /// did not happen.
+    #[test]
+    fn an_algorithm_that_cannot_be_computed_is_an_error_rather_than_a_pass() {
+        let (_dir, path) = temp_file("payload", b"hello");
+        let checksum = Checksum {
+            algorithm: "sha512".to_string(),
+            value: "ab".to_string(),
+        };
+        let error = checksum.verify_file(&path).unwrap_err();
+        assert!(error.to_string().contains("sha512"), "{error}");
     }
 }

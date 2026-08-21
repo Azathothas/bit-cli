@@ -699,6 +699,7 @@ pub fn leech(
     let specs = webseed_args::collect(
         &args.web_seeds,
         meta.as_ref(),
+        None,
         env,
         webseed_args::no_network,
     )?;
@@ -1605,7 +1606,7 @@ fn resolve(
     let kind = SourceKind::classify(source, env)?;
     let meta = load_local(&kind, env)?;
     let layout = meta.layout();
-    let specs = webseed_args::collect(web_seeds, Some(&meta), env, webseed_args::no_network)?;
+    let specs = webseed_args::collect(web_seeds, Some(&meta), None, env, webseed_args::no_network)?;
     if specs.is_empty() {
         return Err(Error::no_usable_sources(
             "no web seed sources: the torrent declares none and none were given",

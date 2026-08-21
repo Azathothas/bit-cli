@@ -33,6 +33,13 @@ omitted from the JSON rather than written as `null`, so a reader cannot mistake
 "not applicable" for "none", and several runs of the same command are folded
 together here to cover as many of them as possible.
 
+The check is containment, not equality: a row this file has and a run did not
+produce passes, because these runs are timed and a failure-only field like
+`sources[].error` appears only when a source fails. **So regenerating is
+lossy.** After running the command above, read the diff and put back any row it
+removed that is still a real field. There is no automatic way to tell a stale
+row from a rare one.
+
 ## Documents
 
 One document per run, on stdout, when `--json` is given.
@@ -294,6 +301,22 @@ From `bit-cli download <TORRENT> --web-seed <URL> --json`.
 | `torrents[].mean_rate.bytes` | integer |
 | `torrents[].mean_rate.human` | string |
 | `torrents[].mean_rate_human` | string |
+| `torrents[].metalink.agreement.file_index` | integer |
+| `torrents[].metalink.agreement.matched_by` | string |
+| `torrents[].metalink.agreement.metalink_size` | integer |
+| `torrents[].metalink.agreement.size_agrees` | bool |
+| `torrents[].metalink.agreement.torrent_size` | integer |
+| `torrents[].metalink.checksum.actual` | string |
+| `torrents[].metalink.checksum.algorithm` | string |
+| `torrents[].metalink.checksum.bytes_hashed` | integer |
+| `torrents[].metalink.checksum.expected` | string |
+| `torrents[].metalink.checksum.matched` | bool |
+| `torrents[].metalink.checksum.path` | string |
+| `torrents[].metalink.file` | string |
+| `torrents[].metalink.mirrors_listed` | integer |
+| `torrents[].metalink.mirrors_registered` | integer |
+| `torrents[].metalink.torrent_url` | string |
+| `torrents[].metalink.version` | string |
 | `torrents[].name` | string |
 | `torrents[].output_directory` | string |
 | `torrents[].peers_seen` | integer |
@@ -826,6 +849,45 @@ From `bit-cli download <TORRENT> --redial-after <DUR> --jsonl`.
 | `peers_dropped` | integer |
 | `seq` | integer |
 | `stalled_ms` | integer |
+| `type` | string |
+
+### `metalink_resolved`
+
+A Metalink was read and the `.torrent` it names was fetched.
+
+From `bit-cli download <METALINK> --jsonl`.
+
+| field | type |
+| --- | --- |
+| `at` | string |
+| `checksums` | integer |
+| `file` | string |
+| `info_hash` | string |
+| `mirrors` | integer |
+| `seq` | integer |
+| `source` | string |
+| `torrent_url` | string |
+| `type` | string |
+| `unsupported_mirrors` | integer |
+| `version` | string |
+
+### `metalink_checked`
+
+The payload was checked against the Metalink's own checksum. `not_checked` says why it was not, when it was not.
+
+From `bit-cli download <METALINK> --jsonl`.
+
+| field | type |
+| --- | --- |
+| `actual` | string |
+| `algorithm` | string |
+| `at` | string |
+| `bytes_hashed` | integer |
+| `expected` | string |
+| `info_hash` | string |
+| `matched` | bool |
+| `path` | string |
+| `seq` | integer |
 | `type` | string |
 
 ### `piece_verified`

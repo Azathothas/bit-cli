@@ -210,6 +210,75 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         }
     }
 
+    // A Metalink, which is the only source kind that resolves its own torrent
+    // and then checks the payload against a second description of it. Its own
+    // fixture and its own server, because the document has to name the
+    // `.torrent` by URL and that means the server has to be serving the
+    // torrent as well as the payload. See `TODO/cli-surface.md`, T-113.
+    //
+    // The checksum is `sha-1` rather than `sha-256` only because this crate
+    // already depends on `sha1` and the schema records field names, not
+    // values. Both go through the same code.
+    let metalink_fixture = TorrentFixture::single_file();
+    let metalink_dir = metalink_fixture.dir();
+    let metalink_server = FileServer::start(metalink_dir.clone());
+    let payload_bytes = &metalink_fixture.files[0].1;
+    let payload_sha1: String = <sha1::Sha1 as sha1::Digest>::digest(payload_bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let meta4 = metalink_dir.join("release.meta4");
+    std::fs::write(
+        &meta4,
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="payload.bin">
+    <size>{size}</size>
+    <hash type="sha-1">{payload_sha1}</hash>
+    <url priority="1">{base}payload/payload.bin</url>
+    <metaurl mediatype="torrent">{base}payload.bin.torrent</metaurl>
+  </file>
+</metalink>
+"#,
+            size = payload_bytes.len(),
+            base = metalink_server.base,
+        ),
+    )
+    .expect("write the metalink");
+    let meta4_arg = meta4.to_str().expect("utf-8 path").to_string();
+    let metalink_out = metalink_dir.join("out");
+    for format in ["--json", "--jsonl"] {
+        let (_, out) = capture(
+            &[
+                format,
+                "download",
+                &meta4_arg,
+                "--dir",
+                metalink_out.to_str().unwrap(),
+                "--web-seed-only",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--report-interval",
+                "50ms",
+                "--stop-after",
+                "20s",
+            ],
+            metalink_dir.clone(),
+        );
+        match format {
+            "--json" => {
+                observe_document(&mut documents, "bit-cli download <METALINK> --json", &out)
+            }
+            _ => observe_events(&mut events, "bit-cli download <METALINK> --jsonl", &out),
+        }
+    }
+    // `--dry-run` is deliberately not sampled. Its document carries
+    // `kind: "download"` and a different shape, so folding it in would make
+    // the `download` table a union of two documents without saying which
+    // fields belong to which. See `TODO/cli-surface.md`, T-156.
+
     // The three `webseed` verbs that need a server: one request per source,
     // a concurrency sweep, and one piece pulled and checked.
     //

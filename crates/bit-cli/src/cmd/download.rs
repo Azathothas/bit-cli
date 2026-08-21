@@ -16,6 +16,7 @@ use bit_cli_core::ExitCode;
 use bit_cli_core::engine::{AddOptions, Engine, TorrentSnapshot};
 use bit_cli_core::error::{Error, Result};
 use bit_cli_core::layout::Layout;
+use bit_cli_core::metalink::{Agreement, Checksum, Metalink};
 use bit_cli_core::paths::Rename;
 use bit_cli_core::torrent::Metainfo;
 use bit_cli_core::units::{Size, format_rate, format_size};
@@ -28,7 +29,7 @@ use tokio::sync::mpsc;
 use crate::cli::{DownloadArgs, Global};
 use crate::env::Env;
 use crate::output::{Renderer, field};
-use crate::source::Kind;
+use crate::source::{Kind, ResolvedMetalink};
 use crate::swarm::{
     self, AttachedSource, Progress, SessionSetup, SourceReport, StopConditions, Stopped,
 };
@@ -77,6 +78,10 @@ pub struct TorrentReport {
     /// trackers or `--no-tracker` was given.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub announced: Vec<SentAnnounce>,
+    /// What the Metalink said and whether the payload agreed with it. Present
+    /// only when the source was a Metalink. See `TODO/cli-surface.md`, T-113.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metalink: Option<MetalinkReport>,
     /// The exit code this torrent's outcome produces.
     ///
     /// A run's code is the worst of its torrents'. Without this, a torrent
@@ -87,6 +92,103 @@ pub struct TorrentReport {
     pub code: ExitCode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// What a Metalink said, and whether the bytes on disk agreed with it.
+///
+/// A Metalink and a `.torrent` are two independent descriptions of the same
+/// payload, and this run has both. Two checks come out of that, and they fail
+/// for different reasons.
+///
+/// The first costs nothing and runs before a byte is fetched: the two
+/// documents each declare a length, and lengths that differ mean they describe
+/// different files. The second runs on the payload the session has already
+/// verified piece by piece against the torrent's own SHA-1 hashes, so a
+/// checksum that then disagrees says the Metalink is the document that is
+/// wrong, not the torrent. Saying which one is wrong is the whole point of
+/// carrying both. See `TODO/cli-surface.md`, T-113.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetalinkReport {
+    /// `4` for RFC 5854 `.meta4`, `3` for the older `.metalink`.
+    pub version: &'static str,
+    /// The `<file name>` the document carried.
+    pub file: String,
+    /// The `<metaurl>` the `.torrent` was fetched from.
+    pub torrent_url: String,
+    /// Torrent URLs tried before that one, and what went wrong with each.
+    /// Empty when the document's first choice answered.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub torrent_fallbacks: Vec<MirrorError>,
+    /// Mirrors the document listed for the payload.
+    pub mirrors_listed: usize,
+    /// Mirrors that became sources in this run. Lower than `mirrors_listed`
+    /// when `--no-torrent-web-seed` or `--no-web-seed` dropped them, or when
+    /// the document's file could not be attributed to one file of a multi-file
+    /// torrent, in which case `agreement.matched_by` says why.
+    pub mirrors_registered: usize,
+    /// Mirrors the document listed under a scheme this cannot fetch, `ftp:`
+    /// being the one that occurs. Counted so the report can say the document
+    /// had more in it than the run could use.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mirrors_unsupported: Vec<String>,
+    /// What the two documents say about the file's length, compared before
+    /// anything was fetched.
+    pub agreement: MetalinkAgreement,
+    /// The checksum the document supplied, when it supplied one this can
+    /// compute.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<MetalinkChecksum>,
+}
+
+/// One torrent URL that did not answer.
+#[derive(Debug, Clone, Serialize)]
+pub struct MirrorError {
+    pub url: String,
+    pub error: String,
+}
+
+/// What the Metalink and the `.torrent` each say about the same file.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetalinkAgreement {
+    /// The file index in the torrent this entry was attributed to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_index: Option<usize>,
+    /// Which rule attributed it, or why none could: `only_file`, `path`,
+    /// `prefixed_path`, `file_name`, `ambiguous`, `no_match`, `no_name`.
+    pub matched_by: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metalink_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub torrent_size: Option<u64>,
+    /// `true` when both declare a length and the two are equal, `false` when
+    /// they differ, absent when either is missing. Absent is neither
+    /// agreement nor disagreement and must not be read as either.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_agrees: Option<bool>,
+}
+
+/// The Metalink's own checksum, and what checking it found.
+#[derive(Debug, Clone, Serialize)]
+pub struct MetalinkChecksum {
+    pub algorithm: String,
+    pub expected: String,
+    /// What the payload hashes to. Absent when the check did not run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    /// `true` when the payload matched, `false` when it did not, absent when
+    /// the check did not run. Absent is not a pass.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched: Option<bool>,
+    /// Bytes read to compute it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_hashed: Option<u64>,
+    /// The file that was hashed, as it sits on disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Why the check did not run, when it did not. A checksum that was not
+    /// computed is not a checksum that passed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_checked: Option<String>,
 }
 
 /// One announce this run sent itself, beyond the session's own.
@@ -221,13 +323,64 @@ pub fn run(
 
     // Every source is classified before the session starts, so a typo in the
     // fifth argument fails before the first byte is fetched.
+    let kinds: Vec<Kind> = args
+        .sources
+        .iter()
+        .map(|source| Kind::classify(source, env))
+        .collect::<Result<_>>()?;
+
+    // One runtime for the whole command. It is built here rather than beside
+    // the session because a Metalink has to be resolved over HTTP before the
+    // plans can be built, and resolving it needs somewhere to run.
+    let runtime = swarm::runtime()?;
+    let user_agent = args
+        .web_seeds
+        .web_seed_user_agent
+        .clone()
+        .unwrap_or_else(bit_cli_core::webseed::fetch::default_user_agent);
+    let mut resolved: std::collections::HashMap<usize, ResolvedMetalink> =
+        std::collections::HashMap::new();
+    let metalinks: Vec<(usize, std::path::PathBuf)> = kinds
+        .iter()
+        .enumerate()
+        .filter_map(|(index, kind)| match kind {
+            Kind::Metalink(path) => Some((index, path.clone())),
+            _ => None,
+        })
+        .collect();
+    if !metalinks.is_empty() {
+        runtime.block_on(async {
+            for (index, path) in metalinks {
+                let document = Metalink::read(&path)?;
+                let one = crate::source::resolve_metalink(&document, &user_agent).await?;
+                renderer.event(
+                    env,
+                    "metalink_resolved",
+                    &json!({
+                        "source": args.sources[index],
+                        "version": one.version,
+                        "file": one.file.name,
+                        "torrent_url": one.torrent_url,
+                        "info_hash": one.meta.info_hash().hex(),
+                        "mirrors": one.file.mirrors.len(),
+                        "unsupported_mirrors": one.file.unsupported_mirrors.len(),
+                        "checksums": one.file.checksums.len(),
+                    }),
+                )?;
+                resolved.insert(index, one);
+            }
+            Ok::<(), Error>(())
+        })?;
+    }
+
     let mut plans = Vec::with_capacity(args.sources.len());
     let mut known_hashes: HashSet<String> = HashSet::new();
     let mut metas: Vec<Option<Metainfo>> = Vec::with_capacity(args.sources.len());
     for (index, source) in args.sources.iter().enumerate() {
-        let kind = Kind::classify(source, env)?;
-        let meta = match &kind {
-            Kind::File(path) => Some(Metainfo::read(path)?),
+        let one = resolved.remove(&index);
+        let meta = match (&kinds[index], &one) {
+            (Kind::File(path), _) => Some(Metainfo::read(path)?),
+            (Kind::Metalink(_), Some(one)) => Some(one.meta.clone()),
             _ => None,
         };
         if let Some(meta) = &meta {
@@ -236,13 +389,63 @@ pub fn run(
         let specs = webseed_args::collect(
             &args.web_seeds,
             meta.as_ref(),
+            one.as_ref().map(|m| &m.file),
             env,
             webseed_args::no_network,
         )?;
         let trackers = setup.tracker_list(meta.as_ref(), env)?;
+        let (torrent_bytes, metalink) = match one {
+            None => (None, None),
+            Some(one) => {
+                let registered = specs
+                    .iter()
+                    .filter(|spec| spec.origin == bit_cli_core::webseed::binding::Origin::Metalink)
+                    .count();
+                // `one.meta` is the torrent this Metalink named, so the two
+                // documents being compared are always both present here.
+                let agreement = one.file.agreement(&one.meta.layout());
+                if agreement.disagrees() {
+                    renderer.warn(
+                        env,
+                        format!(
+                            "{source}: the metalink says the file is {} bytes and the torrent says {}. One of the two is wrong; the payload is checked against both.",
+                            agreement.metalink_size.unwrap_or_default(),
+                            agreement.torrent_size.unwrap_or_default(),
+                        ),
+                    );
+                }
+                let best = one.file.best_checksum().cloned();
+                let unusable_algorithm = match &best {
+                    Some(_) => None,
+                    None => one.file.checksums.first().map(|c| c.algorithm.clone()),
+                };
+                let plan = MetalinkPlan {
+                    version: one.version,
+                    file_name: one.file.name.clone(),
+                    torrent_url: one.torrent_url.clone(),
+                    torrent_fallbacks: one
+                        .torrent_errors
+                        .iter()
+                        .map(|(url, error)| MirrorError {
+                            url: url.clone(),
+                            error: error.clone(),
+                        })
+                        .collect(),
+                    mirrors_listed: one.file.mirrors.len(),
+                    mirrors_registered: registered,
+                    mirrors_unsupported: one.file.unsupported_mirrors.clone(),
+                    agreement,
+                    checksum: best,
+                    unusable_algorithm,
+                };
+                (Some(one.torrent_bytes), Some(Box::new(plan)))
+            }
+        };
         plans.push(Plan {
             index,
             source: source.clone(),
+            torrent_bytes,
+            metalink,
             specs,
             trackers,
             donations: Vec::new(),
@@ -342,7 +545,6 @@ pub fn run(
     }
     let concurrency = args.max_concurrent_downloads.max(1);
     let started = std::time::Instant::now();
-    let runtime = swarm::runtime()?;
 
     let outcome = runtime.block_on(async {
         let engine = Arc::new(Engine::start(&engine_options).await?);
@@ -548,11 +750,37 @@ struct Plan {
     /// Position in the run, which is the order the queue hands plans out in.
     index: usize,
     source: String,
+    /// The exact `.torrent` bytes, when this run resolved them itself rather
+    /// than leaving it to the session. A Metalink names its torrent by URL and
+    /// the URL was already fetched; handing the session the same URL would
+    /// fetch it twice. See `TODO/cli-surface.md`, T-113.
+    torrent_bytes: Option<Vec<u8>>,
+    /// What the Metalink said, when the source was one.
+    metalink: Option<Box<MetalinkPlan>>,
     specs: Vec<SourceSpec>,
     trackers: Option<Vec<String>>,
     /// Files an earlier torrent in this run is proven to hold, computed from
     /// the metadata before anything starts. See `TODO/multi-source.md`, T-140.
     donations: Vec<Donation>,
+}
+
+/// Everything the Metalink said, carried to the end of the run so the
+/// checksum can be checked against the payload it describes.
+struct MetalinkPlan {
+    version: &'static str,
+    file_name: String,
+    torrent_url: String,
+    torrent_fallbacks: Vec<MirrorError>,
+    mirrors_listed: usize,
+    mirrors_registered: usize,
+    mirrors_unsupported: Vec<String>,
+    agreement: Agreement,
+    /// The strongest checksum in the document that this can compute. `None`
+    /// when the document had none, or only ones nothing here hashes.
+    checksum: Option<Checksum>,
+    /// The strongest checksum in the document, computable or not. Used only to
+    /// say why nothing was checked.
+    unusable_algorithm: Option<String>,
 }
 
 /// One file this torrent could read from an earlier torrent in the run.
@@ -677,6 +905,7 @@ async fn one(
                 renamed: Vec::new(),
                 shared: Vec::new(),
                 announced: Vec::new(),
+                metalink: None,
                 code: error.code(),
                 error: Some(error.to_string()),
             }
@@ -698,7 +927,12 @@ async fn one_inner(
         initial_peers: options.peers.clone(),
         ..Default::default()
     };
-    let handle = engine.add(&plan.source, &add).await?;
+    let handle = match plan.torrent_bytes.clone() {
+        // A Metalink's torrent was fetched while the plans were being built,
+        // so the session gets those exact bytes rather than the URL again.
+        Some(bytes) => engine.add_bytes(&plan.source, bytes, &add).await?,
+        None => engine.add(&plan.source, &add).await?,
+    };
     let snapshot = engine.snapshot(&handle);
     let _ = tx
         .send(Msg::Event(
@@ -907,6 +1141,40 @@ async fn one_inner(
     );
     report.shared = shared;
     report.announced = announced;
+    if let Some(metalink) = &plan.metalink {
+        let (metalink_report, code) = check_metalink(metalink, engine, &handle, options, &report);
+        if let Some(checksum) = &metalink_report.checksum {
+            // Serialised from the report's own struct rather than rebuilt
+            // here, so a field the report omits is omitted from the event too.
+            // Rebuilding it with `json!` put `"not_checked": null` in every
+            // successful run, which documents a field as always-null and tells
+            // a reader nothing.
+            let mut payload = serde_json::to_value(checksum).unwrap_or_default();
+            if let Some(fields) = payload.as_object_mut() {
+                fields.insert("info_hash".to_string(), json!(report.info_hash));
+            }
+            let _ = tx.send(Msg::Event("metalink_checked", payload)).await;
+            if checksum.matched == Some(false) {
+                let _ = tx
+                    .send(Msg::Warn(format!(
+                        "the metalink's {} checksum does not match the payload: it says {}, the bytes hash to {}. The payload passed the torrent's own piece hashes, so the metalink is the document that disagrees.",
+                        checksum.algorithm,
+                        checksum.expected,
+                        checksum.actual.as_deref().unwrap_or("nothing"),
+                    )))
+                    .await;
+            }
+        }
+        report.metalink = Some(metalink_report);
+        // A checksum that disagrees is the failure this feature exists to
+        // find, so it decides the torrent's code unless something worse
+        // already had.
+        if let Some(code) = code
+            && report.code == ExitCode::Success
+        {
+            report.code = code;
+        }
+    }
     // A finished torrent can lend its files to the ones after it. An
     // unfinished one cannot: its files are on disk but not all of their bytes
     // are.
@@ -1206,6 +1474,132 @@ async fn watch(
     }
 }
 
+/// Check the payload against the Metalink's own checksum, and say which of the
+/// two documents is wrong when they disagree.
+///
+/// The order of the guards is the point. The check runs only on a payload the
+/// session has finished and hash-checked against the torrent's own piece
+/// hashes, so a digest that then disagrees is evidence about the Metalink and
+/// not about the bytes. Every guard that stops the check writes a
+/// `not_checked` reason, because a checksum that was not computed is not a
+/// checksum that passed. See `TODO/cli-surface.md`, T-113.
+fn check_metalink(
+    metalink: &MetalinkPlan,
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    options: &Options,
+    report: &TorrentReport,
+) -> (MetalinkReport, Option<ExitCode>) {
+    let agreement = MetalinkAgreement {
+        file_index: metalink.agreement.file_index,
+        matched_by: metalink.agreement.matched_by,
+        metalink_size: metalink.agreement.metalink_size,
+        torrent_size: metalink.agreement.torrent_size,
+        size_agrees: metalink.agreement.size_agrees,
+    };
+    let mut out = MetalinkReport {
+        version: metalink.version,
+        file: metalink.file_name.clone(),
+        torrent_url: metalink.torrent_url.clone(),
+        torrent_fallbacks: metalink.torrent_fallbacks.clone(),
+        mirrors_listed: metalink.mirrors_listed,
+        mirrors_registered: metalink.mirrors_registered,
+        mirrors_unsupported: metalink.mirrors_unsupported.clone(),
+        agreement,
+        checksum: None,
+    };
+    // Two documents that declare different lengths describe different files,
+    // and that is decided before anything is hashed.
+    let code = metalink
+        .agreement
+        .disagrees()
+        .then_some(ExitCode::HashMismatch);
+
+    let Some(checksum) = &metalink.checksum else {
+        if let Some(algorithm) = &metalink.unusable_algorithm {
+            out.checksum = Some(MetalinkChecksum {
+                algorithm: algorithm.clone(),
+                expected: String::new(),
+                actual: None,
+                matched: None,
+                bytes_hashed: None,
+                path: None,
+                not_checked: Some(format!("this cannot compute {algorithm}")),
+            });
+        }
+        return (out, code);
+    };
+    let mut result = MetalinkChecksum {
+        algorithm: checksum.algorithm.clone(),
+        expected: checksum.value.clone(),
+        actual: None,
+        matched: None,
+        bytes_hashed: None,
+        path: None,
+        not_checked: None,
+    };
+
+    let stop = |result: &mut MetalinkChecksum, why: String| {
+        result.not_checked = Some(why);
+    };
+    if !report.finished {
+        stop(
+            &mut result,
+            "the download did not finish, so there is nothing complete to hash".to_string(),
+        );
+    } else if let Some(index) = metalink.agreement.file_index {
+        match payload_path(engine, handle, options, index) {
+            None => stop(
+                &mut result,
+                "the torrent's paths were not planned, so the file on disk cannot be named"
+                    .to_string(),
+            ),
+            Some(path) => {
+                result.path = Some(path.display().to_string());
+                match checksum.verify_file(&path) {
+                    Ok(verified) => {
+                        result.actual = Some(verified.actual);
+                        result.matched = Some(verified.matched);
+                        result.bytes_hashed = Some(verified.bytes_hashed);
+                    }
+                    Err(error) => stop(&mut result, error.to_string()),
+                }
+            }
+        }
+    } else {
+        stop(
+            &mut result,
+            format!(
+                "the metalink's checksum could not be attributed to a file in the torrent ({})",
+                metalink.agreement.matched_by
+            ),
+        );
+    }
+
+    let mismatch = (result.matched == Some(false)).then_some(ExitCode::HashMismatch);
+    out.checksum = Some(result);
+    (out, code.or(mismatch))
+}
+
+/// Where one file of a finished torrent actually sits on disk.
+///
+/// The torrent's own path is not necessarily the path on disk: a name the
+/// filesystem refuses, or one that would leave the output directory, is
+/// rewritten before anything is opened. Hashing the torrent's path rather than
+/// the planned one would hash a file that is not there.
+fn payload_path(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    options: &Options,
+    index: usize,
+) -> Option<std::path::PathBuf> {
+    let layout = engine.layout(handle)?;
+    let planned = engine.path_plan(handle)?;
+    let relative = planned.disk_paths.get(index)?;
+    let root = bit_cli_core::storage::payload_root(&options.directory, &layout);
+    Some(root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR)))
+}
+
 /// Where this torrent's files were actually written, when that is not where
 /// the torrent said.
 ///
@@ -1422,6 +1816,7 @@ fn finish(
         renamed,
         shared: Vec::new(),
         announced: Vec::new(),
+        metalink: None,
         code: stopped.code(),
         error: snapshot.error.clone(),
     }
@@ -1578,9 +1973,24 @@ fn dry_run(
             Kind::File(path) => Some(Metainfo::read(path)?),
             _ => None,
         };
+        // A dry run reads the Metalink and does not fetch the torrent it
+        // names. Everything the document itself claims is reportable without
+        // the network: the mirrors, the torrent URL, the size, the checksum.
+        // What needs the network is the `.torrent`, and `needs_network` on
+        // this row is what says so. This is the cheapest way to check that a
+        // `.meta4` says what its author meant.
+        let metalink = match &kind {
+            Kind::Metalink(path) => {
+                let document = Metalink::read(path)?;
+                let file = document.single_file()?.clone();
+                Some((document.version.as_str(), file))
+            }
+            _ => None,
+        };
         let specs = webseed_args::collect(
             &args.web_seeds,
             meta.as_ref(),
+            metalink.as_ref().map(|(_, file)| file),
             env,
             webseed_args::no_network,
         )?;
@@ -1620,6 +2030,18 @@ fn dry_run(
             })).collect::<Vec<_>>(),
             "trackers": trackers,
             "coverage": coverage,
+            "metalink": metalink.as_ref().map(|(version, file)| json!({
+                "version": version,
+                "file": file.name,
+                "size": file.size,
+                "torrents": file.torrents_by_priority().iter().map(|m| &m.url).collect::<Vec<_>>(),
+                "mirrors_listed": file.mirrors.len(),
+                "mirrors_unsupported": file.unsupported_mirrors,
+                "checksum": file.best_checksum().map(|c| json!({
+                    "algorithm": c.algorithm,
+                    "expected": c.value,
+                })),
+            })),
         }));
     }
 

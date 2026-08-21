@@ -19,6 +19,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use bit_cli_core::error::{Error, Result, from_io};
+use bit_cli_core::metalink::{Metalink, MetalinkFile, Mirror};
 use bit_cli_core::torrent::{InfoHash, Magnet, Metainfo};
 
 use crate::env::Env;
@@ -98,8 +99,16 @@ impl Kind {
     }
 
     /// Whether resolving this to full metadata needs the network.
+    ///
+    /// A Metalink is a local file and still needs it: the document names its
+    /// `.torrent` by URL, and the layout is not known until that URL has been
+    /// fetched. What is readable without the network is the document's own
+    /// claims, which is what `--dry-run` reports.
     pub const fn needs_network(&self) -> bool {
-        matches!(self, Self::Url(_) | Self::Magnet(_) | Self::InfoHash(_))
+        matches!(
+            self,
+            Self::Url(_) | Self::Magnet(_) | Self::InfoHash(_) | Self::Metalink(_)
+        )
     }
 }
 
@@ -138,8 +147,21 @@ pub fn load_local(kind: &Kind, env: &mut Env) -> Result<Metainfo> {
     }
 }
 
-/// Fetch a `.torrent` over HTTP.
-pub async fn fetch_torrent(url: &str, user_agent: &str) -> Result<Metainfo> {
+/// Fetch a `.torrent` over HTTP, keeping the bytes as well as the parse.
+///
+/// Both, because the caller hands the exact bytes to the session rather than
+/// handing it the URL again. Fetching a URL twice can return two different
+/// documents, and a run whose report describes one torrent while the session
+/// downloads another is the worst kind of wrong answer.
+pub async fn fetch_torrent(url: &str, user_agent: &str) -> Result<(Metainfo, Vec<u8>)> {
+    let bytes = fetch_bytes(url, user_agent).await?;
+    let meta =
+        Metainfo::parse(&bytes).map_err(|e| Error::source_resolution(format!("{url}: {e}")))?;
+    Ok((meta, bytes))
+}
+
+/// Fetch a URL and return its body, failing on any status that is not success.
+async fn fetch_bytes(url: &str, user_agent: &str) -> Result<Vec<u8>> {
     let client = reqwest_client(user_agent)?;
     let response = client
         .get(url)
@@ -152,11 +174,82 @@ pub async fn fetch_torrent(url: &str, user_agent: &str) -> Result<Metainfo> {
             .with("url", url.to_string())
             .with("http_status", status.as_u16()));
     }
-    let bytes = response
+    response
         .bytes()
         .await
-        .map_err(|e| Error::network(format!("cannot read the body of {url}: {e}")))?;
-    Metainfo::parse(&bytes).map_err(|e| Error::source_resolution(format!("{url}: {e}")))
+        .map(|b| b.to_vec())
+        .map_err(|e| Error::network(format!("cannot read the body of {url}: {e}")))
+}
+
+/// A Metalink read, and the `.torrent` it names fetched.
+///
+/// See `TODO/cli-surface.md`, T-113.
+#[derive(Debug)]
+pub struct ResolvedMetalink {
+    /// `4` or `3`.
+    pub version: &'static str,
+    /// The one `<file>` the document is about.
+    pub file: MetalinkFile,
+    /// The `<metaurl>` the `.torrent` actually came from.
+    pub torrent_url: String,
+    /// Torrent URLs that were tried before it, and what went wrong with each.
+    /// Empty when the document's first choice answered.
+    pub torrent_errors: Vec<(String, String)>,
+    /// The exact bytes fetched. Handed to the session unchanged.
+    pub torrent_bytes: Vec<u8>,
+    pub meta: Metainfo,
+}
+
+/// Read a Metalink and fetch the torrent it names.
+///
+/// The document may list several torrents, which is a mirror list for the
+/// `.torrent` itself. They are tried in the document's own preferred order and
+/// the first that parses wins; the failures are kept so the report can say the
+/// preferred one was not the one used.
+pub async fn resolve_metalink(document: &Metalink, user_agent: &str) -> Result<ResolvedMetalink> {
+    let file = document.single_file()?.clone();
+    // Owned, because the fetch below moves `file` into the result while the
+    // loop is still walking the list.
+    let torrents: Vec<Mirror> = file.torrents_by_priority().into_iter().cloned().collect();
+    if torrents.is_empty() {
+        return Err(Error::source_resolution(format!(
+            "the metalink lists no torrent for {}, so there is nothing to download here. It lists {} HTTP mirror(s); pass one with --web-seed against a .torrent you already have.",
+            match file.name.is_empty() {
+                true => "its file".to_string(),
+                false => file.name.clone(),
+            },
+            file.mirrors.len()
+        ))
+        .with("source_kind", "metalink")
+        .with("mirrors", file.mirrors.len()));
+    }
+    let mut torrent_errors = Vec::new();
+    for mirror in &torrents {
+        match fetch_torrent(&mirror.url, user_agent).await {
+            Ok((meta, torrent_bytes)) => {
+                return Ok(ResolvedMetalink {
+                    version: document.version.as_str(),
+                    file,
+                    torrent_url: mirror.url.clone(),
+                    torrent_errors,
+                    torrent_bytes,
+                    meta,
+                });
+            }
+            Err(error) => torrent_errors.push((mirror.url.clone(), error.to_string())),
+        }
+    }
+    let tried = torrent_errors.len();
+    let detail: Vec<String> = torrent_errors
+        .iter()
+        .map(|(url, error)| format!("{url}: {error}"))
+        .collect();
+    Err(Error::source_resolution(format!(
+        "none of the {tried} torrent(s) the metalink lists could be fetched: {}",
+        detail.join("; ")
+    ))
+    .with("source_kind", "metalink")
+    .with("torrents_tried", tried))
 }
 
 fn reqwest_client(user_agent: &str) -> Result<reqwest::Client> {
@@ -248,6 +341,16 @@ mod tests {
                 .needs_network()
         );
         assert!(Kind::classify(HEX, &env()).unwrap().needs_network());
+    }
+
+    /// A metalink is a local file whose torrent is not. The layout is not
+    /// known until the `<metaurl>` has been fetched, so a caller that skips
+    /// the network cannot resolve one.
+    #[test]
+    fn a_metalink_is_a_local_file_that_still_needs_the_network() {
+        let kind = Kind::classify("r.meta4", &env()).unwrap();
+        assert!(matches!(kind, Kind::Metalink(_)));
+        assert!(kind.needs_network());
     }
 
     #[test]

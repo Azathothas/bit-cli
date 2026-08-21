@@ -118,7 +118,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-110](cli-surface.md) | P1 | cli | **done** | The --jsonl event stream is incomplete |
 | [T-111](cli-surface.md) | P2 | cli | open | piece_verified and file_completed are derived from polling |
 | [T-112](cli-surface.md) | P1 | cli | **done** | --log-file does not write or rotate anything |
-| [T-113](cli-surface.md) | P1 | cli | partial | Metalink is not implemented |
+| [T-113](cli-surface.md) | P1 | cli | **done** | Metalink is not implemented |
 | [T-114](cli-surface.md) | P2 | cli | open | -i/--input-file batch input is not implemented |
 | [T-115](cli-surface.md) | P2 | cli | partial | Hooks do not fire for every documented trigger |
 | [T-116](cli-surface.md) | P3 | cli | open | -O/--index-out cannot rename a file |
@@ -130,6 +130,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-147](windows.md) | P1 | windows | **done** | The rename reason differed by host, so two tests only passed on Windows |
 | [T-150](cli-surface.md) | P2 | ci | open | Clippy pins a floating toolchain, so a Rust release can turn the tree red |
 | [T-153](cli-surface.md) | P3 | ci | open | Link speeds are not read on macOS |
+| [T-154](cli-surface.md) | P2 | cli | open | A Metalink named by URL is not recognised |
+| [T-155](cli-surface.md) | P3 | cli | open | --hash-check-only drops the metalink report |
+| [T-156](cli-surface.md) | P3 | cli | open | A dry run writes a different shape under the same document kind |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
@@ -158,7 +161,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-112 items: 102 to work through, and 10 deferred to Phase C. Twenty-five were
+115 items: 105 to work through, and 10 deferred to Phase C. Twenty-eight were
 added by measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -222,6 +225,14 @@ that runner and one everywhere else. It is T-149 in the other bench target. Two
 targets, the same sampler mistake, and both were found by fixing whatever was
 red above them.
 
+T-154, T-155, and T-156 came out of closing T-113. A Metalink named by URL is
+classified as a torrent URL and fails on the bencode parse, which is how a real
+one is normally met because `MirrorBrain` generates them per request.
+`--hash-check-only` returns before the metalink report is built, so a flag that
+could report the size comparison reports nothing. And `download --dry-run`
+writes `kind: "download"` with a different shape, which is why the schema
+generator does not sample it and its fields are undocumented.
+
 **CI run 32444424026 is green on every job**, which is the first time the whole
 matrix has been. It took four rounds and each one uncovered the next: the macOS
 link failure hid six `sysinfo` failures, which hid T-152, which hid one
@@ -232,9 +243,9 @@ the argument for never leaving one.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 |
-| P1 | 4 | 1 | 0 | 39 |
-| P2 | 24 | 1 | 1 | 10 |
-| P3 | 11 | 0 | 0 | 0 |
+| P1 | 4 | 0 | 0 | 40 |
+| P2 | 25 | 1 | 1 | 10 |
+| P3 | 13 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 
 `blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
@@ -245,8 +256,8 @@ block it and what would unblock it.
 ## Start here
 
 What is settled and what is next, in the order that unblocks the most. The
-first six are done or mostly done, item seven is where the open P0 work is, and
-item eight is the operator's own list.
+first six are done or mostly done, item seven is where the open P0 work is,
+item eight is the operator's own list, and item nine is Metalink.
 
 1. [T-084](create-seed.md) is **done**. `bit-cli create`, `verify`, and `seed`
    round trip byte for byte through `aria2c` 1.37.0 for v1, `--private`, and
@@ -502,3 +513,22 @@ item eight is the operator's own list.
    start from. `-PieceLength` gives all three one piece length, which is what
    makes the shared file provable from the metadata rather than only
    assertable, and `-WebSeed` puts a real URL in torrent C's url-list.
+9. [T-113](cli-surface.md) is **done**. `bit-cli download release.meta4` reads
+   a `.meta4` or a `.metalink`, fetches the `.torrent` its `<metaurl>` names,
+   registers every mirror as a source, downloads, and checks the payload
+   against the document's own checksum.
+
+   **A Metalink and a `.torrent` are two independent descriptions of one
+   payload, and the run says which of them is wrong.** The declared lengths are
+   compared before a byte moves. The digest is then checked against a payload
+   the session has already verified piece by piece against the torrent's own
+   hashes, so a digest that disagrees is evidence about the Metalink. Either
+   disagreement exits 7 and the two stay apart in `--json`.
+
+   The real-document run found the thing worth knowing: **no `MirrorBrain`
+   instance reachable in August 2026 emits `<metaurl mediatype="torrent">`**,
+   so the document a user actually gets has 58 mirrors, three checksums, and
+   nothing to start a download from. `bit-cli` names the mirror count and says
+   so. `pwsh scripts/check-metalink.ps1` drives ten cases on loopback and
+   `pwsh scripts/check-metalink-real.ps1` drives four against
+   `download.documentfoundation.org`.

@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 use bit_cli_core::error::{Context, Error, Result, from_io};
+use bit_cli_core::metalink::MetalinkFile;
 use bit_cli_core::torrent::Metainfo;
 use bit_cli_core::units::{parse_duration_ms, parse_rate, parse_size};
 use bit_cli_core::webseed::binding::{Auth, Origin, SourceLimits, SourceSpec, StatusSet};
@@ -216,6 +217,7 @@ impl Shared {
 pub fn collect(
     args: &WebSeedArgs,
     meta: Option<&Metainfo>,
+    metalink: Option<&MetalinkFile>,
     env: &Env,
     fetch_list: impl Fn(&str) -> Result<String>,
 ) -> Result<Vec<SourceSpec>> {
@@ -228,16 +230,43 @@ pub fn collect(
     // The torrent's own sources come first, so a caller-supplied source with
     // an equal priority is tried after them only if it was written later. The
     // caller controls that with --web-seed-priority.
-    if !args.no_torrent_web_seed
-        && let Some(meta) = meta
-    {
-        for url in meta.url_list() {
-            specs.push(shared.spec(url, Origin::TorrentUrlList, Scope::all(), Mode::Auto));
+    //
+    // A Metalink's mirrors are declared the same way and are dropped by the
+    // same flag. Both are "the sources that came with the source document
+    // rather than from you", and a Metalink whose mirrors were ignored is a
+    // Metalink with nothing left in it but a torrent URL. Mirrors arrive in
+    // the document's own preferred order, and that order is preserved:
+    // `--web-seed-priority` is one number for every CLI source, so the
+    // document's ranking survives only as position.
+    if !args.no_torrent_web_seed {
+        if let Some(file) = metalink {
+            // A Metalink `<url>` is the whole resource, never a directory to
+            // append a name to, so the composition is `exact` and not BEP 19's
+            // `auto`. `exact` on a multi-file torrent is a binding error
+            // unless the scope resolves to one file, so the scope is the file
+            // the document was attributed to. A document that could not be
+            // attributed to one registers nothing rather than a source whose
+            // bytes belong to a piece range nobody knows.
+            if let Some(scope) = metalink_scope(file, meta)? {
+                for mirror in file.mirrors_by_priority() {
+                    specs.push(shared.spec(
+                        mirror.url.clone(),
+                        Origin::Metalink,
+                        scope.clone(),
+                        Mode::Exact,
+                    ));
+                }
+            }
         }
-        for url in meta.http_seeds() {
-            let mut spec = shared.spec(url, Origin::TorrentHttpSeeds, Scope::all(), Mode::Auto);
-            spec.style = bit_cli_core::webseed::Style::Hoffman;
-            specs.push(spec);
+        if let Some(meta) = meta {
+            for url in meta.url_list() {
+                specs.push(shared.spec(url, Origin::TorrentUrlList, Scope::all(), Mode::Auto));
+            }
+            for url in meta.http_seeds() {
+                let mut spec = shared.spec(url, Origin::TorrentHttpSeeds, Scope::all(), Mode::Auto);
+                spec.style = bit_cli_core::webseed::Style::Hoffman;
+                specs.push(spec);
+            }
         }
     }
 
@@ -312,6 +341,28 @@ pub fn collect(
     Ok(specs)
 }
 
+/// The scope a Metalink's mirrors bind to, or `None` when they cannot bind.
+///
+/// A Metalink entry describes one file. On a single-file torrent that is the
+/// whole payload. On a multi-file one it is whichever file the entry was
+/// attributed to, and if it could not be attributed to exactly one then a
+/// mirror serving it covers a byte range nobody has identified. Registering it
+/// anyway would either be a binding error or, worse, an accepted source
+/// serving one file's bytes into another file's pieces.
+fn metalink_scope(file: &MetalinkFile, meta: Option<&Metainfo>) -> Result<Option<Scope>> {
+    let Some(meta) = meta else {
+        return Ok(Some(Scope::all()));
+    };
+    let layout = meta.layout();
+    if layout.files.len() == 1 {
+        return Ok(Some(Scope::all()));
+    }
+    match file.agreement(&layout).file_index {
+        Some(index) => Scope::parse(&format!("file:{index}")).map(Some),
+        None => Ok(None),
+    }
+}
+
 /// Refuse to fetch a list over HTTP when nothing was asked for.
 ///
 /// Commands that must not touch the network pass this, so a
@@ -347,7 +398,7 @@ mod tests {
     }
 
     fn collect_ok(extra: &[&str]) -> Vec<SourceSpec> {
-        collect(&args(extra), None, &env(), no_network).unwrap()
+        collect(&args(extra), None, None, &env(), no_network).unwrap()
     }
 
     #[test]
@@ -386,6 +437,7 @@ mod tests {
         let err = collect(
             &args(&["--web-seed-for", "no-equals-sign"]),
             None,
+            None,
             &env(),
             no_network,
         )
@@ -398,6 +450,7 @@ mod tests {
     fn a_bad_selector_in_web_seed_for_names_the_binding() {
         let err = collect(
             &args(&["--web-seed-for", "piece:9-2=https://b.example.com/"]),
+            None,
             None,
             &env(),
             no_network,
@@ -430,6 +483,7 @@ mod tests {
     fn asking_for_both_restrictions_at_once_is_a_usage_error() {
         let err = collect(
             &args(&["--web-seed-pieces", "0-1", "--web-seed-bytes", "0-1MiB"]),
+            None,
             None,
             &env(),
             no_network,
@@ -485,6 +539,7 @@ mod tests {
         let err = collect(
             &args(&["--web-seed-header", "no-colon"]),
             None,
+            None,
             &env(),
             no_network,
         )
@@ -506,6 +561,7 @@ mod tests {
         let specs = collect(
             &args(&["--web-seed-file", "mirrors.txt"]),
             None,
+            None,
             &env,
             no_network,
         )
@@ -519,6 +575,7 @@ mod tests {
         let specs = collect(
             &args(&["--web-seed-list-url", "https://e.com/mirrors.txt"]),
             None,
+            None,
             &env(),
             |_| Ok("https://a.example.com/\nhttps://b.example.com/\n".to_string()),
         )
@@ -531,6 +588,7 @@ mod tests {
     fn a_list_url_on_a_no_network_command_fails_clearly() {
         let err = collect(
             &args(&["--web-seed-list-url", "https://e.com/mirrors.txt"]),
+            None,
             None,
             &env(),
             no_network,
@@ -557,6 +615,7 @@ mod tests {
         let specs = collect(
             &args(&["--web-seed-config", "seeds.toml"]),
             None,
+            None,
             &env,
             no_network,
         )
@@ -575,7 +634,7 @@ mod tests {
 
     #[test]
     fn web_seed_only_with_nothing_declared_is_refused() {
-        let err = collect(&args(&["--web-seed-only"]), None, &env(), no_network).unwrap_err();
+        let err = collect(&args(&["--web-seed-only"]), None, None, &env(), no_network).unwrap_err();
         assert_eq!(err.code(), bit_cli_core::ExitCode::NoUsableSources);
     }
 
@@ -592,6 +651,7 @@ mod tests {
                 "--web-seed-file",
                 "m.txt",
             ]),
+            None,
             None,
             &env,
             no_network,
@@ -623,6 +683,7 @@ mod tests {
                 "--no-torrent-web-seed",
             ]),
             Some(&meta),
+            None,
             &env(),
             no_network,
         )
@@ -646,6 +707,7 @@ mod tests {
                 "--no-torrent-web-seed",
             ]),
             Some(&meta),
+            None,
             &env(),
             no_network,
         )
@@ -665,6 +727,7 @@ mod tests {
                 "--web-seed-for",
                 &format!("{hash}:file:0=https://cdn.example.com/blob"),
             ]),
+            None,
             None,
             &env(),
             no_network,
