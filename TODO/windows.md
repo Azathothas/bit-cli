@@ -373,3 +373,53 @@ readme        ->  readme-1         case-collision
 
 and the ordinary torrent carries no `renamed` key at all, so a caller can test
 for its absence rather than comparing every path.
+
+### T-147 The rename reason differed by host, so two tests only passed on Windows
+
+Source:      CI run 32407214253, `Test (ubuntu-latest)`, 2026-08-20
+Category:    windows
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `cmd::download::tests::a_hostile_torrent_reports_every_renamed_path_in_json`
+             and `cmd::verify::tests::verify_reads_the_planned_paths_and_reports_the_mapping`
+             fail on `ubuntu-latest` and pass on `windows-latest`:
+
+             ```
+             assertion `left == right` failed
+               left: String("illegal-character")
+              right: "escape"
+             ```
+
+             `paths::is_escape` decided whether a component would leave the
+             output directory by running it through `std::path::Path`, which
+             reads its input the way the **host** platform does.
+             `Path::new("C:")` is a drive prefix on Windows and an ordinary
+             file name on Linux. So the hostile fixture's `C:/pwned.txt`
+             landed at `C_/pwned.txt` on both, for `escape` on one and only
+             `illegal-character` on the other.
+Relevance:   The module says in its own first paragraph that the plan is
+             deterministic on every platform, and the disk paths were. The
+             report was not, and `reasons` is in `--json` for a caller to
+             branch on: a script that treats `escape` as the case worth
+             refusing sees nothing to refuse on Linux. It also made the two
+             tests platform-specific without saying so, which is what kept
+             `Test (ubuntu-latest)` red.
+Approach:    Write the three escaping shapes out rather than asking
+             `std::path`: `..`, an ASCII letter followed by a colon, and a
+             leading backslash. That is what `Path::components` was being
+             asked for, minus the host's opinion.
+Acceptance:  `paths::tests::the_escaping_shapes_are_the_same_on_every_host`
+             passes, and both named tests pass on `ubuntu-latest` and on
+             `windows-latest` in the same run.
+
+The new test names nine shapes that escape and five that do not, so the
+boundary is written down rather than inferred: `a:b:c` escapes because `a:` is
+a drive designator whatever follows it, and `1:x` and `::x` do not because
+neither starts with a letter. Both answers match what the Windows parser gave
+before the change, so this is the same behaviour made portable rather than a
+new rule.
+
+The two `bit-cli` tests were not touched. They asserted the right answer; the
+planner gave the wrong one on one platform.

@@ -299,21 +299,32 @@ fn sanitize_component(component: &str, reasons: &mut Vec<Reason>) -> String {
     out
 }
 
-/// Whether the platform would read this component as something other than a
-/// plain name.
+/// Whether a component would be read as something other than a plain name.
 ///
-/// The check runs the component through the platform's own path parser rather
-/// than pattern matching, so it stays correct for the forms this code does not
-/// know about: `\\?\`, `\\server\share`, `C:`, and a bare root.
+/// The rules are written out here rather than handed to `std::path`, because
+/// `Path::components` reads its input the way the **host** platform does and
+/// this has to answer the same way on every host. `Path::new("C:")` is a drive
+/// prefix on Windows and an ordinary file name on Linux, so the same torrent
+/// planned on the two machines produced the same disk paths for two different
+/// reasons, and the reason is in `--json`. See T-147 in `TODO/windows.md`.
+///
+/// `plan` has already split on `/` and dropped `.` and the empty component, so
+/// what arrives here is one name. Three shapes escape.
 fn is_escape(component: &str) -> bool {
-    use std::path::{Component, Path};
-    let mut components = Path::new(component).components();
-    match (components.next(), components.next()) {
-        (Some(Component::Normal(name)), None) => name != std::ffi::OsStr::new(component),
-        // An empty component is handled as Empty, not as an escape.
-        (None, _) => false,
-        _ => true,
+    // `..` walks up, wherever it is joined.
+    if component == ".." {
+        return true;
     }
+    let bytes = component.as_bytes();
+    // A drive designator relocates the join on Windows, with or without
+    // anything after the colon: `C:`, `c:foo`, and `C:\x` all do it.
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return true;
+    }
+    // A leading backslash is the root of the current drive, and two are a UNC
+    // share or the `\\?\` device namespace. The `/` forms cannot reach here,
+    // because `plan` split on them.
+    component.starts_with('\\')
 }
 
 /// Whether a name resolves to a Windows device.
@@ -445,6 +456,48 @@ mod tests {
         let plan = plan_of(&["C:"]);
         assert_eq!(plan.disk_paths, ["C_"]);
         assert!(plan.renames[0].reasons.contains(&Reason::Escape));
+    }
+
+    /// Every shape that escapes does so on every host, not only on the one
+    /// whose path parser recognises it.
+    ///
+    /// This is the test T-147 is about. `is_escape` used to ask
+    /// `std::path::Path`, which reads `C:` as a drive on Windows and as an
+    /// ordinary name on Linux. The disk paths agreed either way, because the
+    /// colon is illegal on both, but the reason in `--json` did not, and two
+    /// tests in `bit-cli` asserted the Windows answer.
+    #[test]
+    fn the_escaping_shapes_are_the_same_on_every_host() {
+        for path in [
+            "..",
+            "C:",
+            "c:",
+            "C:x",
+            "Z:/pwned.txt",
+            "\\",
+            "\\windows",
+            "\\\\server\\share",
+            "\\\\?\\C:\\x",
+        ] {
+            let plan = plan_of(&[path]);
+            assert!(
+                plan.renames[0].reasons.contains(&Reason::Escape),
+                "{path} was not read as an escape: {:?}",
+                plan.renames[0].reasons
+            );
+        }
+
+        // And the shapes that merely look like one are not. A colon that is
+        // not a drive letter is an illegal character and nothing more, and a
+        // name that only starts with a dot is a name.
+        for path in ["1:x", "::x", ".hidden", "..hidden", "x..y"] {
+            let plan = plan_of(&[path]);
+            let reasons = plan.renames.first().map(|r| r.reasons.clone());
+            assert!(
+                !reasons.unwrap_or_default().contains(&Reason::Escape),
+                "{path} was read as an escape and is not one"
+            );
+        }
     }
 
     #[test]

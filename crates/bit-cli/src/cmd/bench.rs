@@ -2566,10 +2566,18 @@ mod tests {
 
         // The seeder has to be listening before the probe dials it, and how
         // long that takes is the machine's business. Retry rather than sleep a
-        // guessed amount.
+        // guessed amount. A dial that arrives before the listener is up exits
+        // `NoUsableSources`, which is that command working correctly, so the
+        // exit code cannot be asserted until a probe has connected: asserting
+        // it inside the loop is what made this fail on the slower runners.
+        // Eight seconds, against the seeder's own `--stop-after 10s`. A count
+        // of attempts is not the same thing: each attempt costs whatever the
+        // dial costs, so 40 of them is four seconds on this machine and an
+        // unknown number on a loaded runner.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
         let mut found = serde_json::Value::Null;
-        for _ in 0..40 {
-            let report = report(
+        while std::time::Instant::now() < deadline {
+            let (mut env, captured) = Env::test(
                 &[
                     "bench",
                     "probe",
@@ -2579,14 +2587,24 @@ mod tests {
                     "--timeout",
                     "5s",
                 ],
-                ExitCode::Success,
+                ".",
             );
-            if report["probe"]["reachable"] == true {
-                found = report;
-                break;
+            let code = crate::run(&mut env);
+            if code == ExitCode::Success {
+                let report = captured
+                    .json()
+                    .unwrap_or_else(|e| panic!("stdout was not JSON: {e}\n{}", captured.out()));
+                if report["probe"]["reachable"] == true {
+                    found = report;
+                    break;
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        assert!(
+            !found.is_null(),
+            "the probe never reached the seeder on 127.0.0.1:{port} within 8 seconds"
+        );
         let _ = seeder.join();
 
         let probe = &found["probe"];

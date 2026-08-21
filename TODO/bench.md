@@ -475,3 +475,41 @@ Acceptance:  Both numbers recorded here, and if the cost is measurable, the
 The report already carries `environment.tracing_enabled` and
 `environment.trace_subsystems`, so a report taken with a trace on is
 distinguishable from one taken without. The measurement itself is what is left.
+
+### T-148 The peer probe test asserted an exit code inside its own retry loop
+
+Source:      CI run 32407214253, `Test (ubuntu-latest)`, 2026-08-20
+Category:    bench
+Priority:    P2
+Effort:      S
+Status:      **done**
+
+Problem:     `cmd::bench::tests::a_peer_probe_reads_the_handshake_and_what_follows_it`
+             starts a real seeder on a thread and dials it. It cannot know when
+             the listener is up, so it retries, which is right. The retry went
+             through the `report` helper, which asserts an exit code:
+
+             ```
+             left: NoUsableSources
+              right: Success
+             ```
+
+             A dial that arrives before the listener binds exits 6, and that is
+             `bench probe` working: `an_unreachable_peer_exits_no_usable_sources`
+             asserts the same code on purpose. So the first attempt panicked
+             and the loop never ran a second one. It passed on Windows and on
+             macOS because the seeder happened to bind first.
+Relevance:   A test that fails on whichever machine is slower is a test that
+             teaches everyone to re-run CI. It also hid the two real failures
+             beside it in the same job, [T-147](windows.md).
+Approach:    Run the command without asserting inside the loop, treat any
+             non-`Success` exit as "not up yet", and assert once at the end
+             that a probe connected. Bound the loop by a deadline rather than
+             by a count of attempts: 40 attempts is four seconds on this
+             machine and an unknown number on a loaded runner.
+Acceptance:  The test passes on `ubuntu-latest`, `windows-latest`, and
+             `macos-latest` in the same run, and fails with a message naming
+             the port when the seeder never binds.
+
+The deadline is eight seconds against the seeder's own `--stop-after 10s`, so
+the loop cannot outlive its subject.
