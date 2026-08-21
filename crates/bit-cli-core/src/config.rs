@@ -267,8 +267,8 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
     ("file_allocation", "sparse", "How disk space is reserved"),
     (
         "piece_selector",
-        "rarest-first",
-        "Which piece to request next",
+        "default",
+        "Which piece to request next: default, sequential, or in-order",
     ),
     ("log_level", "warn", "Log severity"),
     ("log_format", "text", "Log rendering"),

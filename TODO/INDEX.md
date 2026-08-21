@@ -69,7 +69,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-138](peers.md) | P2 | peers | **done** | A peer that comes back waits out a backoff that grows by six |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
-| [T-032](performance.md) | P1 | performance | open | The piece selector strategy is not implemented |
+| [T-032](performance.md) | P1 | performance | **done** | The piece selector strategy is not implemented |
 | [T-033](performance.md) | P2 | performance | open | --split, -x, and -k do not reach the fetch path |
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
 | [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
@@ -126,6 +126,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-146](cli-surface.md) | P1 | ci | **done** | CI built a Windows binary against the dynamic C runtime |
 | [T-147](windows.md) | P1 | windows | **done** | The rename reason differed by host, so two tests only passed on Windows |
 | [T-150](cli-surface.md) | P2 | ci | open | Clippy pins a floating toolchain, so a Rust release can turn the tree red |
+| [T-153](cli-surface.md) | P3 | ci | open | Link speeds are not read on macOS |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
@@ -154,7 +155,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-111 items: 101 to work through, and 10 deferred to Phase C. Twenty-four were
+112 items: 102 to work through, and 10 deferred to Phase C. Twenty-five were
 added by measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -221,9 +222,9 @@ red above them.
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 |
-| P1 | 6 | 0 | 0 | 38 |
+| P1 | 5 | 0 | 0 | 39 |
 | P2 | 24 | 1 | 1 | 10 |
-| P3 | 10 | 0 | 0 | 0 |
+| P3 | 11 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 
 `blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on

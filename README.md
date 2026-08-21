@@ -877,6 +877,34 @@ where dropping every connection every thirty seconds can make things worse. Set
 the report as `redials[]` and on the event stream as `peer_redial`, with how
 long the run had been stalled and how many live connections it cost.
 
+## Reading a download as it arrives
+
+```bash
+bit-cli download film.torrent --piece-selector sequential --web-seed-connections 1
+```
+
+Pieces arrive front to back. Measured over ten runs on a 48 piece torrent, that
+is **zero out of ten runs with any piece arriving before one already reported**,
+against one such piece in every run of the default. It costs nothing at one
+connection.
+
+The default is not disordered. It asks for the first piece of each file, then
+the last, then the middle in ascending order, so it is almost front to back
+already and its one break is the tail arriving early. That is why the flag is
+worth having and why it is not the default: `sequential` removes that break,
+and above one connection it costs about seven percent of the throughput,
+because every connection is pointed at the same part of the file.
+
+Above one connection the order is not exact and cannot be. A selector decides
+which piece is asked for next; it cannot decide which of four transfers already
+in flight finishes first. Run the measurement yourself:
+
+```bash
+pwsh scripts/check-piece-order.ps1 -Runs 10 -Connections 1,2,4
+```
+
+`in-order` is the same thing spelled the way `aria2` spells it.
+
 ## Fetch one piece from one mirror
 
 ```bash

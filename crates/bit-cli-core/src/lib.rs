@@ -15,6 +15,7 @@ pub mod error;
 pub mod exit;
 pub mod layout;
 pub mod paths;
+pub mod piece_order;
 pub mod span;
 pub mod storage;
 pub mod sysinfo;

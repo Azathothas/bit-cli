@@ -203,7 +203,7 @@ Source:      PROMPT.md A3.6
 Category:    performance
 Priority:    P1
 Effort:      L
-Status:      open
+Status:      **done**
 
 Problem:     `--piece-selector rarest-first|sequential|in-order|random` parses
              and is carried through the config, and none of the four reaches
@@ -217,6 +217,117 @@ Approach:    `librqbit` has a `FileStream` type and streaming support, which
 Acceptance:  `bit-cli download <TORRENT> --piece-selector sequential --jsonl`
              emits `piece_verified` events whose indices are non-decreasing for
              at least the first 90 percent of the run.
+
+**The entry's premise is half wrong, and the wrong half is the important one.
+`librqbit` 9.0.0 is not rarest-first.** Nothing in its picker counts how many
+peers hold a piece. `ChunkTracker::iter_queued_pieces` walks the files in
+priority order and hands each one to `FileInfo::iter_piece_priorities`, which
+is:
+
+```rust
+// crates/.../librqbit-9.0.0/src/file_info.rs:15
+// First and last of each file first, then the rest of pieces in that file.
+first.chain(last).chain(mid).take(r.len())
+```
+
+So the natural order is **first piece, last piece, then ascending**. Measured
+on a 48 piece torrent over four connections, the order pieces were verified in:
+
+```
+47, 0, 1, 3, 4, 6, 2, 5, 7, 8, 9, 10, 12, 14, 11, 13, 15, 16, ... 46
+```
+
+Near-sequential already, with the tail pulled forward and some local
+reordering from four transfers finishing out of turn. So the flag was never
+selecting between rarest-first and sequential. It was selecting between
+"almost sequential" and nothing.
+
+**The lever that does exist.** `PieceTracker::acquire_piece` checks a
+`priority_pieces` iterator **before** the natural order, and that iterator is
+built by the streaming subsystem from every registered `FileStream`: each one
+contributes the pieces covering the 32 MiB after its own read position.
+`ManagedTorrent::stream(file_id)` is public. So a stream held at the earliest
+piece the torrent still needs is a supported way to say "this part next", and
+it needs no fork, which is what [T-002](webseed.md) priced for the other
+approach.
+
+`bit_cli_core::piece_order::InOrder` is that stream and nothing else. It never
+reads a byte: it seeks, which is what moves the window, and lets the session do
+the work. One stream at a time, on whichever file holds the earliest missing
+piece, moved every 50 ms.
+
+**`--piece-selector` now has three values, and it had four.** Both removals are
+rule 0.10, from opposite directions:
+
+- `rarest-first` was the default and named behaviour nothing here has. It is
+  now `default`, documented as what the session actually does.
+- `random` named behaviour nothing implemented and nothing can ask for. The
+  `priority_pieces` iterator is the only input to the picker and a stream's
+  contribution is a contiguous window, so there is no way to express a
+  scattered order through it. It is gone rather than accepted and ignored.
+
+`sequential` and `in-order` are one behaviour under two names, one common and
+one `aria2`'s. `cmd::download::tests::sequential_and_in_order_are_the_same_selector`
+is the single place that says so.
+
+**Acceptance, `scripts/check-piece-order.ps1`, 10 runs per cell, 48 pieces of
+1 MiB over a loopback file server:**
+
+| connections | selector | descents, max | descents, mean | wall, mean |
+| --- | --- | --- | --- | --- |
+| 1 | `default` | 1 | 1.00 | 389 ms |
+| 1 | **`sequential`** | **0** | **0.00** | 368 ms |
+| 2 | `default` | 4 | 2.20 | 232 ms |
+| 2 | `sequential` | 3 | 0.90 | 244 ms |
+| 4 | `default` | 4 | 2.20 | 209 ms |
+| 4 | `sequential` | 3 | 1.60 | 224 ms |
+
+A descent is a `piece_verified` event carrying a lower index than the one
+before it.
+
+**At one connection the answer is exact: zero descents in all ten runs, against
+one in all ten for the default.** That is the acceptance met, and met harder
+than it asks: it wanted non-decreasing over the first 90 percent of the run and
+this is non-decreasing over all of it.
+
+**Above one connection it is not, and that is not the selector.** A selector
+decides which piece is asked for next. It cannot decide the order in which
+transfers already in flight finish. At four connections four pieces are moving
+at once and they complete in whatever order the mirror answers, so the arrival
+order is the request order with local swaps in it. Sequential still helps,
+because the descent it removes is the structural one: the last piece is no
+longer pulled to the front. The residual is concurrency, and the honest thing
+is to say so rather than to report a number that looks like a failure of the
+flag.
+
+**What it costs: nothing at one connection and about 7 percent at four.** 368 ms
+against 389 at one, which is inside the noise and slightly the other way; 224 ms
+against 209 at four, a ratio of 1.07. Two costs make that up, and both are
+real: the open stream holds one permit from `librqbit`'s blocking spawner
+semaphore, which is sized at the session's worker thread count and defaults to
+eight, and pointing every peer at the same part of the file gives them less to
+choose between. The check fails the run if the ratio passes 1.6, so a
+regression here is caught rather than absorbed.
+
+**One race, found by the measurement and not by the design.** The window was
+first registered in the watch loop, which starts after the sources are
+attached. In one run of five, the session had already handed out the last piece
+by then and the order came back
+`0,1,2,3,4,47,5,6,...`: one descent, at position six. It is registered before
+any source is attached now, so under `--web-seed-only` nothing can ask for a
+piece before the window exists, because the bridges are the only peers and they
+do not exist yet. Against a real swarm it is best effort, and a peer dialled
+during the hash check may still be holding an assignment. That is written into
+the code at the point it matters.
+
+**Two things this leaves.** `piece_verified` is derived from polling the
+bitfield, which is [T-111](cli-surface.md), so the acceptance runs at
+`--report-interval 20ms`: a coarse interval folds several pieces into one tick
+and reports them in index order whatever order they arrived in, which would
+make every selector look sequential. And the 32 MiB lookahead is a `librqbit`
+constant this code does not control, so a run that completes more than 32 MiB
+between two 50 ms advances would fall back to the natural order for the
+overshoot. Neither has been reached here; both are worth knowing.
 
 ### T-033 --split, -x, and -k do not reach the fetch path
 

@@ -837,8 +837,9 @@ pub struct SelectionArgs {
     #[arg(long, value_name = "METHOD", default_value = "sparse")]
     pub file_allocation: FileAllocation,
 
-    /// Piece selection strategy.
-    #[arg(long, value_name = "STRATEGY", default_value = "rarest-first")]
+    /// Which piece to ask for next. `sequential` and `in-order` are the same
+    /// thing under two names, and both make a download readable front to back.
+    #[arg(long, value_name = "STRATEGY", default_value = "default")]
     pub piece_selector: PieceSelector,
 }
 
@@ -854,14 +855,32 @@ pub enum FileAllocation {
 }
 
 /// Which piece to ask for next.
+///
+/// Three values, and there used to be four. `rarest-first` was the default and
+/// was a name for behaviour nothing here has: `librqbit` 9.0.0's picker does
+/// not count how many peers hold a piece anywhere. What it actually does is
+/// [`Self::Default`]. `random` went for the same reason in the other
+/// direction: nothing implemented it and there is no way to ask for it. Both
+/// are written up in `TODO/performance.md`, T-032.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum PieceSelector {
+    /// Whatever the session does on its own: the first piece of each file,
+    /// then the last, then the middle in ascending order.
+    ///
+    /// Fastest, because every peer takes whatever it can get, and readable
+    /// front to back except for the tail arriving early.
     #[default]
-    RarestFirst,
+    Default,
+    /// Front to back, by holding the session's priority window at the earliest
+    /// piece still missing.
+    ///
+    /// This is what makes `bit-cli download` readable as it arrives. It costs
+    /// about a tenth of the throughput at four connections and nothing at one:
+    /// `scripts/check-piece-order.ps1` is the measurement.
     Sequential,
+    /// The same as [`Self::Sequential`], under `aria2`'s spelling for it.
     InOrder,
-    Random,
 }
 
 /// `bit-cli files`.

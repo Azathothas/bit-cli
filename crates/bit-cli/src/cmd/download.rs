@@ -400,6 +400,7 @@ pub fn run(
                 trace_http,
                 directory: directory.clone(),
                 peers: peers.clone(),
+                in_order: wants_in_order(args.selection.piece_selector),
                 redial_after,
                 max_redials: args.max_redials,
                 donors: donor_files.clone(),
@@ -518,6 +519,9 @@ struct Options {
     max_redials: u32,
     /// Peers to dial before any are discovered, from `--peer`.
     peers: Vec<std::net::SocketAddr>,
+    /// Whether to hold the session's piece priority at the front of what is
+    /// missing. See `TODO/performance.md`, T-032.
+    in_order: bool,
     /// Where each torrent in the run wrote its files, filled in as they
     /// finish. See `TODO/multi-source.md`, T-140.
     donors: SharedDonors,
@@ -525,6 +529,18 @@ struct Options {
     /// `TODO/trackers.md`, T-062.
     tracker_timeout: Duration,
     tracker_connect_timeout: Duration,
+}
+
+/// Whether a selector asks for pieces front to back.
+///
+/// `sequential` and `in-order` are the same behaviour under two names, one
+/// common and one `aria2`'s, and this is the single place that says so. See
+/// `TODO/performance.md`, T-032.
+const fn wants_in_order(selector: crate::cli::PieceSelector) -> bool {
+    matches!(
+        selector,
+        crate::cli::PieceSelector::Sequential | crate::cli::PieceSelector::InOrder
+    )
 }
 
 /// One source and what was resolved for it before the session started.
@@ -760,6 +776,38 @@ async fn one_inner(
         ));
     }
 
+    // `--piece-selector sequential` holds the session's priority window at the
+    // earliest piece still missing, and it is registered **here**, before any
+    // source is attached, rather than in the watch loop below.
+    //
+    // The reason is a race that the measurement found rather than the design
+    // predicted. `librqbit`'s natural order yields the last piece of a file
+    // second, so if anything can ask for a piece before the window exists, the
+    // tail arrives early and the order has a descent in it. Registering before
+    // the sources means nothing can: under `--web-seed-only` the bridges are
+    // the only peers, and they do not exist yet. Against a real swarm it is
+    // best effort, because a peer dialled during the hash check may already
+    // have been handed one. See `TODO/performance.md`, T-032.
+    let mut ordering = match options.in_order {
+        false => None,
+        true => {
+            let mut driver =
+                bit_cli_core::piece_order::InOrder::new(handle.clone(), layout.clone());
+            if let Some(have) = engine.have_pieces(&handle) {
+                // A failure here loses the ordering, not the download: the
+                // window is a hint to a picker that works without it.
+                if driver.advance(&have).await.is_err() {
+                    let _ = tx
+                        .send(Msg::Warn(
+                            "the session refused a piece priority window, so pieces will arrive in its own order".to_string(),
+                        ))
+                        .await;
+                }
+            }
+            Some(driver)
+        }
+    };
+
     // Files an earlier torrent in this run has already written, which this one
     // is proven to hold too. These are sources like any other: scoped to one
     // file, checked per piece on the way in, and reported with their own
@@ -822,6 +870,7 @@ async fn one_inner(
         options,
         tx,
         &mut announced,
+        ordering.take(),
     )
     .await;
     for source in &sources {
@@ -896,12 +945,15 @@ async fn one_inner(
 async fn watch(
     engine: &Engine,
     handle: &bit_cli_core::engine::Handle,
-    layout: &Layout,
+    layout: &Arc<Layout>,
     sources: &[AttachedSource],
     plan: &Plan,
     options: &Options,
     tx: &mpsc::Sender<Msg>,
     announced: &mut Vec<SentAnnounce>,
+    // The piece priority window, already registered by the caller so that
+    // nothing could ask for a piece before it existed.
+    mut ordering: Option<bit_cli_core::piece_order::InOrder>,
 ) -> (Stopped, Duration, Vec<Redial>) {
     let lengths: Vec<u64> = layout.files.iter().map(|f| f.length).collect();
     let mut progress = Progress::new(layout.piece_count(), lengths);
@@ -944,10 +996,39 @@ async fn watch(
     tokio::pin!(deadline);
     let mut deadline_fired = false;
 
+    // The priority window gets a ticker of its own rather than riding the
+    // report tick, because how often a caller wants progress printed is not a
+    // statement about what order pieces should arrive in: `--report-interval
+    // 10s` must not mean a window that moves twice a minute. Fifty
+    // milliseconds is well inside the 32 MiB of lookahead the window carries,
+    // even on loopback. See `TODO/performance.md`, T-032.
+    let mut order_ticker = tokio::time::interval(Duration::from_millis(50));
+    order_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
         tokio::select! {
             _ = &mut interrupt => return (Stopped::Interrupted, progress.elapsed(), redials),
             _ = ticker.tick() => {}
+            _ = order_ticker.tick(), if ordering.is_some() => {
+                // This arm does not fall through to the body below, which is a
+                // progress report: it fires twenty times a second and a run
+                // does not want twenty progress events a second.
+                //
+                // Losing the ordering loses the ordering and not the download.
+                // The window is a hint to a picker that works without it, so a
+                // failure here drops back to the natural order rather than
+                // failing a run over a preference.
+                if let Some(driver) = ordering.as_mut() {
+                    let advanced = match engine.have_pieces(handle) {
+                        Some(have) => driver.advance(&have).await,
+                        None => Ok(driver.pointing_at()),
+                    };
+                    if !matches!(advanced, Ok(Some(_))) {
+                        ordering = None;
+                    }
+                }
+                continue;
+            }
             _ = &mut completion, if !completed => {
                 completed = true;
                 // Now, not when the run ends: a run that keeps seeding after
@@ -1758,6 +1839,22 @@ mod tests {
     use super::*;
     use crate::cli::SelectionArgs;
     use crate::test_support::{TorrentFixture, run_json_code};
+
+    /// Every selector value maps to one of two behaviours, and which is which
+    /// is stated once.
+    ///
+    /// `sequential` and `in-order` are synonyms on purpose: one is the common
+    /// name and the other is `aria2`'s. `default` is not a synonym for either,
+    /// and the enum used to carry two more values that named behaviour nothing
+    /// implemented. See `TODO/performance.md`, T-032.
+    #[test]
+    fn sequential_and_in_order_are_the_same_selector() {
+        use crate::cli::PieceSelector;
+        assert!(wants_in_order(PieceSelector::Sequential));
+        assert!(wants_in_order(PieceSelector::InOrder));
+        assert!(!wants_in_order(PieceSelector::Default));
+        assert_eq!(PieceSelector::default(), PieceSelector::Default);
+    }
 
     /// A torrent whose paths cannot be written as given still reports where
     /// its files went. Without this a caller cannot find what it downloaded.

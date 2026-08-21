@@ -767,3 +767,39 @@ loader /lib/ld-musl-x86_64.so.1, it needs 1 shared object(s)   # exit 1
 
 The PE path is unchanged and still passes against this machine's own release
 build.
+
+### T-153 Link speeds are not read on macOS
+
+Source:      found here, 2026-08-21, while closing [T-145](#t-145-the-macos-test-job-fails-to-link)
+Category:    ci
+Priority:    P3
+Effort:      M
+Status:      open
+
+Problem:     `sysinfo::platform::host` on the Apple platforms reports the OS,
+             the CPU, the core count, and physical memory, and reports
+             `network` as unavailable rather than reading it. Windows uses
+             `GetIfTable` and Linux reads `/sys/class/net`; macOS has neither.
+Relevance:   `Host::link_speed_bps` is what says whether a throughput number
+             was bounded by the wire, and a report from a Mac cannot answer
+             that. It is P3 rather than higher because macOS is not a release
+             target under decision 9 and nothing measured so far compares
+             across machines on link speed, so the field is unused where it is
+             missing.
+Approach:    `getifaddrs(3)` gives the interface names and the `IFF_UP` flag.
+             The speed needs an `SIOCGIFMEDIA` ioctl per interface against a
+             datagram socket, decoding `ifm_active` into a rate. That is real
+             FFI against `if_media.h` constants that change between releases,
+             which is why it is not in already: it cannot be run here and a
+             wrong decode would report a plausible wrong speed rather than
+             failing.
+Acceptance:  `bit-cli bench webseed --format json` on `macos-latest` carries a
+             `host.network` array with at least one interface, and
+             `host.unavailable` is empty, which is what
+             `sysinfo::tests::the_host_names_its_cpu_os_and_memory` asserts per
+             platform today.
+
+The test names the gap rather than tolerating any gap: it compares
+`host.unavailable` to `["network"]` on Apple and to `[]` everywhere else, so a
+second field going unreadable fails the build, and so does this one being
+fixed without the expectation being updated.

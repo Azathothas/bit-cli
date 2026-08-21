@@ -1239,10 +1239,21 @@ mod tests {
     #[test]
     fn the_host_names_its_cpu_os_and_memory() {
         let host = Host::capture();
-        assert!(
-            host.unavailable.is_empty(),
-            "could not read {:?}",
-            host.unavailable
+        // `unavailable` is the mechanism for a field this platform cannot
+        // read, so the assertion is about **which** fields are on it, not that
+        // it is empty. On the Apple platforms link speeds need `getifaddrs`
+        // plus an `SIOCGIFMEDIA` ioctl per interface, which nothing measured
+        // here compares across machines yet, and saying so beats reporting an
+        // empty list as though the machine had no interfaces. Equality rather
+        // than containment, so a second field going unreadable still fails.
+        // See `TODO/cli-surface.md`, T-153.
+        let expected: &[&str] = match cfg!(target_vendor = "apple") {
+            true => &["network"],
+            false => &[],
+        };
+        assert_eq!(
+            host.unavailable, expected,
+            "the set of fields this platform cannot read changed"
         );
         assert_ne!(host.cpu.model, "unknown", "no CPU model");
         assert!(host.cpu.logical_cores >= 1);
