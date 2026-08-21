@@ -104,7 +104,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-163](peers.md) | P2 | peers | open | MSE/PE peer encryption is not implemented |
 | [T-164](peers.md) | P2 | peers | open | A peer that sends garbage keeps its connection slot |
 | [T-165](peers.md) | P2 | peers | open | The peer's reqq is ignored, so the queue depth is a fixed 128 |
-| [T-166](peers.md) | P1 | peers | open | BEP 10 extension ids are not proven to map in both directions |
+| [T-166](peers.md) | P1 | peers | **done** | BEP 10 extension ids are not proven to map in both directions |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
 | [T-032](performance.md) | P1 | performance | **done** | The piece selector strategy is not implemented |
@@ -159,7 +159,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-103](bep-coverage.md) | P2 | bep | open | Filenames that are not valid UTF-8 are refused |
 | [T-167](bep-coverage.md) | P2 | bep | open | BEP 54 lt_donthave is not implemented |
 | [T-168](bep-coverage.md) | P3 | bep | open | WebTorrent peers and WSS trackers are not supported |
-| [T-171](metainfo.md) | P2 | metainfo | open | httpseeds written as a bencoded string is silently dropped |
+| [T-171](metainfo.md) | P2 | metainfo | **done** | httpseeds written as a bencoded string is silently dropped |
 | [T-172](metainfo.md) | P2 | metainfo | open | Strictness on read is undecided, and the error does not say |
 | [T-173](metainfo.md) | P3 | metainfo | open | A zero-length path component has no defined meaning |
 | [T-174](metainfo.md) | P2 | metainfo | open | A piece length that is not a multiple of 16 KiB has no fixture |

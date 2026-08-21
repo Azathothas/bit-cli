@@ -940,6 +940,32 @@ mod tests {
         assert_eq!(doc["complete"], true);
     }
 
+    /// `TODO/metainfo.md` T-171. The same fixture `info` reads, resolved into
+    /// sources: two of them, one per key, and the `httpseeds` one still
+    /// carrying BEP 17 style. Which key a URL came from is the only signal for
+    /// style that needs no network round trip, so the two lists must not be
+    /// merged on the way through.
+    #[test]
+    fn a_web_seed_key_written_as_a_string_still_resolves_to_a_source() {
+        let fixture = TorrentFixture::web_seed_keys_as_strings();
+        let doc = run_json(&["webseed", "list", fixture.path_str()], fixture.dir());
+        assert_eq!(doc["source_count"], 2);
+
+        let sources = doc["sources"].as_array().unwrap();
+        let get_right = sources
+            .iter()
+            .find(|s| s["origin"] == "torrent_url_list")
+            .expect("a source from url-list");
+        assert_eq!(get_right["url"], "https://getright.example.com/pub/");
+
+        let hoffman = sources
+            .iter()
+            .find(|s| s["origin"] == "torrent_httpseeds")
+            .expect("a source from httpseeds");
+        assert_eq!(hoffman["url"], "https://hoffman.example.com/");
+        assert_eq!(hoffman["style"], "hoffman");
+    }
+
     #[test]
     fn auto_composition_appends_the_name_and_the_path() {
         let fixture = TorrentFixture::multi_file();

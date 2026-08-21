@@ -86,6 +86,30 @@ const MSGID_EXTENDED: u8 = 20;
 /// Extension message id 0 is the extended handshake.
 const EXTENDED_HANDSHAKE: u8 = 0;
 
+/// Extension ids this bridge advertises in its own `m`, as `(name, our id)`.
+///
+/// BEP 10 carries two independent numberings, and this is one of them: the id
+/// a **peer** must use when it sends us that extension. The other direction,
+/// the id **we** must use when sending to a peer, is read out of the peer's
+/// own extended handshake and is never this table. Indexing one with the
+/// other's key is the defect vortex PR 103 found, where extensions had never
+/// once worked against qBittorrent because an incoming id was checked against
+/// the local numbering.
+///
+/// This is empty, and the empty `m` in [`extended_handshake`] is the same
+/// statement on the wire: the bridge only seeds and implements no extension
+/// messages. So no incoming extension id can be one of ours.
+const OUR_EXTENSIONS: &[(&str, u8)] = &[];
+
+/// Whether an incoming extension id is one this bridge advertised.
+///
+/// The id in an incoming extension message is only meaningful in **our**
+/// numbering, so [`OUR_EXTENSIONS`] is the only table it may be looked up in.
+/// Reading it against anyone else's numbering is what T-166 is about.
+fn is_our_extension(id: u8) -> bool {
+    OUR_EXTENSIONS.iter().any(|(_, ours)| *ours == id)
+}
+
 /// What a bridge is doing right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -544,6 +568,26 @@ async fn serve(
     loop {
         // Drain what is already buffered before waiting for more.
         while let Some(frame) = frames.take_frame().map_err(BridgeError::Link)? {
+            // A frame's message id follows the four byte length prefix, and a
+            // keep-alive has neither. An extension message carries its
+            // extension id one byte further on.
+            //
+            // Extension frames are dropped here rather than deserialized,
+            // because this bridge advertised an empty `m` and so has nothing
+            // to route one to. That has to be decided against `OUR_EXTENSIONS`
+            // and nowhere else: `librqbit`'s decoder maps an incoming id
+            // against its own constants, `MY_EXTENDED_UT_METADATA = 3` and
+            // `MY_EXTENDED_UT_PEX = 1`, which this bridge never advertised, so
+            // letting it decode reads the peer's id through a table neither
+            // end agreed on. A body that then fails to parse as that type ends
+            // the connection, which is a web seed lost to a message it had
+            // already said it does not speak. See `TODO/peers.md`, T-166.
+            if frame.get(4) == Some(&MSGID_EXTENDED) {
+                let extension = frame.get(5).copied().unwrap_or(EXTENDED_HANDSHAKE);
+                if !is_our_extension(extension) {
+                    continue;
+                }
+            }
             let message = Message::deserialize(&frame, &[])
                 .map_err(|e| BridgeError::Link(format!("bad message: {e:?}")))?
                 .0;
@@ -588,7 +632,9 @@ async fn serve(
                     ));
                 }
                 // The bridge only seeds, so what the session says about its
-                // own progress, interest, or extensions changes nothing here.
+                // own progress or interest changes nothing here. Extension
+                // messages never reach this arm: they are dropped above, at
+                // the frame, against the numbering this bridge advertised.
                 _ => {}
             }
         }
@@ -1032,6 +1078,41 @@ mod tests {
         assert!(text.contains("1:mde"), "{text}");
         assert!(!text.contains("ut_metadata"), "{text}");
         assert!(!text.contains("ut_pex"), "{text}");
+    }
+
+    /// The two BEP 10 numberings, and the rule that keeps them apart.
+    ///
+    /// An incoming extension id is decided by [`OUR_EXTENSIONS`] and by
+    /// nothing else, and the table has to say the same thing the advertised
+    /// `m` says on the wire. An entry added to one without the other is the
+    /// drift this guards against, and `librqbit`'s own receive-side numbering
+    /// is the table it must never be read as. See `TODO/peers.md`, T-166.
+    #[test]
+    fn an_incoming_extension_id_is_only_read_against_our_own_map() {
+        for id in 0..=u8::MAX {
+            assert_eq!(
+                is_our_extension(id),
+                OUR_EXTENSIONS.iter().any(|(_, ours)| *ours == id),
+                "id {id} is decided by a table other than OUR_EXTENSIONS"
+            );
+        }
+
+        // `MY_EXTENDED_UT_PEX` is 1 and `MY_EXTENDED_UT_METADATA` is 3 in
+        // `librqbit-peer-protocol` 9.0.0. Those are that crate's ids for what
+        // it advertises, not this bridge's, and reading an incoming id as one
+        // of them is what cost a connection before T-166.
+        assert!(!is_our_extension(1));
+        assert!(!is_our_extension(3));
+
+        let text = String::from_utf8_lossy(&extended_handshake(&params("*"))).into_owned();
+        for (name, _) in OUR_EXTENSIONS {
+            assert!(text.contains(name), "`m` does not advertise {name}: {text}");
+        }
+        assert_eq!(
+            OUR_EXTENSIONS.is_empty(),
+            text.contains("1:mde"),
+            "an empty table and an empty `m` are the same statement: {text}"
+        );
     }
 
     #[test]

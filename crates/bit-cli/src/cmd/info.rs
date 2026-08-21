@@ -183,6 +183,25 @@ mod tests {
         assert!(text.contains(&doc["piece_count"].to_string()));
     }
 
+    /// `TODO/metainfo.md` T-171. Both web seed keys are written as a bare
+    /// bencoded string, and `info` has to report both rather than an empty
+    /// list. Reading `url-list` for both shapes and `httpseeds` for one is how
+    /// a torrent that names an HTTP seed reports none.
+    #[test]
+    fn a_web_seed_key_written_as_a_string_is_still_reported() {
+        let fixture = TorrentFixture::web_seed_keys_as_strings();
+        let doc =
+            crate::test_support::run_json(&["info", "--json", fixture.path_str()], fixture.dir());
+        assert_eq!(doc["info_hash"], fixture.info_hash);
+        assert_eq!(doc["web_seeds"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["web_seeds"][0], "https://getright.example.com/pub/");
+        assert_eq!(doc["http_seeds"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["http_seeds"][0], "https://hoffman.example.com/");
+
+        let text = run_ok(&["info", fixture.path_str()], fixture.dir());
+        assert!(text.contains("https://hoffman.example.com/"), "{text}");
+    }
+
     #[test]
     fn a_missing_torrent_exits_with_the_source_resolution_code() {
         let fixture = TorrentFixture::multi_file();

@@ -722,7 +722,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    peers
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     The web seed bridge implements BEP 10 (`webseed/bridge.rs:83`,
              `:708`) and nothing in the tree asserts that it keeps **our**
@@ -762,3 +762,130 @@ Acceptance:  A test in which the peer's extension numbering differs from the
              bridge's, the bridge routes an incoming `ut_metadata` and an
              incoming `upload_only` to the right handlers, and the first
              message after the handshake is asserted to be the bitfield.
+
+**Read against that rule, the bridge had neither table, and the missing one
+cost a connection.** The premise of this entry needed correcting before the
+test could be written, and the correction is what found the defect.
+
+`bit-cli`'s bridge advertises an **empty** `m` (`webseed/bridge.rs`
+`extended_handshake`), which is the honest thing: it seeds and implements no
+extension messages. So there is no "name to our id" table, and because every
+extension message fell through the receive loop's catch-all there was no "peer
+id to handler" table either. A map keyed the wrong way round, which is the
+literal vortex PR 103 defect, could not exist here because there was no map.
+
+**What did exist is the same mistake one level down.** The receive loop called
+`Message::deserialize`, and `librqbit-peer-protocol` 9.0.0 routes an incoming
+extension id against **its own** constants:
+`MY_EXTENDED_UT_PEX = 1` and `MY_EXTENDED_UT_METADATA = 3`
+(`librqbit-peer-protocol/src/lib.rs:52`, `:55`, dispatched at
+`src/extended/mod.rs`). Those are the ids that crate advertises. This bridge
+advertises neither, and it was still reading incoming ids through them. That is
+an incoming id looked up in a table the two ends never agreed on, which is
+exactly the direction confusion this entry names.
+
+The cost is a dropped connection. `UtMetadata::deserialize` refuses a body that
+is not a ut_metadata message, `ExtendedHandshake` refuses one with no `m`, and
+a deserialize error becomes `BridgeError::Link`, which ends the connection and
+starts the reconnect backoff. Measured across the whole id space, with the fix
+reverted:
+
+```
+EXT ID 0: LINK DIED: early eof      <- decoded as an extended handshake
+EXT ID 1: link survived             <- decoded as ut_pex; an empty dict happens to parse
+EXT ID 2: link survived
+EXT ID 3: LINK DIED: early eof      <- decoded as ut_metadata
+EXT ID 4: link survived
+EXT ID 7: link survived
+EXT ID 9: link survived
+EXT ID 200: link survived
+```
+
+Two ids out of the sample, and both of them `librqbit`'s. Every id the bridge
+had actually advertised, which is none of them, was fine. **Id 1 surviving is
+the more instructive result**: it was decoded as `ut_pex` too, and it lived
+only because an empty bencode dictionary happens to satisfy that type. It was
+never routed correctly, it was routed to the wrong type and got away with it.
+That is the silence this entry predicted.
+
+**Fixed by deciding the question against our own map and nowhere else.**
+`OUR_EXTENSIONS` is the table of `(name, our id)` pairs the bridge advertises,
+`is_our_extension` is the only thing that reads it, and the receive loop drops
+an extension frame whose id is not in it before `Message::deserialize` ever
+sees the bytes. The table is empty today and the wire form says the same thing,
+which a unit test asserts as one claim: an empty table and an empty `1:mde` are
+the same statement, so an entry added to one without the other fails.
+
+That is also the seam [T-167](bep-coverage.md) needs. `lt_donthave` adds one
+entry to `OUR_EXTENSIONS` and one handler, and the receive direction is right
+by construction because the lookup is against the advertised map. The **send**
+direction is the second table and does not exist yet: it has to be read out of
+the peer's own extended handshake, and T-167 is the first thing that will need
+it, because the bridge is the end that sends `lt_donthave`.
+
+**The test is a session written by hand, which is what this entry was for.**
+`crates/bit-cli-core/tests/bridge_protocol.rs` speaks the peer protocol byte by
+byte, declares the message ids as its own constants rather than importing the
+bridge's, and never calls the serializer the bridge calls. Nothing in it can
+agree with the bridge by construction. Every other bridge test puts a real
+`librqbit` session on the far end, and both ends of that pair number their
+extensions identically, which is the arrangement the entry named as the one
+that hides this.
+
+The session advertises `ut_metadata = 2`, `upload_only = 4`, `lt_donthave = 7`,
+none of which is `librqbit`'s number for any of them, and then sends messages
+under those ids **and** under 1 and 3. `no_extension_id_can_end_the_connection`
+walks all 256 ids on one connection, then sends a well-formed `ut_metadata`
+request under id 3, which is precisely what a peer that got the direction
+backwards would send. The assertion in both is behavioural: after all of it the
+bridge still answers a `request` with the source's bytes at the offset the
+request named.
+
+**On the ordering rule, PR 156 is right and its one-line summary is not the
+rule here.** vortex's finding is that a message arriving in the same TCP read
+as the handshake was processed before the bitfield had been queued, so
+`Interested` could precede `Bitfield`. `bit-cli`'s bridge writes the extended
+handshake, the bitfield and `unchoke` as one concatenated buffer in a single
+`write_all`, before the receive loop starts, so nothing can interleave with
+them. The order on the wire is extended handshake, bitfield, unchoke, and the
+extended handshake being first is deliberate rather than an exception: BEP 10
+puts it in the handshaking sequence, and it is what carries the BEP 21
+`upload_only` flag that tells the session it is looking at a partial seed
+rather than a leecher. `the_bitfield_precedes_every_peer_message_after_the_handshake`
+asserts that reading, which is the rule that survives contact with a peer that
+also speaks BEP 10: **no ordinary peer message precedes the bitfield.**
+
+PR 155, `Have` handling for peers without BEP 6, is not applicable. The bridge
+sends a bitfield and then never revises it, so it sends no `Have` at all, and
+it ignores every `Have` the session sends because it only seeds. That changes
+with [T-167](bep-coverage.md), which is the first message the bridge will send
+to revise what it holds.
+
+**Proven by reverting the fix.**
+
+```
+$ cargo test -p bit-cli-core --test bridge_protocol    # with the frame skip removed
+test the_bitfield_precedes_every_peer_message_after_the_handshake ... ok
+test no_extension_id_can_end_the_connection ... FAILED
+test a_peer_that_numbers_its_extensions_differently_is_still_served ... FAILED
+test result: FAILED. 1 passed; 2 failed
+
+$ cargo test -p bit-cli-core --test bridge_protocol    # with the fix
+test the_bitfield_precedes_every_peer_message_after_the_handshake ... ok
+test a_peer_that_numbers_its_extensions_differently_is_still_served ... ok
+test no_extension_id_can_end_the_connection ... ok
+test result: ok. 3 passed; 0 failed
+
+$ cargo test -p bit-cli-core --lib webseed::bridge
+test webseed::bridge::tests::an_incoming_extension_id_is_only_read_against_our_own_map ... ok
+test result: ok. 17 passed; 0 failed
+```
+
+**One note on how nearly this stayed hidden.** The first draft of the
+hand-written session sent a malformed extended handshake: two bencode string
+lengths were wrong, `12:lt_donthave` for an eleven byte name and `9:fake/1.0`
+for an eight byte value. Every id "died", which reads as a much larger defect
+than the real one. The lesson is the one [RULES.md](RULES.md) already carries
+from T-032 and T-141: the first reading was of the fixture rather than of the
+thing. The fixture is now the part of this test worth reading twice.
+

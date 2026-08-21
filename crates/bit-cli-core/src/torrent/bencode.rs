@@ -341,6 +341,20 @@ impl Value {
             .map(|items| items.iter().filter_map(Value::as_text).collect())
             .unwrap_or_default()
     }
+
+    /// One byte string, or a list of them, as text.
+    ///
+    /// Several metainfo keys are specified as a list and are written in the
+    /// wild as a bare string when there is only one entry. A reader that
+    /// accepts the list alone returns nothing for those, with no error, so
+    /// every key with that history reads through here rather than through
+    /// [`Value::as_text_list`] directly.
+    pub fn as_text_or_text_list(&self) -> Vec<String> {
+        match self {
+            Self::Bytes(_) => self.as_text().into_iter().collect(),
+            _ => self.as_text_list(),
+        }
+    }
 }
 
 impl fmt::Display for Value {
@@ -526,6 +540,41 @@ mod tests {
         );
         assert!(value.get("missing").is_none());
         assert!(value.get("n").and_then(Value::as_bytes).is_none());
+    }
+
+    #[test]
+    fn one_string_and_a_list_of_them_read_the_same_way() {
+        let value = dict(&[
+            ("one", Value::text("https://a.example.com/")),
+            (
+                "many",
+                Value::List(vec![
+                    Value::text("https://a.example.com/"),
+                    Value::text("https://b.example.com/"),
+                    Value::Int(1),
+                ]),
+            ),
+            ("neither", Value::Int(7)),
+        ]);
+        assert_eq!(
+            value.get("one").map(Value::as_text_or_text_list),
+            Some(vec!["https://a.example.com/".to_string()])
+        );
+        assert_eq!(
+            value.get("many").map(Value::as_text_or_text_list),
+            Some(vec![
+                "https://a.example.com/".to_string(),
+                "https://b.example.com/".to_string(),
+            ])
+        );
+        // A shape that is neither still yields nothing rather than panicking,
+        // and the plain list accessor keeps refusing the string form, which is
+        // why the two are separate methods.
+        assert_eq!(
+            value.get("neither").map(Value::as_text_or_text_list),
+            Some(Vec::new())
+        );
+        assert_eq!(value.get("one").map(Value::as_text_list), Some(Vec::new()));
     }
 
     #[test]

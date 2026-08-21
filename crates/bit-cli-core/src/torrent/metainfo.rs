@@ -291,23 +291,27 @@ impl Metainfo {
     /// The key is a string for a single entry and a list for several, and both
     /// appear in the wild.
     pub fn url_list(&self) -> Vec<String> {
-        match self.root.get("url-list") {
-            Some(Value::Bytes(_)) => self
-                .root
-                .get("url-list")
-                .and_then(Value::as_text)
-                .into_iter()
-                .collect(),
-            Some(value) => value.as_text_list(),
-            None => Vec::new(),
-        }
+        self.root
+            .get("url-list")
+            .map(Value::as_text_or_text_list)
+            .unwrap_or_default()
     }
 
     /// BEP 17 `httpseeds`.
+    ///
+    /// BEP 17 specifies a list and BEP 19 specifies a list, and torrents
+    /// carrying a bare string exist for both. The two keys read through the
+    /// same accessor so they cannot drift apart again: reading one shape here
+    /// and both next door is how a torrent that names an HTTP seed yields
+    /// none, silently.
+    ///
+    /// The two lists stay separate after they are read. Which key a URL came
+    /// from is what decides BEP 17 style from BEP 19 style, so merging them
+    /// would throw away the only signal that needs no network round trip.
     pub fn http_seeds(&self) -> Vec<String> {
         self.root
             .get("httpseeds")
-            .map(Value::as_text_list)
+            .map(Value::as_text_or_text_list)
             .unwrap_or_default()
     }
 
@@ -666,6 +670,68 @@ mod tests {
         assert_eq!(
             as_string.url_list(),
             vec!["https://only.example.com/".to_string()]
+        );
+    }
+
+    #[test]
+    fn httpseeds_is_read_whether_it_is_a_string_or_a_list() {
+        let mut torrent = bencode::decode(&single_file()).unwrap();
+        torrent.as_dict_mut().unwrap().insert(
+            b"httpseeds".to_vec(),
+            Value::List(vec![
+                Value::text("https://hoffman-a.example.com/"),
+                Value::text("https://hoffman-b.example.com/"),
+            ]),
+        );
+        let as_list = Metainfo::parse(&bencode::encode(&torrent)).unwrap();
+        assert_eq!(
+            as_list.http_seeds(),
+            vec![
+                "https://hoffman-a.example.com/".to_string(),
+                "https://hoffman-b.example.com/".to_string(),
+            ]
+        );
+
+        torrent.as_dict_mut().unwrap().insert(
+            b"httpseeds".to_vec(),
+            Value::text("https://only.hoffman.example.com/"),
+        );
+        let as_string = Metainfo::parse(&bencode::encode(&torrent)).unwrap();
+        assert_eq!(
+            as_string.http_seeds(),
+            vec!["https://only.hoffman.example.com/".to_string()]
+        );
+    }
+
+    /// One fixture, both keys, both written as a bare string.
+    ///
+    /// The defect this pair guards against is one key accepting a shape the
+    /// key beside it does not, so the two accessors have to be exercised by
+    /// the same torrent or the asymmetry is what the tests preserve. The
+    /// lists stay separate: which key a URL came from is what tells BEP 17
+    /// style from BEP 19 style.
+    #[test]
+    fn both_web_seed_keys_read_the_string_shape_and_stay_separate() {
+        let mut torrent = bencode::decode(&single_file()).unwrap();
+        {
+            let root = torrent.as_dict_mut().unwrap();
+            root.insert(
+                b"url-list".to_vec(),
+                Value::text("https://getright.example.com/pub/"),
+            );
+            root.insert(
+                b"httpseeds".to_vec(),
+                Value::text("https://hoffman.example.com/"),
+            );
+        }
+        let meta = Metainfo::parse(&bencode::encode(&torrent)).unwrap();
+        assert_eq!(
+            meta.url_list(),
+            vec!["https://getright.example.com/pub/".to_string()]
+        );
+        assert_eq!(
+            meta.http_seeds(),
+            vec!["https://hoffman.example.com/".to_string()]
         );
     }
 

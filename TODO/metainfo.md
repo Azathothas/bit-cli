@@ -54,7 +54,7 @@ Source:      `reference/RESEARCH.md` section C, found in the doc pass of 2026-08
 Category:    metainfo
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `Metainfo::url_list` accepts the BEP 19 `url-list` key as either a
              bencoded list or a bare bencoded string, which is right.
@@ -102,6 +102,69 @@ Acceptance:  A fixture whose `httpseeds` is a bare bencoded string yields one
              `a_url_list_is_read_whether_it_is_a_string_or_a_list` so the pair
              is obvious. A second assertion that both accessors are exercised
              by the same fixture.
+
+**Fixed, and the fix is that both keys now read through one accessor.**
+
+`Value::as_text_or_text_list` (`torrent/bencode.rs:349`) takes the shape
+branch: a `Value::Bytes` yields one entry, anything else falls through to
+`as_text_list` as before. `url_list` (`torrent/metainfo.rs:293`) and
+`http_seeds` (`:306`) both call it and neither carries a branch of its own, so
+there is no longer a place for the two to drift apart. `url_list` also lost the
+duplicated `self.root.get("url-list")` its old branch needed.
+
+`as_text_list` was left alone rather than widened. `announce_tiers`
+(`torrent/metainfo.rs:288`) calls it on each tier of `announce-list`, where a
+tier is a list by BEP 12 and a bare string means something different from a
+one-element tier. Widening the shared accessor would have changed tracker
+parsing as a side effect of a web seed fix, so the tolerant reader is a second
+method and the callers that want it ask for it. The bencode test asserts both
+halves of that: the new accessor takes the string form and the old one still
+refuses it.
+
+**The two lists stay separate, which is the half of `gosh-dl` not to copy.**
+`gosh-dl/src/torrent/metainfo.rs:391` `parse_url_list` is the structure this
+took: one parser, called from `:125` for `url-list` and `:128` for `httpseeds`.
+What that tree then does at `webseed.rs:479` is merge the two into one list and
+hard-code `WebSeedType::GetRight` at `:303`, throwing away the style it had
+just parsed. `bit-cli` marks `httpseeds` sources BEP 17 at collection time
+(`crates/bit-cli/src/webseed_args.rs:265`), and which key a URL came from is
+the only signal for style that costs no network round trip, which is what
+[T-004](webseed.md) rests on. The `webseed list` acceptance asserts the style
+survives, so a later merge would fail a test rather than pass quietly.
+
+**Proven by reverting the fix, not by writing the test after it.** With
+`http_seeds` put back to `Value::as_text_list`, all four new tests fail and
+nothing else does. The two unit tests are in the second run because `cargo
+test` stops at the first failing binary and `bit-cli` is ordered ahead of
+`bit-cli-core`.
+
+```
+$ cargo test --workspace          # with http_seeds reverted to as_text_list
+test cmd::info::tests::a_web_seed_key_written_as_a_string_is_still_reported ... FAILED
+test cmd::webseed::tests::a_web_seed_key_written_as_a_string_still_resolves_to_a_source ... FAILED
+test result: FAILED. 307 passed; 2 failed
+
+$ cargo test -p bit-cli-core --lib -- torrent::metainfo   # same revert
+test torrent::metainfo::tests::httpseeds_is_read_whether_it_is_a_string_or_a_list ... FAILED
+test torrent::metainfo::tests::both_web_seed_keys_read_the_string_shape_and_stay_separate ... FAILED
+test result: FAILED. 19 passed; 2 failed
+```
+
+The fixture is `TorrentFixture::web_seed_keys_as_strings`
+(`crates/bit-cli/src/test_support.rs`), which is `single_file` with **both**
+keys rewritten as a bare bencoded string. One fixture rather than two, because
+the defect is one key accepting a shape the key beside it does not, so the two
+accessors have to be exercised by the same torrent. Both keys are outside
+`info`, so the info hash is unchanged and the test asserts that too.
+
+```
+$ cargo test --workspace          # with the fix
+test torrent::metainfo::tests::httpseeds_is_read_whether_it_is_a_string_or_a_list ... ok
+test torrent::metainfo::tests::both_web_seed_keys_read_the_string_shape_and_stay_separate ... ok
+test torrent::bencode::tests::one_string_and_a_list_of_them_read_the_same_way ... ok
+test cmd::info::tests::a_web_seed_key_written_as_a_string_is_still_reported ... ok
+test cmd::webseed::tests::a_web_seed_key_written_as_a_string_still_resolves_to_a_source ... ok
+```
 
 ### T-172 Strictness on read is undecided, and the error does not say
 

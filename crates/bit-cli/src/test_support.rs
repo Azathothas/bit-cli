@@ -264,6 +264,37 @@ impl TorrentFixture {
         }
     }
 
+    /// [`Self::single_file`] with both web seed keys rewritten as a **bare
+    /// bencoded string** rather than a list.
+    ///
+    /// BEP 17 specifies `httpseeds` as a list and BEP 19 specifies `url-list`
+    /// as a list, and torrents carrying one bare string exist for both keys.
+    /// A reader that accepts the list alone yields nothing for these, with no
+    /// error and no warning, which is `TODO/metainfo.md` T-171.
+    ///
+    /// Both keys are outside `info`, so the info hash is unchanged and the
+    /// field recorded on the fixture stays true.
+    pub fn web_seed_keys_as_strings() -> Self {
+        use bit_cli_core::torrent::bencode::{self, Value};
+
+        let fixture = Self::single_file();
+        let bytes = std::fs::read(&fixture.torrent).expect("read the fixture torrent");
+        let mut root = bencode::decode(&bytes).expect("decode the fixture torrent");
+        {
+            let dict = root.as_dict_mut().expect("a top-level dictionary");
+            dict.insert(
+                b"url-list".to_vec(),
+                Value::text("https://getright.example.com/pub/"),
+            );
+            dict.insert(
+                b"httpseeds".to_vec(),
+                Value::text("https://hoffman.example.com/"),
+            );
+        }
+        std::fs::write(&fixture.torrent, bencode::encode(&root)).expect("rewrite the torrent");
+        fixture
+    }
+
     /// The `.torrent` path, as an argument.
     pub fn path_str(&self) -> &str {
         self.torrent.to_str().expect("utf-8 path")
