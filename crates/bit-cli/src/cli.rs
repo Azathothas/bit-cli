@@ -1372,7 +1372,7 @@ pub enum BenchCommand {
     /// Measure the payload file under several writers, with no session.
     Disk(BenchDiskArgs),
     /// Synthetic peer load against a target.
-    Swarm(BenchArgs),
+    Swarm(BenchSwarmArgs),
     /// One-shot capability and reachability probe.
     Probe(BenchProbeArgs),
 }
@@ -1492,30 +1492,61 @@ pub struct BenchProbeArgs {
     #[command(flatten)]
     pub report: ReportArgs,
 }
-/// A generic `bench` target.
+/// `bit-cli bench swarm`.
+///
+/// Two loads under one verb, and `--for` is what chooses. With it, the target
+/// already serves the torrent and the synthetic peers leech it, which measures
+/// its serving path. Without it, the peers handshake for generated info hashes
+/// the target does not have, which measures its accept path. See
+/// `TODO/bench.md`, T-092, for why those are two loads and not one.
 #[derive(Debug, Args)]
-pub struct BenchArgs {
-    #[command(flatten)]
-    pub source: SourceArgs,
+pub struct BenchSwarmArgs {
+    /// `HOST:PORT` of the peer to load. The only address this ever connects
+    /// to: it announces to no tracker, uses no DHT, and reads no peer list.
+    #[arg(value_name = "TARGET")]
+    pub target: String,
+
+    /// A torrent the target already serves, as a `.torrent` path. Repeatable.
+    ///
+    /// With none, `--torrents` info hashes are generated instead and the
+    /// target will not have any of them, which measures how it handles
+    /// connections it cannot serve rather than how fast it serves.
+    #[arg(long = "for", value_name = "TORRENT")]
+    pub for_torrents: Vec<PathBuf>,
 
     #[command(flatten)]
     pub shared: BenchShared,
 
-    /// Synthetic peer count, for `bench swarm`.
+    /// Synthetic peer count.
     #[arg(long, value_name = "N", default_value_t = 8)]
     pub peers: usize,
 
-    /// Synthetic torrent count, for `bench swarm`.
+    /// How many torrents to generate. Ignored when `--for` is given.
     #[arg(long, value_name = "N", default_value_t = 1)]
     pub torrents: usize,
 
-    /// Per-torrent synthetic payload size.
+    /// The length a generated torrent declares. No payload is written for it:
+    /// the target does not have the torrent, so nothing will ever be fetched
+    /// or checked against it.
     #[arg(long, value_name = "SIZE", default_value = "256MiB")]
     pub payload_size: String,
 
-    /// Synthetic piece size.
+    /// The piece length a generated torrent declares.
     #[arg(long, value_name = "SIZE", default_value = "1MiB")]
     pub piece_size: String,
+
+    /// Where verified pieces and generated torrents are written. A directory
+    /// this run makes and removes when not given.
+    #[arg(long, value_name = "DIR")]
+    pub dir: Option<PathBuf>,
+
+    /// How long one connect attempt gets before the peer gives up on it.
+    #[arg(long, value_name = "DUR", default_value = "10s")]
+    pub connect_timeout: String,
+
+    /// Keep the scratch directory instead of removing it.
+    #[arg(long)]
+    pub keep: bool,
 }
 
 /// `bit-cli bench leech`.

@@ -551,7 +551,7 @@ Source:      CI run 32386960166, 2026-08-20
 Category:    ci
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     `ci.yml`'s `MSRV` job pins rustc 1.85.1 and runs
              `cargo check --workspace --locked --all-features`. It fails:
@@ -644,7 +644,7 @@ Source:      CI run 32386960166, 2026-08-20
 Category:    ci
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     `Test (macos-latest)` fails during linking, not compilation:
 
@@ -1081,3 +1081,135 @@ Acceptance:  `bit-cli download <SOURCE> --dry-run --json | jq -r .kind` prints
              `download_dry_run`, `DOCUMENT_KINDS` names it, and
              `docs/schema.md` carries its field table from a run the generator
              drives.
+
+### T-158 Regenerating the schema deletes fields the sample did not produce
+
+Source:      `docs/schema.md`, found during the doc pass of 2026-08-21
+Category:    cli
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema`
+             overwrites `docs/schema.md` with exactly what that run produced.
+             A field that only appears on a path the sample did not take is
+             silently deleted from the document.
+Relevance:   That command is the documented way to update the schema, and it is
+             in `PROMPT.md`, in `CHANGELOG.md`, and in the panic message the
+             check itself prints. Following the instruction makes the document
+             worse.
+Approach:    Merge rather than replace. Read the committed file, union its rows
+             with the rendered ones, and write the union sorted. A row that is
+             genuinely gone then needs deleting on purpose, which is the right
+             cost for removing a documented field.
+Acceptance:  Regenerating twice in a row on a machine whose sample takes a
+             different path both times leaves every row that either run
+             produced, and `git diff docs/schema.md` is empty when nothing
+             changed.
+
+**Found by following the instruction.** Regenerating on 2026-08-21 removed one
+row and added none:
+
+```
+-| `sources[].error` | string |
+```
+
+That field is real. `crates/bit-cli/src/cmd/webseed.rs:285` and
+`crates/bit-cli-core/src/webseed/probe.rs:457` both carry
+`error: Option<String>` with `skip_serializing_if`, so it appears when a source
+fails and not when every source succeeds. The generator's sample had no failing
+source, so the row went. Three regenerations in a row produced the same
+deletion, so it is deterministic rather than a flake.
+
+The regeneration was **not committed**, and the committed schema is the
+accurate one.
+
+**Why the check did not catch it.** `the_committed_schema_matches_what_the
+_program_writes` is a containment check on purpose: a row this run produced and
+the file lacks is a failure, and a row the file has and this run did not
+produce is not. That asymmetry is right, and its comment explains why: these
+runs are timed, so a download that beats its own report tick emits no
+`progress`. The gap is that the **writer** does not share the reader's
+asymmetry. The check tolerates extra rows and the generator deletes them.
+
+### T-159 Subcommand flags are filed under "Report options" in the help
+
+Source:      `bit-cli bench <SUB> --help`, found in the doc pass of 2026-08-21
+Category:    cli
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `--peers`, `--torrents`, `--dir`, and `--connect-timeout` appear
+             under the heading **Report options** in `bench swarm --help`.
+             None of them is a report option. `bench leech`, `bench seed`, and
+             `bench disk` have the same defect, so four of the six subcommands
+             mis-file their own flags.
+Relevance:   The headings exist so a reader can find a flag by what it does.
+             One that files `--peers` beside `--fail-under` is worse than none,
+             because it is confidently wrong.
+Approach:    `clap`'s `next_help_heading` applies to every argument declared
+             after it, including the ones in the outer struct that follow a
+             flattened inner one. `BenchShared` sets the benchmark heading and
+             flattens `ReportArgs`, which sets the report heading, and the
+             outer struct's own fields are declared after that flatten, so they
+             inherit it. Give each subcommand struct its own
+             `#[command(next_help_heading = "...")]`, or flatten the shared
+             groups last.
+Acceptance:  For every `bench` subcommand, the only flags under **Report
+             options** are `--report`, `--format`, `--baseline`, and
+             `--fail-under`. A test walks `clap`'s command tree and asserts it,
+             so the next subcommand cannot reintroduce it.
+
+Reproduce, and see it on four of six:
+
+```bash
+for s in webseed leech seed disk probe swarm; do
+  echo "== $s"
+  bit-cli bench $s --help | sed -n '/^Report options:/,/^[A-Za-z].*options:$/p'
+done
+```
+
+`webseed` and `probe` are correct, and they are correct by accident: neither
+declares a flag after its flatten.
+
+### T-160 One lib test failed once and has not been seen again
+
+Source:      local `cargo test --workspace`, 2026-08-21
+Category:    ci
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     One run of `cargo test --workspace` reported
+             `test result: FAILED. 305 passed; 1 failed` in the `bit-cli --lib`
+             target. The name was not captured, because the command filtering
+             the output matched only the summary line.
+Relevance:   [T-148](#t-148-the-peer-probe-test-asserted-an-exit-code-inside-its-own-retry-loop)
+             is the precedent: a test that fails one run in twenty turns CI red
+             on somebody else's push and costs more to diagnose there than
+             here. A flake that is known about and unnamed is still a flake.
+Approach:    Capture the name. The suite is 306 tests in that target and runs in
+             about 31 seconds, so a loop is cheap:
+
+             ```powershell
+             foreach ($i in 1..40) {
+               cargo test -p bit-cli --lib 2>&1 | Tee-Object ".tmp/lib-$i.log" | Out-Null
+             }
+             Select-String -Path .tmp/lib-*.log -Pattern '^test (\S+) \.\.\. FAILED'
+             ```
+
+             The candidates are the tests that bind a port or start a child
+             process, because those are the ones a busy machine can starve.
+Acceptance:  The test is named, the race is named, and the fix is in the test
+             rather than in a retry around it, the way T-148 was fixed.
+
+**Not reproduced in 14 further runs**, including six sequential and two
+concurrent pairs run specifically to provoke it, with no `bit-cli`,
+`loopback-fileserver`, `loopback-tracker`, or `loopback-churn` process left
+over from anything else. So it is rare rather than load-dependent in any way
+this machine can reproduce on demand, and it is recorded rather than chased.
+
+The one thing to change next time it is looked for: filter for
+`^test \S+ \.\.\. FAILED` and not for the summary line, which is how the name
+was lost.

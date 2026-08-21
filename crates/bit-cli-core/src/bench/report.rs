@@ -644,6 +644,11 @@ pub struct Report {
     /// measures reachability and capability rather than throughput.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub probe: Option<crate::bench::probe::ProbeReport>,
+    /// What a `bench swarm` found. Present only for that subcommand, which
+    /// measures somebody else's process and so carries per-peer detail no
+    /// other report has.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swarm: Option<crate::bench::swarm::Outcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold: Option<Threshold>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -669,6 +674,7 @@ impl Report {
             sources: Vec::new(),
             summary: Summary::default(),
             probe: None,
+            swarm: None,
             threshold: None,
             baseline: None,
             notes: Vec::new(),

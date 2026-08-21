@@ -78,15 +78,61 @@ Problem:     `bit-cli create --version v2|hybrid` returns a usage error naming
              padding files a hybrid torrent needs exist.
 Relevance:   v1 is what everything reads today, so this is not urgent, but a
              creation tool that cannot make a hybrid torrent will age badly.
-Approach:    `superseedr/src/torrent_manager/merkle.rs` is the reference for
-             the tree shape (GPL-3.0, read only). Upstream issue #546 carries a
-             full design for `rqbit`. Creation is the tractable half: `bit-cli
-             create --version hybrid` needs the v2 `file tree`, the
-             `piece layers`, and BEP 47 padding between files. Downloading a v2
-             torrent needs `librqbit` support and is a separate, larger item.
+Approach:    BEP 52 is the reference and is enough on its own; the shape is
+             written out below. Upstream issue #546 carries a full design for
+             `rqbit`. Creation is the tractable half: `bit-cli create --version
+             hybrid` needs the v2 `file tree`, the `piece layers`, and BEP 47
+             padding between files. Downloading a v2 torrent needs `librqbit`
+             support and is a separate, larger item.
 Acceptance:  `bit-cli create <PATH> --version hybrid` produces a torrent that
              `intermodal` and one mainline client both accept, and whose v1
              info hash matches a `--version v1` build of the same payload.
+
+**The v2 shape, from BEP 52, written here so this entry does not depend on a
+reading of somebody else's implementation.**
+
+The hash tree:
+
+- Leaves are SHA-256 over **16 KiB blocks**, not over pieces.
+- The leaf layer is padded to the next power of two with **32 zero bytes per
+  missing node**. The internal nodes above the padding are then computed
+  normally rather than special-cased.
+- A parent is SHA-256 over the **64 byte** concatenation of its two children.
+- The root is reached by folding until one 32 byte node is left.
+
+The metainfo:
+
+- `piece length` is a power of two and at least `0x4000`.
+- `piece layers` is a **top-level key, a sibling of `info`**, not inside it.
+  Putting it inside changes the info hash.
+- The v2 info hash is `SHA-256(bencode(info))` at full width.
+- A file leaf in `file tree` is the `""` key holding `{length, pieces root}`.
+- `piece layers` is **omitted for a file smaller than one piece**, because its
+  root is the only node there is.
+
+**The case nearly nobody implements.** `piece layers` stores the layer whose
+nodes are `piece length` sized. At a 16 KiB piece length that **is** the leaf
+layer. At 32 KiB or above it is a layer further up, and the stored layer must
+have **the padding truncated off** before it is written. Emitting the padded
+layer produces a torrent that hashes consistently against itself and is
+rejected or silently mis-sized by anything that checks. Every v2 implementation
+this work looked at either gets this wrong or documents that it does not handle
+it. `bit-cli` has to.
+
+Two more things worth carrying in from the same reading:
+
+- **Piece size selection.** Aim for under 2,500 pieces, starting at 32 KiB and
+  capping at 16 MiB, with an early exit above 20 GiB. Worth comparing against
+  `bit-cli create`'s own heuristic, which came from `intermodal`.
+- **BEP 47 padding.** When padding is on, a partial piece is filled with zeroes
+  and a `.pad/<len>` file with `attr = "p"` is emitted so the next real file
+  starts on a piece boundary. Padding must **not** be emitted after the last
+  file.
+
+One implementation detail that is a defect rather than a design choice: a
+merkle helper that computes `ceil(log2(n))` in floating point rounds wrong for
+a large leaf count, and a tree one layer short produces a wrong root with no
+error at all. Use integer bit arithmetic.
 
 ### T-082 BEP 16 superseeding is not implemented
 
@@ -162,6 +208,14 @@ Evidence:    Run at 2026-08-19T18:55:16.569Z on Microsoft Windows 10.0.26200,
     v1        pass    a6291a9a2794b3ff158e6db9d9424e6b166ddca7  490012
     private   pass    7240f139d5bbabedba0e2c7522bcafd6b087e8c5  490012
     webseed   skip    rqbit does not implement BEP 19
+
+             Re-run on 2026-08-21 against **aria2 1.37.0 (3 of 3 pass) and
+             rqbit 9.0.1 (2 of 2 pass, web seed skipped)**. The `rqbit` binary
+             moved from 9.0.0 to 9.0.1 between the two runs and the info hashes
+             are unchanged, which is what a byte-for-byte round trip is
+             supposed to survive. The `librqbit` **crate** this tree depends on
+             is still pinned at 9.0.0 in `Cargo.lock`; the interop client and
+             the dependency are two different things and only the first moved.
 
              The web seed case is skipped for `rqbit` and named in the report's
              `cases_skipped`, never silently dropped. Skipping is correct here:

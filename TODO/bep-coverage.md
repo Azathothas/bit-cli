@@ -107,9 +107,9 @@ extension is `ut_holepunch`; the message carries `msg_type`, `addr_type`,
 **already-connected peer** to relay a `rendezvous` naming the unreachable
 target; that peer checks both sides advertise the extension and sends
 `connect` to each carrying the other's address; both then dial, and the two
-outbound SYNs crossing in flight open both NATs. `reference/README.md` has the
-whole flow with file and line citations into a complete 678 line
-implementation.
+outbound SYNs crossing in flight open both NATs. That is the whole protocol,
+and it is written out here rather than cited, because the working
+implementation it was read against is not a tree this repository keeps.
 
 **The swarm is the rendezvous.** That is the design, and it is why no relay
 server, no STUN, and no overlay is needed. `iroh` is a QUIC overlay with its

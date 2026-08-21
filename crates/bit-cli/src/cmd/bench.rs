@@ -24,7 +24,9 @@ use std::time::Duration;
 use bit_cli_core::ExitCode;
 use bit_cli_core::bench::render::{self, Format};
 use bit_cli_core::bench::report::{Build, Environment, Kind, Parameters, Report, Target};
-use bit_cli_core::bench::{disk as bench_disk, recorder, webseed as bench_webseed};
+use bit_cli_core::bench::{
+    disk as bench_disk, recorder, swarm as bench_swarm, webseed as bench_webseed,
+};
 use bit_cli_core::engine::Engine;
 use bit_cli_core::error::{Error, Result};
 use bit_cli_core::layout::Layout;
@@ -32,9 +34,7 @@ use bit_cli_core::torrent::Metainfo;
 use bit_cli_core::units::{Millis, Size, parse_duration, parse_rate, parse_size};
 use bit_cli_core::webseed::binding::BindingSet;
 
-use crate::cli::{
-    BenchArgs, BenchCommand, BenchShared, BenchWebseedArgs, Global, ReportArgs, ReportFormat,
-};
+use crate::cli::{BenchCommand, BenchShared, BenchWebseedArgs, Global, ReportArgs, ReportFormat};
 use crate::env::Env;
 use crate::output::Renderer;
 use crate::source::{Kind as SourceKind, load_local};
@@ -56,7 +56,7 @@ pub fn run(
         BenchCommand::Leech(args) => leech(args, global, renderer, env),
         BenchCommand::Disk(args) => disk(args, global, renderer, env),
         BenchCommand::Seed(args) => seed(args, global, renderer, env),
-        BenchCommand::Swarm(args) => unbuilt(Kind::Swarm, args),
+        BenchCommand::Swarm(args) => swarm_load(args, global, renderer, env),
         BenchCommand::Probe(args) => probe(args, global, renderer, env),
     }
 }
@@ -187,19 +187,6 @@ fn peer_id() -> [u8; 20] {
 /// It fails loudly with the `TODO/` entry that closes it rather than
 /// pretending to work, and it names the one that is built, because a caller
 /// pointed at the wrong subcommand should be told which one to use.
-fn unbuilt(kind: Kind, _args: &BenchArgs) -> Result<ExitCode> {
-    Err(Error::generic(format!(
-        "`bit-cli bench {}` is not implemented yet; see TODO/bench.md",
-        kind.as_str()
-    ))
-    .with("todo", "T-090")
-    .with("subcommand", kind.as_str())
-    .with(
-        "hint",
-        "`bit-cli bench webseed` measures HTTP sources today",
-    ))
-}
-
 /// The build metadata every report carries.
 fn build() -> Build {
     Build {
@@ -635,6 +622,402 @@ pub fn disk(
         _ => ExitCode::Success,
     };
     emit(&report, &output, renderer, env, code)
+}
+
+/// `bit-cli bench swarm`: synthetic peer load against one target.
+///
+/// Two loads under one verb, chosen by `--for`. The reasoning is in
+/// `TODO/bench.md`, T-092, and the short version is that a target which is
+/// somebody else's process cannot be serving a torrent this run invented, and
+/// decision 7.4 rules out the RPC that would let it be told. So `--for` names
+/// torrents it already has and the peers leech them, and without it the peers
+/// handshake for generated info hashes and only the accept path is measured.
+///
+/// This is the one subcommand that puts load on a machine other than this one,
+/// so the target is the only address it ever contacts: no tracker, no DHT, no
+/// PEX, and no peer list read out of a torrent or the configuration.
+fn swarm_load(
+    args: &crate::cli::BenchSwarmArgs,
+    global: &Global,
+    renderer: &mut Renderer,
+    env: &mut Env,
+) -> Result<ExitCode> {
+    let output = Output::resolve(&args.shared.report, global, env)?;
+    let target: std::net::SocketAddr = args.target.parse().map_err(|_| {
+        Error::usage(format!(
+            "`{}` is not a peer address. `bench swarm` takes HOST:PORT and dials that and nothing else.",
+            args.target
+        ))
+        .with("value", args.target.clone())
+    })?;
+    if args.peers == 0 {
+        return Err(Error::usage("--peers cannot be zero"));
+    }
+    let run_for = duration(&args.shared.duration, "duration")?;
+    let warmup = duration(&args.shared.warmup, "warmup")?;
+    let interval = duration(&args.shared.metrics_interval, "metrics-interval")?;
+    let disk_budget = size(Some(&args.shared.disk_budget), "disk-budget")?.unwrap_or(0);
+
+    let mut report = Report::new(
+        Kind::Swarm,
+        Environment::begin(
+            build(),
+            env.args.clone(),
+            env.cwd.display().to_string(),
+            global.trace.clone(),
+        ),
+    );
+    if report.environment.build.debug_assertions {
+        report.note("this is a debug build: the numbers describe a debug build and nothing else");
+    }
+
+    // A directory this run owns, because everything in it is removed at the
+    // end. A caller-named one is used as given and kept.
+    let (root, temporary) = match &args.dir {
+        Some(dir) => (env.resolve(dir), false),
+        None => (
+            std::env::temp_dir().join(format!("bit-cli-bench-swarm-{}", std::process::id())),
+            true,
+        ),
+    };
+    std::fs::create_dir_all(&root).map_err(|e| {
+        bit_cli_core::error::from_io(e, format!("cannot create {}", root.display()))
+    })?;
+
+    let (torrents, mode) = match args.for_torrents.is_empty() {
+        false => (declared_torrents(args, env)?, bench_swarm::Mode::Leech),
+        true => (
+            generated_torrents(args, &root, &mut report)?,
+            bench_swarm::Mode::Connect,
+        ),
+    };
+    if mode == bench_swarm::Mode::Connect {
+        report.note(
+            "no --for was given, so the peers handshake for info hashes the target does not have. This measures the accept and handshake path, not the serving path.",
+        );
+    }
+    if !args.for_torrents.is_empty() && args.torrents != 1 {
+        renderer.warn(
+            env,
+            format!(
+                "--torrents {} is ignored: {} torrent(s) were named with --for",
+                args.torrents,
+                args.for_torrents.len()
+            ),
+        );
+    }
+
+    let total: u64 = torrents.iter().map(|t| t.total_length).sum();
+    report.parameters = Parameters {
+        duration: Millis::from(run_for),
+        warmup: Millis::from(warmup),
+        metrics_interval: Millis::from(interval),
+        concurrency: args.shared.concurrency.max(1),
+        fail_under: output.fail_under.map(Size),
+        ceiling: rate(args.shared.ceiling.as_deref(), "ceiling")?.map(Size),
+        peers: Some(args.peers),
+        torrents: Some(torrents.len()),
+        payload_size: Some(Size(total)),
+        piece_size: torrents.first().map(|t| Size(u64::from(t.piece_length))),
+        disk_budget: Some(Size(disk_budget)),
+        ..Default::default()
+    };
+    report.target = Target {
+        source: target.to_string(),
+        info_hash: torrents.first().map(|t| hex20(&t.info_hash)),
+        name: Some(format!(
+            "{} peers, {} torrent(s), {} load",
+            args.peers,
+            torrents.len(),
+            mode.as_str()
+        )),
+        total: Some(Size(total)),
+        piece_length: torrents.first().map(|t| Size(u64::from(t.piece_length))),
+        piece_count: torrents
+            .first()
+            .map(bench_swarm::TorrentUnderTest::piece_count),
+        endpoints: vec![target.to_string()],
+    };
+
+    let options = bench_swarm::Options {
+        target,
+        peers: args.peers,
+        duration: run_for,
+        connect_timeout: duration(&args.connect_timeout, "connect-timeout")?,
+        requests_in_flight: args.shared.concurrency.max(1),
+        disk_budget,
+        // Nothing is fetched in connect mode, so nothing is held and the
+        // directory holds only the generated torrents.
+        hold_dir: (mode == bench_swarm::Mode::Leech).then(|| root.clone()),
+        torrents,
+        mode,
+    };
+
+    let mut outcome = None;
+    if global.dry_run {
+        report.note("dry run: no connection was opened");
+    } else {
+        let recorder = Arc::new(recorder::Recorder::new(
+            warmup,
+            interval,
+            options.requests_in_flight,
+        ));
+        let runtime = crate::swarm::runtime()?;
+        // The sampler has to stop when the load does, not when the deadline
+        // does. A `join!` of the two runs the clock out even after every peer
+        // has finished, which divides the bytes by `--duration` instead of by
+        // how long the transfer took: 8 MiB moved in half a second was
+        // reported as 818 KiB/s over ten. `--duration` bounds the run; it is
+        // not the run's length.
+        let (found, samples) = runtime.block_on(async {
+            let load = bench_swarm::run(&options, &recorder);
+            tokio::pin!(load);
+            let mut samples = Vec::new();
+            let mut tick = tokio::time::interval(interval);
+            tick.tick().await;
+            let found = loop {
+                tokio::select! {
+                    outcome = &mut load => break outcome,
+                    _ = tick.tick() => samples.push(recorder.sample()),
+                }
+            };
+            (found, samples)
+        });
+        // One last sample, so the window between the final tick and the end
+        // of the run is in the series rather than thrown away. This is the
+        // third time a `bench` subcommand has dropped its last window; T-149
+        // and T-152 were the first two.
+        let last = recorder.sample();
+        renderer.event(env, "bench_sample", &last)?;
+        recorder.stop();
+        let found = found?;
+        for sample in &samples {
+            renderer.event(env, "bench_sample", sample)?;
+        }
+        // A leech load on loopback finishes in well under a second, so every
+        // byte can land inside the warmup and the measured window can be
+        // empty while the run plainly moved data. Guarding on "the window
+        // never opened" is not enough for that: the window opens on the first
+        // tick either way.
+        let measured = recorder.summary().bytes.0;
+        if !recorder.measured_anything() || (measured == 0 && found.bytes_received.0 > 0) {
+            report.note(format!(
+                "the load finished in {}ms, inside the {}ms warmup, so the whole run is the measured window",
+                recorder.elapsed().as_millis(),
+                warmup.as_millis()
+            ));
+            recorder.collapse_warmup();
+        }
+        report.series = recorder.series();
+        report.summary = recorder.summary();
+        for sample in &report.series {
+            report.environment.observe(&sample.process);
+        }
+        annotate(&mut report, &found, renderer, env);
+        outcome = Some(found.clone());
+        report.swarm = Some(found);
+    }
+
+    if temporary
+        && !args.keep
+        && let Err(e) = std::fs::remove_dir_all(&root)
+    {
+        renderer.warn(env, format!("could not remove {}: {e}", root.display()));
+    }
+
+    let met = match global.dry_run {
+        true => {
+            if output.fail_under.is_some() {
+                report.note("--fail-under was not applied: a dry run measures nothing");
+            }
+            true
+        }
+        false => report.apply_threshold(output.fail_under),
+    };
+    compare_against_baseline(&mut report, &output, renderer, env)?;
+    report.environment.finish();
+
+    // A piece that arrived and did not match the torrent's own hash is the
+    // target serving wrong data. That outranks a threshold, the way a
+    // scrambled block does in `bench disk`.
+    let wrong_data = outcome.as_ref().is_some_and(|o| o.pieces_failed > 0);
+    let nothing_connected = outcome
+        .as_ref()
+        .is_some_and(|o| o.peers_connected == 0 && o.peers_dialled > 0);
+    let code = match (global.dry_run, wrong_data, nothing_connected, met) {
+        (true, ..) => ExitCode::Success,
+        (_, true, ..) => ExitCode::HashMismatch,
+        (_, _, true, _) => ExitCode::NoUsableSources,
+        (_, _, _, false) => ExitCode::ThresholdNotMet,
+        _ => ExitCode::Success,
+    };
+    emit(&report, &output, renderer, env, code)
+}
+
+/// Turn every `--for` torrent into something the peers can ask for.
+fn declared_torrents(
+    args: &crate::cli::BenchSwarmArgs,
+    env: &mut Env,
+) -> Result<Vec<bench_swarm::TorrentUnderTest>> {
+    let mut out = Vec::with_capacity(args.for_torrents.len());
+    for path in &args.for_torrents {
+        let path = env.resolve(path);
+        let meta = Metainfo::read(&path)?;
+        let info = meta.info();
+        out.push(bench_swarm::TorrentUnderTest {
+            info_hash: meta.info_hash().0,
+            name: info.name.clone(),
+            piece_length: info.piece_length,
+            total_length: info.total_length(),
+            piece_hashes: info.pieces.clone(),
+        });
+    }
+    Ok(out)
+}
+
+/// Build `--torrents` info dictionaries the target will not recognise.
+///
+/// No payload is written for them. Nothing will ever fetch a piece of one, so
+/// nothing will ever check a piece hash, and the hashes only have to make each
+/// info hash distinct. They come from the torrent's position through a fixed
+/// generator rather than from randomness, so two runs with the same
+/// `--torrents` produce the same info hashes and a target's own logs can be
+/// read across runs.
+///
+/// The `.torrent` files are written out so a run is reproducible and so the
+/// operator can add one to a target and come back with `--for`.
+fn generated_torrents(
+    args: &crate::cli::BenchSwarmArgs,
+    root: &std::path::Path,
+    report: &mut Report,
+) -> Result<Vec<bench_swarm::TorrentUnderTest>> {
+    use bit_cli_core::torrent::bencode::{Value, encode};
+
+    if args.torrents == 0 {
+        return Err(Error::usage("--torrents cannot be zero"));
+    }
+    let total = size(Some(&args.payload_size), "payload-size")?.unwrap_or(0);
+    let piece_length = size(Some(&args.piece_size), "piece-size")?.unwrap_or(0);
+    if total == 0 {
+        return Err(Error::usage("--payload-size cannot be zero"));
+    }
+    if piece_length == 0 || piece_length > u64::from(u32::MAX) {
+        return Err(Error::usage("--piece-size has to be between 1 and 4 GiB"));
+    }
+    let piece_length = piece_length as u32;
+    let count = total.div_ceil(u64::from(piece_length));
+
+    let mut out = Vec::with_capacity(args.torrents);
+    let mut written = 0u64;
+    for index in 0..args.torrents {
+        let name = format!("bench-swarm-{index}.bin");
+        let mut pieces = Vec::with_capacity(count as usize * 20);
+        // A linear congruential generator seeded from the index: deterministic
+        // across runs, distinct across torrents, and not meant to be random.
+        let mut state = 0x2545_F491_4F6C_DD1Du64 ^ ((index as u64 + 1) << 32);
+        for _ in 0..count * 20 {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            pieces.push((state >> 33) as u8);
+        }
+        let mut info = BTreeMap::new();
+        info.insert(b"length".to_vec(), Value::Int(total as i64));
+        info.insert(b"name".to_vec(), Value::Bytes(name.clone().into_bytes()));
+        info.insert(
+            b"piece length".to_vec(),
+            Value::Int(i64::from(piece_length)),
+        );
+        info.insert(b"pieces".to_vec(), Value::Bytes(pieces));
+        let info = Value::Dict(info);
+        let info_bytes = encode(&info);
+        let info_hash = bit_cli_core::torrent::InfoHash::of(&info_bytes);
+
+        let mut root_dict = BTreeMap::new();
+        root_dict.insert(b"info".to_vec(), info);
+        root_dict.insert(
+            b"created by".to_vec(),
+            Value::Bytes(format!("bit-cli/{}", bit_cli_core::VERSION).into_bytes()),
+        );
+        let bytes = encode(&Value::Dict(root_dict));
+        let path = root.join(format!("{name}.torrent"));
+        std::fs::write(&path, &bytes).map_err(|e| {
+            bit_cli_core::error::from_io(e, format!("cannot write {}", path.display()))
+        })?;
+        written += bytes.len() as u64;
+
+        out.push(bench_swarm::TorrentUnderTest {
+            info_hash: info_hash.0,
+            name,
+            piece_length,
+            total_length: total,
+            // Deliberately empty. These hashes describe nothing, and carrying
+            // them would let a caller believe a piece could be checked against
+            // one.
+            piece_hashes: Vec::new(),
+        });
+    }
+    report.note(format!(
+        "{} generated torrent(s) written to {}, {written} bytes",
+        out.len(),
+        root.display(),
+    ));
+    Ok(out)
+}
+
+/// Turn the outcome into notes a reader acts on.
+fn annotate(
+    report: &mut Report,
+    outcome: &bench_swarm::Outcome,
+    renderer: &Renderer,
+    env: &mut Env,
+) {
+    if outcome.peers_connected < outcome.peers_dialled {
+        let refused = outcome.peers_dialled - outcome.peers_connected;
+        let classes: Vec<String> = outcome
+            .failures
+            .iter()
+            .map(|f| format!("{} {}", f.count, f.class))
+            .collect();
+        report.note(format!(
+            "{refused} of {} peers never connected: {}",
+            outcome.peers_dialled,
+            classes.join(", ")
+        ));
+    }
+    if outcome.peers_wrong_info_hash > 0 {
+        let note = format!(
+            "{} peers were answered with a different info hash than they asked about",
+            outcome.peers_wrong_info_hash
+        );
+        renderer.warn(env, &note);
+        report.note(note);
+    }
+    if outcome.pieces_failed > 0 {
+        let note = format!(
+            "{} completed pieces did not match the torrent's own hash",
+            outcome.pieces_failed
+        );
+        renderer.warn(env, &note);
+        report.note(note);
+    }
+    if outcome.pieces_dropped_over_budget > 0 {
+        report.note(format!(
+            "{} verified pieces were dropped because --disk-budget was full at {}",
+            outcome.pieces_dropped_over_budget,
+            bit_cli_core::units::format_size(outcome.disk_budget.0)
+        ));
+    }
+    if outcome.mode == bench_swarm::Mode::Leech && outcome.peers_unchoked == 0 {
+        report.note(
+            "no peer was ever unchoked, so no byte could be requested. The target has the torrent and is not serving it to these peers.",
+        );
+    }
+}
+
+/// Lowercase hex of a twenty byte hash.
+fn hex20(bytes: &[u8; 20]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// `bit-cli bench leech`: download a target and measure what it cost.
@@ -1797,33 +2180,103 @@ mod tests {
         assert!(error.contains("no web seed sources"), "{error}");
     }
 
-    /// `swarm` is the last one left, and it says which entry closes it rather
-    /// than pretending to work. `probe` was on this list until T-090 step 5,
-    /// which is why this is one case rather than a loop.
+    /// Every `bench` subcommand is built, so nothing is left to say "not
+    /// implemented". This is what that test became: the list itself, checked
+    /// against `clap`, so a subcommand added later without a body is caught by
+    /// the same case rather than by a reader noticing.
     #[test]
-    fn the_subcommands_that_are_not_built_name_their_todo_entry() {
-        let fixture = TorrentFixture::multi_file();
-        {
-            let subcommand = "swarm";
-            let (mut env, captured) = crate::env::Env::test(
-                &[
-                    "--json",
-                    "bench",
-                    subcommand,
-                    fixture.torrent.to_str().unwrap(),
-                ],
-                ".",
-            );
+    fn every_bench_subcommand_is_built() {
+        for subcommand in ["webseed", "leech", "seed", "disk", "swarm", "probe"] {
+            let (mut env, captured) =
+                crate::env::Env::test(&["--json", "bench", subcommand, "--help"], ".");
             let code = crate::run(&mut env);
-            assert_ne!(
+            assert_eq!(
                 code,
                 ExitCode::Success,
-                "bench {subcommand} claimed to work"
+                "bench {subcommand}: {}",
+                captured.err()
             );
-            let doc = captured.json().unwrap();
-            assert_eq!(doc["context"]["todo"], "T-090");
-            assert_eq!(doc["context"]["subcommand"], subcommand);
         }
+    }
+
+    /// `bench swarm` is the one subcommand that loads a machine other than
+    /// this one, so its target has to be an address and nothing else. A path
+    /// is the mistake worth catching, because every other `bench` subcommand
+    /// takes one in that position.
+    #[test]
+    fn a_swarm_target_that_is_not_an_address_is_refused() {
+        let fixture = TorrentFixture::multi_file();
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "bench",
+                "swarm",
+                fixture.torrent.to_str().unwrap(),
+                "--duration",
+                "1s",
+            ],
+            ".",
+        );
+        assert_eq!(crate::run(&mut env), ExitCode::Usage);
+        assert!(captured.err().contains("HOST:PORT"), "{}", captured.err());
+    }
+
+    /// The target is required, and it is the only thing dialled. `clap` gives
+    /// the first half; this is the case that says a missing target is a usage
+    /// error rather than a run against a default.
+    #[test]
+    fn a_swarm_with_no_target_refuses_to_run() {
+        let (mut env, captured) = crate::env::Env::test(&["bench", "swarm"], ".");
+        assert_eq!(crate::run(&mut env), ExitCode::Usage);
+        assert!(captured.err().contains("TARGET"), "{}", captured.err());
+    }
+
+    /// A dry run resolves the target, generates the torrents, and opens no
+    /// socket, which is what makes it safe to point at a real host to see
+    /// what a run would do.
+    #[test]
+    fn a_swarm_dry_run_opens_no_connection() {
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "--json",
+                "--dry-run",
+                "bench",
+                "swarm",
+                "127.0.0.1:1",
+                "--peers",
+                "4",
+                "--torrents",
+                "2",
+                "--payload-size",
+                "4MiB",
+                "--piece-size",
+                "1MiB",
+                "--duration",
+                "1s",
+            ],
+            ".",
+        );
+        assert_eq!(
+            crate::run(&mut env),
+            ExitCode::Success,
+            "{}",
+            captured.err()
+        );
+        let doc = captured.json().unwrap();
+        assert_eq!(doc["kind"], "swarm");
+        assert_eq!(doc["target"]["source"], "127.0.0.1:1");
+        assert_eq!(doc["parameters"]["peers"], 4);
+        assert_eq!(doc["parameters"]["torrents"], 2);
+        assert!(
+            doc["swarm"].is_null(),
+            "a dry run measured something: {doc}"
+        );
+        let notes = doc["notes"].as_array().unwrap();
+        assert!(
+            notes.iter().any(|n| n
+                .as_str()
+                .is_some_and(|s| s.contains("no connection was opened"))),
+            "{doc}"
+        );
     }
 
     #[test]

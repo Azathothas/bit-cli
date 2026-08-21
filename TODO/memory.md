@@ -10,7 +10,7 @@ Source:      https://github.com/ikatson/rqbit/issues/525 (open)
 Category:    memory
 Priority:    P0
 Effort:      L
-Status:      open
+Status:      partial
 
 Problem:     A reporter running `librqbit` inside a long-lived server saw both
              RSS and open descriptors climb until the process failed. It
@@ -27,8 +27,29 @@ Acceptance:  `scripts/soak.ps1` writes `bench/soak-<timestamp>.csv` with the
              three series, and this entry records the slope of each over six
              hours.
 
+**Where this stands, 2026-08-21.** Read this first; the rest of the entry is
+the history in order, and its earlier summaries were true when they were
+written.
+
+- **Descriptors: disproved.** An idle seeder holds exactly 189 handles across
+  533 samples over 4.6 hours, and a loaded one shows no trend. `CLOSE_WAIT` is
+  zero at all 1,064 samples across both runs.
+- **Memory: reproduced, quantified, linear.** 0.804 MiB an hour under `steady`,
+  r squared 0.73 over 525 samples, and the last three hours give the same
+  slope. Not a settling curve.
+- **Open, on attribution rather than on wall clock.** What the byte is charged
+  to is not yet separable, because completions ran at a constant rate for the
+  whole run. The next measurement is two two-hour runs at different leech
+  rates, not another six-hour one.
+
+The evidence and the fits are in
+[the 2026-08-21 section](#session-of-2026-08-21-the-question-is-answered-and-the-answer-is-linear).
+
+---
+
 **The harness is built and a 1.76 hour run is recorded. The six hour run the
-acceptance asks for has not been completed, so this stays open.**
+acceptance asks for has not been completed, so this stays open.** (2026-08-20;
+superseded by the section above.)
 
 `scripts/soak.ps1` samples one long-lived `bit-cli seed` every
 `-SampleSeconds` and writes `bench/soak-<timestamp>.csv` with resident memory,
@@ -142,6 +163,10 @@ is a series that rises and falls rather than one that climbs. Two and a half
 hours cannot separate a settling curve from a leak, which is exactly what the
 six hour run is for and why this stays open.
 
+*That reading was wrong, and the next section says why.* The maximum above the
+last reading is one thread burst, not the series changing direction. Excluding
+it the slope is 0.804 MiB an hour at an r squared of 0.73, and it is a line.
+
 Both runs also shared the machine with a full `cargo build --release` and the
 test suite, several times over. That is worth knowing when reading the RSS
 series: the leech cycles compete with whatever else is running.
@@ -190,6 +215,201 @@ when the session ended, so its files are not committed).
 The restarted run is the one to look for: if `.tmp/soak-steady` and its
 bench files are still on the machine, read the JSON before starting another,
 because a run that reached five hours is worth more than a fresh one.
+
+## Session of 2026-08-21: the question is answered, and the answer is linear
+
+The pair started at 2026-08-21T01:24:28Z ran **4.61 hours of the six** and were
+killed with the session, not by a defect. Between them they hold 1,064 samples,
+which is more than the six hour run was ever going to need. Both are committed:
+
+- `bench/soak-20260821T012428252Z.csv`, `steady`, 16 MiB payload, two leechers,
+  531 samples over 4.605 hours, 1,060 completed leech cycles.
+- `bench/soak-20260821T012429347Z.csv` and `.json`, `idle`, the control, 533
+  samples over 4.617 hours.
+
+**Six hours was not needed, and the reason is in the data rather than in the
+schedule.** The discrimination the entry asks for is settled by comparing the
+slope over the whole run against the slope over its last three hours. If those
+agree, the series is a line. If the second is smaller, it is settling. They
+agree, and they already agreed at three hours.
+
+### The steady run
+
+Fitted against elapsed hours, over the 525 samples that are not the one thread
+burst described below:
+
+| model | fit | r squared | rmse (MiB) |
+| --- | --- | --- | --- |
+| **linear in `t`** | 14.886 + **0.804** MiB/h | **0.733** | **0.652** |
+| logarithmic, `log(1+t)` | 14.322 + 2.207 | 0.673 | 0.722 |
+| square root, `sqrt(t)` | 13.857 + 2.018 | 0.673 | 0.723 |
+| saturating, `1-exp(-t/2h)` | 14.300 + 4.016 | 0.645 | 0.752 |
+| saturating, `1-exp(-t/5h)` | 14.626 + 6.105 | 0.712 | 0.678 |
+| saturating, `1-exp(-t/8h)` | 14.721 + 8.423 | 0.723 | 0.665 |
+
+Linear wins outright. Every saturating model fits worse, and they improve
+monotonically as the time constant grows, which is the signature of a curve
+that does not bend inside the window: at eight hours the exponential is a
+straight line over four and a half. The last three hours on their own give
+**0.744 MiB/h at r squared 0.52**, against 0.804 over the whole run. The slope
+does not decay.
+
+So the answer to the open question is **linear**. Not a settling curve, and not
+an allocator holding pages and then releasing them.
+
+The half-hourly shape, which is what a single whole-run slope hides:
+
+| window | min | median | max | mean threads | mean handles |
+| --- | --- | --- | --- | --- | --- |
+| 0.0-0.5 h | 15.00 | 15.62 | 16.49 | 26.9 | 216 |
+| 0.5-1.0 h | 14.43 | 14.74 | 16.03 | 26.6 | 216 |
+| 1.0-1.5 h | 14.91 | 15.53 | **41.70** | 39.1 | 252 |
+| 1.5-2.0 h | 15.29 | 16.34 | 20.63 | 27.9 | 219 |
+| 2.0-2.5 h | 15.49 | 17.17 | 23.72 | 28.2 | 221 |
+| 2.5-3.0 h | 15.55 | 17.40 | 17.77 | 26.9 | 217 |
+| 3.0-3.5 h | 15.74 | 17.59 | 18.73 | 26.8 | 217 |
+| 3.5-4.0 h | 16.08 | 17.94 | 18.62 | 26.7 | 216 |
+| 4.0-4.5 h | 16.05 | 18.61 | 19.17 | 27.0 | 217 |
+
+All figures MiB. The floor rises from 14.43 to 16.05 and the median from 14.74
+to 18.61, over three and a half hours. The rise is in the level, not only in
+the peaks.
+
+### The one spike, and why it is not the trend
+
+Resident memory's maximum of 41.70 MiB, the handle maximum of 1,150, and the
+thread maximum of 352 are **all the same sample**, number 130, at 1.107 hours.
+Resident memory's 99th percentile is 19.39 MiB, so the maximum is 2.15 times
+the 99th. Three samples in the whole run are above 100 threads: 1.11, 1.12, and
+2.02 hours.
+
+The three series move together. `corr(threads, handles)` is **0.9984** and
+`corr(threads, rss)` is 0.767, and a straight fit of resident memory against
+thread count gives **14.645 MiB + 79.5 KiB per thread**, which is the size of a
+thread's committed stack. So a handle spike is a thread spike, a thread spike
+is a memory spike, and all three retire. That is a burst of blocking work, not
+growth.
+
+This is why the whole-run slope including the spikes is 0.732 MiB/h at r
+squared 0.27 and the slope excluding them is 0.804 at r squared 0.73. Removing
+three samples makes the trend clearer, not weaker, which is the opposite of
+what removing evidence for a trend would do.
+
+### The idle control
+
+The control is what makes the steady number mean anything.
+
+| series | over 533 samples and 4.617 hours |
+| --- | --- |
+| `handles` | **189 at every sample.** Minimum 189, maximum 189. |
+| `threads` | 21 from hour two onward, no variation |
+| `tcp_total` | 1 at every sample, which is the listener |
+| `tcp_close_wait` | **0 at every sample** |
+| `rss_bytes` | 13.75 MiB falling to 12.02, then flat within 0.03 MiB for the last 2.5 hours |
+| `peak_rss_bytes` | last rose at hour 1, then flat |
+
+A seeder with no tracker and nothing connecting does not move. So the sampler
+is not the source, the session's own timers are not the source, and every
+number in the `steady` run is the load.
+
+### What this closes and what it does not
+
+- **The descriptors half of this entry is disproved.** `idle` holds exactly 189
+  handles across 533 samples. `steady` is -2.18 an hour at an r squared of
+  0.003, which is noise. `CLOSE_WAIT` is **zero at all 1,064 samples across
+  both runs**, so [T-020](peers.md) needs the churn shape and does not appear
+  under a deployment-shaped load. That was already the reading at 2.76 hours
+  and 4.6 hours does not change it.
+- **The memory half reproduces and is now quantified.** 0.804 MiB an hour under
+  `steady`, linear, r squared 0.73 over 525 samples. That is 19.3 MiB a day and
+  579 MiB over thirty if it holds, which is the shape this entry's report
+  describes.
+- **What is not answered is what the byte is charged to.** Leech completions
+  run at a constant 228.5 an hour at an r squared of 0.9999 for the whole run,
+  so elapsed time and completed work are collinear in this data and cannot be
+  separated by it. 0.804 MiB an hour and 3.6 KiB per completed leech fit the
+  same points exactly as well.
+
+**The next measurement is not a longer run.** It is two shorter ones at
+different leech rates, because that is the only thing that separates per-hour
+from per-download:
+
+```powershell
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 120 -Workload steady -PayloadMiB 16 -Leechers 1 -Root .tmp/soak-rate1
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 120 -Workload steady -PayloadMiB 16 -Leechers 4 -Root .tmp/soak-rate4
+```
+
+Four times the completion rate against the same wall clock. If the MiB per hour
+quadruples, it is per download and the leech path is where to look. If it does
+not move, it is per hour and the announce and timer paths are. Two hours is
+enough for both, because the discrimination above needed three.
+
+### The ceilings, set
+
+The slopes above are now the reference, so `scripts/soak.ps1` can judge rather
+than record. These are the values a regression run should carry:
+
+```powershell
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 120 -Workload steady -PayloadMiB 16 `
+  -RssCeilingMiBPerHour 2 -HandleCeilingPerHour 32 -CloseWaitCeilingPerHour 1
+```
+
+- `-RssCeilingMiBPerHour 2` is 2.5 times the measured 0.804. Above it something
+  new is happening; at it, this entry's own finding is not what fails the run,
+  which is the [check-close-wait.ps1](../scripts/check-close-wait.ps1) rule.
+- `-HandleCeilingPerHour 32` against a measured slope of zero in `idle` and
+  -2.18 in `steady`. It has to clear the thread bursts, which reach 1,150
+  handles for two samples and come straight back.
+- `-CloseWaitCeilingPerHour 1` against zero at 1,064 samples. Anything at all
+  here is [T-020](peers.md) arriving under a load that has never shown it.
+
+Reproduce the analysis from the committed CSVs:
+
+```powershell
+pwsh -NoProfile -Command "Import-Csv bench/soak-20260821T012428252Z.csv | Where-Object { $_.iso -match '^\d{4}-' } | Measure-Object -Property rss_bytes -Minimum -Maximum -Average"
+```
+
+### One harness defect this run found: T-157
+
+The `steady` run's JSON is **4,833 NUL bytes**. Its CSV survived with all 531
+samples because a CSV is appended and a summary is rewritten. The whole point
+of rewriting the summary after every sample is that a killed run still leaves
+its slopes, and the kill destroyed exactly that. Written up as
+[T-157](#t-157-a-killed-soak-destroys-the-summary-it-was-rewriting) below, and
+fixed.
+
+### T-157 A killed soak destroys the summary it was rewriting
+
+Source:      `bench/soak-20260821T012428252Z.json`, 2026-08-21
+Category:    memory
+Priority:    P2
+Effort:      S
+Status:      **done**
+
+Problem:     `scripts/soak.ps1` rewrote `bench/soak-<timestamp>.json` with
+             `Set-Content` straight onto the path. That truncates first and
+             fills after, so a process killed between the two leaves a file of
+             NUL bytes rather than the previous summary.
+Relevance:   The rewrite exists so a killed run leaves its slopes. Doing it
+             non-atomically means a killed run leaves less than nothing: a file
+             that parses as an object with every field empty.
+Approach:    Write to `<path>.tmp` and rename over the target. A rename within
+             one directory is atomic on both NTFS and POSIX.
+Acceptance:  A short run writes the summary, leaves no `.tmp` behind, and the
+             summary parses.
+
+The `steady` run of 2026-08-21T01:24:28Z is the worked example. 4.605 hours and
+531 samples in the CSV, 4,833 NUL bytes in the JSON, and the slopes in this
+entry had to be recomputed from the CSV. `Set-Content` now writes
+`$jsonPath.tmp` and `Move-Item -Force` renames it over `$jsonPath`.
+
+Acceptance, run:
+
+```powershell
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 1 -Workload idle -Root .tmp/soak-atomic-check
+```
+
+`complete=True`, 2 samples, and zero `bench/*.tmp` left behind.
 
 ### T-041 Per-source window cache is bounded but not measured
 

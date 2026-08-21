@@ -456,17 +456,17 @@ and none of them is what `--web-seed-connections` does.
 
 ### T-002 Measure Candidate A-prime, the in-process virtual peer
 
-Source:      PROMPT.md section 2.5, `superseedr/src/networking/web_seed_worker.rs`
+Source:      PROMPT.md section 2.5
 Category:    webseed
 Priority:    P1
 Effort:      L
 Status:      **done**
 
-Problem:     `superseedr` implements the same "a web seed is a peer"
-             abstraction without a socket: the worker talks to the torrent
-             manager over channels. If that shape is reachable through
-             `librqbit`'s public API, Candidate A's loopback hop and second
-             copy are removable with no fork.
+Problem:     The same "a web seed is a peer" abstraction is implementable
+             without a socket: the worker talks to the torrent manager over
+             channels. If that shape is reachable through `librqbit`'s public
+             API, Candidate A's loopback hop and second copy are removable with
+             no fork.
 Relevance:   It is the cheapest large win available, if it is available.
 Approach:    Establish first whether `librqbit` 9.0.0 can accept a peer that is
              not a socket. `Session::add_torrent` takes `initial_peers` as

@@ -15,10 +15,11 @@ unblock it.
 
 Built from the upstream `rqbit` corpus fetched on 2026-08-19 with `gh`:
 262 issues (91 open, 171 closed) and 346 pull requests, categorised by
-`scripts/triage.jq`. What every reference tree was read for, and what was
-learned from each with file and line citations, is in `reference/README.md`;
-`reference-map.md` keeps the licence determinations, which have to survive that
-directory being deleted.
+`scripts/triage.jq`. `reference-map.md` keeps the licence determination for
+every tree that was read, and records the four that were deleted on 2026-08-21
+because their licence is incompatible with MIT. **No entry here depends on a
+tree that is gone**: what each one needed is written into the entry, which is
+what [T-122](reference-map.md) closed.
 
 Category counts from the triage, which is why the files are sized the way they
 are: bep 66, seeding 48, trackers 41, peers 40, windows 38, disk-io 37,
@@ -79,6 +80,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-036](performance.md) | P0 | paths | **done** | A multi-file torrent with one file lands without its directory |
 | [T-037](performance.md) | P1 | performance | **done** | A run stalls for minutes, roughly once in fifty |
 | [T-040](memory.md) | P0 | memory | partial | Memory and descriptors grow without bound over a long run |
+| [T-157](memory.md) | P2 | memory | **done** | A killed soak destroys the summary it was rewriting |
 | [T-041](memory.md) | P2 | memory | open | Per-source window cache is bounded but not measured |
 | [T-042](memory.md) | P1 | memory | **done** | Peak RSS is not captured in any report |
 | [T-050](dht.md) | P2 | dht | open | The DHT cache costs disk I/O even when nothing is running |
@@ -105,7 +107,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-085](create-seed.md) | P1 | create | **done** | Creation determinism is not proven across platforms |
 | [T-090](bench.md) | P0 | bench | partial | bit-cli bench is not implemented |
 | [T-091](bench.md) | P0 | bench | **done** | Bench reports do not capture their environment |
-| [T-092](bench.md) | P1 | bench | open | bench swarm has no synthetic load generator |
+| [T-092](bench.md) | P1 | bench | partial | bench swarm has no synthetic load generator |
 | [T-093](bench.md) | P2 | bench | **done** | --baseline comparison is not implemented |
 | [T-094](bench.md) | P2 | bench | open | Trace output has no measured cost |
 | [T-148](bench.md) | P2 | bench | **done** | The peer probe test asserted an exit code inside its own retry loop |
@@ -133,10 +135,13 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-154](cli-surface.md) | P2 | cli | open | A Metalink named by URL is not recognised |
 | [T-155](cli-surface.md) | P3 | cli | open | --hash-check-only drops the metalink report |
 | [T-156](cli-surface.md) | P3 | cli | open | A dry run writes a different shape under the same document kind |
+| [T-158](cli-surface.md) | P2 | cli | open | Regenerating the schema deletes fields the sample did not produce |
+| [T-159](cli-surface.md) | P3 | cli | open | Subcommand flags are filed under "Report options" in the help |
+| [T-160](cli-surface.md) | P3 | ci | open | One lib test failed once and has not been seen again |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
-| [T-122](reference-map.md) | P2 | licensing | open | reference/ is not deleted at the end of Phase B |
+| [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
 | [T-130](multi-source.md) | P1 | webseed | **done** | A source cannot be told which statuses are worth retrying |
 | [T-131](multi-source.md) | P1 | bench | **done** | The loopback file server cannot simulate a signed URL |
 | [T-132](multi-source.md) | P1 | performance | open | The swarm cannot be rate limited separately from HTTP sources |
@@ -161,7 +166,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-115 items: 105 to work through, and 10 deferred to Phase C. Twenty-eight were
+119 items: 109 to work through, and 10 deferred to Phase C. Thirty-two were
 added by measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -233,6 +238,14 @@ could report the size comparison reports nothing. And `download --dry-run`
 writes `kind: "download"` with a different shape, which is why the schema
 generator does not sample it and its fields are undocumented.
 
+T-157 came out of the soak that answers T-040. `scripts/soak.ps1` rewrites its
+summary after every sample so a killed run still leaves its slopes, and it did
+that with a `Set-Content` straight onto the path. The `steady` run of
+2026-08-21T01:24:28Z was killed mid-rewrite and left **4,833 NUL bytes** where
+its slopes should have been. Its CSV survived with all 531 samples, because a
+CSV is appended and a summary is rewritten. The whole value of the rewrite was
+in the half that was not atomic.
+
 **CI run 32444424026 is green on every job**, which is the first time the whole
 matrix has been. It took four rounds and each one uncovered the next: the macOS
 link failure hid six `sysinfo` failures, which hid T-152, which hid one
@@ -240,13 +253,25 @@ per-platform assertion that turned out to be the test rather than the code. A
 red job does not cost one defect, it costs every defect behind it, and that is
 the argument for never leaving one.
 
-| Priority | Open | Partial | Blocked | Done |
-| --- | --- | --- | --- | --- |
-| P0 | 1 | 2 | 0 | 8 |
-| P1 | 4 | 0 | 0 | 40 |
-| P2 | 25 | 1 | 1 | 10 |
-| P3 | 13 | 0 | 0 | 0 |
-| Phase C | 10 deferred | | | |
+**Two things a measurement disproved on 2026-08-21, and both are the same
+mistake.** A `bench swarm` run reported zero peers handshaked in every leech
+case and read as a broken handshake. The handshake was fine: the acceptance
+script ran the connect load first against a shared seeder, and the connect load
+leaves the target unable to handshake at all. And the `steady` soak's resident
+memory looked like a 0.73 MiB/h slope at an r squared of 0.27, which is noise.
+Removing the three samples that are one thread burst gives 0.804 MiB/h at an r
+squared of 0.73, which is a trend. In both cases the first reading was of the
+fixture rather than of the thing. That is the same lesson T-032 and T-141 wrote
+down, arrived at twice more.
+
+| Priority | Open | Partial | Blocked | Done | Total |
+| --- | --- | --- | --- | --- | --- |
+| P0 | 1 | 2 | 0 | 8 | 11 |
+| P1 | 3 | 1 | 0 | 40 | 44 |
+| P2 | 25 | 1 | 1 | 12 | 39 |
+| P3 | 15 | 0 | 0 | 0 | 15 |
+| Phase C | | | | 10 deferred | 10 |
+| **All** | **44** | **4** | **1** | **60** | **119** |
 
 `blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4
@@ -283,8 +308,25 @@ item eight is the operator's own list, and item nine is Metalink.
    reads rather than writes. `bench probe` is a one-shot reachability and
    capability check against a peer address or an HTTP endpoint: the handshake,
    the reserved bytes, the extended handshake, and what the peer volunteers,
-   or the status, the range support, and the TLS parameters. `swarm` is the
-   one still unbuilt, and it says so.
+   or the status, the range support, and the TLS parameters. **Every one of the
+   six subcommands is now built**, which is what `every_bench_subcommand_is_built`
+   asserts against `clap`.
+
+   [T-092](bench.md) is **partial** and is the last of T-090. `bench swarm` has
+   both its loads. Without `--for` it generates info hashes the target does not
+   have and measures the accept path; with `--for` its synthetic peers leech a
+   torrent the target serves, check every piece against the torrent's own
+   hashes, and hold what they verified once between them. Measured against
+   `bit-cli seed`: **333.33 MiB/s at one peer, 666.67 at four, 941.18 at
+   sixteen**, so the target's aggregate stops scaling between four and sixteen
+   rather than falling over. `pwsh scripts/check-swarm.ps1` drives nine cases.
+
+   It does not close, on one acceptance clause and two unbuilt halves.
+   `--disk-budget` bounds the bytes written and not the bytes on disk, because
+   a held piece is written at its own offset: a 2 MiB budget leaves a 4.75 MiB
+   file. A synthetic peer keeps its pieces and does not serve them, so the load
+   is a hundred leeches rather than a swarm. And the case that proves no peer
+   but the target is ever dialled is not written yet.
 4. [T-001](webseed.md) is **done**, and so is [T-006](webseed.md).
    `scripts/bench-webseed.ps1` takes the number in four stages so the cost is
    attributed rather than asserted, and it was run twice: on loopback and
@@ -368,10 +410,9 @@ item eight is the operator's own list, and item nine is Metalink.
 7. The long-run failures. [T-017](disk-io.md), [T-030](performance.md),
    [T-021](peers.md), [T-031](performance.md), [T-037](performance.md), and
    [T-138](peers.md) are **done**. [T-020](peers.md) is the one open P0 left,
-   and [T-040](memory.md) is partial: it needs six hours of wall clock and
-   nothing else. It is also the one item where the work is waiting rather than
-   thinking, so it is the first thing a session starts. Measure before theorising: every one of these
-   closed that way, and every time the answer was not what the entry
+   and [T-040](memory.md) is partial: its question is answered and what is left
+   is attribution, not wall clock. Measure before theorising: every one of
+   these closed that way, and every time the answer was not what the entry
    predicted.
 
    [T-021](peers.md) does both things its acceptance allows, and which one
@@ -395,9 +436,17 @@ item eight is the operator's own list, and item nine is Metalink.
    half the time, accumulating linearly, released by later traffic and never
    by time. `--max-handles` bounds it with a loud exit 16.
 
-   What the soak adds: `CLOSE_WAIT` was zero at every sample of a 2.26 hour
-   `steady` run and of a 2.76 hour `idle` one, so this needs the churn shape
-   and does not appear under a deployment-shaped load.
+   What the soak adds: `CLOSE_WAIT` is zero at **every one of 1,064 samples**
+   across a 4.605 hour `steady` run and a 4.617 hour `idle` one, so this needs
+   the churn shape and does not appear under a deployment-shaped load.
+
+   What `bench swarm` adds is worse than a socket count. While the pending set
+   is full the target **cannot complete a handshake for any info hash,
+   including one it is serving**, and it goes on reporting itself as seeding.
+   Leech one peer, run the connect load, leech again against the same seeder:
+   8,388,608 bytes, then 100 connected and 0 handshaked, then **connected, 0
+   handshaked, 0 bytes**. A stranded socket is a resource. A listener that
+   accepts and never answers is an outage no health check sees.
 
    [T-017](disk-io.md) rules the disk out rather than in. `bit-cli bench disk`
    writes the same bytes through the same storage from N threads with no
@@ -434,21 +483,32 @@ item eight is the operator's own list, and item nine is Metalink.
    and in every `progress` event. [T-011](disk-io.md) removed one of the two
    things [T-040](memory.md) names: descriptors are now bounded by a flag.
 
-   [T-040](memory.md) is **partial** and is the first thing to start, because
-   it is six hours of wall clock that nothing else has to wait for.
-   `scripts/soak.ps1` samples a long-lived seeder under one of six workloads,
-   writes the three series to `bench/soak-<timestamp>.csv`, and rewrites
-   `bench/soak-<timestamp>.json` after every sample, so a run that is killed
-   still leaves its slopes. Three partial runs are recorded in the entry. The
-   `idle` control is the useful new one: **188 handles at every one of 315
-   samples over 2.76 hours**, resident memory flat or slightly falling, and
-   `CLOSE_WAIT` zero. So the descriptors half of this entry does not reproduce
-   at all, and whatever the `steady` load does is the load. Under `steady`,
-   over 2.26 hours: `CLOSE_WAIT` zero at all 258 samples, handles noise, and
-   resident memory **0.93 MiB an hour at an r squared of 0.65** with a maximum
-   above its last reading, which is a series that rises and falls rather than
-   one that climbs. Six hours is what separates a settling curve from a leak.
-   Both commands are in the entry.
+   [T-040](memory.md) is **partial**, and the open question it carried is
+   answered. `scripts/soak.ps1` samples a long-lived seeder under one of six
+   workloads and writes the series to `bench/soak-<timestamp>.csv`. The pair
+   started on 2026-08-21 ran 4.6 of their 6 hours and hold 1,064 samples
+   between them, which turned out to be more than the question needed.
+
+   **The descriptors half is disproved.** The `idle` control holds exactly
+   **189 handles at every one of 533 samples**, one TCP socket, and 21 threads,
+   with resident memory flat within 0.03 MiB over its last 2.5 hours. Nothing
+   moves when nothing is asked of it, so the sampler and the session timers are
+   ruled out and every number in the `steady` run is the load.
+
+   **The memory half reproduces and is linear.** 0.804 MiB an hour at an r
+   squared of 0.73 over 525 samples, and the last three hours alone give 0.744
+   at 0.52, so the slope does not decay. Linear beats logarithmic, square root,
+   and every saturating exponential; the best saturating fit needs a time
+   constant of eight hours, which over a four and a half hour window is a
+   straight line. So: not a settling curve, and not an allocator holding pages.
+
+   **Six hours would not have added the answer.** The discrimination is the
+   whole-run slope against the last-three-hours slope, and those agreed at
+   three hours. What is missing is not a longer run but two shorter ones at
+   different leech rates: completions run at a constant 228.5 an hour, so
+   elapsed time and completed work are collinear and 0.804 MiB per hour fits
+   these points exactly as well as 3.6 KiB per download. Both commands, and the
+   three ceilings the slopes now justify, are in the entry.
 8. [multi-source.md](multi-source.md), the operator's five scenarios about
    pointing several kinds of source at one payload. Read that file before
    starting any of T-130 to T-143: its first part records which scenarios

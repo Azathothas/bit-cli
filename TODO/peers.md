@@ -129,12 +129,49 @@ the script does assert, and what will now fail the run, is the listener
 surviving, so defect one cannot come back unnoticed.
 
 
-**What the soak adds, 2026-08-20.** `CLOSE_WAIT` was **zero at every one of
-258 samples** over a 2.26 hour `steady` run and at every one of 315 samples
-over a 2.76 hour `idle` one, with handles flat in both. So this needs the
-churn shape: connections that close before they handshake. A seeder under a
-deployment-shaped load, with real downloads and a tracker announcing, strands
-nothing. See [T-040](memory.md) for the runs.
+**What the soak adds, 2026-08-20, extended 2026-08-21.** `CLOSE_WAIT` is
+**zero at every one of 1,064 samples** across a 4.605 hour `steady` run and a
+4.617 hour `idle` one, with handles flat in both and exactly 189 at every
+`idle` sample. So this needs the churn shape: connections that close before
+they handshake. A seeder under a deployment-shaped load, with real downloads
+and a tracker announcing, strands nothing over four and a half hours. See
+[T-040](memory.md) for the runs.
+
+**The stranding also stops the target serving, 2026-08-21.** This was known as
+a socket count. It is worse than that: while the pending set is full the target
+**cannot complete a handshake for any info hash, including one it is
+serving**, and it goes on reporting itself as seeding. Found by
+[T-092](bench.md)'s acceptance, which used one seeder for every case and read
+as a broken handshake in `bench swarm` until the order was changed.
+
+Three runs against one `bit-cli seed`, from
+`bench/swarm-20260821T063418798Z.json`, case `listener_poisoned`:
+
+| step | connected | handshaked | bytes |
+| --- | --- | --- | --- |
+| `bench swarm <T> --for p.torrent --peers 1` | 1 | 1 | 8,388,608 |
+| `bench swarm <T> --peers 100 --torrents 4` | 100 | 0 | 0 |
+| `bench swarm <T> --for p.torrent --peers 1` | 1 | **0** | **0** |
+
+99 of the 100 ended in `handshake_timeout` and one in
+`closed_before_handshake`, and `seeder_still_alive` is true at the end. So the
+target accepts the TCP connection, answers no handshake, and never says so.
+
+That changes what this entry costs. A stranded socket is a resource; a
+listener that accepts and never answers is an outage that no health check
+looking at the process, the port, or the log will see. The `--max-handles`
+ceiling carried here is still the only mitigation, and it now has a second
+reason to exist.
+
+Reproduce:
+
+```powershell
+pwsh -NoProfile -File scripts/check-swarm.ps1
+```
+
+Case `listener_poisoned`, which carries `judged: false` because this entry is
+open and an acceptance script does not fail the build for a defect that is
+already recorded.
 
 ### T-021 A temporary network drop stops the download permanently
 

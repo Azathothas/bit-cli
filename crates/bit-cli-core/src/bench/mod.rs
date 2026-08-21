@@ -23,6 +23,7 @@ pub mod probe;
 pub mod recorder;
 pub mod render;
 pub mod report;
+pub mod swarm;
 pub mod webseed;
 
 pub use recorder::{Observation, Recorder};

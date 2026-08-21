@@ -150,7 +150,7 @@ Acceptance:  Each verb works against a running daemon.
 
 ### T-208 status --follow against a live session
 
-Source:      decision 7.4, `superseedr/src/integrations/cli.rs`
+Source:      decision 7.4
 Category:    phase-c
 Priority:    P3 within Phase C
 Effort:      M
@@ -162,9 +162,10 @@ Problem:     `bit-cli` can stream progress for a download it is running itself
 Relevance:   The distinction matters and is easy to blur: a streaming mode a
              single foreground invocation produces itself is Phase A;
              following someone else's session is Phase C.
-Approach:    `superseedr`'s `StatusCommandMode { Snapshot, Follow, SetInterval,
-             Stop }` is the shape worth copying: one subcommand serving both a
-             one-shot query and a stream.
+Approach:    One subcommand serving both a one-shot query and a stream, with
+             the mode a value rather than a separate verb: snapshot, follow,
+             set the interval, stop. That shape keeps `--follow` from becoming
+             a second command that drifts from the first.
 Acceptance:  `bit-cli status --follow` streams events from a daemon.
 
 ### T-209 Watch directories, RSS, cluster mode, and the control service
@@ -175,9 +176,9 @@ Priority:    P3 within Phase C
 Effort:      XL
 Status:      deferred
 
-Problem:     Everything in `superseedr` that needs a running process: RSS
-             ingestion, watch directories, Docker and VPN integration, cluster
-             mode, and the control service.
+Problem:     Everything that needs a running process: RSS ingestion, watch
+             directories, Docker and VPN integration, cluster mode, and the
+             control service.
 Relevance:   Recorded so they are not rediscovered as Phase B ideas.
 Approach:    All need the daemon.
 Acceptance:  Deferred as a group.

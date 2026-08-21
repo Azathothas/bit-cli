@@ -4,10 +4,15 @@
 determination for every project it reads, copies from, or depends on, and the
 per-subsystem provenance for anything learned from a copyleft reference.
 
-Determinations were made on 2026-08-19, and extended on 2026-08-21, against the
-trees under `reference/`, which is gitignored and is deleted in Phase B.
-`reference/README.md` is what those trees were read for and what was learned;
-this file is what may be done with them.
+Determinations were made on 2026-08-19 and extended on 2026-08-21, against the
+trees under `reference/`, which is gitignored and untracked. This file is what
+may be done with them, and it stands on its own: nothing tracked depends on
+anything under `reference/`.
+
+**On 2026-08-21 the four trees whose licence is incompatible with MIT were
+deleted.** They were read for shape and nothing was taken from any of them.
+What that decision means, and how the entries that used to cite them now
+stand, is in [reference-map.md](reference-map.md), T-122.
 
 ---
 
@@ -16,29 +21,37 @@ this file is what may be done with them.
 | Project | License | May copy code? | Verified from |
 | --- | --- | --- | --- |
 | `kist` | MIT OR Apache-2.0 | Yes, under MIT | `LICENSE-MIT` in the fork base |
-| FluxDown | AGPL-3.0 | **No** | its `LICENSE` |
-| superseedr | GPL-3.0-or-later | **No** | its `LICENSE`, SPDX headers on every file |
 | intermodal | CC0-1.0 | Yes, adapt directly | its `LICENSE` |
 | fx-torrent | Apache-2.0 | Yes, with the notice terms | its `LICENSE`, `license = "Apache-2.0"` in `Cargo.toml` |
-| yip | AGPL-3.0-or-later | **No** | its `LICENSE`, `license = "AGPL-3.0-or-later"` in `Cargo.toml` |
-| pluto-bittorrent | **none stated** | **No** | no `LICENSE` file in the repository |
-
-Three additions on 2026-08-21, and two of them tighten rather than loosen.
+| aria2 documentation | documentation | Quote sparingly, with attribution | the manual's own terms |
+| `rqbit` issue and PR corpus | n/a, data | It is JSON, not code | the GitHub API |
 
 **fx-torrent is Apache-2.0**, the only permissively licensed BitTorrent
-implementation in the corpus, so it is the one tree that could legally be
+implementation kept in the corpus, so it is the one tree that could legally be
 copied from or depended on. Nothing has been. Copying would attach Apache-2.0
 section 4's requirements: the licence text, the `NOTICE` contents, and a
 statement of changes, all of which `cargo about` would then have to carry into
 `THIRD_PARTY.md`. Depending on it as a crate is the cheaper route if it is ever
 wanted, and `cargo deny`'s allow-list already permits Apache-2.0.
 
-**yip is AGPL-3.0-or-later**, the same boundary as FluxDown and for the same
-reason: network-use disclosure would attach to the netdisk deployment.
+### The four that were deleted
 
-**pluto-bittorrent has no licence file at all**, which is the strictest case in
-the table. An absent licence is not permissive; it is all rights reserved.
-Read for shape, cite by line, copy nothing.
+Two AGPL-3.0 trees, one GPL-3.0-or-later, and one with no `LICENSE` file at
+all. None of them may be copied from, and an absent licence is the strictest
+case of the four: it is not permissive, it is all rights reserved.
+
+**Nothing was taken from any of them, and the tables that would have recorded
+it are empty.** The boundary was procedural rather than a matter of care: every
+finding in the corpus is written as a description of a technique with a
+citation to check it against, never as a snippet, and every entry that cited
+one of the four has been rewritten to stand on the BEP or the decision it
+actually rests on.
+
+They are deleted because a copy that is not there cannot be committed by
+accident, and because the work they were read for is done. `cargo deny` refuses
+copyleft dependencies outright and
+[check-licence-gate.ps1](../scripts/check-licence-gate.ps1) proves it against a
+probe crate, so the boundary stays mechanical rather than a matter of memory.
 
 ### kist
 
@@ -59,55 +72,18 @@ above verbatim in `LICENSE`.
 `LICENSE-APACHE` is deleted, because the Apache half of the disjunction is not
 being exercised.
 
-### FluxDown, AGPL-3.0
+### Why `panic = "abort"` is not set
 
-AGPL is the strongest copyleft in common use. Copying AGPL code into an MIT
-tree relicenses the result and imposes network-use source disclosure on anyone
-running it as a service, which is exactly the netdisk deployment this tool is
-built for. So the boundary is hard:
+This is the one conclusion that arrived by way of a copyleft tree, and it is
+worth stating on its own footing because the tree is gone.
 
-- Read it for architecture, sequencing, data flow, failure handling, and
-  naming. Learn from it freely.
-- Do not copy, translate, transliterate, or closely paraphrase it. Not one
-  function. Not "with variables renamed". Reading a file and then writing your
-  own from memory of its structure is still a derivative work if the result
-  mirrors it line for line.
-- Do not vendor, submodule, or ship any part of it.
-
-**What was taken so far: nothing.** No FluxDown file has been read during this
-work beyond the directory listing and the licence. The one conclusion carried
-across is architectural and was already recorded in the prompt as decision 7.6:
-FluxDown deliberately does not set `panic = "abort"` because their download
-manager relies on `catch_unwind` to survive a task panic. `bit-cli` reaches the
-same conclusion for the same reason, recorded in a comment in the release
-profile. A shared conclusion about a Cargo profile setting is not a derivative
-work of anything.
-
-When a subsystem is built after reading FluxDown, it gets a row here naming
-what was read, what was concluded, what was built instead, and the benchmark or
-differential test that shows the result holds up (rule 0.10).
-
-| Subsystem | What was read | What was concluded | What was built | Evidence |
-| --- | --- | --- | --- | --- |
-| (none yet) | | | | |
-
-### superseedr, GPL-3.0-or-later
-
-Same treatment as FluxDown. Every file carries an SPDX header, so there is no
-ambiguity about what is being looked at.
-
-**What was taken so far: nothing.** `src/networking/web_seed_worker.rs` is
-named in `TODO/webseed.md` as the reference for Candidate A-prime and has not
-been opened. `src/synthetic_load.rs` is named in `TODO/bench.md` for the shape
-of a load generator (warmup, bounded disk budget, adaptive step search, periodic
-metrics) and has not been opened either. Those are descriptions from the
-prompt, not from the source.
-
-The same table applies when that changes.
-
-| Subsystem | What was read | What was concluded | What was built | Evidence |
-| --- | --- | --- | --- | --- |
-| (none yet) | | | | |
+`bit-cli`'s release profile does **not** set `panic = "abort"`, and the reason
+is that a download manager wants `catch_unwind` to survive a task panic:
+aborting the process on one poisoned torrent takes every other torrent in the
+invocation with it. That is recorded in a comment in the release profile and
+in decision 7.6. A shared conclusion about a Cargo profile setting is not a
+derivative work of anything, and the reasoning stands without the tree that
+prompted it.
 
 ### intermodal, CC0-1.0
 

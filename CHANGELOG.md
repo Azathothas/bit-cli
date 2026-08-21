@@ -166,6 +166,18 @@ it, so the history starts here.
   file each, and comparing the three is what says where a limit lives. Every
   step reads its payload back and checks each block is the one written to it,
   and exits 7 rather than reporting a rate when it is not.
+- `bench swarm` puts synthetic peers on a target that is somebody else's
+  process, so it takes a `HOST:PORT` rather than a torrent and that address is
+  the only thing it contacts: no tracker, no DHT, no PEX, and no peer list read
+  from a torrent or the configuration. Two loads, chosen by `--for`. With it,
+  the peers leech a torrent the target already serves and check every completed
+  piece against the torrent's own hashes. Without it, info hashes are
+  generated that the target cannot have, and what is measured is the accept and
+  handshake path. Measured against `bit-cli seed` on loopback: 333.33 MiB/s at
+  one peer, 666.67 at four, 941.18 at sixteen. Two halves are not built and are
+  open under `TODO/bench.md` T-092: `--disk-budget` bounds the piece bytes kept
+  and not the file length on disk, because a held piece is written at its own
+  offset, and a synthetic peer keeps its verified pieces without serving them.
 
 ### Measurement
 
@@ -198,6 +210,18 @@ it, so the history starts here.
 - `scripts/soak.ps1` samples a long-lived seeder every 30 seconds for as long
   as it is given, under one of six workloads, and writes resident memory,
   handles, threads, CPU, and TCP socket states to a CSV with the slope of each.
+  The summary is rewritten after every sample, to a temporary file that is
+  renamed over the target, so a run that is killed leaves the slopes it had
+  reached. It used to write in place, and a killed run left a file of NUL
+  bytes.
+- A long run does not leak descriptors, and it does leak memory slowly. An
+  idle seeder holds **189 handles at every one of 533 samples over 4.6
+  hours**, one TCP socket, and 21 threads, with resident memory flat inside
+  0.03 MiB over its last two and a half hours. Under a deployment-shaped load
+  of downloads plus tracker announces, resident memory rises **0.804 MiB an
+  hour**, linear rather than settling: the last three hours give the same slope
+  as the whole run, and every saturating model fits worse. `CLOSE_WAIT` is zero
+  at all 1,064 samples across both runs. See `TODO/memory.md` under T-040.
 - The warmup window is reported rather than dropped. A sample taken during
   warmup is marked and excluded from the summary, because "it was slow for the
   first three seconds" is itself a result.
@@ -489,7 +513,9 @@ it, so the history starts here.
 
 ### Not in this release
 
-`bench swarm`, BEP 52 v2 and hybrid creation, BEP 16 superseeding, and
-`-i/--input-file`. Each has an entry in `TODO/` with what closes it. Nothing is
-stubbed: a command that is not implemented says so and exits with a code a
-script can branch on.
+BEP 52 v2 and hybrid creation, BEP 16 superseeding, and `-i/--input-file`.
+Each has an entry in `TODO/` with what closes it. Nothing is stubbed: a command
+that is not implemented says so and exits with a code a script can branch on.
+
+`bench swarm` ships and is not finished. Both loads work and the two halves
+that are missing are named above rather than left for a reader to discover.

@@ -319,6 +319,32 @@ Approach:    Document the working invocations in the README: pipe directly to
              on PowerShell 7.
 Acceptance:  The README carries both forms and both have been run.
 
+**A second redirection trap, and it has moved.** Every `check-*.ps1` in this
+repository runs `bit-cli` through `Start-Process` with redirect files rather
+than calling it directly, and the reason on record is that under
+`$ErrorActionPreference = 'Stop'` a native command writing to stderr is a
+terminating error in `pwsh` 7. **That is no longer true on this machine, and
+the change is upstream rather than local.** Measured on 2026-08-21:
+
+```powershell
+pwsh -NoProfile -Command "$ErrorActionPreference='Stop'; try { & pwsh -NoProfile -Command \"[Console]::Error.WriteLine('x'); exit 0\" 2>&1 | Out-Null; \"survived, LASTEXITCODE=$LASTEXITCODE\" } catch { \"TERMINATED\" }"
+```
+
+```
+PSVersion: 7.6.5
+PSNativeCommandUseErrorActionPreference: False
+survived, LASTEXITCODE=0
+```
+
+`$PSNativeCommandUseErrorActionPreference` is the switch, it defaults to
+`False` from PowerShell 7.4, and it was `True` in the 7.2 and 7.3 range where
+the rule was written. So the behaviour depends on the host's `pwsh` version,
+which is exactly the reason to keep the `Start-Process` pattern: a script that
+works here and terminates on a 7.3 runner is worse than one that does neither.
+The pattern stays. What changes is the reason given for it: it is not that
+stderr always terminates, it is that whether it terminates is not this
+repository's to decide.
+
 ### T-076 seed and verify do not report renamed paths
 
 Source:      found here, 2026-08-19, while closing T-071

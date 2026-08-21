@@ -272,6 +272,84 @@ pub fn text(report: &Report) -> Vec<String> {
         ));
     }
 
+    // A swarm run measures somebody else's process, so what a reader wants
+    // first is how many of the peers it asked for actually got anywhere.
+    if let Some(swarm) = &report.swarm {
+        out.push(String::new());
+        out.push("Swarm".to_string());
+        out.push(field("  load", swarm.mode.as_str()));
+        out.push(field("  dialled", &swarm.dialled));
+        out.push(field(
+            "  peers",
+            format!(
+                "{} dialled, {} connected, {} handshaked",
+                swarm.peers_dialled, swarm.peers_connected, swarm.peers_handshaked
+            ),
+        ));
+        if swarm.peers_wrong_info_hash > 0 {
+            out.push(field(
+                "  wrong info hash",
+                format!("{} peers", swarm.peers_wrong_info_hash),
+            ));
+        }
+        for failure in &swarm.failures {
+            out.push(field(&format!("  {}", failure.class), failure.count));
+        }
+        if swarm.connect.count > 0 {
+            out.push(field(
+                "  connect",
+                format!(
+                    "p50 {} p99 {} max {}",
+                    format_duration_ms(swarm.connect.p50_ms),
+                    format_duration_ms(swarm.connect.p99_ms),
+                    format_duration_ms(swarm.connect.max_ms),
+                ),
+            ));
+        }
+        if swarm.handshake.count > 0 {
+            out.push(field(
+                "  handshake",
+                format!(
+                    "p50 {} p99 {} max {}",
+                    format_duration_ms(swarm.handshake.p50_ms),
+                    format_duration_ms(swarm.handshake.p99_ms),
+                    format_duration_ms(swarm.handshake.max_ms),
+                ),
+            ));
+        }
+        if swarm.mode == crate::bench::swarm::Mode::Leech {
+            out.push(field(
+                "  unchoked",
+                format!("{} peers", swarm.peers_unchoked),
+            ));
+            out.push(field(
+                "  choke events",
+                format!(
+                    "{} choke, {} unchoke",
+                    swarm.choke_events, swarm.unchoke_events
+                ),
+            ));
+            out.push(field("  received", format_size(swarm.bytes_received.0)));
+            out.push(field("  blocks", swarm.blocks_received));
+            out.push(field(
+                "  pieces",
+                format!(
+                    "{} verified, {} failed",
+                    swarm.pieces_verified, swarm.pieces_failed
+                ),
+            ));
+            out.push(field(
+                "  held",
+                format!(
+                    "{} of {} budget, {} pieces dropped",
+                    format_size(swarm.bytes_held.0),
+                    format_size(swarm.disk_budget.0),
+                    swarm.pieces_dropped_over_budget
+                ),
+            ));
+        }
+    }
+
     // A probe has no throughput, so its findings are the report. Rendered
     // before the summary, which for a probe carries only the deadline and
     // whether the one exchange failed.

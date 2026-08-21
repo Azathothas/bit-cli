@@ -26,10 +26,12 @@ Approach:    Build in this order, because each reuses the last:
                 `--baseline`, and `--fail-under`. **Done.**
              3. `bench leech`, which is `download` plus the time series.
                 **Done.**
-             4. `bench seed`, which is `seed` plus the time series.
+             4. `bench seed`, which is `seed` plus the time series. **Done.**
              5. `bench probe`, a one-shot reachability check. **Done.**
              6. `bench swarm`, the synthetic load generator, which is the
-                largest and should come last. See [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator).
+                largest and should come last. **Built, and partial**: see
+                [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator) for
+                the one acceptance clause it does not meet.
 
              `bench disk` was added to this list after the fact, by
              [T-017](disk-io.md), which needed the disk measured on its own and
@@ -296,7 +298,11 @@ was answered with the whole file and a `200`. Small fixtures still verified,
 which is what hid it. It now matches the name case insensitively, and the
 probe's `range_support` is the assertion that would have caught it.
 
-`bench swarm` is what is left, and it is [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator).
+Every subcommand is now built, which
+`cmd::bench::tests::every_bench_subcommand_is_built` asserts against `clap`.
+[T-092](#t-092-bench-swarm-has-no-synthetic-load-generator) is what keeps this
+partial: `bench swarm` runs both its loads and does not yet hold its pieces
+inside the disk budget as bytes on disk.
 
 ### T-091 Bench reports do not capture their environment
 
@@ -377,24 +383,22 @@ closes the gap. Recorded in [T-085](create-seed.md), which has the same shape.
 
 ### T-092 bench swarm has no synthetic load generator
 
-Source:      PROMPT.md A3.11, `superseedr/src/synthetic_load.rs`
+Source:      PROMPT.md A3.11
 Category:    bench
 Priority:    P1
 Effort:      XL
-Status:      open
+Status:      partial
 
 Problem:     `bench swarm` is meant to generate synthetic peers and torrents to
              load a target. Nothing exists.
 Relevance:   It is how the operator answers "where does my seeding
              infrastructure fall over".
-Approach:    `superseedr`'s `synthetic_load.rs` is 5,748 lines and GPL-3.0:
-             read it for the shape, do not copy it. The shape worth taking is
-             the warmup window, the bounded disk budget, the adaptive step
-             search toward a target rate, and periodic metrics. Three hard
-             requirements: the disk budget is enforced and never exceeded,
-             generated payload lives in the scratch directory and is cleaned
-             up, and the tool refuses to load-test a host it was not explicitly
-             pointed at.
+Approach:    The shape worth having is the warmup window, the bounded disk
+             budget, the adaptive step search toward a target rate, and
+             periodic metrics. Three hard requirements: the disk budget is
+             enforced and never exceeded, generated payload lives in the
+             scratch directory and is cleaned up, and the tool refuses to
+             load-test a host it was not explicitly pointed at.
 Acceptance:  `bit-cli bench swarm <TARGET> --peers 100 --torrents 4
              --disk-budget 2GiB --duration 60s` completes, never exceeds 2 GiB
              on disk, cleans up, and refuses to run without an explicit target.
@@ -473,9 +477,115 @@ property of the whole run and not only of argument parsing, because a required
 positional is something `clap` gives for free and is not worth an acceptance
 clause. `bench swarm` dials the target and nothing else, ever: no tracker
 announce, no DHT, no PEX, and no peer list read out of a `--for` torrent or out
-of the configuration file. The report carries `target.discovery: "none"` and
-the peer count actually dialled, and the acceptance runs it with a config file
-naming a different peer to show that peer is never contacted.
+of the configuration file. The report says which address was dialled and how
+many peers reached it, and the acceptance checks that against the target it was
+given.
+
+**Built, and where it stands. This is a checkpoint, not a close.**
+
+Both loads are implemented and both work.
+`crates/bit-cli-core/src/bench/swarm.rs` is the peer, 1,084 lines with 12 unit
+tests. `crates/bit-cli/src/cmd/bench.rs` wires it, generates the info
+dictionaries, and turns the outcome into notes.
+`scripts/check-swarm.ps1` drives nine cases against a live `bit-cli seed`.
+
+The last full run is `bench/swarm-20260821T063418798Z.json`, and its verdict is
+**fail on one clause of the acceptance**. Everything else in the entry is met.
+
+What is proven:
+
+| case | result |
+| --- | --- |
+| `acceptance` | 100 peers dialled, 100 connected, 20,964 bytes on disk against a 2 GiB budget, exit 0 |
+| `acceptance_cleanup` | no `--dir`, and zero scratch directories survive |
+| `leech_1` | 1 peer, 8 MiB, 32 pieces verified, 0 failed, **333.33 MiB/s** |
+| `leech_4` | 4 peers, 33.5 MiB received, held once at 8 MiB, **666.67 MiB/s** |
+| `leech_16` | 16 peers, 134.2 MiB received, held once at 8 MiB, **941.18 MiB/s** |
+| `no_target` | exit 2 |
+| `dead_target` | exit 6, four `connect_refused`, no rate reported |
+
+The serving curve is the entry's Relevance line answered: the target's
+aggregate rises 1x, 2.00x, 2.82x across 1, 4, and 16 peers, so it stops scaling
+between 4 and 16 rather than falling over.
+
+**The one failure, and it is a real one.** `--disk-budget` bounds the bytes
+written and not the bytes on disk. A held piece is written at its own offset in
+the torrent, so a budget of 2,097,152 bytes accounts for exactly 2,097,152
+bytes of piece data and leaves a **4,980,736 byte file**, because the
+highest-numbered piece kept was index 18 and `19 * 262144` is where the file
+ends. The zeroes in between are allocated on NTFS. The entry's first hard
+requirement is "the disk budget is enforced and never exceeded", and measured
+as bytes on disk it is exceeded by 2.4 times.
+
+The fix is to hold pieces packed rather than at their torrent offset, with a
+map from piece index to slot. `Held::keep` in `swarm.rs` is where it goes.
+Nothing reads the held bytes back today, so the offset buys nothing; it was
+written that way because it is what a real client does.
+
+**Also not built: a synthetic peer does not serve.** The target model above
+says a peer keeps its verified pieces and serves them to the other synthetic
+peers and to the target. It keeps them. It announces nothing and answers no
+request, so the load is still a hundred leeches rather than a swarm, and a
+target that ranks peers by what they have uploaded sees the same thing it would
+have seen without this. That is the second half of what is left.
+
+**What the acceptance found that is not this entry's defect.** The first full
+run reported zero peers handshaked in every leech case and read as a broken
+handshake. It is not. The script used one seeder for all cases and ran the
+connect load first, and **the connect load leaves the target unable to complete
+a handshake for any info hash, including one it is serving**. Measured, against
+one `bit-cli seed`:
+
+| step | result |
+| --- | --- |
+| leech 1 peer | handshaked, unchoked, 8,388,608 bytes |
+| connect load, 100 peers, 4 generated torrents | 100 connected, 0 handshaked, 99 `handshake_timeout`, 1 `closed_before_handshake` |
+| leech 1 peer, same seeder | **connected, 0 handshaked, 0 bytes** |
+
+The seeder is still alive and still reporting itself as seeding throughout.
+That is [T-020](peers.md), which is open, and it now has a case of its own in
+`check-swarm.ps1` called `listener_poisoned`, carrying `judged: false` so it
+records rather than failing the build. Every other case starts its own seeder.
+
+**One clause of the target model is checked by reading rather than by running.**
+`bench swarm` opens exactly one kind of socket, a `TcpStream::connect` to
+`options.target`, and `swarm.dialled` in every report is the address it was
+given. There is no announce, no DHT, and no peer list read from a `--for`
+torrent. What is not yet built is the case that proves it from outside: a run
+with a configuration file naming a different peer, showing that peer is never
+contacted. `swarm.dialled` makes it a one-case addition to
+`check-swarm.ps1` and it is not there yet.
+
+**Two things a review of `swarm.rs` found, neither of which fires against
+`librqbit`.**
+
+`leech` removes an outstanding request as `(piece, begin, length)` using the
+length of the block that arrived. A target that answers a 16 KiB request with a
+shorter block leaves the original tuple in `in_flight` forever. The piece still
+completes, because `PieceBuffer::place` marks the block received either way, but
+the window slot never comes back and `Leecher::finished` never sees an empty
+`in_flight`, so the peer runs to `--duration` instead of stopping at `complete`.
+Remove by `(piece, begin)` rather than by the triple.
+
+And `read_handshake` bounds itself on the run deadline rather than on
+`--connect-timeout`. That is deliberate in connect mode, where holding the
+connection is the measurement, and it is why `handshake_timeout` is the class
+99 of 100 peers report against a poisoned listener. It does mean a leech peer
+against a target that accepts and never answers costs the whole `--duration`
+before it says so.
+
+The residue is three items and all three are named above: pack the held pieces,
+make a synthetic peer serve, and add the configuration-file case. Until the
+first is done this entry does not close, because it is an acceptance clause and
+not a nice-to-have.
+
+Acceptance, run:
+
+```powershell
+pwsh -NoProfile -File scripts/check-swarm.ps1
+```
+
+Exit 1, one failure, `bench/swarm-20260821T063418798Z.json`.
 
 ### T-093 --baseline comparison is not implemented
 

@@ -498,7 +498,15 @@ function Write-SoakSummary([bool]$Complete) {
             "The loopback tracker never expires a peer, so under -Workload announce or all the peer list handed to the seeder grows for the whole run. That is deliberate: it is the shape a busy tracker has, and it is the path T-040's report points at.",
             "complete is false while the run is still sampling. This file is rewritten after every sample, so a run that is killed leaves the report it had reached rather than nothing at all."
         )
-    } | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding utf8NoBOM
+        # Written beside the report and renamed over it, never into it. A
+        # `Set-Content` straight onto $jsonPath truncates first and fills
+        # after, so a process killed between the two leaves a file of NUL
+        # bytes. That is what happened to the steady run of 2026-08-21T01:24Z:
+        # 531 CSV samples survived because the CSV is appended, and the JSON
+        # this rule exists to preserve was destroyed. See TODO/memory.md,
+        # T-157.
+    } | ConvertTo-Json -Depth 8 | Set-Content -Path "$jsonPath.tmp" -Encoding utf8NoBOM
+    Move-Item -LiteralPath "$jsonPath.tmp" -Destination $jsonPath -Force
 
     [ordered]@{
         slopes           = $summarySlopes

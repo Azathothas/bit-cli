@@ -452,7 +452,7 @@ bit-cli create <PATH>           Create a .torrent
 bit-cli edit <TORRENT>          Rewrite metainfo fields, writing a new file
 bit-cli magnet <SOURCE>         Convert a torrent to a magnet URI
 bit-cli seed <SOURCE>           Seed existing data in the foreground
-bit-cli bench <SUBCOMMAND>      leech | seed | webseed | disk | probe. Measure and report
+bit-cli bench <SUBCOMMAND>      leech | seed | webseed | disk | swarm | probe. Measure and report
 bit-cli config show             Print the resolved configuration with the origin of every value
 bit-cli completions <SHELL>     bash | zsh | fish | powershell | elvish | nushell
 bit-cli man                     Generate a man page
@@ -468,17 +468,41 @@ stdin.
 Every command runs in the foreground, does its work, and exits. There is no
 daemon and no stored session.
 
-One of the six `bench` subcommands parses but is not built yet. It exits
-non-zero naming the `TODO/` entry that closes it, rather than pretending to
-work:
+## Loading a target
+
+`bench swarm` is the one subcommand that puts load on a machine other than
+this one, so it takes a peer address rather than a torrent, and that address is
+the only thing it ever contacts. It announces to no tracker, uses no DHT, and
+reads no peer list.
 
 ```bash
-bit-cli bench swarm album.torrent
+bit-cli bench swarm 10.0.0.5:51413 --for album.torrent --peers 16 --disk-budget 2GiB
 ```
 
+`--for` names a torrent the target already serves. The synthetic peers
+handshake for it, declare interest, request blocks, and check every completed
+piece against the torrent's own hashes, so the report measures the target's
+serving path and would notice it serving wrong bytes.
+
+```bash
+bit-cli bench swarm 10.0.0.5:51413 --peers 100 --torrents 4 --disk-budget 2GiB
 ```
-error: `bit-cli bench swarm` is not implemented yet; see TODO/bench.md
-```
+
+Without `--for`, four info hashes are generated and the target has none of
+them. Nothing can be served, which is the point: what is measured is the accept
+and handshake path. How many connections the target takes, how fast it answers
+a handshake, and whether its listener survives.
+
+The `.torrent` files for the generated info hashes are written to the scratch
+directory, so a run is reproducible and the operator can add one to a target
+and come back with `--for`.
+
+Two limits are worth knowing before reading a report. `--disk-budget` bounds
+the piece bytes a peer keeps, and a held piece is written at its own offset, so
+the file on disk can be larger than the budget. And a synthetic peer keeps what
+it verified without serving it, so this is a hundred leeches rather than a
+swarm: a target that ranks peers by what they have uploaded sees no difference.
+Both are open under [T-092](TODO/bench.md).
 
 ## Metalink
 

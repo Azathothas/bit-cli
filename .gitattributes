@@ -5,8 +5,15 @@
 # translation applied to one changes its info hash. So the rule is explicit per
 # type rather than inferred per checkout.
 #
-# Verify with `git ls-files --eol`. No tracked text file should be `w/crlf`
-# except a `.ps1`.
+# Verify with `git ls-files --eol`. Every tracked text file is `i/lf`, which is
+# the half that decides what a commit contains and the half worth checking:
+#
+#   git ls-files --eol | Select-String -NotMatch 'i/lf|i/-text'
+#
+# The working-tree column is not uniform and does not need to be. A `.ps1`
+# should be `w/crlf`, and one written by an editor that did not read this file
+# will be `w/lf` until it is next checked out. A committed `bench/*.json` is
+# `w/crlf` because PowerShell wrote it, and is normalised to LF on the way in.
 
 * text=auto eol=lf
 
