@@ -107,6 +107,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-094](bench.md) | P2 | bench | open | Trace output has no measured cost |
 | [T-148](bench.md) | P2 | bench | **done** | The peer probe test asserted an exit code inside its own retry loop |
 | [T-149](bench.md) | P1 | bench | **done** | The last window of a leech bench was never counted |
+| [T-152](bench.md) | P1 | bench | **done** | A disk bench shorter than one sample interval reported no series at all |
 | [T-100](bep-coverage.md) | P2 | bep | open | BEP 6 fast extension is not implemented |
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
@@ -153,7 +154,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-110 items: 100 to work through, and 10 deferred to Phase C. Twenty-three were
+111 items: 101 to work through, and 10 deferred to Phase C. Twenty-four were
 added by measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -210,10 +211,17 @@ moves on its own. And T-151 is that only one of the three release targets was
 ever checked for static linking, which matters because T-146 is the proof that
 the check is what catches it.
 
+T-152 came out of the round after that, once macOS linked and its process
+reader worked: a `bench disk` phase that finished inside one metrics interval
+emitted no sample at all, so the schema generator produced no `bench_sample` on
+that runner and one everywhere else. It is T-149 in the other bench target. Two
+targets, the same sampler mistake, and both were found by fixing whatever was
+red above them.
+
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 |
-| P1 | 6 | 0 | 0 | 37 |
+| P1 | 6 | 0 | 0 | 38 |
 | P2 | 24 | 1 | 1 | 10 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |

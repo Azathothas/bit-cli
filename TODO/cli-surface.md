@@ -458,7 +458,13 @@ allowance carries the note that says when to drop it.
 That is the whole argument for having an `MSRV` job at all: the claim is only
 worth making if something compiles against it.
 
-Closing evidence is a green `MSRV` job, recorded below.
+**The run is in.** `MSRV` passed in 1m1s on CI run 32440386139, 2026-08-21,
+compiling the whole workspace with `--locked --all-features` on rustc 1.88:
+
+https://github.com/Azathothas/bit-cli/actions/runs/32440386139
+
+`Clippy` passed in the same run, which is the other half: the two lints the
+raise turned on are fixed rather than allowed.
 
 ### T-145 The macOS test job fails to link
 
@@ -583,7 +589,13 @@ Checked here the same way the link fix was, since this machine is not a Mac:
 $ rustc --target aarch64-apple-darwin --edition 2024 --emit=metadata -D warnings <the module>
 ```
 
-Closing evidence is a green `Test (macos-latest)`, recorded below.
+**Where it stands.** CI run 32440386139 links on `macos-latest` and runs the
+suite: the link failure is gone and all six `sysinfo` failures with it, so both
+defects this entry names are closed. That run's macOS job is still red on one
+unrelated test, `coverage_of_the_documented_names_matches_what_is_recorded`,
+which is [T-152](bench.md) and has nothing to do with the platform reader: a
+`bench disk` phase finished inside one metrics interval and emitted no sample.
+This entry closes on the fix for that landing green.
 
 
 ### T-146 CI built a Windows binary against the dynamic C runtime
@@ -718,6 +730,22 @@ Approach:    One script, two formats, chosen by the file's own magic bytes
              thing to build a gate on.
 Acceptance:  The check runs on all three targets in `ci.yml` and in
              `release.yml`, and it fails a dynamically linked ELF.
+
+**The run is in.** CI run 32440386139, 2026-08-21, with the new flags and the
+new check on all three:
+
+| job | result |
+| --- | --- |
+| `Build (x86_64-unknown-linux-musl)` | pass, 4m19s |
+| `Build (aarch64-unknown-linux-musl)` | pass, 3m53s |
+| `Build (x86_64-pc-windows-msvc)` | pass, 8m15s |
+
+https://github.com/Azathothas/bit-cli/actions/runs/32440386139
+
+Each one built with `+crt-static -C prefer-dynamic=no`, the musl pair also with
+`-C link-self-contained=yes -C link-arg=-Wl,--build-id=none`, and each one then
+had its own binary read back. So the two musl artifacts are now known to carry
+no `PT_INTERP` and no `DT_NEEDED` rather than assumed to.
 
 **Both directions were proven before it shipped as a gate**, because a check
 that cannot fail is not a check and there is no Linux on this machine to try it

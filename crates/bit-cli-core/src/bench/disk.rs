@@ -474,6 +474,38 @@ fn one_step(
             }));
         }
 
+        // One point of the series, from the counters as they stand.
+        //
+        // A closure rather than inline code because the loop is not the only
+        // caller: the phase emits one last point after the writers stop. See
+        // the comment on that call.
+        let point =
+            |now: Instant, delta: &StorageCounts, window: Duration, cumulative: u64| Sample {
+                at: Timestamp::now(),
+                elapsed: Millis::from(now.duration_since(phase_started)),
+                warmup: false,
+                concurrency: threads,
+                bytes: Size(delta.write_bytes),
+                cumulative_bytes: Size(cumulative),
+                rate: Rate(rate_of(delta.write_bytes, window)),
+                requests: delta.write_ops,
+                errors: 0,
+                process: Process::sample(),
+                costs: Some(Costs {
+                    verify: Millis(0),
+                    verify_bytes: Size(0),
+                    disk_read: Millis(delta.read_nanos / 1_000_000),
+                    disk_read_bytes: Size(delta.read_bytes),
+                    disk_write: Millis(delta.write_nanos / 1_000_000),
+                    disk_write_bytes: Size(delta.write_bytes),
+                    mean_service_us: match delta.write_ops {
+                        0 => None,
+                        ops => Some(delta.write_nanos / 1_000 / ops),
+                    },
+                }),
+                ..Default::default()
+            };
+
         // The sampler runs on this thread while the writers work, so the
         // series has the same shape `bench leech` produces and the two read
         // side by side.
@@ -486,33 +518,8 @@ fn one_step(
             if now >= next {
                 let counts = metrics.read();
                 let delta = counts.since(&last);
-                let window = now.duration_since(last_at);
                 cumulative += delta.write_bytes;
-                let sample = Sample {
-                    at: Timestamp::now(),
-                    elapsed: Millis::from(now.duration_since(phase_started)),
-                    warmup: false,
-                    concurrency: threads,
-                    bytes: Size(delta.write_bytes),
-                    cumulative_bytes: Size(cumulative),
-                    rate: Rate(rate_of(delta.write_bytes, window)),
-                    requests: delta.write_ops,
-                    errors: 0,
-                    process: Process::sample(),
-                    costs: Some(Costs {
-                        verify: Millis(0),
-                        verify_bytes: Size(0),
-                        disk_read: Millis(delta.read_nanos / 1_000_000),
-                        disk_read_bytes: Size(delta.read_bytes),
-                        disk_write: Millis(delta.write_nanos / 1_000_000),
-                        disk_write_bytes: Size(delta.write_bytes),
-                        mean_service_us: match delta.write_ops {
-                            0 => None,
-                            ops => Some(delta.write_nanos / 1_000 / ops),
-                        },
-                    }),
-                    ..Default::default()
-                };
+                let sample = point(now, &delta, now.duration_since(last_at), cumulative);
                 on_sample(&sample);
                 outcome.series.push(sample);
                 last = counts;
@@ -529,6 +536,27 @@ fn one_step(
                     .join()
                     .map_err(|_| anyhow::anyhow!("a writer thread panicked"))??,
             );
+        }
+
+        // One last point, once the writers have stopped and everything they
+        // did is in the counters.
+        //
+        // The loop above only emits on an interval boundary, so the window
+        // between the last boundary and the end of the phase was never
+        // reported, and a phase that finished inside a single interval
+        // reported nothing at all: its series was empty. 64 MiB on a fast NVMe
+        // is about twenty milliseconds against a ten millisecond interval,
+        // which is the margin that made the schema generator produce no
+        // `bench_sample` on `macos-latest` and one everywhere else. Same
+        // defect as `bench leech` had, recorded as T-149 in `TODO/bench.md`.
+        let now = Instant::now();
+        let counts = metrics.read();
+        let delta = counts.since(&last);
+        if delta.write_ops > 0 || outcome.series.is_empty() {
+            cumulative += delta.write_bytes;
+            let sample = point(now, &delta, now.duration_since(last_at), cumulative);
+            on_sample(&sample);
+            outcome.series.push(sample);
         }
         Ok(costs)
     })?;
@@ -660,6 +688,36 @@ mod tests {
         assert_eq!(step.write_ops, 64);
         assert_eq!(step.verified, Some(true));
         assert!(outcome.notes.is_empty(), "{:?}", outcome.notes);
+    }
+
+    /// A run shorter than one sample interval still produces a series.
+    ///
+    /// The sampler emits on interval boundaries, so a phase that finished
+    /// before the first one emitted nothing and the report carried an empty
+    /// series: a measurement with no points, which reads as a measurement that
+    /// was not taken. A one hour metrics interval is the same thing every fast
+    /// disk was already doing to a ten millisecond one, made deterministic.
+    /// See `TODO/bench.md`, T-152.
+    #[test]
+    fn a_phase_shorter_than_one_interval_still_reports_a_sample() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = quick(Layout::Shared, 2, vec![], 1 << 20);
+        options.metrics_interval = Duration::from_secs(3600);
+        let mut seen = 0usize;
+        let outcome = run(dir.path(), &options, |_| seen += 1).unwrap();
+        assert_eq!(
+            outcome.series.len(),
+            1,
+            "one point, and exactly one: the loop cannot have emitted any"
+        );
+        assert_eq!(seen, 1, "the callback sees the same point the series has");
+        let sample = &outcome.series[0];
+        assert_eq!(
+            sample.cumulative_bytes.0,
+            1 << 20,
+            "the one point accounts for the whole payload"
+        );
+        assert_eq!(sample.requests, 64, "and for every write that made it");
     }
 
     #[test]

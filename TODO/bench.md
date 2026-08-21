@@ -563,3 +563,55 @@ test result: ok. 1 passed; 0 failed
 
 The test was not changed. It was asserting something true that the report had
 stopped carrying.
+
+### T-152 A disk bench shorter than one sample interval reported no series at all
+
+Source:      CI run 32440386139, `Test (macos-latest)`, 2026-08-21
+Category:    bench
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `schema_gen::tests::coverage_of_the_documented_names_matches_what_is_recorded`
+             failed on `macos-latest` and passed on the other two:
+
+             ```
+             the set of names no run produces changed
+               left: ["bench_sample"]
+              right: []
+             ```
+
+             The generator drives `bench disk --payload-size 64MiB
+             --metrics-interval 10ms` to produce one `bench_sample`. The
+             sampler emits only when an interval boundary passes, and 64 MiB on
+             a fast NVMe is about twenty milliseconds against a ten millisecond
+             interval. That is a margin of two, and the macOS runner was on the
+             wrong side of it: the phase finished before the first boundary and
+             the series was empty.
+Relevance:   A report whose time series has no points is a measurement that was
+             not taken, and nothing said so. The same sampler also dropped the
+             window between the last boundary and the end of every longer run,
+             so every `bench disk` report has been short by up to one interval
+             of writes. It is [T-149](#t-149-the-last-window-of-a-leech-bench-was-never-counted)
+             at a different scale, in the other bench target, found the same
+             way: by fixing what was above it in the same job.
+Approach:    Emit one last point after the writers stop and before the phase
+             ends, exactly as `bench leech` now does. The condition is "any
+             writes since the last boundary, or no points at all", so a run
+             that already ended on a boundary does not gain an empty sample.
+Acceptance:  A phase with a metrics interval longer than the phase still
+             reports one sample, that sample accounts for the whole payload,
+             and the callback sees the same point the series does.
+
+`bench::disk::tests::a_phase_shorter_than_one_interval_still_reports_a_sample`
+sets the interval to an hour, which is the same thing every fast disk was
+already doing to a ten millisecond one, made deterministic:
+
+```
+$ cargo test -p bit-cli-core --lib bench::disk
+test result: ok. 8 passed; 0 failed
+```
+
+The generator's parameters were left alone. Raising the payload size would have
+moved the margin without removing the dependence on it, and the dependence is
+the defect.
