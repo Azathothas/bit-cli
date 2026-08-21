@@ -254,10 +254,15 @@ assertion that turned out to be the test rather than the code. A red job does
 not cost one defect, it costs every defect behind it, and that is the argument
 for never leaving one.
 
-**Run 32459406311 is green on all sixteen jobs and is the head of `main`.** It
-carries `bench swarm`, the T-040 answer, the deleted reference trees, and the
-T-160 fix. Its only annotation is [T-161](cli-surface.md), a build action still
-targeting Node.js 20.
+**Run 32459406311 is green on all sixteen jobs**, against the commit that
+closes T-160. Everything in this file was checked against that tree: `bench
+swarm`, the T-040 answer, the deleted reference trees, and the T-160 fix. Its
+only annotation is [T-161](cli-surface.md), a build action still targeting
+Node.js 20.
+
+Naming a run rather than "the latest" is deliberate. A line that says which
+commit it describes stays true; one that says "the head" is wrong by the next
+push. Check the current one with `gh run list --limit 1`.
 
 Between those two runs one job went red, and what turned it red is worth
 keeping: run 32458314378 was a **documentation-only commit** and
