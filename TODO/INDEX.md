@@ -49,7 +49,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
 | [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
 | [T-009](webseed.md) | P1 | webseed | **done** | A source cannot be attached over more than one connection |
-| [T-141](webseed.md) | P1 | webseed | open | --web-seed-connect-timeout does not bound a connect that never answers |
+| [T-141](webseed.md) | P1 | webseed | **done** | --web-seed-connect-timeout does not bound a connect that never answers |
 | [T-010](disk-io.md) | P1 | disk-io | **done** | pwrite takes a read lock where it needs a write lock |
 | [T-011](disk-io.md) | P1 | disk-io | **done** | No file handle pool, so long runs exhaust descriptors |
 | [T-012](disk-io.md) | P2 | disk-io | **done** | Preallocation is not implemented |
@@ -106,6 +106,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-093](bench.md) | P2 | bench | **done** | --baseline comparison is not implemented |
 | [T-094](bench.md) | P2 | bench | open | Trace output has no measured cost |
 | [T-148](bench.md) | P2 | bench | **done** | The peer probe test asserted an exit code inside its own retry loop |
+| [T-149](bench.md) | P1 | bench | **done** | The last window of a leech bench was never counted |
 | [T-100](bep-coverage.md) | P2 | bep | open | BEP 6 fast extension is not implemented |
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
@@ -123,6 +124,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-145](cli-surface.md) | P2 | ci | **done** | The macOS test job fails to link |
 | [T-146](cli-surface.md) | P1 | ci | **done** | CI built a Windows binary against the dynamic C runtime |
 | [T-147](windows.md) | P1 | windows | **done** | The rename reason differed by host, so two tests only passed on Windows |
+| [T-150](cli-surface.md) | P2 | ci | open | Clippy pins a floating toolchain, so a Rust release can turn the tree red |
+| [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | open | reference/ is not deleted at the end of Phase B |
@@ -150,8 +153,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-107 items: 97 to work through, and 10 deferred to Phase C. Twenty were added by
-measurements rather than by the triage. T-007 came out of T-001: a stalling
+110 items: 100 to work through, and 10 deferred to Phase C. Twenty-three were
+added by measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
 source cannot be attached over more than one connection, and concurrent
@@ -196,11 +199,22 @@ one host and a file name on the other. The disk paths agreed; the reason in
 `--json` did not. T-148 is the flaky test sitting beside it, which asserted an
 exit code inside its own retry loop.
 
+Fixing those four uncovered three more, which is what a red job costs
+compounded: every failure it hides is a failure nobody is looking for. T-149,
+found once Windows was the only red job left, is a `bench leech` report that
+had been dropping its final window of disk operations and piece verification,
+so a run short enough to finish inside one `--metrics-interval` reported no
+hashing at all. T-150 is that `Clippy` pins a floating `stable`, so three
+lints appeared in CI that a current local toolchain does not raise: the gate
+moves on its own. And T-151 is that only one of the three release targets was
+ever checked for static linking, which matters because T-146 is the proof that
+the check is what catches it.
+
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 |
-| P1 | 7 | 0 | 0 | 34 |
-| P2 | 23 | 1 | 1 | 10 |
+| P1 | 6 | 0 | 0 | 37 |
+| P2 | 24 | 1 | 1 | 10 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 

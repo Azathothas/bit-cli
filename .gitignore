@@ -17,6 +17,23 @@
 *.part
 *.bit-cli-part
 
+# Benchmark and acceptance output.
+#
+# Every check-*.ps1 and bench-*.ps1 script writes a timestamped report here,
+# and a session runs them dozens of times, so an unignored bench/ buries the
+# working tree in files nobody meant to keep.
+#
+# `.gitignore` only applies to files git is not already tracking, so the
+# reports a TODO entry cites stay committed and stay in every diff. When a run
+# IS the evidence for an entry, add it on purpose:
+#
+#   git add -f bench/soak-20260821T012428252Z.json
+#
+# That is the rule from PROMPT.md 0: a comparative claim without a committed
+# benchmark does not ship. This ignores the other ninety runs, not that one.
+/bench/*.json
+/bench/*.csv
+
 # Logs
 *.log
 /logs/

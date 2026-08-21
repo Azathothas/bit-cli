@@ -446,6 +446,18 @@ a lint whose fix needs an API newer than the declared `rust-version`, so the
 Both are fixed rather than allowed. That is the second thing a wrong MSRV
 costs: not just a red job, but lint coverage nobody knew was off.
 
+**And the raise had a second cost that had to be paid before the job could go
+green.** With `rust-version` at 1.85 the tree also compiled `core::arch`'s
+`__cpuid` and `__get_cpuid_max` without an `unsafe` block, because a current
+toolchain has made those safe to call. At 1.88 they are still `unsafe fn`, so
+`cargo check` under the pinned toolchain failed with two `E0133`s that no
+amount of local testing on a current compiler would ever show. Writing the
+block and allowing `unused_unsafe` is what compiles under either, and the
+allowance carries the note that says when to drop it.
+
+That is the whole argument for having an `MSRV` job at all: the claim is only
+worth making if something compiles against it.
+
 Closing evidence is a green `MSRV` job, recorded below.
 
 ### T-145 The macOS test job fails to link
@@ -529,6 +541,48 @@ and `every_strategy_sets_the_length` runs `Falloc` alongside the other three.
 So the macOS job stops being a job nobody reads and becomes the evidence for
 this entry.
 
+**The link was the first defect and not the only one.** With it fixed, the job
+compiled, linked, ran, and failed six tests, all on the same cause and all the
+same shape as the first: `sysinfo::platform` was written `#[cfg(unix)]` and
+reads `/proc`. macOS has no `/proc`, so every read missed. The report it
+produced on an M-series Mac:
+
+```json
+"host": {
+  "cpu": {"architecture": "aarch64", "logical_cores": 3, "model": "unknown"},
+  "memory_total": {"bytes": 0, "human": "0 B"},
+  "os": {"name": "Linux", "version": "unknown"},
+  "unavailable": ["os.version", "memory_total", "network"]
+},
+"process": {"cpu_ms": 0, "open_handles": 0, "peak_rss_bytes": 0, ...}
+```
+
+`os.name` says `Linux` on a Mac. The module has an `unavailable` list for
+exactly this and it was populated correctly, and the field beside it was still
+a lie, because the fallback was a hardcoded `"Linux"` rather than a read that
+failed. A benchmark carries its environment so two numbers can be compared;
+this one would have said two Macs and a Linux box were the same machine.
+
+There is now a third implementation, from libSystem, with no new dependency:
+`getrusage` for processor time and the resident high-water mark, which on
+Darwin is in bytes where Linux reports the same field in kilobytes;
+`proc_pidinfo` for resident size now and for the open descriptor count; and
+`sysctlbyname` for the kernel name and version, the product version, the CPU
+brand string, and physical memory. Link speeds are not read and say so:
+`getifaddrs` plus an ioctl per interface is more than anything here compares
+across machines today.
+
+The struct layouts are transcribed from the system headers, and a
+transcription that is one field out does not fail, it reads the wrong offset
+and returns a plausible wrong number. `const _: () = assert!(size_of::<..>())`
+on all three fails the build instead.
+
+Checked here the same way the link fix was, since this machine is not a Mac:
+
+```
+$ rustc --target aarch64-apple-darwin --edition 2024 --emit=metadata -D warnings <the module>
+```
+
 Closing evidence is a green `Test (macos-latest)`, recorded below.
 
 
@@ -577,3 +631,111 @@ no `RUSTFLAGS` at all, so `.cargo/config.toml` applies there and every
 published artifact has been statically linked. The defect was in the
 verification path rather than in the release path, and the verification path
 is where it was caught.
+
+### T-150 Clippy pins a floating toolchain, so a Rust release can turn the tree red
+
+Source:      CI run 32437262089, 2026-08-21
+Category:    ci
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     The `Clippy` job pins `toolchain: stable`, which is whatever
+             Rust released most recently. Three lints fired there that do not
+             fire on the toolchain in front of me:
+
+             ```
+             error: using `chunks_exact` with a constant chunk size
+               --> crates/bit-cli-core/src/engine.rs:631:25
+               --> crates/bit-cli-core/src/torrent/metainfo.rs:459:10
+               --> crates/bit-cli-core/src/tracker.rs:655:10
+             ```
+
+             `cargo clippy --workspace --all-targets --all-features --
+             -D warnings` is clean on rustc 1.97.1 here, on a cold lint of the
+             same crate. So a commit that was green when it was written goes
+             red six weeks later with nobody having touched it, and the person
+             who finds it is whoever pushed next.
+Relevance:   `-D warnings` plus a floating toolchain means the build gate moves
+             on its own. This is not hypothetical: it happened in the run
+             above, and the three findings were mixed in with four real
+             failures, which is exactly the noise that makes a red light stop
+             being read. The lints themselves were worth fixing, which is the
+             argument for keeping a floating job somewhere rather than for
+             having the gate float.
+Approach:    Two jobs rather than one, which is the shape that keeps both
+             properties. A pinned `Clippy` at a named version is the gate and
+             blocks the merge. A second job on `stable`, allowed to fail,
+             reports what the next toolchain will want. Bumping the pin is then
+             a commit with a message, the same as the MSRV in
+             [T-144](#t-144-the-msrv-job-fails-the-tree-needs-a-newer-rustc-than-it-claims).
+
+             The same question applies to `Format`, `Test`, and `Build`, which
+             all pin `stable` too. `rustfmt` output is stable across releases
+             in practice and the test jobs want the newest compiler, so the
+             case is weakest there and strongest for the job that runs lints
+             with `-D warnings`.
+Acceptance:  `ci.yml` names a version for the gating lint job, a second job
+             tracks `stable` without blocking, and this entry records a run
+             where the tracking job is red and the gate is green.
+
+**Not done, and open on purpose.** The three lints are fixed, so the tree is
+green on both toolchains today and there is nothing to demonstrate the split
+against. Doing it now would mean adding a job whose whole point cannot be shown
+until the next Rust release. The three fixes are recorded under
+[T-144](#t-144-the-msrv-job-fails-the-tree-needs-a-newer-rustc-than-it-claims),
+because raising the MSRV is what unlocked two of the four lints this round;
+this one is the third and came from the toolchain rather than the manifest,
+which is precisely the distinction the entry is about.
+
+### T-151 Only one of the three release targets was checked for static linking
+
+Source:      found here, 2026-08-21, while acting on an operator request
+Category:    ci
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `scripts/check-static.ps1` reads a PE import table and refuses a
+             binary that needs `VCRUNTIME140.dll`. Both `ci.yml` and
+             `release.yml` ran it `if: runner.os == 'Windows'`. The two musl
+             targets make the same promise and nothing checked it, so
+             `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` could
+             have been shipping a binary that needs a loader and nobody would
+             have found out until it failed to start.
+Relevance:   [T-146](#t-146-ci-built-a-windows-binary-against-the-dynamic-c-runtime)
+             is the proof that this is not theoretical: CI did build against
+             the dynamic CRT, for weeks, and the reason it was caught at all is
+             that the one target with a check had one. Two thirds of the
+             release matrix had no such luck.
+Approach:    One script, two formats, chosen by the file's own magic bytes
+             rather than by the host, so a cross-built artifact is checked the
+             same way wherever the checking happens. For ELF that is: no
+             `PT_INTERP` program header and no `DT_NEEDED` entry in
+             `.dynamic`. Read from the file directly rather than through `ldd`,
+             which on a static binary prints "not a dynamic executable" on
+             glibc and runs the binary on some other libcs, and neither is a
+             thing to build a gate on.
+Acceptance:  The check runs on all three targets in `ci.yml` and in
+             `release.yml`, and it fails a dynamically linked ELF.
+
+**Both directions were proven before it shipped as a gate**, because a check
+that cannot fail is not a check and there is no Linux on this machine to try it
+against. Two synthetic ELF64 files were built, one with a `PT_INTERP` naming
+`/lib/ld-musl-x86_64.so.1` and one `DT_NEEDED` entry, and one with neither:
+
+```
+$ pwsh -NoProfile -File scripts/check-static.ps1 -Path static.elf
+interp:  none
+needed:  0 shared object(s)
+static confirmed: no PT_INTERP and no DT_NEEDED          # exit 0
+
+$ pwsh -NoProfile -File scripts/check-static.ps1 -Path dynamic.elf
+interp:  /lib/ld-musl-x86_64.so.1
+needed:  1 shared object(s)
+check-static: the binary is not statically linked: it names the dynamic
+loader /lib/ld-musl-x86_64.so.1, it needs 1 shared object(s)   # exit 1
+```
+
+The PE path is unchanged and still passes against this machine's own release
+build.

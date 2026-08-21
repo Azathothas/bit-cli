@@ -101,19 +101,36 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
       # The workflow-level RUSTFLAGS replaces the per-target rustflags in
-      # .cargo/config.toml rather than adding to them, so `+crt-static` has to
-      # be repeated here or the Windows artifact links the dynamic CRT and the
-      # check below fails. All three targets in this matrix want it.
-      - run: cargo build --release --locked --target ${{ matrix.target }}
+      # .cargo/config.toml rather than adding to them, so every flag that
+      # matters to the artifact has to be repeated here. That is what once let
+      # CI build a Windows binary against the dynamic CRT: see
+      # TODO/cli-surface.md, T-146. The comments on each flag are in
+      # .cargo/config.toml, and the two lists have to say the same thing.
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: cargo build --release --locked --target ${{ matrix.target }}
         env:
-          RUSTFLAGS: -D warnings -C target-feature=+crt-static
-      # A release binary that needs a Visual C++ redistributable is a release
-      # binary that fails to start on a clean machine, with a dialog box rather
-      # than an error a script can read.
-      - name: Check static CRT (Windows)
+          RUSTFLAGS: >-
+            -D warnings
+            -C target-feature=+crt-static
+            -C prefer-dynamic=no
+            -C link-self-contained=yes
+            -C link-arg=-Wl,--build-id=none
+      - name: Build (Windows)
         if: runner.os == 'Windows'
+        run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: -D warnings -C target-feature=+crt-static -C prefer-dynamic=no
+      # Every release target makes the same promise: the binary runs on a
+      # machine with nothing installed. On Windows that means no Visual C++
+      # redistributable, and the failure is a dialog box rather than an error a
+      # script can read. On Linux it means no loader and no shared objects.
+      # The script picks the check from the file's own magic bytes.
+      - name: Check the binary is self-contained
         shell: pwsh
-        run: ./scripts/check-static.ps1 -Path "target/${{ matrix.target }}/release/bit-cli.exe"
+        run: |
+          $name = if ($env:RUNNER_OS -eq 'Windows') { 'bit-cli.exe' } else { 'bit-cli' }
+          ./scripts/check-static.ps1 -Path "target/${{ matrix.target }}/release/$name"
 
   notices:
     name: Third party notices

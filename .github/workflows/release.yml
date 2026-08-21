@@ -85,10 +85,15 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Check static CRT (Windows)
-        if: runner.os == 'Windows'
+      # Every published artifact makes the same promise: it runs on a machine
+      # with nothing installed. This reads the binary and refuses to publish
+      # one that names a loader, needs a shared object, or imports the dynamic
+      # C runtime. It runs on all three targets rather than only Windows.
+      - name: Check the binary is self-contained
         shell: pwsh
-        run: ./scripts/check-static.ps1 -Path "target/${{ matrix.target }}/release/bit-cli.exe"
+        run: |
+          $name = if ($env:RUNNER_OS -eq 'Windows') { 'bit-cli.exe' } else { 'bit-cli' }
+          ./scripts/check-static.ps1 -Path "target/${{ matrix.target }}/release/$name"
 
       # Archive names carry the target triple rather than a friendly name, so
       # two builds of the same release cannot collide and a downloader can tell
