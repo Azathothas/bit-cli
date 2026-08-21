@@ -1383,6 +1383,48 @@ And a green run does not mean a suite has no race: this one passed twenty
 consecutive local runs and sixteen CI jobs before failing on a commit that
 touched no code.
 
+**It failed again on 2026-08-21T17:00Z, differently, and the fix above was only
+half of it.** CI run **32505742044** turned `Test (ubuntu-latest)` red on the
+[T-172](metainfo.md) push:
+
+```
+thread '...' panicked at crates/bit-cli/src/cmd/peers.rs:448:9:
+assertion `left == right` failed: {... "connecting":1, "live":0, "seen":1,
+  "peers":[{"errors":0,"downloaded_bytes":0,"state":"connecting"}]}
+  left: Number(0)
+ right: 2000
+```
+
+Read it against the failure above: `errors: 0` and `state: connecting` where
+the first one had `errors: 1` and `state: dead`. The dial was **not** lost this
+time. `wait_for_listener` did its job, the peer was reached, and the handshake
+was still in flight when the five second sample ended. So the first fix
+addressed the race it named and left the guessed duration behind it, which is
+the half [RULES.md](RULES.md) actually states: a test waits on the condition,
+never on a guessed duration.
+
+Rerunning the same job on the same commit with no change passed, which is what
+separates a flake from a break and is worth doing before touching anything.
+
+**Fixed by sampling until the bytes arrive.** `--duration` is the command's own
+contract and it samples for exactly that long, so the test cannot make one
+sample longer without changing what it is testing. What it can do is sample
+again: the run repeats until a report shows bytes moved or twenty-five seconds
+pass, and asserts on that report. On an unloaded machine the first sample
+succeeds and it costs nothing.
+
+The seeder is no longer joined. It runs for forty seconds so the retries have
+something to dial, and waiting for it to time out would have made every run of
+this test as long as its worst case: joining a 90 second seeder took the test
+from six seconds to ninety-one, measured. The thread dies with the test binary.
+
+**What this says about the previous fix, and about the next one.** T-160's
+`Approach` line was already the right rule, written down and then applied to
+only one of the two guesses in the test. A fix that quotes the rule and half
+applies it reads as complete in review, which is how this cost a second red
+job. Every timing assumption in a test has to be listed before one of them is
+fixed, not after the next failure names it.
+
 ### T-161 A CI action still targets Node.js 20, which is deprecated
 
 Source:      CI run 32457763652 annotations, 2026-08-21

@@ -116,6 +116,47 @@ What it enforces, and why each rule exists:
 - **The gates run before the push**, not after. `cargo fmt --all --check`,
   `cargo clippy -- -D warnings`, and `cargo test --workspace`.
 
+## 4a. Tools on this machine
+
+Three that a session should reach for before its own habits. Recorded here on
+2026-08-21 because the operator added them mid-session and the next agent will
+not know they exist.
+
+- **`codegraph`.** This repository has a `.codegraph/` index. Reach for it
+  **before** `grep`, `find`, or opening a file, when the question is "how does
+  X work", "where is X", or "what am I about to change". One call returns the
+  verbatim line-numbered source of the relevant symbols plus the call paths
+  between them and a blast-radius summary, which is what a grep-and-read loop
+  costs several round trips to assemble. The MCP tool is
+  `codegraph_explore`; the shell equivalent is
+  `codegraph explore "<symbols or question>"`.
+
+```bash
+codegraph sync
+```
+
+  after editing, when a query does not reflect a change yet. It is incremental
+  and takes under a second for a few files.
+
+  What it is not for: raw byte inspection. A question about literal CR bytes or
+  file encoding is `cat -A`'s, not codegraph's.
+
+- **`scc`** counts code. `scc --no-cocomo crates/` is the whole usage. Use it
+  when a doc claims a size, so the number is measured rather than remembered.
+
+- **ISO 8601 UTC in the record.** A commit body and a `PROGRESS.md` state line
+  carry the time the work was done, so a reader can line a commit up with a CI
+  run and a `TODO/` entry without inferring order from position.
+
+```bash
+date -u +"%Y-%m-%dT%H:%M:%SZ"
+```
+
+  The same format the JSON output uses, which is the rule
+  [section 5](#5-the-rules-that-bite-most-often) already carries for output.
+  An entry that closes says when, on its `Status:` line or in its first
+  closing sentence.
+
 ## 5. The rules that bite most often
 
 ### Process
@@ -132,7 +173,13 @@ What it enforces, and why each rule exists:
   [T-017](disk-io.md), [T-021](peers.md), [T-032](performance.md),
   [T-033](performance.md), [T-037](performance.md), [T-073](windows.md),
   [T-118](cli-surface.md), [T-131](multi-source.md), [T-141](webseed.md),
-  [T-145](cli-surface.md), [T-160](cli-surface.md), [T-162](webseed.md).
+  [T-145](cli-surface.md), [T-160](cli-surface.md), [T-162](webseed.md),
+  [T-184](disk-io.md), [T-172](metainfo.md).
+- **Measure before building, when the entry describes what the code does.**
+  Both 2026-08-21 additions above cost nothing to check and inverted the work:
+  [T-184](disk-io.md) predicted pieces that can never be proved and they verify
+  fine, and [T-172](metainfo.md) recommended strictness on the one dictionary
+  this tree never re-encodes. One command each.
 - **A corpus citation is evidence of what someone else did, not evidence that
   `bit-cli` does it.** Never let one become the other in a doc.
   [T-074](windows.md) is the worked example: the corpus named a librqbit

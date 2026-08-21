@@ -320,9 +320,9 @@ test cmd::info::tests::junk_after_the_top_level_dictionary_is_still_refused ... 
 test cmd::edit::tests::editing_a_torrent_with_unsorted_keys_keeps_its_info_hash ... ok
 ```
 
-Twelve more in `torrent/bencode.rs`, including that one tolerated byte does not
-excuse the one after it and that the recorded offset names the dictionary rather
-than the key.
+Thirteen more in `torrent/bencode.rs`, including that one tolerated byte does
+not excuse the one after it, that the recorded offset names the dictionary
+rather than the key, and the three depth tests below.
 
 `README.md` states the position under "Reading a torrent somebody else wrote",
 which is the acceptance's last clause.

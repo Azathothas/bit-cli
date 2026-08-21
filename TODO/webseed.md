@@ -1466,9 +1466,9 @@ verified and nobody disagreed about, so in a healthy run it holds the pieces in
 flight and nothing else. `LedgerStats.evicted` is the one number worth reading:
 it counts pieces that could no longer have been attributed if they had turned
 out wrong. It is reported as `torrents[].attribution` in `--json`.
-`forgetting_a_piece_gives_its_slot_back` exists because the first draft dropped
-the map entry and left the order entry, which would have shrunk the ledger by
-one for the rest of the run on every forget.
+`forgetting_a_piece_gives_its_slot_back` is there because dropping the map
+entry and leaving the order entry is the obvious way to write `forget_piece`
+and it would shrink the ledger by one, permanently, on every forget.
 
 **A conviction retires the source, through the path T-005 already built.**
 `SourceStats` gains a `banned` slot, set from outside the fetch path and read

@@ -1191,6 +1191,65 @@ async fn the_style_probe_tells_a_hoffman_seed_from_a_getright_one() {
     }
 }
 
+/// The whole style pass is bounded, so one unreachable mirror cannot hold up
+/// the reachable ones.
+///
+/// Everything waits on this pass: no bridge starts serving until every style
+/// is decided. A source that does not answer keeps BEP 19, which is what
+/// `auto` did before the probe existed, so the probe can never cost more than
+/// the answer it replaces. The assertion is on the clock as well as the
+/// answer, because the point is the delay and not the fallback.
+/// See `TODO/webseed.md`, T-004.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_unreachable_mirror_does_not_hold_up_the_others() {
+    let src = tempfile::tempdir().unwrap();
+    let data = content(64 * 1024, 73);
+    std::fs::write(src.path().join("movie.bin"), &data).unwrap();
+    let (reachable, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+
+    let layout = Arc::new(Layout::from_lengths(
+        "movie.bin",
+        false,
+        PIECE_LENGTH,
+        [("movie.bin".to_string(), data.len() as u64)],
+    ));
+    let hash = "0".repeat(40);
+
+    // 203.0.113.0/24 is TEST-NET-3 and is not routed, so a connect to it hangs
+    // rather than being refused. That is the case a refused port does not
+    // reach: `127.0.0.1:9` answers instantly and would prove nothing here.
+    let mut dead = SourceSpec::new("http://203.0.113.1/movie.bin", Origin::CommandLine);
+    dead.mode = bit_cli_core::webseed::Mode::Exact;
+    dead.limits.connect_timeout_ms = 30_000;
+    dead.limits.timeout_ms = 30_000;
+    let mut live = SourceSpec::new(format!("{reachable}movie.bin"), Origin::CommandLine);
+    live.mode = bit_cli_core::webseed::Mode::Exact;
+
+    let mut set = BindingSet::resolve(&layout, &hash, &[dead, live]).unwrap();
+    let started = std::time::Instant::now();
+    let decisions = bit_cli_core::webseed::probe::resolve_auto_styles(&mut set, &hash).await;
+    let elapsed = started.elapsed();
+
+    assert_eq!(decisions.len(), 2);
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "a 30 second connect timeout must not become a 30 second wait: {elapsed:?}"
+    );
+    // Both end up BEP 19: the reachable one because it answered with the whole
+    // entity, the dead one because nothing answered.
+    for decision in &decisions {
+        assert_eq!(decision.style, bit_cli_core::webseed::Style::GetRight);
+    }
+    assert!(
+        decisions[0].probe_error.is_some(),
+        "the source that was cut off says so: {decisions:?}"
+    );
+    assert!(
+        decisions[1].probe_error.is_none(),
+        "the source that answered has nothing to report: {decisions:?}"
+    );
+}
+
 /// A source that cannot be reached at all keeps the answer `auto` gave before
 /// the probe existed, rather than being refused over a failed probe.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

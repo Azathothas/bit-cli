@@ -939,6 +939,22 @@ pub struct StyleDecision {
     pub probe_error: Option<String>,
 }
 
+/// The longest the whole style-resolution pass may take.
+///
+/// Everything waits on this: no bridge starts serving until every style is
+/// decided, so an unreachable mirror would otherwise hold up the reachable
+/// ones for its full connect timeout, which defaults to ten seconds. The
+/// fallback when the budget runs out is BEP 19, which is exactly what `auto`
+/// did before the probe existed, so the probe can only ever be an improvement
+/// on the old behaviour and never a delay worse than the answer it replaces.
+///
+/// Five seconds is far above what one byte over HTTP costs and far below the
+/// ten a dead host costs. A caller who set a shorter
+/// `--web-seed-connect-timeout` gets theirs instead, because they have already
+/// said how long a source is worth waiting for.
+/// See `TODO/webseed.md`, T-004.
+const STYLE_PROBE_BUDGET: Duration = Duration::from_secs(5);
+
 /// Resolve every `Style::Auto` in a binding set, probing only where it has to.
 ///
 /// Three of the four cases cost nothing. An explicit `--web-seed-style` is
@@ -948,7 +964,8 @@ pub struct StyleDecision {
 /// read, and that is the one this asks. See `TODO/webseed.md`, T-004.
 ///
 /// Probes run together rather than in turn, because a run with eight sources
-/// should not wait eight timeouts to start.
+/// should not wait eight timeouts to start, and the whole pass is bounded by
+/// [`STYLE_PROBE_BUDGET`].
 pub async fn resolve_auto_styles(set: &mut BindingSet, info_hash: &str) -> Vec<StyleDecision> {
     let mut decisions: Vec<StyleDecision> = Vec::new();
     let mut probes = Vec::new();
@@ -983,6 +1000,12 @@ pub async fn resolve_auto_styles(set: &mut BindingSet, info_hash: &str) -> Vec<S
     // Together rather than in turn: a run with eight sources should not wait
     // eight timeouts before it starts. The binding is cloned into each task
     // because the set is borrowed mutably below.
+    let budget = probes
+        .iter()
+        .map(|position| set.bindings[*position].spec.limits.connect_timeout())
+        .max()
+        .unwrap_or(STYLE_PROBE_BUDGET)
+        .min(STYLE_PROBE_BUDGET);
     let mut tasks = tokio::task::JoinSet::new();
     for position in &probes {
         let binding = set.bindings[*position].clone();
@@ -991,18 +1014,26 @@ pub async fn resolve_auto_styles(set: &mut BindingSet, info_hash: &str) -> Vec<S
         tasks.spawn(async move { (position, speaks_hoffman(&binding, &hash).await) });
     }
     let mut answers: Vec<(usize, Result<bool>)> = Vec::with_capacity(probes.len());
-    while let Some(finished) = tasks.join_next().await {
-        match finished {
-            Ok(answer) => answers.push(answer),
-            Err(e) => {
-                // A panicked probe is a bug here rather than a bad mirror, and
-                // it must not take the run down. There is no position to
-                // attribute it to once the task is gone, so nothing is
-                // recorded and the source keeps `auto`'s old answer.
-                debug_assert!(false, "style probe panicked: {e}");
+    let collect = async {
+        while let Some(finished) = tasks.join_next().await {
+            match finished {
+                Ok(answer) => answers.push(answer),
+                Err(e) => {
+                    // A panicked probe is a bug here rather than a bad mirror,
+                    // and it must not take the run down. There is no position
+                    // to attribute it to once the task is gone, so nothing is
+                    // recorded and the source keeps `auto`'s old answer.
+                    debug_assert!(false, "style probe panicked: {e}");
+                }
             }
         }
-    }
+    };
+    // A source that did not answer inside the budget is simply absent from
+    // `answers`, and the loop below only visits the ones that did. The rest
+    // fall through to the fallback after it.
+    let _ = tokio::time::timeout(budget, collect).await;
+    let answered: std::collections::HashSet<usize> =
+        answers.iter().map(|(position, _)| *position).collect();
 
     for (position, answer) in answers {
         let binding = &mut set.bindings[position];
@@ -1022,6 +1053,24 @@ pub async fn resolve_auto_styles(set: &mut BindingSet, info_hash: &str) -> Vec<S
             style,
             decided_by: StyleSource::Probe,
             probe_error,
+        });
+    }
+
+    // Whatever the budget cut off. Recorded rather than dropped: a source
+    // silently treated as BEP 19 because a probe ran long is exactly the kind
+    // of thing that is impossible to diagnose from the outside.
+    for position in probes.into_iter().filter(|p| !answered.contains(p)) {
+        let binding = &mut set.bindings[position];
+        binding.spec.style = Style::GetRight;
+        decisions.push(StyleDecision {
+            index: binding.index,
+            url: binding.spec.url.clone(),
+            style: Style::GetRight,
+            decided_by: StyleSource::Probe,
+            probe_error: Some(format!(
+                "the style probe did not answer within {}ms, so BEP 19 was assumed",
+                budget.as_millis()
+            )),
         });
     }
     decisions.sort_by_key(|decision| decision.index);

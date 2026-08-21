@@ -1093,8 +1093,9 @@ That is true of the bytes and wrong about the run: nothing ever asked to fetch
 them. `verify --select-file` and `--exclude-file` list them under
 `not_selected`, leave them unread rather than hashing bytes nobody asked for,
 count `pieces_ok` against what was asked for, and measure `have_share` against
-`selected` rather than `total`. Without that last part a selection that arrived
-intact reported 55 per cent.
+`selected` rather than `total`. That last part is not cosmetic: on this fixture
+the selection is 2,048 bytes of a 3,700 byte torrent, so a run that got
+everything it asked for would otherwise read 55.35 per cent complete.
 
 The flags are `crate::selection`, shared with `download`, because a second copy
 of an index parser is a second set of off-by-one bugs. The one difference is
