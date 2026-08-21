@@ -592,6 +592,40 @@ pub fn free_port() -> u16 {
         .port()
 }
 
+/// Block until something accepts on `port`, or the timeout runs out.
+///
+/// `free_port` binds a port to learn its number and then drops the listener, so
+/// there is a window where the number is known and nothing is listening. A test
+/// that starts a seeder on a thread and dials it immediately can land in that
+/// window: the dial fails, the peer is marked dead with one error, and
+/// `librqbit` does not retry for ten seconds, which is longer than any of these
+/// tests run. That is not a slow machine showing a real defect, it is the test
+/// racing its own fixture, and it is what turned `Test (ubuntu-latest)` red on
+/// CI run 32458314378. See `TODO/cli-surface.md`, T-160.
+///
+/// Waiting on the condition rather than sleeping a guessed amount is the rule
+/// T-148 wrote down. Returns whether the port came up, so a caller can say so
+/// rather than failing on the assertion three lines later.
+pub fn wait_for_listener(port: u16, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        // A connect that succeeds is dropped immediately. One connection that
+        // closes before it handshakes is the shape T-020 measures, and it takes
+        // thousands of them to matter: `scripts/check-close-wait.ps1` puts 2000
+        // through a seeder and the listener survives.
+        if std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)),
+            std::time::Duration::from_millis(200),
+        )
+        .is_ok()
+        {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    false
+}
+
 /// Run the binary in-process and require success, returning stdout.
 pub fn run_ok(args: &[&str], cwd: impl Into<PathBuf>) -> String {
     let (mut env, captured) = Env::test(args, cwd);
@@ -709,6 +743,34 @@ mod tests {
         assert_eq!(
             std::fs::read(&one.torrent).unwrap(),
             std::fs::read(&other.torrent).unwrap()
+        );
+    }
+
+    /// A wait that always says yes is not a wait, and one that always says no
+    /// would fail every test that uses it for a reason nothing names. Both
+    /// directions, so `wait_for_listener` cannot become vacuous without this
+    /// failing. See T-160.
+    #[test]
+    fn waiting_for_a_listener_answers_both_ways() {
+        let listener =
+            std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        assert!(
+            wait_for_listener(port, std::time::Duration::from_secs(2)),
+            "a bound port was reported as not listening"
+        );
+
+        // Dropping the listener frees the port, which is exactly the window
+        // `free_port` leaves open and the one this helper exists to close.
+        drop(listener);
+        let started = std::time::Instant::now();
+        assert!(
+            !wait_for_listener(port, std::time::Duration::from_millis(300)),
+            "an unbound port was reported as listening"
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(250),
+            "it gave up before its timeout, so it is not waiting at all"
         );
     }
 }

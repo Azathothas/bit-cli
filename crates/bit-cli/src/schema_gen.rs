@@ -607,6 +607,15 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         })
     };
 
+    // Same race as the `peers` test, and here it is quieter and worse: a dial
+    // that beats the listener samples a `peers` document with a dead peer and
+    // no bytes, and the schema this generator writes is then missing whatever
+    // a live peer carries. See `TODO/cli-surface.md`, T-160 and T-158.
+    assert!(
+        crate::test_support::wait_for_listener(seeder_port, std::time::Duration::from_secs(10)),
+        "the seeder never listened on {seeder_port}"
+    );
+
     let peer = format!("127.0.0.1:{seeder_port}");
     let (_, out) = capture(
         &[

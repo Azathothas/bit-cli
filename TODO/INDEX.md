@@ -137,7 +137,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-156](cli-surface.md) | P3 | cli | open | A dry run writes a different shape under the same document kind |
 | [T-158](cli-surface.md) | P2 | cli | open | Regenerating the schema deletes fields the sample did not produce |
 | [T-159](cli-surface.md) | P3 | cli | open | Subcommand flags are filed under "Report options" in the help |
-| [T-160](cli-surface.md) | P3 | ci | open | One lib test failed once and has not been seen again |
+| [T-160](cli-surface.md) | P1 | ci | **done** | A peers test raced its own seeder |
 | [T-161](cli-surface.md) | P3 | ci | open | A CI action still targets Node.js 20, which is deprecated |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
@@ -273,11 +273,11 @@ down, arrived at twice more.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 | 11 |
-| P1 | 3 | 1 | 0 | 40 | 44 |
+| P1 | 3 | 1 | 0 | 41 | 45 |
 | P2 | 25 | 1 | 1 | 12 | 39 |
-| P3 | 16 | 0 | 0 | 0 | 16 |
+| P3 | 15 | 0 | 0 | 0 | 15 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **45** | **4** | **1** | **60** | **120** |
+| **All** | **44** | **4** | **1** | **61** | **120** |
 
 `blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

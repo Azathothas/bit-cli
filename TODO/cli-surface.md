@@ -1173,46 +1173,67 @@ done
 `webseed` and `probe` are correct, and they are correct by accident: neither
 declares a flag after its flatten.
 
-### T-160 One lib test failed once and has not been seen again
+### T-160 A peers test raced its own seeder
 
-Source:      local `cargo test --workspace`, 2026-08-21
+Source:      local `cargo test --workspace` and CI run 32458314378, 2026-08-21
 Category:    ci
-Priority:    P3
+Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**
 
-Problem:     One run of `cargo test --workspace` reported
-             `test result: FAILED. 305 passed; 1 failed` in the `bit-cli --lib`
-             target. The name was not captured, because the command filtering
-             the output matched only the summary line.
+Problem:     `cmd::peers::tests::a_sampled_swarm_carries_what_came_from_each_peer`
+             starts a seeder on a thread and dials it from the test thread with
+             nothing in between. `free_port` binds a port to learn its number
+             and drops the listener, so there is a window where the number is
+             known and nothing is listening. A dial that lands in that window
+             fails, the peer is marked dead with one error, and `librqbit` does
+             not retry it for ten seconds, which is twice the test's own
+             `--duration 5s`. Every assertion after the dial then fails.
 Relevance:   [T-148](#t-148-the-peer-probe-test-asserted-an-exit-code-inside-its-own-retry-loop)
-             is the precedent: a test that fails one run in twenty turns CI red
-             on somebody else's push and costs more to diagnose there than
-             here. A flake that is known about and unnamed is still a flake.
-Approach:    Capture the name. The suite is 306 tests in that target and runs in
-             about 31 seconds, so a loop is cheap:
-
-             ```powershell
-             foreach ($i in 1..40) {
-               cargo test -p bit-cli --lib 2>&1 | Tee-Object ".tmp/lib-$i.log" | Out-Null
-             }
-             Select-String -Path .tmp/lib-*.log -Pattern '^test (\S+) \.\.\. FAILED'
-             ```
-
-             The candidates are the tests that bind a port or start a child
-             process, because those are the ones a busy machine can starve.
+             is the precedent, and this is the same mistake in another test: a
+             fixture whose readiness is assumed rather than waited for. A test
+             that fails one run in twenty turns CI red on somebody else's push
+             and costs more to diagnose there than here.
+Approach:    Wait on the condition, not on a guessed duration.
+             `test_support::wait_for_listener` dials the port until something
+             accepts or ten seconds pass, and the test asserts it came up
+             before it asserts anything about the swarm, so a fixture that
+             never started says so instead of failing three assertions later.
 Acceptance:  The test is named, the race is named, and the fix is in the test
              rather than in a retry around it, the way T-148 was fixed.
 
-**Not reproduced in 14 further runs**, including six sequential and two
-concurrent pairs run specifically to provoke it, with no `bit-cli`,
-`loopback-fileserver`, `loopback-tracker`, or `loopback-churn` process left
-over from anything else. So it is rare rather than load-dependent in any way
-this machine can reproduce on demand, and it is recorded rather than chased.
+**Found twice and named once.** It failed one local `cargo test --workspace`
+and was not reproduced in fourteen further runs, including six sequential and
+two concurrent pairs run to provoke it, with the name lost because the command
+filtering the output matched only the summary line. Then it failed
+`Test (ubuntu-latest)` on CI run 32458314378, which was a **documentation-only
+commit**, and the CI log carried what the local filter had thrown away:
 
-The one thing to change next time it is looked for: filter for
-`^test \S+ \.\.\. FAILED` and not for the summary line, which is how the name
-was lost.
+```
+---- cmd::peers::tests::a_sampled_swarm_carries_what_came_from_each_peer stdout ----
+thread '...' panicked at crates/bit-cli/src/cmd/peers.rs:427:9:
+assertion `left == right` failed: {... "dead":1, "live":0,
+  "peers":[{"errors":1,"downloaded_bytes":0,"verified_pieces":0,"state":"dead"}]}
+  left: Number(1)
+ right: 0
+```
+
+`errors: 1` and `downloaded_bytes: 0` are the whole diagnosis: the peer never
+connected, so nothing followed. A commit that changed only Markdown is what
+proves the test and not the code.
+
+**Fixed, and in two places.** `crates/bit-cli/src/schema_gen.rs` has the same
+seeder-on-a-thread-then-dial shape and now waits too. There it is quieter and
+worse: nothing asserts, so a lost race would sample a `peers` document with a
+dead peer and silently write a schema missing whatever a live peer carries.
+That is [T-158](#t-158-regenerating-the-schema-deletes-fields-the-sample-did-not-produce)
+arriving by a second route.
+
+Two things worth keeping from how this was found. Filter for
+`^test \S+ \.\.\. FAILED` and not for the summary line, or the name is lost.
+And a green run does not mean a suite has no race: this one passed twenty
+consecutive local runs and sixteen CI jobs before failing on a commit that
+touched no code.
 
 ### T-161 A CI action still targets Node.js 20, which is deprecated
 

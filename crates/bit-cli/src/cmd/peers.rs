@@ -402,6 +402,17 @@ mod tests {
             })
         };
 
+        // The seeder is on a thread and `peers` dials it from this one, so the
+        // listener has to be up first. Without this the dial can lose the race,
+        // and `librqbit` does not retry a dead peer for ten seconds, which is
+        // twice the `--duration` below: the run then reports one error, zero
+        // bytes, and a dead peer, and every assertion after it fails. That is
+        // T-160, and it turned CI red on a docs-only commit.
+        assert!(
+            crate::test_support::wait_for_listener(port, std::time::Duration::from_secs(10)),
+            "the seeder never listened on {port}"
+        );
+
         let report = crate::test_support::run_json(
             &[
                 "peers",
