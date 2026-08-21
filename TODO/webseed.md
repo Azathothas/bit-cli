@@ -321,6 +321,27 @@ Acceptance:  The stall case in `bench/webseed-<timestamp>.json` ends in under
              three times `--web-seed-timeout`, and this file records the before
              and after.
 
+**Two independent implementations reached the same rule this entry proposes,
+and both bound it tighter.** vortex
+[PR 143](https://github.com/Nehliin/vortex/pull/143) mirrors libtorrent: drop
+a connection with **no activity in either direction for 15 seconds while
+requests are in flight**. The in-flight condition is the important half — an
+idle connection with nothing outstanding is not stalled, it is idle, and
+dropping it is a different decision. `seedchamp/docs/design.md:197` uses a
+20 second request stall, **4 seconds in endgame**, and triggers Cancel plus
+re-Request rather than killing the source. Two more details there are worth
+copying exactly: a partial frame stays in the buffer, and **only ingested
+blocks refresh the stall clock**, so a source dribbling bytes that never
+complete a block is correctly seen as stalled rather than as slow. That is
+precisely the `--stall-after 65536` case this entry reproduces.
+
+vortex [PR 142](https://github.com/Nehliin/vortex/pull/142) is the mistake to
+avoid on the way: the in-flight queue was not consulted before snubbing, so
+peers were snubbed merely for choking, and fast peers were snubbed after
+**explicitly rejecting** every request. A reject is not a timeout, and neither
+is a 503 — see [T-005](#t-005-a-source-restricted-mid-run-cannot-be-re-scoped)
+on treating 503 as backpressure.
+
 ### T-008 A duplicate block request is fetched twice
 
 Source:      the [T-090](bench.md) `bench leech` measurement
@@ -351,6 +372,30 @@ Approach:    Skipping the second spawn is one line, and it is not obviously
 Acceptance:  `summary.pipeline.requests` equals `summary.pipeline.blocks` on a
              `bench leech` run of a torrent with more than a thousand pieces,
              and the run still completes.
+
+**anacrolix solves this from the other end, and the answer is better than
+skipping the second spawn.** `torrent/webseed-peer.go:327` `maxChunkDiscard`
+and `:344` `readChunks`: the response body **keeps being read after a cancel**,
+so already-buffered bytes are used rather than thrown away, and the stream is
+cancelled only when no wanted chunk remains inside the discard window. The
+related constant is `torrent/webseed/client.go:29`
+`MaxDiscardBytes = 48 << 10`: when a server answers `200` to a ranged request,
+up to 48 KiB is read and discarded to reach the wanted offset, and beyond that
+the request fails as `ErrStatusOkForRangeRequest`.
+
+That reframes this entry. The waste is not "a block was fetched twice", it is
+"bytes already in flight were discarded because the request that wanted them
+was cancelled". `bit-cli` has a per-source window cache, which is why the cost
+has not shown up as traffic, so the two designs are solving the same problem
+from opposite sides and the measurement in the Acceptance is what says which
+one this tree needs. Read the discard-window rule before writing the one-line
+guard: if the window cache already absorbs it, the guard is the whole fix and
+the discard window is not needed.
+
+`torrent/webseed/client.go:185` `checkContentLength` is a third small rule from
+the same file: compare `Content-Length` **only** when `Content-Encoding` is
+`identity` or absent. See [T-004](#t-004-bep-17-style-is-not-auto-detected-only-declared)
+on why a transcoding proxy makes any other comparison wrong.
 
 ### T-009 A source cannot be attached over more than one connection
 
@@ -672,11 +717,49 @@ Acceptance:  `bit-cli webseed test <TORRENT> --web-seed <HOFFMAN URL>` reports
              `"style": "hoffman"` without the flag, and a download from that
              source completes.
 
+**The corpus holds the only implementation of both styles, and it makes half of
+this entry unnecessary.** `gosh-dl` parses the two metainfo keys into two
+separate fields: `gosh-dl/src/torrent/metainfo.rs:125` reads `url-list` into
+`:36` `url_list` and `:128` reads `httpseeds` into `:38` `httpseeds`, both
+through one shared parser at `:391` `parse_url_list` that accepts a bencoded
+string or a list and filters to `http://` and `https://`. Its
+`gosh-dl/src/torrent/webseed.rs:24` has the type,
+`WebSeedType { GetRight, Hoffman }`, and `:587` `build_piece_url` has both URL
+forms: GetRight is the URL itself for a single-file torrent and a per-file URL
+otherwise, and **Hoffman is `{url}?info_hash={urlencoded}&piece={index}`**.
+`:618` `build_file_url` trims a trailing `/`, percent-encodes each path
+component and joins with `/`.
+
+**Then it throws the distinction away, and that is the part to not copy.** At
+`gosh-dl/src/torrent/webseed.rs:303` the manager builds every source with
+`let seed_type = WebSeedType::GetRight;` under a comment guessing that Hoffman
+seeds "typically end with specific paths", and `:479` `all_webseeds()` merges
+`url_list` and `httpseeds` into one list. The style was parsed correctly and
+discarded before use.
+
+**Which hands this entry a cheaper answer than the probe.** BEP 17 and BEP 19
+are distinguished by *which metainfo key the URL came from* — that is what the
+two BEPs specify, and it needs no network round trip. `bit-cli` already marks
+sources from `httpseeds` as BEP 17 at collection time, so the metainfo half is
+done. What is left is genuinely only the command-line case, where there is no
+key to read and the probe is the only signal. So this entry shrinks to: keep
+the metainfo keying, add the probe for `--web-seed` sources alone, and keep
+`--web-seed-style` as the override for both.
+
+The probe also needs `Accept-Encoding: identity`, which gosh-dl sets on every
+web seed request for a reason worth carrying: a transcoding proxy that
+re-encodes the body silently changes the byte range that comes back, so a
+correct request returns wrong bytes and the piece fails its hash against a
+healthy mirror.
+
+Related and separate: `bit-cli` reads `url-list` as a string or a list and
+reads `httpseeds` as a list only, which is [T-171](metainfo.md).
+
 ### T-005 A source restricted mid-run cannot be re-scoped
 
-Source:      design gap
+Source:      design gap; corroborated by `reference/RESEARCH.md` section D, 2026-08-21
 Category:    webseed
-Priority:    P3
+Priority:    P2
 Effort:      M
 Status:      open
 
@@ -694,6 +777,42 @@ Acceptance:  A torrent with two files, a mirror that serves one and 404s the
              other, and a peer for the rest: the run completes, and
              `--json` reports the source's scope narrowed to the file it does
              hold.
+
+**Raised from P3 to P2 on 2026-08-21, and the argument is that this is a
+correctness bug in the one feature `bit-cli` exists for rather than a
+refinement.**
+
+`bit-cli`'s whole scope model says a mirror holding part of a payload is a
+first-class case and not an error. `README.md` says so, and it is the
+difference between this tool and every other one. The retirement rule
+contradicts it: a permanent status on **one file** — 401, 403, 404, 410 or
+416 — retires the **whole source**, including the files it was serving
+correctly a moment earlier. So `bit-cli` supports partial mirrors right up to
+the moment a mirror turns out to be partial in a way the scope did not
+predict, which is the case the model is for.
+
+`torrent/webseed-peer.go:57` `webseedFileUnavailable` is the rule this should
+be: on 403, 404, 410 or 451, remove **only that file's pieces** from the web
+seed's bitmap, via `:71` `removeFilePieces`. The source keeps serving
+everything else. That is strictly better for a partial mirror and it is not
+more code, it is different code in the same place.
+
+Two more things from the same file are worth taking while this is open.
+`torrent/webseed-peer.go:46` uses `convict(err, time.Minute)` — a source is
+**suspended for a term** rather than killed, which is what
+[T-137](multi-source.md) already built here as `--web-seed-cooldown`, so the
+two designs agree and this entry only has to extend it from whole-source to
+per-file. And `torrent/webseed/client.go:270` treats **503 as backpressure
+rather than death**, which is a status `bit-cli` should never let a user
+configure as fatal by accident.
+
+Note the wire-level obstacle in this entry's Approach — that the bridge cannot
+retract bits it has already announced, so re-scoping means a reconnect — has an
+answer in the corpus that removes it entirely. BEP 54 `lt_donthave` is one
+extended message carrying a piece index that clears exactly one bit in the
+peer's bitfield. That is [T-167](bep-coverage.md), it is about twenty lines of
+protocol, and it turns this entry's reconnect into a message. Do that first and
+this gets smaller.
 
 ---
 
@@ -1020,3 +1139,72 @@ What each test asserts now:
 The last one is the point. Replacing a brittle assertion with a weaker one
 would have traded a red job for a blind spot. This one is narrower about the
 machine and wider about the code.
+
+---
+
+### T-179 A bad piece cannot be attributed to the source that filled it
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    webseed
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     When a piece fails its hash, `bit-cli` knows the piece failed and
+             does not know **who supplied the wrong bytes**. A piece is filled
+             from blocks that may have come from several HTTP sources, several
+             peers, or a mix, and nothing records which block came from where
+             once the block has been written.
+Relevance:   This is the gap under two other entries and it is the reason both
+             of them have to guess.
+
+             [T-164](peers.md) wants to block a peer that sends garbage, and
+             [T-005](#t-005-a-source-restricted-mid-run-cannot-be-re-scoped)
+             wants to narrow a source that serves the wrong thing. Both need to
+             name a culprit. Without attribution the choices are to punish
+             everyone who contributed to the piece, which retires healthy
+             mirrors, or to punish nobody, which is what happens today.
+
+             It matters more here than in a normal client, and the reason is
+             `bit-cli`'s own design. A conventional client fills a piece from
+             one peer most of the time, so "the piece failed" and "that peer is
+             bad" are nearly the same statement. `bit-cli` exists to point
+             **several sources at one payload**, so its normal case is the
+             ambiguous one. `--web-seed-verify piece` already hash-checks at
+             the source, which covers a source serving a whole wrong piece; it
+             does not cover a piece assembled from two sources where one of
+             them is wrong.
+Approach:    `torrent/smartban/smartban.go` is 83 lines and does exactly this,
+             with `torrent/smartban.go` as the integration. Every block is
+             recorded with the peer that supplied it. When a piece fails its
+             hash, `CheckBlock` re-hashes each block against the verified data
+             once it arrives and returns **exactly the peers whose blocks
+             disagree**. That converts "a source is bad" from a guess into a
+             fact, and it does it without a second fetch, because the correct
+             data arrives anyway on the retry.
+
+             The cost is the block-to-source map, which is bounded by the
+             pieces in flight rather than by the torrent size, so it belongs
+             with the accounting [T-041](memory.md) is already measuring rather
+             than as a new allocation to justify. `--web-seed-verify piece`
+             gives a head start: the per-source hash check already exists and
+             the map is what generalises it to the mixed case.
+
+             gosh-dl [PR 7](https://github.com/goshitsarch-eng/gosh-dl/pull/7)
+             is the accounting hazard to avoid while touching this code. In
+             endgame the same piece is requested from several sources, and two
+             concurrent completions both incremented the verified-byte counter,
+             so progress exceeded 100 per cent — reported by a user as
+             331.5 MB of 263.6 MB, or 125.8 per cent, in
+             [Issue 6](https://github.com/goshitsarch-eng/gosh-dl/issues/6).
+             The fix is to make the increment conditional on winning the
+             `pending.remove()` race. `bit-cli` closed
+             [T-139](multi-source.md) over the same class of error, a resumed
+             download charging its existing bytes to the swarm, so the rule is
+             already established here: **report verified bytes, count network
+             bytes separately.**
+Acceptance:  A run with two sources for one torrent, one of which serves wrong
+             bytes for part of a piece, names that source and only that source
+             in `--json`, retires it, and completes from the other. The healthy
+             source is asserted to still be active at the end, because
+             retiring both is the failure this entry exists to prevent.

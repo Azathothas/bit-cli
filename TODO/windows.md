@@ -298,7 +298,35 @@ Acceptance:  **Fixed in the pinned 9.0.0.** Verified at
              `storage/filesystem/opened_file.rs:63-74`: the Windows
              `pread_exact` now loops over `seek_read` and returns
              `ErrorKind::UnexpectedEof` when a read returns zero. Checked
-             2026-08-19.
+             2026-08-19, and re-checked 2026-08-21 against the same registry
+             copy.
+
+**Re-checked on 2026-08-21 against the corpus, and this entry was right.**
+`nanotorrent/patches/0010-windows-pread-pwrite-exact.patch` is 112 lines with
+tests against **librqbit 8.1.1**, and its `PATCHES.md` states the consequence
+in full: `pread_exact` called `File::seek_read` once and **discarded the byte
+count**, so at or past EOF `Ok(0)` was reported as success with the caller's
+buffer untouched. `FileOps::initial_check` therefore never saw a file as
+missing or empty and hash-checked every piece — a fresh 6.5 GiB torrent spent
+about eleven seconds SHA-1'ing files holding nothing — and any short read
+hashed, streamed **or served to a peer** whatever stale bytes were in the
+buffer. The same patch fixes `pwrite_all`, which re-wrote the whole buffer at
+the same offset on every pass while subtracting the written count from
+`remaining`, duplicating data and able to underflow.
+
+`reference/RESEARCH.md` suggests this defect is consistent with T-074 and with
+[T-015](disk-io.md), and asks which librqbit `bit-cli` pins. The answer:
+**9.0.0, and both halves are already fixed there.** `pread_exact` at
+`opened_file.rs:63-74` loops, advances the offset, and maps `Ok(0)` to
+`UnexpectedEof`. `pwrite_all` at `:87-101` loops, advances both `buf` and
+`offset`, and subtracts only what was actually written. So the 8.1.1 defect is
+not present in the tree, T-074 stays **done** on the evidence it always had,
+and [T-015](disk-io.md) had a different cause, recorded under its own entry.
+A corpus citation is evidence of what somebody else found in the version they
+read; it is not evidence about this tree, and this is the worked example.
+
+One difference survives, and it is [T-178](#t-178-librqbits-windows-pwrite_all-can-spin-forever-on-a-zero-byte-write)
+below.
 
 ### T-075 PowerShell redirection encoding is not documented
 
@@ -458,3 +486,79 @@ true one.
 
 The two `bit-cli` tests were not touched. They asserted the right answer; the
 planner gave the wrong one on one platform.
+
+---
+
+### T-178 librqbit's Windows pwrite_all can spin forever on a zero-byte write
+
+Source:      `reference/RESEARCH.md` section D, checked against the pinned crate 2026-08-21
+Category:    windows
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `librqbit` 9.0.0's Windows `pwrite_all`, at
+             `storage/filesystem/opened_file.rs:87-101` in the registry copy,
+             is:
+
+             ```rust
+             let mut remaining = buf.len();
+             while remaining > 0 {
+                 let written = self.seek_write(&buf[..remaining], offset)?;
+                 remaining -= written;
+                 offset += written as u64;
+                 buf = &buf[written..];
+             }
+             ```
+
+             The loop is correct for a short write, which is the defect
+             [T-074](#t-074-a-false-hash-check-pass-on-empty-files) records as
+             fixed. It has no guard for `written == 0`. `WriteFile` returning
+             success with zero bytes written is rare and is not impossible: a
+             full volume, a disconnected network share, or a filter driver can
+             all produce it. When it happens `remaining` never decreases and
+             the loop **never terminates**, on the thread that owns that write.
+Relevance:   P3 because the trigger is rare, and worth an entry because of what
+             it looks like when it fires. A hung write thread on a seeding box
+             is not a crash and not an error: the process stays up, keeps
+             answering, and quietly stops making progress on one file. That is
+             the same signature as [T-037](performance.md), a run that stalls
+             for minutes, and the same signature as
+             [T-020](peers.md)'s listener that accepts and never answers. Two
+             of this project's three hardest bugs so far have had exactly this
+             shape, and the lesson each of them wrote down is that an outage no
+             health check sees costs more to find than it costs to prevent.
+
+             `bit-cli` is Windows-first, and this is on the payload write path
+             for every download on the platform it targets.
+Approach:    `nanotorrent/patches/0010-windows-pread-pwrite-exact.patch` maps
+             `Ok(0)` to `std::io::ErrorKind::WriteZero`, which is the standard
+             library's own convention for exactly this case and is what
+             `write_all` does. Its three tests are the shape to copy:
+             `pread_exact_fails_on_empty_file`,
+             `pread_exact_fails_past_eof_and_leaves_no_stale_bytes`, and
+             `pwrite_all_advances_the_offset`.
+
+             This is a one-line upstream change and `bit-cli` cannot make it,
+             so the question is what to do here. Two options, and the second is
+             the one to take.
+
+             Reporting it upstream is the clean fix and is out of `bit-cli`'s
+             hands. Meanwhile `bit-cli` already owns a storage wrapper — the
+             one [T-010](disk-io.md), [T-011](disk-io.md) and
+             [T-013](disk-io.md) were closed with, which opens a payload file
+             on first touch and holds the descriptor pool. A write that has
+             made no progress for a bounded time is detectable there, and
+             `bit-cli` already has the vocabulary for it: exit code 16, a
+             resource ceiling the caller set, which `--max-handles` uses.
+Blocker:     Not blocked, but not worth building alone. It shares its whole
+             mechanism with [T-018](disk-io.md), which is about the write path
+             issuing one operation per 16 KiB block, and anything that batches
+             or coalesces writes there is the natural place to put a
+             no-progress guard. Do them together or this is a wrapper for one
+             `if`.
+Acceptance:  A test double whose write returns `Ok(0)` causes the run to fail
+             with a named error inside a bounded time rather than hanging, and
+             the error says which file and offset. Windows only, so the test is
+             `#[cfg(windows)]` and the guard is in `bit-cli`'s wrapper rather
+             than conditional on a librqbit version.

@@ -564,3 +564,201 @@ empty. It fails on the old code with `seen: 0`.
 $ cargo test -p bit-cli --lib peers
 test result: ok. 11 passed; 0 failed
 ```
+
+---
+
+### T-163 MSE/PE peer encryption is not implemented
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    peers
+Priority:    P2
+Effort:      L
+Status:      open
+
+Problem:     `bit-cli` speaks plaintext BitTorrent only. There is no MSE/PE
+             (message stream encryption, protocol encryption) in the tree, and
+             no way to require it, prefer it, or accept it.
+Relevance:   This is an interoperability cost before it is a privacy feature.
+             A peer configured to **require** encryption will not exchange
+             traffic with a plaintext-only client at all, which superseedr
+             [Issue 297](https://github.com/Jagalite/superseedr/issues/297)
+             states plainly from the other side of the same gap. So the swarm
+             `bit-cli` can reach is smaller than the swarm that exists, and
+             nothing in the output says so.
+Approach:    Three sources, in the order they are worth reading.
+
+             `mtorrent/mtorrent-core/src/pe/` is the cleanest standalone
+             implementation. `key_exchange.rs` carries the 768-bit MSE DH
+             prime with generator 2 and `KEY_SIZE = 96`.
+             `mtorrent/mtorrent-core/src/pe/handshake.rs:12-17` fixes
+             `MODE_PLAINTEXT = 1`, `MODE_RC4 = 2`, `MODE_ANY = 3`,
+             `MAX_PADDING_LEN = 512` and `VC_LEN = 8`, with `max_pe3_len` and
+             `max_pe4_len` just below so a reader can bound its buffers. `:41`
+             `outbound_handshake` and `:164` `inbound_handshake` are the two
+             directions.
+
+             `mtorrent/mtorrent-core/src/pe/utils.rs:17` `detect_encryption`
+             is the piece that matters most for `bit-cli`'s shape. It reads
+             exactly `PROTOCOL_STRING.len()` bytes, compares, and returns the
+             stream **with those bytes pushed back**, so one listening port
+             serves plaintext and encrypted peers with no second port and no
+             mode flag.
+
+             `nanotorrent` is the librqbit-specific route, and it is the one
+             that matters, because `bit-cli` builds on librqbit and does not
+             fork it. Patches `0003-stream-transform-seam.patch` and
+             `0005-incoming-stream-transform-seam.patch` add a
+             `StreamTransform` trait plus `SessionOptions::stream_transform`
+             for outgoing streams, and an `IncomingStreamTransform` for the
+             accept path. The non-obvious half is in 0005: the incoming
+             transform is handed **every active info hash**, because the hash
+             is not known until the possibly-encrypted handshake has been
+             read, and the MSE responder resolves the peer's SKEY against
+             them. `nanotorrent/src/bittorrent/mse.rs` is 819 lines of
+             implementation against those two seams, and its module doc states
+             the policy choice outright: RC4 only, advertise only RC4 in
+             `crypto_provide`, drop a peer that will not do RC4, because that
+             is what "require encryption" means.
+Blocker:     The seams do not exist in `librqbit` 9.0.0. This is the same wall
+             [T-002](webseed.md) measured and [T-102](bep-coverage.md)
+             records: the connect and accept paths and `PeerConnectionHandler`
+             are implemented inside `librqbit` by the torrent state, not by
+             anything a dependent crate can supply. What would unblock it is
+             two upstream visibility changes of the shape nanotorrent's 0003
+             and 0005 make, or a vendored `librqbit`, which decision 7.3 does
+             not take. It stays open with the cost named.
+Acceptance:  A `bit-cli download` against a peer configured to require
+             encryption completes, and the same run against the same peer with
+             encryption off completes too, from one listening port with no
+             mode flag. `--encryption off|prefer|require` reports which mode
+             each peer settled on in `--json`. Both runs recorded here.
+
+### T-164 A peer that sends garbage keeps its connection slot
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    peers
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `bit-cli` has `--web-seed-fatal-status` and
+             `--web-seed-max-errors`, so an HTTP source that misbehaves is
+             retired and stays retired. There is no equivalent for a peer. A
+             peer that fails a piece hash, sends a malformed message, or
+             breaks the protocol is dropped and then redialled.
+Relevance:   vortex [Issue 125](https://github.com/Nehliin/vortex/issues/125)
+             is that failure with the crash already fixed: once the process
+             stopped dying on the malformed response, the same peer
+             reconnected and kept sending garbage, burning a connection slot,
+             and the DHT rediscovered it **every 20 seconds**. Fixing a crash
+             without adding a blocklist turns a hard failure into a slow one,
+             which is harder to diagnose. The asymmetry is the argument on its
+             own: `bit-cli` already decided that a source which misbehaves gets
+             retired, and applies that decision to only one of its two kinds
+             of source.
+Approach:    The proposal in that issue is the shape. Auto-block on a protocol
+             violation, check the blocklist **before completing a handshake**
+             rather than after, and expose add, remove and query. Persistence
+             is optional there, which suits `bit-cli`: decision 7.4 allows no
+             state file, so the blocklist lives for the invocation and
+             `--block-peer <ADDR>` covers the case a user wants to carry
+             across runs.
+             `aria2_rust/aria2-core/src/engine/bt_peer_storage/` holds a
+             `rejection_state.rs` with blocklist tests beside it, for a second
+             opinion on the bookkeeping.
+
+             What makes a violation attributable rather than guessed is
+             [T-179](webseed.md), smart ban: with several sources filling one
+             piece, a failed hash names a set of peers and not one peer. Build
+             that first, or this blocks whichever peer is convenient.
+Acceptance:  A synthetic peer that fails a piece hash twice is not redialled
+             for the rest of the run, `bit-cli peers --json` names it with the
+             reason, and the freed slot measurably goes to another peer.
+             `bench swarm` drives it, because it already builds peers that
+             misbehave on purpose.
+
+### T-165 The peer's reqq is ignored, so the queue depth is a fixed 128
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    peers
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     A peer's BEP 10 extended handshake carries `reqq`, the number of
+             block requests it will queue. `bit-cli bench leech` reports a
+             queue depth of 128 whatever the peer said, and nothing reads the
+             advertised value.
+Relevance:   mtorrent [Issue 17](https://github.com/DanglingPointer/mtorrent/issues/17)
+             carries the whole argument: exceeding `reqq` either wastes every
+             request past the limit or gets the connection dropped, depending
+             on the peer, and both look like a slow peer from this side. It
+             also makes a number `bench leech` prints wrong rather than merely
+             unbounded, which matters more here than upstream, because that
+             number is evidence under [T-041](memory.md) and
+             [T-018](disk-io.md). A fixed constant reported as a measurement is
+             the mistake [T-032](performance.md) and [T-141](webseed.md) both
+             closed by disproving.
+Approach:    `vortex/bittorrent/src/peer_comm/extended_protocol.rs:60`
+             `extension_handshake_msg` shows `reqq` beside `m`, `v`, `p`,
+             `metadata_size` and `upload_only` in the same handshake
+             `bit-cli`'s bridge already builds, so the field is one key away on
+             the send side. On the receive side the value bounds the pipeline.
+             `seedchamp/docs/design.md:197` is what to bound it *with*: a
+             BDP-sized depth from an EMA of that peer's own wire rate,
+             `desired = 5 s * rate / 16 KiB`, capped rather than fixed, with a
+             20 s request stall and 4 s in endgame. The bridge is the place to
+             start because it is `bit-cli`'s own peer implementation. The
+             session side needs `librqbit`.
+Acceptance:  `bench leech` reports the peer's advertised `reqq` and the depth
+             actually used, and the two agree when the peer advertises less
+             than the cap. A synthetic peer advertising `reqq = 8` receives no
+             more than 8 outstanding requests, asserted in a test rather than
+             observed in a report.
+
+### T-166 BEP 10 extension ids are not proven to map in both directions
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    peers
+Priority:    P1
+Effort:      S
+Status:      open
+
+Problem:     The web seed bridge implements BEP 10 (`webseed/bridge.rs:83`,
+             `:708`) and nothing in the tree asserts that it keeps **our**
+             extension ids and **the peer's** apart. They are two independent
+             numberings.
+Relevance:   vortex [PR 103](https://github.com/Nehliin/vortex/pull/103) is
+             the best interop finding in the corpus and it is exactly this
+             mistake. The extension map was keyed by the local id and then
+             tested against the peer's: `if self.extensions.contains_key(&id)
+             { continue; }`. When qBittorrent assigned `ut_metadata = 2` and
+             the local side used `1`, incoming id 2 was skipped as "already
+             initialised", because the local `upload_only` happened to be 2.
+             The stated consequence is that extensions had never once worked
+             against qBittorrent. A defect of this shape is silent, is
+             invisible against any peer that happens to number its extensions
+             the same way, and `bit-cli`'s bridge sits on both ends of a
+             loopback pair in every test it has, which is precisely the
+             arrangement that hides it.
+Approach:    The rule is one sentence: map **peer id to handler** in one
+             direction and **name to our id** in the other, as two separate
+             tables, and never index one with the other's key. Read the bridge
+             against that rule, then write a test whose peer deliberately
+             numbers `ut_metadata` and `upload_only` differently from the
+             bridge and asserts both are routed.
+
+             Two ordering rules from the same repository are worth asserting
+             while that test is being written.
+             [PR 156](https://github.com/Nehliin/vortex/pull/156): messages
+             arriving in the same TCP read as the handshake were processed
+             before the bitfield was queued, so `Interested` could precede
+             `Bitfield`, and **the bitfield must be the first message after
+             the handshake**. `webseed/bridge.rs:674` already says the order
+             matters; a test is what keeps it true.
+             [PR 155](https://github.com/Nehliin/vortex/pull/155) is the
+             `Have` handling for peers without BEP 6.
+Acceptance:  A test in which the peer's extension numbering differs from the
+             bridge's, the bridge routes an incoming `ut_metadata` and an
+             incoming `upload_only` to the right handlers, and the first
+             message after the handshake is asserted to be the bitfield.

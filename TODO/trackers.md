@@ -221,3 +221,136 @@ Approach:    Add `--scrape-url` so a caller who knows the endpoint can supply
              it.
 Acceptance:  `bit-cli trackers <TORRENT> --scrape --scrape-url <URL>` scrapes
              a tracker whose convention differs.
+
+---
+
+## What the 2026-08-21 corpus adds to the three entries above
+
+**T-063, tier order.** `TorrentNG/crates/rt-tracker/src/tier.rs` is the BEP 12
+rule implemented: `:8` `Tier { trackers, active }`, `:55`
+`TierSet { tiers, active_tier }`, `promote_active()` which **swaps a successful
+tracker to the front of its tier**, and `advance()` which moves to the next
+tracker on failure and then to the next tier. That is the whole algorithm and
+it is small.
+
+`bit-cli`'s divergence stands, and this entry's reasoning survives contact with
+it: a command whose job is to report on every tracker should not wait out a
+dead tier. What the corpus adds is that a `--respect-tiers` flag would be
+cheap, and one fact that changes where the work is. `nanotorrent`'s patch 0008
+records that **librqbit flattens `announce_list` tiers into a `HashSet`**, so
+tier order is not available from the session at all without patching it.
+`bit-cli`'s own `tracker.rs:116` keeps the tier index for the `trackers`
+command, so the divergence is real for the command and *forced* for the
+download path. Those are two different situations and this entry currently
+reads as though they were one. Note also that promoting a working tracker to
+the front of its tier is useful even without tier fallthrough, and costs
+nothing.
+
+mtorrent [Issue 29](https://github.com/DanglingPointer/mtorrent/issues/29)
+adds the ordering rule worth having whatever is decided: **announce to the
+torrent's own trackers before any configured extras.** With many trackers
+configured, outgoing connects timed out and peers were never reached.
+
+**T-064, UDP backoff.** Two ladders exist and both are defensible, which
+supports this entry's decision to diverge deliberately rather than copy.
+`torrent/tracker/udp/timeout.go:9` is BEP 15 as written, `15 * 2^n` clamped at
+`n = 8`, which is 3840 seconds — nine lines of code and up to 62 minutes.
+`mtorrent/mtorrent-core/src/trackers/udp.rs:150` takes `MAX_RETRANSMISSIONS = 3`
+with `:160` `timeout_sec = 15 * (1 << retransmit_n)`, so 15, 30, 60 and 120
+seconds, giving up at 225 seconds and documenting that total. `bit-cli` makes
+three attempts inside `--tracker-timeout`, dividing it by three
+(`tracker.rs:364`), which is a third shape. **Documenting the total budget is
+what the other two do and this entry should adopt**: the Acceptance says "state
+the retry policy", and stating the worst-case wall clock is what a caller
+setting a deadline actually needs.
+
+One thing this entry does not mention and should. Connection ids expire, and a
+client that caches one too long **will** be rejected.
+`aquatic/crates/udp/src/workers/socket/validator.rs` shows why from the server
+side: a `ConnectionId` is four bytes of seconds-since-start plus four bytes of
+truncated keyed BLAKE3 over those bytes and the client IP, validated in
+constant time and expiring after `max_connection_age`. anacrolix caches ids
+with a one-minute reissue rule and carries an explicit workaround for one
+tracker, forcing a reconnect when the error body is literally
+`"Connection ID missmatch.\x00"`. A one-shot `bit-cli trackers` run is short
+enough that this rarely bites, and a `download` that announces
+`started`, then `completed`, then `stopped` over a long transfer is not.
+
+**T-065, scrape convention.** Corroborated and closed as a question.
+`torrent/tracker/http/scrape.go` derives the scrape URL with
+`url.JoinPath("..", "scrape")`, the same BEP 48 convention, and **no repository
+in the corpus implements another one**. So "cannot be derived" is the right
+answer and `--scrape-url` is the right escape hatch, which is what this entry
+already proposes. Related, from aquatic
+[Issue 232](https://github.com/greatest-ape/aquatic/issues/232): there is no
+canonical announce path for a UDP tracker either — the path in a `udp://` URL
+is advisory, carried as a BEP 41 option if wanted — so a client must not
+assume `/announce` there.
+
+---
+
+### T-180 A negative left in a tracker exchange has no decided handling
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    trackers
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     Two halves of one question, and neither has been decided.
+
+             **On the way out.** `bit-cli` announces `left` as a byte count.
+             Before a magnet's metadata arrives there is no total length, so
+             the true answer is unknown, and nothing in the tree records what
+             is sent in that window.
+
+             **On the way in.** A tracker or a peer-facing announce relay can
+             carry a negative `left`, and `bit-cli`'s response parsing has no
+             fixture for one.
+Relevance:   aquatic [PR 254](https://github.com/greatest-ape/aquatic/pull/254)
+             (MERGED) is the evidence that this is real rather than
+             theoretical: **some clients send `left = -1`** when the length is
+             unknown, rather than omitting the parameter, and a `usize` parse
+             rejected the whole announce. That PR cross-references
+             anacrolix/torrent#981, so at least two implementations met it
+             independently. `aquatic/crates/ws_protocol/src/incoming/announce.rs:13`
+             separately records that `left` **may be absent entirely**, for
+             instance when a magnet is opened.
+
+             `bit-cli` is on both sides of this. It announces for real from
+             `trackers` and from `download`'s `started`, `completed` and
+             `stopped` events, and it parses responses. A magnet is a first
+             class source here, so the unknown-length window is a normal path
+             and not an edge case.
+Approach:    Decide both halves and test both.
+
+             Outbound, there are three candidate answers and the third is
+             probably right: send `left=0`, which claims to be a seed and is a
+             lie that costs other peers; omit the key, which some trackers
+             reject; or send a large sentinel. What settles it is that a
+             tracker rejecting the announce is a loud failure and claiming to
+             seed a payload you do not have is a silent one, so prefer
+             correctness over acceptance and record which trackers refuse.
+             `bit-cli trackers <MAGNET>` against a real tracker is the
+             measurement, and it is cheap.
+
+             Inbound, accept a negative or absent value and normalise it to
+             "unknown" rather than to zero, because zero means seed and
+             unknown does not. A signed parse plus an `Option` is the whole
+             change.
+
+             While the response parser is open, anacrolix
+             [PR 1055](https://github.com/anacrolix/torrent/pull/1055) is the
+             other fixture to add: a tracker returning `peers: [42]`, or a peer
+             dictionary missing `ip` or `port`, crashed the client. The fix
+             keeps the good entries and errors on the bad ones, which is the
+             right shape for `bit-cli`, whose trackers come from untrusted
+             torrents. aquatic
+             [Issue 82](https://github.com/greatest-ape/aquatic/issues/82) adds
+             the empty case: a response with **no `peers` key at all** is a
+             well-formed empty swarm, not a parse error.
+Acceptance:  `bit-cli trackers <MAGNET> --json` states what it sent for `left`
+             and why, a fixture response carrying `left = -1` parses to
+             "unknown" rather than to a seed, and a fixture response carrying
+             `peers: [42]` keeps every valid peer and names the invalid entry
+             without failing the run.

@@ -134,6 +134,105 @@ merkle helper that computes `ceil(log2(n))` in floating point rounds wrong for
 a large leaf count, and a tree one layer short produces a wrong root with no
 error at all. Use integer bit arithmetic.
 
+**The 2026-08-21 corpus supplies a working v2-and-hybrid creator built on the
+same engine `bit-cli` uses, and the specification above is now checkable
+against three independent implementations rather than read alone.**
+
+`nanotorrent/src/bittorrent/torrent_create.rs` is 618 lines and exists for
+exactly this reason: librqbit creates v1 torrents only, so somebody else has
+already written the piece `bit-cli` is missing, against the same base. It
+confirms every clause above and settles two the specification leaves to
+judgement. `:207` `hash_file_v2`: the **final short block is hashed as-is and
+not zero-padded**, leaves are then padded to a power of two with the zero hash,
+and the piece layer is the tree level where one node spans one piece,
+**truncated to `ceil(num_blocks / blocks_per_piece)` real pieces** because
+trailing all-padding pieces lie beyond the end of the file. That is the
+"case nearly nobody implements" above, implemented. A file of one piece or less
+gets an **empty** piece layer, and an empty file gets no `pieces root` at all.
+`:280` `V1Hasher` with `:309` `pad_to_piece` is the hybrid path, emitting the
+BEP 47 padding file at `:457-466` with `attr = "p"` and path
+`[".pad", "<len>"]`. `:381` `auto_piece_length` starts at 256 KiB and doubles
+while `total/pl > 2000`, capping at 16 MiB; `:390` `validate_piece_length`
+enforces power-of-two and at least 16 KiB, which v1 does not require and v2
+does. It hand-rolls a bencode encoder at `:46-99` and says why: the structure
+is a recursive tree plus a dictionary keyed by **raw 32-byte hashes**, and
+serde was considered and rejected. `bit-cli` has its own bencode writer, so
+that decision is worth checking against it before assuming the existing one
+will do.
+
+`torrent/merkle/` is the primitive layer: `merkle.go:10` `BlockSize = 1<<14`,
+`:12` `Root`, `:28` `RootWithPadHash`, `:47` `CompactLayerToSliceHashes`; and
+`torrent/merkle/hash.go:9` `NewHash` is a **streaming** `hash.Hash` over 16 KiB
+blocks with `:70` `SumMinLength` padding a short file tail with zero hashes.
+Streaming matters for `bit-cli`, whose hasher already reads a payload once.
+
+`rustorrent/src/torrent.rs:542` `validate_v2_piece_layers` and `:581`
+`validate_hybrid_layout` are the most complete validation in the corpus and
+belong on the **read** side of this entry rather than the write side.
+`:542` checks that every file above one piece has exactly
+`ceil(length / piece_length)` hashes that reconstruct its `pieces root`, **and
+the reverse**, that every entry in `piece layers` corresponds to a file that
+needs one, because piece layers are not an extension bucket. `:581` requires
+every BEP 47 padding file to be exactly the bytes needed to reach the next
+piece boundary, every non-padding file to start on a boundary, and the v1 and
+v2 file lists to agree pairwise in path and length.
+`rustorrent/src/sha256.rs:186` `merkle_root_from_piece_layer` states the rule
+in one sentence: omitted balancing nodes are supplied using the zero hash **for
+the selected piece layer**, derived by repeatedly hashing the zero hash up from
+the block level.
+
+**One construction in the corpus is wrong, and it is wrong in a way that
+passes its own tests.** `bqti/src/bit_torrent/torrent/merkle.rs:35`
+`from_piece_hashes` reduces by `chunks(2)`, hashing `H(chunk[0] || 0^32)`
+whenever a level has an odd count. BEP 52 pads the **layer to a power of two**
+with the layer's pad hash before reducing. The two agree when the layer length
+is already a power of two and diverge otherwise: for a five-hash layer the
+correct construction pairs the padding as `H(H(h4,P), H(P,P))` while that one
+produces `H(H(h4,0), 0)`. Follow the rustorrent, anacrolix and nanotorrent
+construction.
+
+**Three peer-facing crashes to read before implementing v2 hash exchange**, all
+reachable from input `bit-cli` accepts, since it takes torrents from magnets,
+URLs and stdin. anacrolix
+[PR 1056](https://github.com/anacrolix/torrent/pull/1056): a `pieces root` that
+is not exactly 32 bytes panicked inside the file-tree iterator, reachable from
+`AddTorrent`, `SetInfoBytes` **and peer metadata exchange**; the fix is to
+validate the tree before anything sets the info.
+[PR 1054](https://github.com/anacrolix/torrent/pull/1054): a `Hashes` message
+was processed without checking it answered an outstanding request, so a bogus
+`pieces root` dereferenced a nil file.
+[PR 1066](https://github.com/anacrolix/torrent/pull/1066): a v2 file with
+`fileNumPieces % 512 == 1` leaves one hash in the last request block, and the
+BEP 52 minimum request length is two — a precise off-by-one any implementation
+will meet.
+
+**Fixtures, so this does not need building from scratch.**
+`torrent/testdata/bittorrent-v2-test.torrent` is pure v2 and
+`torrent/testdata/bittorrent-v2-hybrid-test.torrent` is hybrid.
+`superseedr/integration_tests/torrents/` holds sixteen more in `v1`, `v2` and
+`hybrid` subdirectories — `single_4k`, `single_8k`, `single_16k`, `multi_file`
+and `nested` in each — with payload descriptors in
+`superseedr/integration_tests/test_data/`. Those are the cheapest route to v2
+coverage in `cargo test` and they cost nothing to add before any of the code.
+`superseedr/src/torrent_manager/merkle.rs` is 541 lines of which most are
+regression tests whose names are themselves a list of v2 edge cases somebody
+got wrong: `verify_tail_padding_fix`,
+`test_v2_small_file_less_than_piece_len`, `test_v2_merkle_parity_regression`,
+`test_compute_root_3_blocks_padding`.
+
+**And one argument for the priority.** mkbrr
+[Issue 112](https://github.com/autobrr/mkbrr/issues/112) (OPEN) is a v2 request
+where the requester's own summary is that v2 is not really used by many people,
+while noting what it does give: a stable per-file merkle hash and 16 KiB
+re-download granularity. That is the honest case for keeping this P1 rather
+than raising it. Against that, `bit-cli`'s
+[T-084](#t-084-the-create-round-trip-has-not-been-proven-against-another-client)
+round trip cannot cover `--version hybrid` until this lands, and validating v2
+output needs a libtorrent leg in the interop harness, because libtorrent is the
+only widely deployed BEP 52 implementation. That dependency is worth knowing
+before starting: without it, a v2 torrent `bit-cli` writes is checked only
+against `bit-cli`.
+
 ### T-082 BEP 16 superseeding is not implemented
 
 Source:      PROMPT.md A3.4b
@@ -154,6 +253,30 @@ Approach:    Superseeding means advertising one piece at a time per peer and
 Acceptance:  `bit-cli seed --superseed --json` reports, per peer, which single
              piece it was offered and when that changed.
 
+**The corpus holds one implementation, and it is worth reading mostly for what
+it leaves out.** `rustorrent/src/main.rs:10577`: in super-seed mode an
+outbound connection sends **a single `Have` for one pseudo-randomly chosen
+piece instead of the bitfield**, and remembers it. `:11050`: when that peer
+later advertises the same piece, proving it redistributed it, advance to
+`(index + 1) % piece_count` and send that. `:12588` is the inbound path doing
+the same, seeded from the peer tag. The `else` branches at `:10593` and
+`:12601` carry the BEP 3 rule that a bitfield is always the first message after
+the handshake even when it is empty, which is the same rule
+[T-166](peers.md) exists to keep true here.
+
+What that implementation does **not** do is the harder and more important half,
+and a `bit-cli` acceptance has to cover it: tracking which piece each peer was
+given, refusing to advance until redistribution is confirmed **to a different
+peer**, and disconnecting a peer that never redistributes. Without those three
+it is piece-at-a-time advertising rather than superseeding, and it gives away
+more copies than a plain seed would.
+
+This does not change the blocker. `librqbit` exposes neither the bitfield sent
+at handshake nor per-peer `Have` control, so this stays open on the same wall
+as [T-032](performance.md) and [T-002](webseed.md). What the corpus adds is
+that the algorithm is now written down, so when that wall moves the work is
+small.
+
 ### T-083 Seeding does not report choke state or disconnect reasons
 
 Source:      PROMPT.md A3.4b
@@ -168,6 +291,28 @@ Problem:     See [T-024](peers.md). The seed report carries bytes, pieces,
 Relevance:   A3.4b names both.
 Approach:    Blocked on the same upstream stats gap.
 Acceptance:  As T-024.
+
+**What the state to be reported actually is**, from
+`vortex/bittorrent/src/torrent.rs:488` `recalculate_unchokes`, which is the
+fullest choking implementation in the corpus and is the seeding half in
+particular. A peer that is not interested, or is pending disconnect, is choked
+immediately and its round counters reset; if it held the optimistic slot the
+optimistic timer resets too, so somebody else gets it. **Leeching** sorts by
+`downloaded_in_last_round` descending. **Seeding** is libtorrent-style round
+robin: a peer unchoked for over a minute that has received more than
+`piece_length * seeding_piece_quota` bytes is demoted, ties breaking on
+`uploaded_in_last_round` and then on time since last unchoke. One fifth of
+`max_unchoked`, minimum one, is reserved for optimistic unchokes (`:594`
+`recalculate_optimistic_unchokes`), and a previously optimistic peer that earns
+a normal slot is promoted with the timer reset. Config at `:55-97`:
+`max_unchoked = 8`, recalculated every 15 ticks, optimistic every 30.
+
+Every quantity in that paragraph is a field this entry wants reported, which is
+the useful part: the report shape follows from the algorithm, and `bit-cli`
+does not have to invent one. fx-torrent
+[PR 79](https://github.com/yoep/fx-torrent/pull/79) is the hazard that comes
+with it — upload-slot bookkeeping that deadlocked the whole torrent tick — and
+is the reason to report the state rather than only compute it.
 
 ### T-084 The create round trip has not been proven against another client
 
@@ -357,3 +502,156 @@ platforms disagree, and it had never been green before because the run it
 first appeared in was red for other reasons. The two hashes it compared are
 equal, and the same commit's `Test (windows-latest)` asserted the constant, so
 the number both platforms produce is also the number written down.
+
+### T-175 create does not normalise NFD filenames
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    create
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `bit-cli create` writes whatever bytes the filesystem hands it.
+             On macOS, and on any SMB or NFS mount reached from it, that can be
+             **NFD**: a decomposed spelling where `é` is `e` plus a combining
+             acute, while the same name stored on the origin was **NFC**, one
+             code point. The two are different byte strings and therefore
+             different paths in a torrent, and `bit-cli` runs on macOS.
+Relevance:   mkbrr [Issue 182](https://github.com/autobrr/mkbrr/issues/182)
+             (CLOSED, fixed by
+             [PR 183](https://github.com/autobrr/mkbrr/pull/183)) is the
+             best-documented cross-platform torrent-creation bug in the corpus,
+             and what makes it worth a P2 here is **when** it is discovered.
+             Torrents were created on macOS against an SMB mount from a
+             Synology NAS. The NAS stored NFC; the mount presented NFD; the
+             torrent recorded NFD. macOS path lookup is
+             normalisation-insensitive, so the torrent verified clean locally
+             **including with the tool's own check command**. The breakage
+             appeared only on Linux and Windows, which is to say only after the
+             torrent was published. The reported case was a 41-file season pack
+             with 19 accented names, all of which showed as missing to
+             everybody who was not the person who made it.
+
+             A creation bug that a local verify cannot see is the worst kind
+             this project can ship, because `bit-cli`'s whole answer to "did
+             this work" is `bit-cli verify` and an interop round trip, and both
+             would have passed.
+Approach:    `mkbrr/torrent/normalize.go` is the fix and its restraint is the
+             interesting part.
+
+             `:18` `decomposed(s)` returns true only when `s` differs from its
+             NFC form **purely by combining marks**. Canonical singletons
+             (U+212B ANGSTROM SIGN, the CJK compatibility ideographs) and
+             composition exclusions are deliberately excluded, because for
+             those "the bytes are what the filesystem genuinely holds, not a
+             decomposition artifact". Rewriting them would corrupt a legitimate
+             name.
+
+             `:58` `nfcPath(dir, rel)` rewrites to NFC **only when `Lstat`
+             proves both spellings are `os.SameFile`**. That is the whole
+             safety argument: on a filesystem that genuinely stores NFD, the
+             NFC spelling does not resolve, so nothing is rewritten. The
+             rewrite happens only where the filesystem itself says the two
+             names are one file.
+
+             `:80` `pathKey` and `:86` `resolveNormalized` are the
+             comparison-only half, for matching a torrent written in one form
+             against files stored in the other. That half belongs in `verify`
+             and in the path planner rather than in `create`.
+Acceptance:  A fixture directory whose names are NFD on disk produces a torrent
+             whose paths are NFC, on a filesystem where both spellings resolve
+             to the same file; and the same fixture on a filesystem that
+             genuinely stores NFD produces NFD, unchanged. The second half is
+             the one that proves the rule was implemented rather than a blanket
+             `ToNFC`. If the second cannot be tested on CI's runners, say so
+             here and test the predicate directly.
+
+             A lint is the cheaper half and worth landing first: a path that is
+             decomposed by the `:18` definition fires `nfd-path`, clearable
+             with `--allow`, so a user who means it can proceed and a user who
+             does not finds out before publishing.
+
+### T-176 Three lints the corpus names are missing, and one message is wrong
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    create
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `bit-cli create` refuses on ten lints
+             (`crates/bit-cli-core/src/torrent/lint.rs:26`):
+             `private-no-tracker`, `piece-count`,
+             `piece-length-not-power-of-two`, `empty-payload`, `empty-file`,
+             `windows-path`, `case-collision`, `bad-web-seed`, `bad-tracker`
+             and `long-path`. Three checks the corpus names are missing, and
+             two of the three are cases where a torrent `bit-cli` calls clean
+             cannot be opened by a widely deployed client.
+
+             **1. More than 65535 pieces.** intermodal
+             [Issue 499](https://github.com/casey/intermodal/issues/499)
+             (OPEN): **µTorrent refuses to open such a torrent.** `bit-cli`'s
+             `piece-count` lint fires above **100,000**
+             (`lint.rs:172`), which is above that limit, so the band from
+             65,536 to 100,000 pieces passes every check `bit-cli` has and
+             produces a torrent µTorrent cannot open. That is not a style
+             opinion, it is a client that will not read the output.
+
+             **2. A piece length over 16 MiB.** intermodal
+             [Issue 358](https://github.com/casey/intermodal/issues/358)
+             (OPEN) gives 16 MiB as the practical ceiling, and larger has been
+             reported to break clients. `bit-cli` agrees with that ceiling in
+             one place and not the other: `piece_length.rs:23` caps the
+             **automatic** choice at `MAX = 16 MiB`, while
+             `piece_length.rs:59` `validate` refuses only zero, so
+             `--piece-length 64MiB` is accepted in silence. The doc comment on
+             `validate` explains why small lengths are permitted, which is
+             sound, and says nothing about large ones.
+
+             **3. Duplicate paths.** create-torrent
+             [Issue 126](https://github.com/webtorrent/create-torrent/issues/126)
+             (OPEN): two inputs with the same relative path produce a torrent
+             with duplicate entries, which is invalid. `bit-cli` **does** catch
+             this, but by accident and under the wrong name: `lint.rs:213`
+             keys a `BTreeSet` on `path.to_lowercase()`, so an exact duplicate
+             collides too and fires `case-collision` with the message
+             "collides with another path that differs only in case" — which is
+             false when the two paths are identical. A user reads that message
+             and goes looking for a casing difference that is not there.
+Relevance:   All three are one-line checks against a table `bit-cli` already
+             has, and two of them are the difference between a torrent that
+             works everywhere and one that works here. The third is a wrong
+             sentence in an error, which is the class of defect
+             [T-147](windows.md) already cost a red job over: the disk paths
+             agreed and the reason in `--json` did not.
+Approach:    Two new lints and one message split.
+
+             `piece-count` gains a second threshold at 65,535 with its own
+             message naming µTorrent, or a separate `piece-count-uopenable`
+             lint if the two want to be cleared independently — they do, since
+             one is a performance opinion and the other is a compatibility
+             fact.
+
+             `piece-length-too-large` fires above 16 MiB from `validate`'s
+             caller, not from `validate`, so the "only zero is impossible" rule
+             in that function stays true and the judgement stays in the linter
+             where the rest of the judgement lives.
+
+             `duplicate-path` fires when the exact path repeats;
+             `case-collision` keeps its current message and fires only when the
+             paths differ. Insert into two sets rather than one.
+
+             `mkbrr/internal/trackers/trackers.go:319` `DefaultPieceSizeRanges`
+             is worth reading alongside: fourteen bands from 32 KiB at 64 MB to
+             128 MiB above 128 GB, with `:310` `GetTrackerMaxPieceLength` and
+             `:336` `GetTrackerPieceSizeExp` applying **per-tracker** caps as a
+             hard ceiling a user may lower and not exceed. That is a larger
+             feature than this entry and is not proposed here, but it is where
+             the 16 MiB number comes from in practice and where anyone raising
+             it should look first.
+Acceptance:  A payload producing 70,000 pieces fires the new lint and names
+             µTorrent; `--piece-length 64MiB` fires
+             `piece-length-too-large`; two identical input paths fire
+             `duplicate-path` and not `case-collision`; and two paths differing
+             only in case still fire `case-collision`. Four cases, one test
+             each, all clearable with `--allow`.

@@ -752,3 +752,109 @@ Acceptance:  `bit-cli bench disk --block-size 16KiB --layout shared
              the improvement is recorded here with both reports, and the whole
              suite passes including `scripts/interop-roundtrip.ps1`, which is
              what proves no byte moved.
+
+**Two implementations of this exact change exist, and one of them has the
+tests.** `TorrentNG/crates/rt-storage/src/elevator.rs:223`
+`coalesce_ready_ops` and `:251` `can_merge` merge adjacent ready operations on
+the same file into one dispatch, and its test names carry the rule that matters
+here: `ready_reads_are_offset_sorted_and_coalesced_per_file` and
+`writes_are_ordered_but_not_coalesced`. **Reads are offset-sorted and
+coalesced; writes are ordered and not.** That is a stronger constraint than the
+three above and worth understanding before overriding it: a write-combining
+buffer reorders nothing, but it does defer, and constraint 1 above is exactly
+the reason that tree kept writes un-coalesced.
+
+`crates/rt-storage/src/handle_cache.rs` in the same tree is a path-and-access
+keyed LRU of open descriptors bounded by a fraction of `RLIMIT_NOFILE`, which
+is what [T-011](#t-011-no-file-handle-pool-so-long-runs-exhaust-descriptors)
+built here as `--max-open-files`. Its doc names the property that makes a
+shared descriptor safe and that this entry depends on: **no per-operation
+`seek`, so concurrent readers and writers do not race a file cursor.**
+
+`crates/rt-storage/src/io_class.rs:7` is the piece this entry does not have and
+probably wants: an `IoClass` ordering of
+`Metadata < Recheck < MoveCopy < PeerWrite < PeerRead < Foreground` with
+**per-class concurrency caps that differ for spinning disks and SSDs** (`:24`
+`hdd_concurrency`, `:36` `ssd_concurrency`; peer reads 4 against 16, recheck 1
+against 4). Its stated invariant is that peer reads must never be starved by
+bulk recheck or background copy, which is precisely the failure
+`bit-cli bench disk` was built to expose and has not yet been pointed at.
+
+anacrolix [PR 1051](https://github.com/anacrolix/torrent/pull/1051) (OPEN) is
+the same problem solved for the same platform: cache the writable handle so a
+16 KiB chunk write stops reopening the file, and buffer piece-completion
+persistence on a **1 s or 128 MiB checkpoint** rather than per piece, while
+keeping `complete = false` immediate. That asymmetry — batch the optimistic
+update, never batch the pessimistic one — is the safe shape for constraint 3
+above.
+
+One hazard from the same tree, because this entry adds a buffer that both a
+reader and a writer consult: anacrolix
+[PR 1074](https://github.com/anacrolix/torrent/pull/1074) fixed a deadlock from
+a **recursive `RLock`**, because `sync::RWMutex` is not recursive and a queued
+writer arriving between two read locks wedges both. That is the same class as
+[T-010](#t-010-pwrite-takes-a-read-lock-where-it-needs-a-write-lock), already
+closed here, and constraint 1 is a re-entrancy invitation of exactly that
+shape: `pread_exact` consulting a buffer that `pwrite_all` holds a lock on.
+
+### T-177 A piece that spans a file boundary has no adversarial fixture
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    disk-io
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     In a multi-file torrent a piece may straddle a file boundary: its
+             first bytes belong to one file and its last to the next. Writing
+             such a piece requires splitting it **at the boundary** and issuing
+             one write per file. `bit-cli` has span-mapping code for this in
+             `crates/bit-cli-core/src/span.rs` and `layout.rs`, and no test
+             built to break it.
+Relevance:   fx-torrent
+             [Issue 98](https://github.com/yoep/fx-torrent/issues/98) (OPEN)
+             is what happens when the split is missing: pieces are written
+             **entirely into the file they start in**. The reporter's symptom
+             is the memorable part — in a multi-file FLAC album, **only the
+             first file is playable** — and the issue body carries a
+             reproducible CC-licensed magnet. Every byte was transferred, every
+             piece hashed against something, and the payload was wrong.
+
+             That failure mode is the one `bit-cli` can least afford, for the
+             same reason [T-074](windows.md) was a P1: a wrong payload that
+             reports success is worse than a failure. It is also close to
+             defects this project has already had.
+             [T-036](performance.md) was a multi-file torrent losing its
+             directory, and mkbrr
+             [PR 154](https://github.com/autobrr/mkbrr/pull/154) is the
+             verification-side twin: mapped files got *compacted* offsets that
+             skipped missing files while verification used torrent-level
+             offsets, so **every piece after a missing-file gap was reported
+             bad and completion showed 0 per cent** on intact data.
+             `bit-cli verify` reports per-piece results and has the same two
+             coordinate systems to keep straight.
+Approach:    A fixture, and the positive counterpart already exists to copy
+             from. `vortex/bittorrent/src/file_store.rs` is the answer to
+             fx-torrent 98 and its test names are the specification:
+             `basic_multifile_alinged`, `small_multifile_misalinged`,
+             `small_multifile_misalinged_files_and_subpiece`,
+             `multifile_not_multiple_of_piece_size`, `multifile_misalinged_v2`,
+             `multifile_misalinged_v3`, `single_file_misaligned`,
+             `basic_single_file_aligned_unaligned_subpiece`. Eight cases, each
+             naming one way the arithmetic goes wrong.
+
+             Two of those eight interact with entries already open here. The
+             `not_multiple_of_piece_size` case is
+             [T-174](metainfo.md). And a boundary piece is what makes
+             `--select-file` dishonest: `FluxDown/native/engine/src/bt_partfile.rs`
+             documents the case where the bytes of an *unselected* file inside
+             a boundary piece are discarded, so those pieces can never be
+             verified or uploaded afterwards. `bit-cli` has `--select-file`
+             and a `seed` command, so it has that problem too and nothing
+             records it.
+Acceptance:  A multi-file fixture whose pieces straddle every boundary, with
+             at least one file shorter than a piece, passes `download`,
+             `verify`, `seed` and a web seed fetch, and every file's bytes are
+             asserted individually rather than by the torrent-level hash. Plus
+             one assertion that a piece spanning two files issues two writes,
+             not one.

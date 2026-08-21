@@ -16,10 +16,35 @@ unblock it.
 Built from the upstream `rqbit` corpus fetched on 2026-08-19 with `gh`:
 262 issues (91 open, 171 closed) and 346 pull requests, categorised by
 `scripts/triage.jq`. `reference-map.md` keeps the licence determination for
-every tree that was read, and records the four that were deleted on 2026-08-21
-because their licence is incompatible with MIT. **No entry here depends on a
-tree that is gone**: what each one needed is written into the entry, which is
-what [T-122](reference-map.md) closed.
+every tree that has been read. **No entry here depends on a tree that is
+gone**: what each one needed is written into the entry, which is what
+[T-122](reference-map.md) closed.
+
+A second corpus arrived on 2026-08-21: **twenty-two upstream BitTorrent
+implementations**, indexed by `reference/RESEARCH.md`, all permissive (twenty-one
+MIT, `intermodal` CC0-1.0). Entries below cite it as
+`repository/path/file.ext:line`. Those citations are evidence of what somebody
+else did and never evidence that `bit-cli` does it; where an entry now rests on
+one, it says which. `reference/` is gitignored and is never committed.
+
+**Two source files these entries name no longer exist, and their `Source:`
+lines still stand.** A `Source:` line records where an entry came from, not a
+path a reader must be able to open — the same rule the `rqbit` issue JSON has
+always been read under.
+
+- `PROMPT.md` was the operator's working brief: section 0 the ground rules,
+  section 3 the testing policy, section 5 Phase B, section 7 the settled
+  decisions, section 9 the aria2 parity checklist, sections A3 and A6 the CLI
+  surface. It is gone from the working tree and was always gitignored. Thirty-seven
+  `Source:` lines across this directory name one of its sections. Everything in
+  it that still binds is now written down here: the ground rules and the testing
+  policy are in this file and in the entries that apply them, decision 7.3
+  (librqbit stays the base) and 7.4 (no daemon, no RPC) are quoted where they
+  are used, and **section 9's aria2 parity checklist is written out in
+  [phase-c.md](phase-c.md)**, which was the last thing it held that nothing else
+  did. Nothing was lost with it.
+- The `aria2-next` documentation tree and the `rqbit` issue JSON are not in the
+  new corpus. The findings they produced are written into the entries.
 
 Category counts from the triage, which is why the files are sized the way they
 are: bep 66, seeding 48, trackers 41, peers 40, windows 38, disk-io 37,
@@ -48,10 +73,11 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-002](webseed.md) | P1 | webseed | **done** | Measure Candidate A-prime, the in-process virtual peer |
 | [T-003](webseed.md) | P1 | webseed | **done** | The piece picker cannot be told to prefer HTTP |
 | [T-004](webseed.md) | P2 | webseed | open | BEP 17 style is not auto-detected, only declared |
-| [T-005](webseed.md) | P3 | webseed | open | A source restricted mid-run cannot be re-scoped |
+| [T-005](webseed.md) | P2 | webseed | open | A source restricted mid-run cannot be re-scoped |
 | [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
 | [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
 | [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
+| [T-179](webseed.md) | P2 | webseed | open | A bad piece cannot be attributed to the source that filled it |
 | [T-009](webseed.md) | P1 | webseed | **done** | A source cannot be attached over more than one connection |
 | [T-141](webseed.md) | P1 | webseed | **done** | --web-seed-connect-timeout does not bound a connect that never answers |
 | [T-162](webseed.md) | P1 | bench | **done** | Two bench webseed tests assumed a loaded runner cannot also fail |
@@ -64,6 +90,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-016](disk-io.md) | P2 | disk-io | blocked | fastresume is not used when adding a torrent |
 | [T-017](disk-io.md) | P1 | disk-io | **done** | Concurrent receive paths contend on the payload file |
 | [T-018](disk-io.md) | P2 | disk-io | open | The write path issues one operation per 16 KiB block |
+| [T-177](disk-io.md) | P2 | disk-io | open | A piece that spans a file boundary has no adversarial fixture |
 | [T-020](peers.md) | P0 | peers | open | Connections accumulate in CLOSE_WAIT until TCP is unusable |
 | [T-021](peers.md) | P0 | peers | **done** | A temporary network drop stops the download permanently |
 | [T-022](peers.md) | P1 | peers | open | Peer connections churn on IPv6-only swarms |
@@ -72,10 +99,14 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-025](peers.md) | P3 | peers | open | PeerStatsFilterState is not exported, so the filter is built by JSON |
 | [T-142](peers.md) | P1 | peers | **done** | bit-cli peers never joined the swarm it was sampling |
 | [T-138](peers.md) | P2 | peers | **done** | A peer that comes back waits out a backoff that grows by six |
+| [T-163](peers.md) | P2 | peers | open | MSE/PE peer encryption is not implemented |
+| [T-164](peers.md) | P2 | peers | open | A peer that sends garbage keeps its connection slot |
+| [T-165](peers.md) | P2 | peers | open | The peer's reqq is ignored, so the queue depth is a fixed 128 |
+| [T-166](peers.md) | P1 | peers | open | BEP 10 extension ids are not proven to map in both directions |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
 | [T-032](performance.md) | P1 | performance | **done** | The piece selector strategy is not implemented |
-| [T-033](performance.md) | P2 | performance | open | --split, -x, and -k do not reach the fetch path |
+| [T-033](performance.md) | P3 | performance | open | --split, -x, and -k do not reach the fetch path |
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
 | [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
 | [T-036](performance.md) | P0 | paths | **done** | A multi-file torrent with one file lands without its directory |
@@ -87,12 +118,15 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-050](dht.md) | P2 | dht | open | The DHT cache costs disk I/O even when nothing is running |
 | [T-051](dht.md) | P2 | dht | open | A magnet with no DHT and no trackers fails without saying so |
 | [T-052](dht.md) | P3 | dht | open | DHT is not reported |
+| [T-169](dht.md) | P3 | dht | open | BEP 33 DHT scrape and BEP 51 infohash indexing are not implemented |
+| [T-170](dht.md) | P3 | dht | open | BEP 44 mutable items are not implemented |
 | [T-060](trackers.md) | P1 | trackers | **done** | The announced port is wrong when no port is configured |
 | [T-061](trackers.md) | P1 | trackers | **done** | bit-cli trackers announces a fixed port |
 | [T-062](trackers.md) | P1 | trackers | **done** | Announce timing has no started, completed, or stopped events |
 | [T-063](trackers.md) | P3 | trackers | open | Tracker tiers are announced in parallel rather than in order |
 | [T-064](trackers.md) | P2 | trackers | open | UDP tracker retry does not follow the BEP 15 backoff |
 | [T-065](trackers.md) | P3 | trackers | open | Scrape is only implemented for the BEP 48 URL convention |
+| [T-180](trackers.md) | P2 | trackers | open | A negative left in a tracker exchange has no decided handling |
 | [T-070](windows.md) | P1 | windows | **done** | A downloaded executable cannot be run until the process exits |
 | [T-071](windows.md) | P0 | windows | **done** | Reserved device names in torrent paths are not sanitised |
 | [T-072](windows.md) | P0 | windows | **done** | Case-colliding paths silently overwrite |
@@ -100,12 +134,15 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-074](windows.md) | P1 | windows | **done** | A false hash-check pass on empty files |
 | [T-075](windows.md) | P2 | windows | open | PowerShell redirection encoding is not documented |
 | [T-076](windows.md) | P2 | windows | **done** | seed and verify do not report renamed paths |
+| [T-178](windows.md) | P3 | windows | open | librqbit's Windows pwrite_all can spin forever on a zero-byte write |
 | [T-080](create-seed.md) | P1 | create | **done** | librqbit's create_torrent writes an extra piece hash |
 | [T-081](create-seed.md) | P1 | create | open | BEP 52 v2 and hybrid torrents are not implemented |
 | [T-082](create-seed.md) | P2 | seeding | open | BEP 16 superseeding is not implemented |
 | [T-083](create-seed.md) | P2 | seeding | open | Seeding does not report choke state or disconnect reasons |
 | [T-084](create-seed.md) | P0 | create | **done** | The create round trip has not been proven against another client |
 | [T-085](create-seed.md) | P1 | create | **done** | Creation determinism is not proven across platforms |
+| [T-175](create-seed.md) | P2 | create | open | create does not normalise NFD filenames |
+| [T-176](create-seed.md) | P2 | create | open | Three lints the corpus names are missing, and one message is wrong |
 | [T-090](bench.md) | P0 | bench | partial | bit-cli bench is not implemented |
 | [T-091](bench.md) | P0 | bench | **done** | Bench reports do not capture their environment |
 | [T-092](bench.md) | P1 | bench | partial | bench swarm has no synthetic load generator |
@@ -118,6 +155,12 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
 | [T-103](bep-coverage.md) | P2 | bep | open | Filenames that are not valid UTF-8 are refused |
+| [T-167](bep-coverage.md) | P2 | bep | open | BEP 54 lt_donthave is not implemented |
+| [T-168](bep-coverage.md) | P3 | bep | open | WebTorrent peers and WSS trackers are not supported |
+| [T-171](metainfo.md) | P2 | metainfo | open | httpseeds written as a bencoded string is silently dropped |
+| [T-172](metainfo.md) | P2 | metainfo | open | Strictness on read is undecided, and the error does not say |
+| [T-173](metainfo.md) | P3 | metainfo | open | A zero-length path component has no defined meaning |
+| [T-174](metainfo.md) | P2 | metainfo | open | A piece length that is not a multiple of 16 KiB has no fixture |
 | [T-110](cli-surface.md) | P1 | cli | **done** | The --jsonl event stream is incomplete |
 | [T-111](cli-surface.md) | P2 | cli | open | piece_verified and file_completed are derived from polling |
 | [T-112](cli-surface.md) | P1 | cli | **done** | --log-file does not write or rotate anything |
@@ -126,7 +169,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-115](cli-surface.md) | P2 | cli | partial | Hooks do not fire for every documented trigger |
 | [T-116](cli-surface.md) | P3 | cli | open | -O/--index-out cannot rename a file |
 | [T-117](cli-surface.md) | P1 | cli | **done** | --schema-version has no schema behind it |
-| [T-118](cli-surface.md) | P2 | cli | open | The short-flag table is not checked in CI |
+| [T-118](cli-surface.md) | P3 | cli | open | The short-flag table is not checked in CI |
 | [T-144](cli-surface.md) | P1 | ci | **done** | The MSRV job fails: the tree needs a newer rustc than it claims |
 | [T-145](cli-surface.md) | P2 | ci | **done** | The macOS test job fails to link |
 | [T-146](cli-surface.md) | P1 | ci | **done** | CI built a Windows binary against the dynamic C runtime |
@@ -141,6 +184,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-160](cli-surface.md) | P1 | ci | **done** | A peers test raced its own seeder |
 | [T-161](cli-surface.md) | P3 | ci | open | A CI action still targets Node.js 20, which is deprecated |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
+| [T-181](cli-surface.md) | P1 | cli | open | Four flags are accepted in silence and reach no code |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -168,8 +212,41 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-121 items: 111 to work through, and 10 deferred to Phase C. Thirty-four were
-added by measurements rather than by the triage. T-007 came out of T-001: a stalling
+140 items: 130 to work through, and 10 deferred to Phase C.
+
+**Nineteen were added on 2026-08-21 by reading the twenty-two tree corpus
+against this tree**, T-163 to T-181. Every one of them is open, so the open
+count went from 44 to 63 in a session that wrote no code, which is the correct
+direction: a gap nobody had written down was still a gap.
+
+Seventeen of the nineteen come from `RESEARCH.md` section C and section D.
+**Two did not, and they are the two worth separating**, because they needed no
+corpus and were still not found: [T-171](metainfo.md), where `url_list`
+accepts a bencoded string or a list and `http_seeds` four lines below it
+accepts a list only; and [T-181](cli-surface.md), four flags that parse and are
+never read again, found by grepping every `pub` field in `cli.rs` for a reader
+outside that file. Both are one command to check and neither had been run.
+
+A third is a hybrid and shows what the corpus is actually for.
+[T-176](create-seed.md) exists because intermodal proposed a lint for torrents
+with more than 65,535 pieces, since µTorrent refuses to open them. That is the
+corpus. The finding is that `bit-cli` already has a piece-count lint and it
+fires above **100,000**, so the band between the two numbers passes every check
+`bit-cli` has and produces a torrent µTorrent cannot open. That is this tree.
+Neither half is the defect on its own.
+
+**Three entries described a state this tree is not in, and all three were
+corrected rather than closed.** [T-033](performance.md) said three aria2 flags
+"parse and do nothing"; they do not exist and exit 2.
+[T-118](cli-surface.md) said neither `docs/flags.md` nor its CI check exists;
+both do, and four tests enforce them. [T-161](cli-surface.md) named two CI call
+sites for a deprecated action; there are four. The common cause is that each
+was written from a specification rather than from the binary, and each took one
+command to check. That is the argument for pass 1 of this session existing at
+all.
+
+Thirty-four earlier items were added by measurements rather than by the
+triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
 source cannot be attached over more than one connection, and concurrent
@@ -299,11 +376,11 @@ down, arrived at twice more.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 | 11 |
-| P1 | 3 | 1 | 0 | 42 | 46 |
-| P2 | 25 | 1 | 1 | 12 | 39 |
-| P3 | 15 | 0 | 0 | 0 | 15 |
+| P1 | 5 | 1 | 0 | 42 | 48 |
+| P2 | 36 | 1 | 1 | 12 | 50 |
+| P3 | 21 | 0 | 0 | 0 | 21 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **44** | **4** | **1** | **62** | **121** |
+| **All** | **63** | **4** | **1** | **62** | **140** |
 
 `blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

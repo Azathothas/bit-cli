@@ -821,6 +821,35 @@ Acceptance:  Three torrents holding one file, added in one invocation with
              soon as it finishes rather than fetching it. The same
              `scripts/check-shared-files.ps1` with `-j 3` reports one fetch.
 
+**Somebody else has written the acceptance test for this, and its premise is
+this entry's premise.** `torrent/tests/add-webseed-after-priorities/` is an
+integration test whose whole point is attaching a source to a torrent that has
+already started: `herp_test.go:80-84` calls `DownloadAll()`, sleeps a second,
+and **then** calls `AddWebSeeds(["http://localhost:3003/test.img"])`. Its
+`README` states the acceptance condition in two clauses, and the second is the
+one worth adopting here: "The seeder should start fetching from HTTP, despite
+the webseed being added after `Torrent.DownloadAll` is called. **It should
+still fetch even if the leecher does not connect**" — which is `bit-cli`'s own
+`--web-seed-only` case, applied to a late attachment. A late source that only
+works when a peer happens to be present is a source that works by accident.
+
+The fixture is a 500 MiB sparse `test.img` served by Python's
+`rangehttpserver` on port 3003 with the `.torrent` committed, which is a
+smaller version of this repository's own `loopback-fileserver` example, so the
+rig costs nothing to reproduce.
+
+`torrent/tests/webseed-partial-seed/` is the same rig used for a different
+property and it is a warning rather than a template. From anacrolix
+discussion 916: the seeder and leecher must progress completed pieces in lock
+step, because the bug was that **the leecher reached the end of its maximum
+unverified-bytes window before hitting a piece the seeder had available**, and
+deadlocked. `torrent/internal/request-strategy/NOTES.md:14` gives that window
+as 64 MiB by default. `bit-cli` has a bounded per-source window cache that
+[T-041](memory.md) says is bounded but not measured, and this is the deadlock
+that bound can cause once sources appear and disappear mid-run. Attaching a
+source late is exactly the case that makes the window and the availability
+disagree, so measure it here rather than discovering it under `-j 3`.
+
 ### T-134 v1 and v2 info hashes are not reconciled
 
 Category:    bep
