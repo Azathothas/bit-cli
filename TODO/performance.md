@@ -331,10 +331,10 @@ overshoot. Neither has been reached here; both are worth knowing.
 
 ### T-033 --split, -x, and -k do not reach the fetch path
 
-Source:      PROMPT.md A3.6
+Source:      PROMPT.md A3.6; premise disproved 2026-08-21, see the correction below
 Category:    performance
-Priority:    P2
-Effort:      M
+Priority:    P3
+Effort:      S
 Status:      open
 
 Problem:     `-s/--split`, `-x/--max-connection-per-server`, and
@@ -351,6 +351,60 @@ Approach:    All three are about how one HTTP source is fetched in parallel.
 Acceptance:  `bench/split-<timestamp>.json` shows throughput at `-x 1`,
              `-x 4`, and `-x 16` against one mirror, with the curve recorded
              here. If the curve is flat, the flags do not ship.
+
+**The premise is wrong and the measurement is one command.** Checked on
+2026-08-21 against the built binary: none of the three flags exists. There is
+no `--split`, no `-x`, no `--max-connection-per-server`, no `-k`, and no
+`--min-split-size` anywhere in `crates/bit-cli/src/cli.rs` or in
+`bit-cli <SUBCOMMAND> --help` for any of the sixteen subcommands.
+
+```
+$ bit-cli download --split 4
+error: unexpected argument '--split' found
+$ echo $LASTEXITCODE
+2
+```
+
+They do not "parse and do nothing". They are rejected with exit 2, `Usage`,
+which is what this entry's own Relevance argues *for*: "three flags that look
+like they work and do not are worse than three flags that error." They error.
+
+So the defect this entry describes does not exist, and what is left is a real
+but different question: **should `bit-cli` accept the aria2 spellings at all?**
+That is aria2 parity, not a broken flag, and the case for it is that a script
+written from aria2 muscle memory passes them. The case against is that all
+three concepts already have flags here that do work and are measured:
+
+| aria2 | `bit-cli` | State |
+| --- | --- | --- |
+| `-x`, `--max-connection-per-server` | `--web-seed-connections` | works, measured under [T-009](webseed.md): two connections are worth 1.92x on loopback |
+| `-s`, `--split` | `--web-seed-concurrency` | works |
+| `-k`, `--min-split-size` | `--web-seed-chunk-size` | works |
+
+Adding three aliases is half an hour. What makes it a decision rather than a
+chore is that the mappings are not exact — aria2's `-x` is a per-server
+connection cap and `--web-seed-connections` is a per-source one, which differ
+when two sources share a host — so an alias that is close but not identical is
+the failure this project's own short-flag rules exist to prevent.
+`docs/flags.md` states the rule: an `aria2` letter is never reassigned to a
+different concept, and `cli.rs:2048` `short_flags_never_contradict_aria2`
+enforces it. Under that rule `-x` may only be taken if it means what aria2
+means.
+
+**Re-scoped rather than closed**, because the entry's underlying question is
+open and this project does not close things by deciding they were never
+broken. Status stays open; the priority drops from P2 to P3, since a flag that
+errors is not a defect and nothing here is unmeasured. The Acceptance is now:
+decide whether the three aliases ship, and if they do, prove each moves a
+number under its aria2 meaning rather than its `bit-cli` one.
+
+This is the same shape as [T-032](#t-032-the-piece-selector-strategy-is-not-implemented)
+and [T-141](webseed.md), both of which closed by disproving their own premise,
+and the same shape as [T-118](cli-surface.md), which turned out to be built.
+Three entries in this directory have now described a state the tree was not in.
+The common cause is that all three were written from a specification of what
+`bit-cli` should do rather than from the binary, and the fix each time was one
+command.
 
 ### T-034 Endgame mode is not observable
 
@@ -429,8 +483,13 @@ they are not, and a limiter that refills on a clock its sleeps do not advance
 cannot be tested at all.
 
 This is not [T-031](#t-031-the-rate-limit-did-not-apply-to-the-session), which
-is the session-wide `--max-download-rate` and `--max-overall-download-rate`.
-That one is still open.
+is the session-wide `--max-download-rate` and `--max-upload-rate`. **That one
+is done**, measured: 4.10 MiB/s against a 4 MiB/s cap and 223.39 MiB/s
+uncapped, over three paired runs. This sentence said "still open" and named
+`--max-overall-download-rate` as part of T-031, and both halves were wrong.
+T-031's own Closed note excludes the two `--max-overall-*` flags explicitly,
+and nothing owned them until [T-181](cli-surface.md), which is where they are
+now: accepted, and reaching no code at all.
 
 ---
 

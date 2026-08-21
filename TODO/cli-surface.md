@@ -527,9 +527,9 @@ changes meaning, which has not happened.
 
 ### T-118 The short-flag table is not checked in CI
 
-Source:      PROMPT.md A3.2
+Source:      PROMPT.md A3.2; premise disproved 2026-08-21, see the correction below
 Category:    cli
-Priority:    P2
+Priority:    P3
 Effort:      S
 Status:      open
 
@@ -544,6 +544,45 @@ Approach:    Generate the table from the `clap` command tree, compare it to the
              concept.
 Acceptance:  `docs/flags.md` exists and a test regenerates it and fails on
              drift.
+
+**"Neither the file nor the check exists" is false, and both have existed for
+some time.** `docs/flags.md` is 79 lines with the table, the two rules, and the
+`-v` / `-V` reasoning. Four tests read the `clap` command tree and fail on
+drift, and they run in `cargo test`, which is to say in CI on all three
+platforms:
+
+| Test | Where | What fails it |
+| --- | --- | --- |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2107` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2012` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2048` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:1833` | `-V` no longer meaning `--check-integrity` |
+
+```
+$ cargo test -p bit-cli --lib short_flag
+test result: ok. 4 passed; 0 failed; 0 ignored; 303 filtered out
+```
+
+The third of those is the one A3.2 actually asked for: it holds the reserved
+list — `d` dir, `o` out/output, `j` max-concurrent-downloads, `u`
+max-upload-rate, `q` quiet, `c` continue, `V` check-integrity, `O` index-out,
+`l` log-file — and requires any flag carrying one of those letters to name the
+matching id or not exist.
+
+**One clause of the Acceptance is genuinely unmet, and it is the reason this
+stays open rather than closing.** The Acceptance says a test "regenerates it
+and fails on drift". The test *asserts* and does not regenerate: it fails with
+the exact row to add, which a reader then pastes in. That is a deliberate
+difference and probably the better one — see [T-158](#t-158-regenerating-the-schema-deletes-fields-the-sample-did-not-produce),
+where the regenerating half of the schema check deletes rows the sample did not
+produce — but the entry asked for regeneration and did not get it, so the
+honest state is open with the gap narrowed to one clause. Dropped from P2 to
+P3: nothing is unprotected.
+
+`docs/flags.md` named the test as `every_short_flag_is_documented`, which is
+not its name. Corrected in the same pass. A doc citing a symbol that does not
+exist is the same defect class as an entry describing a state the tree is not
+in, which is what this correction is.
 
 ### T-144 The MSRV job fails: the tree needs a newer rustc than it claims
 
@@ -1114,6 +1153,39 @@ row and added none:
 -| `sources[].error` | string |
 ```
 
+**Re-measured on 2026-08-21 in the doc pass, and it removes two rows now, not
+one.** Regenerated into a scratch copy and diffed rather than committed, which
+is the workaround this entry exists to remove:
+
+```
+$ cp docs/schema.md /tmp/committed.md
+$ BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema
+$ diff /tmp/committed.md docs/schema.md
+338d337
+< | `torrents[].sources[].error` | string |
+535d533
+< | `sources[].error` | string |
+$ git checkout -- docs/schema.md
+```
+
+Both are the same field seen from the two document shapes, and both are real:
+a source that errored carries an `error` string. The sample simply had no
+erroring source on this machine on this run. Note what that means for the
+count — the number of rows lost is a property of the run rather than of the
+tree, so it grows and shrinks and "one row" was never the number. The
+mechanism is the defect, not the size.
+
+The read-only half of the check is fine and stays fine.
+`schema_gen.rs:734` `the_committed_schema_matches_what_the_program_writes`
+passes, and it is deliberately a **containment** check rather than an equality
+one, for the reason its own comment gives: these runs are timed, so a download
+that finished before its second report tick emits no `progress`, and requiring
+equality would make the contract check flaky. The regenerating branch at `:739`
+is a plain `std::fs::write` of the rendered text, with none of that tolerance.
+So the check is asymmetric on purpose and the regenerator is symmetric by
+accident, and the fix is to give `:739` the same tolerance the assertion
+already has.
+
 That field is real. `crates/bit-cli/src/cmd/webseed.rs:285` and
 `crates/bit-cli-core/src/webseed/probe.rs:457` both carry
 `error: Option<String>` with `skip_serializing_if`, so it appears when a source
@@ -1257,9 +1329,16 @@ Relevance:   Same shape as [T-150](#t-150-clippy-pins-a-floating-toolchain-so-a-
              a gate that moves without this repository touching it. The
              difference is that this one announces itself first, so it is worth
              acting on before it announces itself as a red job.
-Approach:    `ilammy/setup-nasm` is used by the two Windows jobs, `Build
-             (x86_64-pc-windows-msvc)` and `Test (windows-latest)`, at
-             `.github/workflows/ci.yml:62` and `:97`. Take a release that
+Approach:    `ilammy/setup-nasm` is used at **four** call sites in **four**
+             jobs, not the two an earlier revision of this entry named:
+             `test` at `.github/workflows/ci.yml:62`, `build` at `:97`,
+             `interop` at `:199`, and `determinism` at `:238`. On the matrix
+             those are `Test (windows-latest)`,
+             `Build (x86_64-pc-windows-msvc)`,
+             `Create round trip (windows-latest)` and
+             `Create determinism (windows-latest)`. Patching two of the four
+             leaves the annotation on the other two and leaves the tree half
+             fixed, which is the reason the count is written out here. Take a release that
              declares `node24`, or replace it: NASM is needed only by `aws-lc-
              rs`, and `choco install nasm` on the runner is one line with no
              action behind it. Every other action in the file is already on a
@@ -1270,3 +1349,111 @@ Acceptance:  A CI run with no Node.js deprecation annotation, and the Windows
 Recorded rather than acted on, because the run this came from is green on all
 sixteen jobs and changing a build dependency of the one target that has to link
 statically is not a change to make in the same push as everything else.
+
+### T-181 Four flags are accepted in silence and reach no code
+
+Source:      the flag audit of 2026-08-21
+Category:    cli
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     Four flags parse, are carried into a struct, and are never read
+             again anywhere in the workspace:
+
+             | Flag | Declared | Read |
+             | --- | --- | --- |
+             | `--no-pex` | `cli.rs:1335` | nowhere |
+             | `--tracker-list-url <URL>` | `cli.rs:700` | nowhere |
+             | `--max-overall-download-rate <RATE>` | `cli.rs:741` | nowhere |
+             | `--max-overall-upload-rate <RATE>` | `cli.rs:745` | nowhere |
+
+             The check is one command: every `pub` field in `cli.rs` grepped
+             for outside that file. Six fields have no reader. Two of the six
+             are already owned — `index_out` by
+             [T-116](#t-116--o--index-out-cannot-rename-a-file) and
+             `on_piece_verified` by
+             [T-115](#t-115-hooks-do-not-fire-for-every-documented-trigger) —
+             and these four are owned by nothing.
+Relevance:   This is the P1 definition in `INDEX.md` verbatim: "a documented
+             capability does not work, or a flag does nothing." It is also the
+             rule `cli-surface.md` opens with: a flag that looks like it works
+             and does not is worse than one that errors.
+
+             Each of the four fails a different way and none of them fails
+             loudly.
+
+             `--no-pex` is the one with a security shape. A user passing it
+             believes peer exchange is off. It is not off, and their address
+             keeps being gossiped to the swarm. That is a privacy expectation
+             silently unmet rather than a performance knob silently ignored.
+
+             `--tracker-list-url` promises a tracker list fetched over HTTP.
+             Nothing is fetched, so the run announces to fewer trackers than
+             the user asked for and finds fewer peers, which reads as a quiet
+             swarm rather than as a missing feature.
+
+             `--max-overall-download-rate` and `--max-overall-upload-rate` are
+             the pair that matter most on the operator's own case. They are the
+             whole-run caps, and the per-torrent ones next to them
+             (`--max-download-rate`, `--max-upload-rate`) **do** work and are
+             measured under [T-031](performance.md). So a user who caps a
+             single torrent gets a cap and a user who caps the whole run gets
+             nothing, from two flags that sit four lines apart in the same
+             struct and read identically in `--help`. `performance.md` under
+             T-031 already noted these two were not covered by that
+             measurement, and no entry picked them up.
+Approach:    Two of the four are work and two are a decision.
+
+             **`--max-overall-*-rate`** is the one to build. `librqbit`'s
+             `LimitsConfig` is per-session, and `bit-cli` runs one session per
+             invocation, so a session-wide cap is where these belong and the
+             per-torrent flags are the ones that need dividing. Care is needed
+             on one point [T-132](multi-source.md) already records: a session
+             cap applies to peers **and** to HTTP sources together, because a
+             web seed reaches the session as a peer. So `--max-overall-*` and
+             `--web-seed-speed-limit` interact, and the acceptance has to
+             measure both together or it proves nothing.
+
+             **`--tracker-list-url`** is a small fetch: GET the URL, one
+             tracker per line, blank line separating BEP 12 tiers, which is
+             the format `--tracker-file` already parses at `cli.rs:697`. The
+             work is reusing that parser and bounding the fetch, because the
+             URL is user-supplied and the response is untrusted. Cap the body,
+             set a deadline, and refuse a non-HTTP scheme.
+
+             **`--no-pex` cannot be built here.** `librqbit` 9.0.0 has no
+             switch for it: `swarm.rs:160-161` shows `--no-dht` and `--no-lsd`
+             reaching `enable_dht` and `enable_lsd`, and there is no
+             `enable_pex` beside them. `nanotorrent`'s
+             `patches/0004-pex-toggle.patch` adds exactly that —
+             `SessionOptions::disable_pex`, gating **both** directions — which
+             is the shape of the upstream change needed and the evidence that
+             it is a small one. Until it exists, the flag must either warn or
+             refuse.
+
+             **The pattern for all four in the meantime already exists in this
+             tree.** `crates/bit-cli/src/cmd/seed.rs:105`: `--superseed` is
+             accepted and prints a warning naming the entry that would close
+             it. That is the honest behaviour for a flag that cannot yet do
+             what it says, and it is why `--superseed` is not on the list
+             above. Do that for all four today, and remove each warning as its
+             flag starts working.
+Acceptance:  Two parts, and the first is what stops this recurring.
+
+             A test that walks the `clap` command tree and asserts every flag
+             either reaches code or is on an explicit, named exception list,
+             so a fifth cannot be added silently. The exception list is the
+             deliverable: it is short, it is reviewed, and it makes the
+             warning above mechanical rather than remembered.
+             `cli.rs:2107` `every_short_flag_is_documented_in_the_flags_table`
+             is the model — it already walks the tree and fails with the exact
+             fix to apply.
+
+             Then, per flag: `--max-overall-download-rate 4MiB/s` over `-j 4`
+             holds the aggregate within ten per cent, measured against an
+             uncapped run of the same four torrents, with both numbers here;
+             `--tracker-list-url` against a loopback URL serving three
+             trackers announces to all three and reports them in `--json`;
+             `--no-pex` warns, naming this entry, until the upstream switch
+             exists.
