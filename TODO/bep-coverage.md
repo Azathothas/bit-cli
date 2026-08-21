@@ -389,7 +389,7 @@ Sending `lt_donthave` is as small as this entry says. Honouring one is not
 `librqbit-9.0.0/src/torrent_state/live/mod.rs:1076` dispatches
 `Message::Have(h) => self.on_have(h)`, and `on_have` at `:1523` sets one bit in
 `live.bitfield`. There is no inverse. Every extension message the session does
-not know falls to the catch-all at `:1111`:
+not know falls to the catch-all at `:1112`:
 
 ```rust
 message => {

@@ -58,7 +58,7 @@ Status:      **done**
 
 Problem:     `Metainfo::url_list` accepts the BEP 19 `url-list` key as either a
              bencoded list or a bare bencoded string, which is right.
-             `Metainfo::http_seeds` at `torrent/metainfo.rs:306` accepts the
+             `Metainfo::http_seeds` at `torrent/metainfo.rs:311` accepts the
              BEP 17 `httpseeds` key as a **list only**:
 
              ```rust
@@ -105,10 +105,10 @@ Acceptance:  A fixture whose `httpseeds` is a bare bencoded string yields one
 
 **Fixed, and the fix is that both keys now read through one accessor.**
 
-`Value::as_text_or_text_list` (`torrent/bencode.rs:349`) takes the shape
+`Value::as_text_or_text_list` (`torrent/bencode.rs:352`) takes the shape
 branch: a `Value::Bytes` yields one entry, anything else falls through to
 `as_text_list` as before. `url_list` (`torrent/metainfo.rs:293`) and
-`http_seeds` (`:306`) both call it and neither carries a branch of its own, so
+`http_seeds` (`:311`) both call it and neither carries a branch of its own, so
 there is no longer a place for the two to drift apart. `url_list` also lost the
 duplicated `self.root.get("url-list")` its old branch needed.
 

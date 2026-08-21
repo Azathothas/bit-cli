@@ -449,51 +449,66 @@ block it and what would unblock it.
 
 ## Start here
 
-The work order, re-derived on 2026-08-21 with the twenty-two tree corpus in
-hand. Four questions decide it, and they are asked in this order because a
-later answer never outranks an earlier one.
+The work order, re-derived on 2026-08-21 after the six items the previous
+derivation put first were closed or blocked. Four questions decide it, and they
+are asked in this order because a later answer never outranks an earlier one.
+
+**What the previous ordering asked for is done.** T-171, T-005, T-181, T-177,
+T-174 and T-166 all closed, and T-167 turned out blocked rather than cheap. The
+argument that put them there held: the two highest were both silent wrong
+answers in the web seed path, and both were real. What follows is the same four
+questions asked again against what is left.
 
 ### 1. Correctness in the one feature this project exists for
 
-`bit-cli` exists to attach arbitrary HTTP sources to an existing `.torrent`.
-A defect in that path outranks every feature below it, including the P0s,
-because a P0 that takes the process down is visible and a wrong answer that
-reports success is not.
+`bit-cli` exists to attach arbitrary HTTP sources to an existing `.torrent`. A
+defect in that path outranks every feature below it, including the P0s, because
+a P0 that takes the process down is visible and a wrong answer that reports
+success is not.
 
-Six items, and the first two are the whole argument.
-
-1. **[T-171](metainfo.md)**. `url_list` accepts a bencoded string or a list;
-   `http_seeds` four lines below it accepts a list only, so a torrent whose
-   `httpseeds` is a bare string yields **zero** HTTP sources with no error and
-   no warning. A web seed tool silently reading none of the seeds a torrent
-   names is the worst failure available here. `torrent/metainfo.rs:306` is the
-   accessor, `torrent/bencode.rs:339` and `:305` are why it returns empty, and
-   `gosh-dl/src/torrent/metainfo.rs:391` is one parser serving both keys.
-   Effort S.
-2. **[T-005](webseed.md)**. One permanent status on one file retires the
-   **whole** source. `README.md` says a mirror holding part of a payload is a
-   first-class case and not an error, and this is the code contradicting it at
-   exactly the moment the claim is tested. `torrent/webseed-peer.go:57`
-   removes only that file's pieces instead. Raised from P3 to P2 for this
-   reason. Effort M, and [T-167](bep-coverage.md) below makes it smaller.
-3. **[T-181](cli-surface.md)**. Four flags parse and reach no code, P1 by this
-   file's own definition. `--no-pex` is the one to fix first even though it is
-   the one that cannot be built: a user passing it believes peer exchange is
-   off and their address keeps being gossiped. Warn today, the way
-   `cmd/seed.rs:105` already does for `--superseed`.
-4. **[T-177](disk-io.md)** and **[T-174](metainfo.md)**. Two missing fixtures,
-   both for arithmetic that is only ever exercised on the easy case. A piece
-   straddling a file boundary, and a piece length that is not a multiple of
-   16 KiB. fx-torrent 98 is what the first costs: in a multi-file album only
-   the first file plays, every byte transferred. vortex PR 124 is the second:
-   a double panic in a destructor. `vortex/bittorrent/src/file_store.rs` has
-   eight test names that are the specification. Effort S each, and if the
-   arithmetic is already right they cost one test apiece.
-5. **[T-179](webseed.md)**, smart ban. Not a defect on its own, and it is what
-   [T-164](peers.md) and [T-005](webseed.md) both need in order to name a
-   culprit rather than guess one. With several sources filling one piece,
+1. **[T-179](webseed.md)**, smart ban, and it is now the top of this list
+   because [T-005](webseed.md) put it there. A permanent failure on one file
+   now narrows a source instead of retiring it, so **more** of a payload is
+   filled by more sources at once, and a bad piece still cannot be attributed
+   to the source that filled it. With several sources filling one piece,
    `torrent/smartban/smartban.go` in 83 lines turns "a source is bad" from a
-   guess into a fact.
+   guess into a fact. `RecordBlock` stores a hash of every block against the
+   peer that supplied it, and `CheckBlock`, called once the correct bytes for
+   that block are known, returns **every** peer whose recorded hash differs.
+   So a failed piece convicts exactly the sources that were wrong rather than
+   the last one to answer, and it convicts all of them at once. Note what it
+   does not do: it holds no data and re-fetches nothing, so the caller owes it
+   correct bytes from somewhere. [T-164](peers.md) needs the same machinery
+   from the peer side. Effort M.
+2. **[T-184](disk-io.md)**, new, out of T-177's fixture. A piece that straddles
+   the boundary between a selected file and an unselected one has no decided
+   behaviour, and since [T-013](disk-io.md) closed there is nowhere on disk for
+   the unselected half to go. So a run under `--select-file` may hold pieces it
+   can never prove, and `seed` will announce them. A seeder announcing a piece
+   it cannot serve looks to a peer like a peer that lies. The entry recommends
+   announcing only whole pieces the selection covers, which is the rule the web
+   seed bridge already uses for its own bitfield. Effort M.
+3. **[T-004](webseed.md)**, BEP 17 auto-detection, and it is smaller than its
+   entry looks. The style is decided by **which metainfo key the URL came
+   from**, which is what BEP 17 and BEP 19 specify and needs no probe, and
+   `bit-cli` already keys `httpseeds` sources correctly.
+   [T-171](metainfo.md)'s closing added the test that pins it, so what is left
+   is only the `--web-seed` command-line case, where there is no key to read.
+   Effort S.
+4. **[T-172](metainfo.md)**, strictness on read. Two questions about hostile or
+   sloppy bencode that have never been answered deliberately: unsorted
+   dictionary keys, and trailing bytes after the top-level dictionary. The
+   entry carries a recommendation with its argument, **strict inside `info` and
+   tolerant outside it**, and can be built on it without an operator answer.
+   [T-174](metainfo.md)'s closing arrived at the same position independently
+   from the piece-length side, which is corroboration rather than coincidence.
+   Effort S.
+5. **[T-143](multi-source.md)**, attaching a source to a torrent that has
+   already started. [T-005](webseed.md) built the machinery this needs and did
+   not use it for this: a bridge now reconnects mid-run with a different piece
+   list, which is most of what attaching late requires. The remaining question
+   is where the binding comes from once the run is under way. Effort M, and
+   smaller than it was.
 
 ### 2. The open P0 items, and why each is still P0
 
@@ -525,34 +540,24 @@ Six items, and the first two are the whole argument.
 Somebody else has already written and tested these. Effort here is reading and
 adapting rather than designing.
 
-9. **[T-167](bep-coverage.md)**, BEP 54 `lt_donthave`. The protocol is one
-   BEP 10 extended message carrying a 4-byte piece index that clears one bit;
-   `fx-torrent/src/peer/extension/donthave.rs` is 99 lines including its
-   tests. It is the cheapest correctness win in the corpus, and it turns
-   T-005's reconnect into a message. **Do this before T-005.**
-10. **[T-064](trackers.md)**, BEP 15 backoff. Nine lines at
-    `torrent/tracker/udp/timeout.go:9`, with a second, shorter ladder at
-    `mtorrent/mtorrent-core/src/trackers/udp.rs:150`. The entry's decision to
-    diverge stands; what it owes is the documented total budget, which both
-    references state and this one does not.
-11. **[T-004](webseed.md)**, BEP 17 auto-detection, now smaller than it looks.
-    The style is determined by **which metainfo key the URL came from**, which
-    is what BEP 17 and BEP 19 specify and needs no probe, and `bit-cli` already
-    keys `httpseeds` sources correctly. Only the `--web-seed` command-line case
-    needs the probe.
-12. **[T-176](create-seed.md)**, three lints. Two are threshold changes against
+9. **[T-064](trackers.md)**, BEP 15 backoff. Nine lines at
+   `torrent/tracker/udp/timeout.go:9`, with a second, shorter ladder at
+   `mtorrent/mtorrent-core/src/trackers/udp.rs:150`. The entry's decision to
+   diverge stands; what it owes is the documented total budget, which both
+   references state and this one does not.
+10. **[T-176](create-seed.md)**, three lints. Two are threshold changes against
     numbers the corpus supplies, and one is splitting a message that is
     currently false.
-13. **[T-100](bep-coverage.md)**, BEP 6. The algorithm at
+11. **[T-100](bep-coverage.md)**, BEP 6. The algorithm at
     `vortex/.../peer_connection.rs:89`, the receive-side bug that makes it
     silently inert at `torrent/peerconn.go:1047`, a canonical test vector, and
     a documented divergence in aria2 so a mismatch is not debugged twice.
-14. **[T-081](create-seed.md)**, BEP 52. `nanotorrent`'s 618-line v2 and
+12. **[T-081](create-seed.md)**, BEP 52. `nanotorrent`'s 618-line v2 and
     hybrid creator is built **on librqbit**, the same base, for the same
     reason. Three independent implementations to check the spec against, real
     v1/v2/hybrid fixtures in two trees, and one construction in the corpus that
     is wrong in a way that passes its own tests.
-15. **[T-018](disk-io.md)** and **[T-083](create-seed.md)**. Coalescing with
+13. **[T-018](disk-io.md)** and **[T-083](create-seed.md)**. Coalescing with
     tests at `TorrentNG/crates/rt-storage/src/elevator.rs:223`, and the full
     choke algorithm at `vortex/bittorrent/src/torrent.rs:488`, from which the
     report shape T-083 wants simply follows.
@@ -563,25 +568,20 @@ The distinction the coverage table could not make until now.
 
 **They cost reach today.**
 
-16. **[T-163](peers.md)**, MSE/PE. The largest single loss of reachable swarm
+14. **[T-163](peers.md)**, MSE/PE. The largest single loss of reachable swarm
     in the list: a peer configured to *require* encryption will not exchange
     traffic with a plaintext-only client at all. Blocked on the same librqbit
     seam as [T-002](webseed.md) and [T-102](bep-coverage.md), and
     `nanotorrent`'s patches 0003 and 0005 are the shape of the upstream change.
     High value, not startable.
-17. **[T-166](peers.md)**, BEP 10 id direction. P1 and effort S. If it is wrong
-    the failure is total and silent against qBittorrent, and `bit-cli`'s bridge
-    is tested only against itself, which is the arrangement that hides it. A
-    test either proves it or finds it. **Cheapest high-consequence item in the
-    file.**
-18. **[T-103](bep-coverage.md)**, the `.utf-8` key variants. uTorrent writes
+15. **[T-103](bep-coverage.md)**, the `.utf-8` key variants. uTorrent writes
     `name` and `name.utf-8` with different encodings, and preferring the
     `.utf-8` spelling is a read-side rule, not the Shift-JIS work the entry
     leads with.
 
 **They are completeness.**
 
-19. [T-101](bep-coverage.md) uTP, [T-102](bep-coverage.md) BEP 55,
+16. [T-101](bep-coverage.md) uTP, [T-102](bep-coverage.md) BEP 55,
     [T-168](bep-coverage.md) WebTorrent, [T-169](dht.md) BEP 33 and 51,
     [T-170](dht.md) BEP 44, [T-082](create-seed.md) BEP 16. None of these
     stops `bit-cli` talking to a peer it can otherwise reach. uTP is
@@ -589,31 +589,55 @@ The distinction the coverage table could not make until now.
     BEP 52's own advocates say it is not widely used: mkbrr
     [Issue 112](https://github.com/autobrr/mkbrr/issues/112) is a v2 request
     whose author writes that it is not really used by many people.
-20. [multi-source.md](multi-source.md) is the operator's five scenarios and
+17. [multi-source.md](multi-source.md) is the operator's five scenarios and
     four of the five work in full. Read that file before starting any of T-130
     to T-143; the work left is smaller than the entry count suggests.
 
+### Blocked, and staying at the height of their value
+
+The rule in this file is that a blocked item stays open with its blocker named
+rather than sinking, because sinking is how a blocker stops being anybody's
+problem. Three are blocked on `librqbit` seams and one on a design decision:
+
+- **[T-167](bep-coverage.md)**, BEP 54 `lt_donthave`, newly blocked. The
+  previous ordering put it above T-005 as the cheapest correctness win in the
+  corpus, and that was true of the **send** side and only the send side.
+  `librqbit` 9.0.0 dispatches `Have` to `on_have` and has no inverse, and every
+  extension message it does not know reaches a catch-all that logs and ignores.
+  Sending one would be a log line per retracted piece and no change to what the
+  session requests. Two upstream changes would unblock it, both named in the
+  entry, and the smaller is twenty lines.
+- **[T-163](peers.md)** MSE, **[T-102](bep-coverage.md)** BEP 55: the
+  `PeerConnectionHandler` seam, named in both.
+- **[T-016](disk-io.md)** fastresume, blocked on `AddTorrentOptions` carrying
+  no way to skip the hash check.
+
 ### What this ordering changed
 
-The previous order put the long-run failures at item seven and Metalink at
-item nine, and it was written when the only correctness question in the web
-seed path was performance. Three things moved it.
+The previous order's argument was that a silent wrong answer in the web seed
+path outranks a visible P0, and it put six items above [T-020](peers.md) on
+that basis. All six are resolved and four of them were real defects, so the
+argument was right and is kept.
 
-**The headline feature had a silent parse bug in it.** T-171 was above every
-P0 the moment it was found, and it was found by reading two adjacent functions.
+Three things moved this one.
 
-**A P0 is not automatically first.** T-020 is real and it is a churn-shaped
-failure that a deployment-shaped load does not produce, which the soak
-established over 1,064 samples. T-171 is a normal-path failure that produces a
-wrong answer and reports success. The second outranks the first.
+**Closing an entry raised the one under it.** [T-005](webseed.md) made a
+partial mirror keep serving, which means more sources filling one payload at
+once, which is exactly the case [T-179](webseed.md) exists for. T-179 was item
+five and is now item one, and nothing about it changed.
 
-**Several items got cheaper without changing.** T-167, T-064, T-004 and T-176
-are the same work they were, against reference code that is now readable, and
-that moves them up the list without any argument about their value.
+**Two entries were created by building others.** [T-184](disk-io.md) came out
+of T-177's fixture and [T-183](cli-surface.md) came out of T-181's. Both are
+the normal way this list grows and both are worth separating from the corpus
+items: nobody else's code found them.
 
-Nothing moved down for being hard. [T-163](peers.md) is blocked and stays high,
-with the blocker named, because the rule in this file is that a blocked item
-stays open rather than sinking.
+**One item moved from cheap to blocked, and reading the code is what moved
+it.** T-167 was ranked on a corpus file that is 99 lines including its tests.
+The corpus file is still 99 lines. What was never checked is whether the far
+end would do anything with the message, and it will not. A corpus citation is
+evidence of what somebody else did and never evidence that `bit-cli` can do it,
+which is the rule [RULES.md](RULES.md) already carries and which this ranking
+broke.
 
 ## What is settled, and what each closing measured
 

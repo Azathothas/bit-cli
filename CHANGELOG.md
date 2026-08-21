@@ -96,6 +96,18 @@ it, so the history starts here.
   that answered 503 for four seconds and then recovered was lost for the rest
   of the run with no flag set, and `--web-seed-max-errors` could never be
   reached.
+- **A permanent failure on one file narrows a source rather than retiring it.**
+  A mirror that answers 404 for one file of twelve gives up the pieces that
+  file touches and goes on serving the other eleven. It used to lose the whole
+  source, including the files it was serving correctly a moment earlier, which
+  contradicted the scope model this project exists for. A source with no pieces
+  left is still retired, and the reason says it ran out rather than naming one
+  file. `--json` carries `gone_files` and `pieces_dropped` per source, both
+  omitted when nothing was lost. A permanent failure no longer spends
+  `--web-seed-max-errors` either: that budget counts transient failures that
+  exhausted their retries, and charging a permanent one as well put a narrowed
+  mirror into cooldown through the back door. See `TODO/webseed.md` under
+  T-005.
 - `download` reports `retries` and `retries_by_status` per source, in the text
   output and in `--json`.
 - `--peer <ADDR>` dials a peer whether or not a tracker or the DHT answers, and
@@ -537,9 +549,12 @@ nothing reads, so a third cannot be added quietly
 
 Two revisions of this section have been wrong about this in opposite
 directions. The first claimed nothing was stubbed and six flags were. The
-second listed six and missed a seventh, `--web-seed-list-url`, which is read
-but only into a refusal ([T-183](TODO/cli-surface.md)). The count is not the
-point; the test is.
+second listed six and missed a seventh, `--web-seed-list-url`, which **was**
+read and read only into a function that always errors, on every command that
+accepts it ([T-183](TODO/cli-surface.md), fixed). Neither the audit nor the
+test above could have found it, because both look for a field with no reader
+and that one has a reader. The count is not the point; the test is, and what
+the test is weak about is written in its own docstring.
 
 `bench swarm` ships and is not finished. Both loads work and the two halves
 that are missing are named above rather than left for a reader to discover.

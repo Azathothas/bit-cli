@@ -314,14 +314,25 @@ INDEX  EVIDENCE      PROVEN     OTHER       OTHER PATH
 ### Which failures are worth retrying
 
 Whether an HTTP status is worth retrying is a property of the server, not of
-the code. `bit-cli` retires a source on 401, 403, 404, 410, and 416, and
-retries the rest. Two flags move a code across that line, per source:
+the code. `bit-cli` treats 401, 403, 404, 410 and 416 as permanent and retries
+the rest. Two flags move a code across that line, per source:
 
 ```bash
 bit-cli download release.torrent \
   --web-seed-for 'file:0=https://cdn.example.com/blobs/a3f1/payload.iso' \
   --web-seed-retry-status 403
 ```
+
+**A permanent status on one file does not retire the source.** The file's
+pieces are dropped from what that source announces and it goes on serving the
+rest, so a mirror holding eleven files of twelve stays a mirror for eleven of
+them. A source with nothing left is retired, and the reason says it ran out
+rather than naming one file. `--json` carries `gone_files` and
+`pieces_dropped` per source, both omitted when nothing was lost.
+
+A source addressed by piece rather than by file, which is BEP 17, has no
+per-file request to attribute a failure to, so a permanent status retires it
+whole. See `TODO/webseed.md` under T-005.
 
 A CDN that signs its URLs answers 403 when a signature expires, and the next
 request to the stable URL is redirected to a fresh one and succeeds. Without
@@ -340,7 +351,8 @@ is `bench/signed-source-20260820T132602637Z.json`. The count varies with
 timing; whether the run completes does not.
 
 `--web-seed-fatal-status` is the other direction, same spelling: a code it
-names retires the source even though the built-in classification would retry
+names is treated as permanent even though the built-in classification would
+retry it, so it narrows the source or, on a request that names no file, retires
 it. Both take codes and inclusive ranges (`403`, `403,429`, `500-599`). A code
 in both lists is a usage error, because there is no defensible answer.
 
@@ -1333,7 +1345,7 @@ not there, and the entry that closes it is named.
 | 5 | DHT | inherited | `--no-dht` reaches `enable_dht`, `swarm.rs:160` |
 | 7 | IPv6 tracker extension | yes | `peers6` at `tracker.rs:493`, 18 bytes per entry |
 | 9 | Metadata from peers | inherited | magnets resolve through the session |
-| 10 | Extension protocol | yes | `webseed/bridge.rs:83`, `:708` |
+| 10 | Extension protocol | yes | `webseed/bridge.rs:84` `MSGID_EXTENDED`, `:888` `extended_handshake`, `:102` `OUR_EXTENSIONS` |
 | 11 | PEX | inherited | no `bit-cli` code; `--no-pex` warns that it cannot turn it off, [T-181](TODO/cli-surface.md) |
 | 12 | Multitracker metadata | yes | `tracker.rs:115` tiers; `create`, `edit`, `trackers` |
 | 14 | Local service discovery | inherited | `--no-lsd` reaches `enable_lsd`, `swarm.rs:161` |
@@ -1341,7 +1353,7 @@ not there, and the entry that closes it is named.
 | 17 | HTTP seeding, Hoffman style | yes | `webseed/fetch.rs`; style is declared, not detected ([T-004](TODO/webseed.md)) |
 | 19 | HTTP seeding, GetRight style | yes | `webseed/composition.rs`, the headline feature |
 | 20 | Peer id conventions | yes | `webseed/bridge.rs` handshake |
-| 21 | Extension for partial seeds | yes | `webseed/bridge.rs:719` `upload_only` |
+| 21 | Extension for partial seeds | yes | `webseed/bridge.rs:897` `upload_only` |
 | 23 | Compact peer lists | yes | `tracker.rs:552` |
 | 27 | Private torrents | yes | `torrent/metainfo.rs`, `create`, `edit` |
 | 39 | Updating torrents via feed URL | yes | `create`, `edit` |
@@ -1352,6 +1364,7 @@ not there, and the entry that closes it is named.
 | 16 | Superseeding | no | [T-082](TODO/create-seed.md). `--superseed` is accepted and warns |
 | 29 | uTP | no | [T-101](TODO/bep-coverage.md). No flag enables it |
 | 52 | BitTorrent v2 | no | [T-081](TODO/create-seed.md), [T-134](TODO/multi-source.md) |
+| 54 | `lt_donthave` | no | [T-167](TODO/bep-coverage.md), blocked: `librqbit` 9.0.0 has no receive side |
 | 55 | Holepunch | no | [T-102](TODO/bep-coverage.md) |
 | MSE/PE | Peer encryption | no | [T-163](TODO/peers.md) |
 

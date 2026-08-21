@@ -777,9 +777,9 @@ literal vortex PR 103 defect, could not exist here because there was no map.
 **What did exist is the same mistake one level down.** The receive loop called
 `Message::deserialize`, and `librqbit-peer-protocol` 9.0.0 routes an incoming
 extension id against **its own** constants:
-`MY_EXTENDED_UT_PEX = 1` and `MY_EXTENDED_UT_METADATA = 3`
-(`librqbit-peer-protocol/src/lib.rs:52`, `:55`, dispatched at
-`src/extended/mod.rs`). Those are the ids that crate advertises. This bridge
+`MY_EXTENDED_UT_METADATA = 3` at `librqbit-peer-protocol/src/lib.rs:52` and
+`MY_EXTENDED_UT_PEX = 1` at `:55`, dispatched at `src/extended/mod.rs`. Those
+are the ids that crate advertises. This bridge
 advertises neither, and it was still reading incoming ids through them. That is
 an incoming id looked up in a table the two ends never agreed on, which is
 exactly the direction confusion this entry names.
