@@ -138,6 +138,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-158](cli-surface.md) | P2 | cli | open | Regenerating the schema deletes fields the sample did not produce |
 | [T-159](cli-surface.md) | P3 | cli | open | Subcommand flags are filed under "Report options" in the help |
 | [T-160](cli-surface.md) | P3 | ci | open | One lib test failed once and has not been seen again |
+| [T-161](cli-surface.md) | P3 | ci | open | A CI action still targets Node.js 20, which is deprecated |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
@@ -166,7 +167,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-119 items: 109 to work through, and 10 deferred to Phase C. Thirty-two were
+120 items: 110 to work through, and 10 deferred to Phase C. Thirty-three were
 added by measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -246,12 +247,17 @@ its slopes should have been. Its CSV survived with all 531 samples, because a
 CSV is appended and a summary is rewritten. The whole value of the rewrite was
 in the half that was not atomic.
 
-**CI run 32444424026 is green on every job**, which is the first time the whole
-matrix has been. It took four rounds and each one uncovered the next: the macOS
-link failure hid six `sysinfo` failures, which hid T-152, which hid one
-per-platform assertion that turned out to be the test rather than the code. A
-red job does not cost one defect, it costs every defect behind it, and that is
-the argument for never leaving one.
+**CI run 32444424026 was green on every job**, the first time the whole matrix
+had been. It took four rounds and each one uncovered the next: the macOS link
+failure hid six `sysinfo` failures, which hid T-152, which hid one per-platform
+assertion that turned out to be the test rather than the code. A red job does
+not cost one defect, it costs every defect behind it, and that is the argument
+for never leaving one.
+
+**Run 32457763652 is green on all sixteen jobs**, and it is the one to check
+this state against: it carries `bench swarm`, the T-040 answer, and the deleted
+reference trees. Its only annotation is [T-161](cli-surface.md), a build action
+still targeting Node.js 20.
 
 **Two things a measurement disproved on 2026-08-21, and both are the same
 mistake.** A `bench swarm` run reported zero peers handshaked in every leech
@@ -269,9 +275,9 @@ down, arrived at twice more.
 | P0 | 1 | 2 | 0 | 8 | 11 |
 | P1 | 3 | 1 | 0 | 40 | 44 |
 | P2 | 25 | 1 | 1 | 12 | 39 |
-| P3 | 15 | 0 | 0 | 0 | 15 |
+| P3 | 16 | 0 | 0 | 0 | 16 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **44** | **4** | **1** | **60** | **119** |
+| **All** | **45** | **4** | **1** | **60** | **120** |
 
 `blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

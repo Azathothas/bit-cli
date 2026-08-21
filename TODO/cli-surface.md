@@ -1213,3 +1213,39 @@ this machine can reproduce on demand, and it is recorded rather than chased.
 The one thing to change next time it is looked for: filter for
 `^test \S+ \.\.\. FAILED` and not for the summary line, which is how the name
 was lost.
+
+### T-161 A CI action still targets Node.js 20, which is deprecated
+
+Source:      CI run 32457763652 annotations, 2026-08-21
+Category:    ci
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     Three jobs annotate:
+
+             ```
+             Node.js 20 is deprecated. The following actions target Node.js 20
+             but are being forced to run on Node.js 24:
+             ilammy/setup-nasm@v1.5.2
+             ```
+
+             The run is green. Being forced onto a runtime it was not built
+             for is a warning today and a failure whenever the forcing stops.
+Relevance:   Same shape as [T-150](#t-150-clippy-pins-a-floating-toolchain-so-a-rust-release-can-turn-the-tree-red):
+             a gate that moves without this repository touching it. The
+             difference is that this one announces itself first, so it is worth
+             acting on before it announces itself as a red job.
+Approach:    `ilammy/setup-nasm` is used by the two Windows jobs, `Build
+             (x86_64-pc-windows-msvc)` and `Test (windows-latest)`, at
+             `.github/workflows/ci.yml:62` and `:97`. Take a release that
+             declares `node24`, or replace it: NASM is needed only by `aws-lc-
+             rs`, and `choco install nasm` on the runner is one line with no
+             action behind it. Every other action in the file is already on a
+             current major.
+Acceptance:  A CI run with no Node.js deprecation annotation, and the Windows
+             jobs still green, which is what says NASM is still being found.
+
+Recorded rather than acted on, because the run this came from is green on all
+sixteen jobs and changing a build dependency of the one target that has to link
+statically is not a change to make in the same push as everything else.
