@@ -513,9 +513,25 @@ it, so the history starts here.
 
 ### Not in this release
 
-BEP 52 v2 and hybrid creation, BEP 16 superseeding, and `-i/--input-file`.
-Each has an entry in `TODO/` with what closes it. Nothing is stubbed: a command
-that is not implemented says so and exits with a code a script can branch on.
+BEP 52 v2 and hybrid creation ([T-081](TODO/create-seed.md)), BEP 16
+superseeding ([T-082](TODO/create-seed.md)), BEP 6 fast extension
+([T-100](TODO/bep-coverage.md)), BEP 55 holepunch
+([T-102](TODO/bep-coverage.md)), uTP ([T-101](TODO/bep-coverage.md)), MSE/PE
+peer encryption ([T-163](TODO/peers.md)), non-UTF-8 filenames
+([T-103](TODO/bep-coverage.md)), and `-i/--input-file`
+([T-114](TODO/cli-surface.md)). Each has an entry in `TODO/` with what closes
+it.
+
+**No command is stubbed, and four flags are.** A command that is not
+implemented says so and exits with a code a script can branch on, and
+`--superseed` warns that BEP 16 is not there. But `--no-pex`,
+`--tracker-list-url`, `--max-overall-download-rate` and
+`--max-overall-upload-rate` are accepted in silence and reach no code, and
+`-O/--index-out` and `--on-piece-verified` do the same. That is
+[T-181](TODO/cli-surface.md), [T-116](TODO/cli-surface.md) and
+[T-115](TODO/cli-surface.md). An earlier revision of this section claimed
+nothing was stubbed; six flags are, and the fix pattern is the one
+`crates/bit-cli/src/cmd/seed.rs:105` already uses for `--superseed`.
 
 `bench swarm` ships and is not finished. Both loads work and the two halves
 that are missing are named above rather than left for a reader to discover.

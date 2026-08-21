@@ -4,9 +4,10 @@
 //! branch on it without parsing any text, so every code means exactly one
 //! thing and no code is ever reused for a second meaning.
 //!
-//! Codes 11 through 15 exist so a script can tell "your mirrors are
+//! Codes 11 through 16 exist so a script can tell "your mirrors are
 //! misconfigured" apart from "the network is down" apart from "your server is
-//! slow". That distinction is the point of the table.
+//! slow" apart from "the process is out of handles". That distinction is the
+//! point of the table.
 //!
 //! On Windows the code is read from `$LASTEXITCODE` in PowerShell, not `$?`.
 

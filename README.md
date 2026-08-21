@@ -1321,32 +1321,47 @@ bit-cli download release.torrent --web-seed-config web-seeds.toml
 
 ## Protocol support
 
-| BEP | What | Status |
-| --- | --- | --- |
-| 3 | The BitTorrent protocol | yes |
-| 5 | DHT | yes |
-| 9 | Metadata from peers | yes |
-| 10 | Extension protocol | yes |
-| 11 | PEX | yes |
-| 12 | Multitracker metadata | yes |
-| 14 | Local service discovery | yes |
-| 15 | UDP tracker protocol | yes |
-| 17 | HTTP seeding, Hoffman style | yes |
-| 19 | HTTP seeding, GetRight style | yes |
-| 20 | Peer id conventions | yes |
-| 21 | Extension for partial seeds | yes |
-| 23 | Compact peer lists | yes |
-| 27 | Private torrents | yes |
-| 29 | uTP | available, off by default |
-| 39 | Updating torrents via feed URL | yes |
-| 48 | Tracker scrape | yes |
-| 6 | Fast extension | no |
-| 16 | Superseeding | no |
-| 47 | Padding files | no |
-| 52 | BitTorrent v2 | no |
-| 55 | Holepunch | no |
+Three statuses, and the difference between them matters. **Yes** means
+`bit-cli`'s own code implements it and a test covers it; the symbol column
+names where. **Inherited** means `librqbit` provides it, `bit-cli` reaches it
+through the session, and `bit-cli` has no test of its own. **No** means it is
+not there, and the entry that closes it is named.
+
+| BEP | What | Status | Where |
+| --- | --- | --- | --- |
+| 3 | The BitTorrent protocol | inherited | the session; `tracker.rs:9` for the announce half |
+| 5 | DHT | inherited | `--no-dht` reaches `enable_dht`, `swarm.rs:160` |
+| 9 | Metadata from peers | inherited | magnets resolve through the session |
+| 10 | Extension protocol | yes | `webseed/bridge.rs:83`, `:708` |
+| 11 | PEX | inherited | no `bit-cli` code; `--no-pex` does not reach it, [T-181](TODO/cli-surface.md) |
+| 12 | Multitracker metadata | yes | `tracker.rs:115` tiers; `create`, `edit`, `trackers` |
+| 14 | Local service discovery | inherited | `--no-lsd` reaches `enable_lsd`, `swarm.rs:161` |
+| 15 | UDP tracker protocol | yes | `tracker.rs:25`, `:301`, `:643` |
+| 17 | HTTP seeding, Hoffman style | yes | `webseed/fetch.rs`; style is declared, not detected ([T-004](TODO/webseed.md)) |
+| 19 | HTTP seeding, GetRight style | yes | `webseed/composition.rs`, the headline feature |
+| 20 | Peer id conventions | yes | `webseed/bridge.rs` handshake |
+| 21 | Extension for partial seeds | yes | `webseed/bridge.rs:719` `upload_only` |
+| 23 | Compact peer lists | yes | `tracker.rs:552` |
+| 27 | Private torrents | yes | `torrent/metainfo.rs`, `create`, `edit` |
+| 39 | Updating torrents via feed URL | yes | `create`, `edit` |
+| 47 | Padding files | read only | parsed and skipped: `torrent/metainfo.rs:116`, `storage.rs:728`; `create` does not emit them ([T-081](TODO/create-seed.md)) |
+| 48 | Tracker scrape | yes | `tracker.rs:427`, `:499`; BEP 48 URL convention only ([T-065](TODO/trackers.md)) |
+| 53 | Magnet file selection, `so=` | yes | `torrent/magnet.rs:211` |
+| 6 | Fast extension | no | [T-100](TODO/bep-coverage.md) |
+| 16 | Superseeding | no | [T-082](TODO/create-seed.md). `--superseed` is accepted and warns |
+| 29 | uTP | no | [T-101](TODO/bep-coverage.md). No flag enables it |
+| 52 | BitTorrent v2 | no | [T-081](TODO/create-seed.md), [T-134](TODO/multi-source.md) |
+| 55 | Holepunch | no | [T-102](TODO/bep-coverage.md) |
+| MSE/PE | Peer encryption | no | [T-163](TODO/peers.md) |
 
 `TODO/bep-coverage.md` tracks the gaps.
+
+**uTP is not reachable.** `librqbit-utp` appears in `cargo tree` because
+`librqbit` depends on it, not because `bit-cli` uses it: `ListenerOptions::mode`
+is never set, so the session stays `TcpOnly`, and no flag changes that. Earlier
+revisions of this table said "available, off by default", which read as a
+capability a user could turn on. There is nothing to turn on. [T-101](TODO/bep-coverage.md)
+carries the work.
 
 ## Building
 

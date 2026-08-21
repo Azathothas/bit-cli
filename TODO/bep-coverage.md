@@ -13,23 +13,56 @@ Implemented means there is a test. Inherited means `librqbit` provides it and
 | 6  | Fast extension | not implemented (T-100) |
 | 9  | Metadata from peers (magnet) | inherited |
 | 10 | Extension protocol | implemented in the bridge |
-| 11 | PEX | inherited |
+| 11 | PEX | inherited; `--no-pex` reaches nothing (T-181) |
 | 12 | Multitracker metadata | implemented in `create`, `edit`, `trackers` |
 | 14 | Local service discovery | inherited |
 | 15 | UDP tracker protocol | implemented in `tracker.rs` |
 | 16 | Superseeding | not implemented (T-082) |
-| 17 | HTTP seeding, Hoffman style | implemented in `fetch.rs` |
+| 17 | HTTP seeding, Hoffman style | implemented in `fetch.rs`, style declared not detected (T-004) |
 | 19 | HTTP/FTP seeding, GetRight style | implemented, the headline feature |
 | 20 | Peer id conventions | implemented |
 | 21 | Extension for partial seeds | implemented in the bridge |
 | 23 | Compact peer lists | implemented in `tracker.rs` |
 | 27 | Private torrents | implemented in `create`, `edit` |
-| 29 | uTP | inherited, off by default |
+| 29 | uTP | **not reachable**, no flag enables it (T-101) |
+| 33 | DHT scrape | not implemented (T-169) |
 | 39 | Updating torrents via feed URL | implemented in `create`, `edit` |
-| 47 | Padding files | not implemented (T-081) |
-| 48 | Tracker scrape | implemented in `tracker.rs` |
-| 52 | BitTorrent v2 | not implemented (T-081) |
+| 44 | DHT store, mutable items | not implemented (T-170) |
+| 47 | Padding files | **read only**: parsed and skipped, `create` does not emit them (T-081) |
+| 48 | Tracker scrape | implemented in `tracker.rs`, BEP 48 URL convention only (T-065) |
+| 51 | DHT infohash indexing | not implemented (T-169) |
+| 52 | BitTorrent v2 | not implemented (T-081, T-134) |
+| 53 | Magnet file selection, `so=` | implemented in `torrent/magnet.rs` |
+| 54 | `lt_donthave` | not implemented (T-167) |
 | 55 | Holepunch | not implemented (T-102) |
+| MSE/PE | Peer encryption | not implemented (T-163) |
+| WebTorrent | WebRTC peers, WSS trackers | not implemented (T-168) |
+
+**Four rows changed on 2026-08-21 and each was wrong in the same direction:
+the table described intent rather than the tree.**
+
+- **BEP 29 said "inherited, off by default".** There is no uTP in `bit-cli` at
+  all. `ListenerOptions::mode` is never set, so the session stays `TcpOnly`,
+  and no flag changes that. `librqbit-utp` 0.7.0 appears in `cargo tree`
+  because `librqbit` depends on it, which is not the same thing as a
+  capability a user can turn on. "Off by default" reads as a switch; there is
+  no switch. See [T-101](#t-101-utp-is-available-but-untested).
+- **BEP 47 said "not implemented".** The read side is implemented and tested.
+  `torrent/metainfo.rs:107` parses the `attr` key, `:116` `InfoFile::is_padding`
+  is the predicate, `storage.rs:728` and `:870` never open a padding file
+  because it is alignment rather than data, `cmd/files.rs:176` reports it, and
+  `torrent/metainfo.rs:825` `padding_files_are_recognised` is the test. What is
+  missing is the **write** side: `create` emits no padding files, which is a
+  clause of [T-081](create-seed.md).
+- **BEP 53 was absent.** `torrent/magnet.rs:39` and `:211` parse the `so=`
+  index-range file selection out of a magnet.
+- **BEP 33, 44, 51 and 54, MSE/PE and WebTorrent were absent.** Six gaps the
+  corpus named that no row admitted to. They have entries now rather than
+  silence.
+
+The lesson is the one [T-032](performance.md) and [T-141](webseed.md) wrote
+down: a table is a claim, and a claim needs a symbol. Every row above now
+either names one or names the entry that closes it.
 
 ---
 
@@ -59,6 +92,51 @@ Acceptance:  The bridge negotiates BEP 6 with a session that supports it, sends
              `have all` for a complete source, and rejects an out-of-scope
              request without dropping the connection. Covered by an e2e test.
 
+**The corpus supplies the algorithm, a conformance vector, and a warning.**
+
+`vortex/bittorrent/src/peer_comm/peer_connection.rs:89` `generate_fast_set` is
+the spec-conformant allowed-fast set: seed is
+`(ip.to_bits() & 0xffffff00).to_be_bytes()`, a **/24 mask, which is what BEP 6
+specifies**, concatenated with the 20-byte info hash, then `x = SHA1(x)`
+repeatedly taking five big-endian `u32`s per round mod `num_pieces`,
+de-duplicated, with a 300-round attempt cap. `:684-712` is the send side:
+`ALLOWED_FAST_SET_SIZE = 6`, sent on the peer's first `Interested`, and a
+torrent of six pieces or fewer gets the whole set rather than the algorithm.
+`:758-790` is the receive side, and `:792` hard-errors on `HaveAll` or
+`HaveNone` when `fast_ext` was never negotiated.
+
+The receive side is where this goes wrong quietly.
+`torrent/peerconn.go:1047-1054` carries the fix from anacrolix
+[PR 1052](https://github.com/anacrolix/torrent/pull/1052): **the `AllowedFast`
+case must `Add` to the peer's bitmap**, or every downstream check reads an
+empty set and the feature is inert while appearing to work.
+`torrent/peerconn.go:960-985` is the behaviour that makes it worth having: on
+`Unchoke`, requests for allowed-fast pieces are *preserved* rather than
+dropped.
+
+**Ship this vector as a unit test.** From that same PR, reproducible against
+both implementations named above:
+
+```
+ip        = 80.4.4.200
+info_hash = AA AA ... AA  (20 bytes)
+numPieces = 1313
+k         = 7
+=> [1059, 431, 808, 1217, 287, 376, 1188]
+```
+
+**Expect an aria2 peer to disagree, and do not treat that as a bug here.**
+`aria2_rust/aria2-protocol/src/bittorrent/fast_set.rs:150` `mask_ip` mirrors
+aria2's own C++ rather than the BEP: class A and B addresses are masked to /16
+and class C to /24. So two widely deployed clients derive **different**
+allowed-fast sets for the same peer. Implement the BEP as written, as vortex
+and anacrolix do, and know the divergence exists before debugging it.
+
+The receive half alone is worth having before the send half:
+seedchamp [PR 7](https://github.com/j-c-m/seedchamp/pull/7) honours `Suggest`
+in the picker without ever sending one, and `seedchamp/docs/design.md:152-160`
+records that as a deliberate posture rather than an unfinished one.
+
 ### T-101 uTP is available but untested
 
 Source:      corpus, `librqbit-utp`
@@ -77,6 +155,53 @@ Approach:    Add `--transport tcp|utp|both`, default `tcp`, and measure. Rule
 Acceptance:  A download over uTP completes and verifies, and a run with a
              concurrent latency probe shows lower induced latency than the
              same run over TCP. Both numbers here.
+
+**The title says "available" and it is not, which is a stronger statement of
+the same gap.** Checked on 2026-08-21: there is no uTP anywhere in `bit-cli`.
+`ListenerOptions::mode` is never set, no `--transport` flag exists, and
+`grep -rn utp crates/` finds nothing. `librqbit-utp` 0.7.0 is in `cargo tree`
+because `librqbit` depends on it, which is a dependency and not a capability.
+The `README.md` protocol table said "available, off by default" and this file
+said "inherited, off by default"; both read as a switch a user could flip.
+There is no switch. Both are corrected, and the work in this entry is
+unchanged: it was always "add the flag and measure", never "test the flag that
+exists".
+
+**Three implementations to read, and one argument for not writing one.**
+
+`TorrentNG/crates/rt-utp/` is the most complete and the only one with a status
+document: `TorrentNG/docs/protocol/UTP.md` separates "the packet codec works"
+from "the engine can carry peer-wire traffic over it", which is exactly the
+distinction this entry needs to make about itself. `congestion.rs` is LEDBAT
+with `TARGET_DELAY_US = 100_000`, `:50` `on_ack` taking the base delay as a
+running minimum of `timestamp_diff` and `:77` `on_timeout` halving with an MTU
+floor, with three unit tests in the file. `selective_ack.rs:11` fixes
+`EXTENSION_KIND = 1` and its doc states the bit numbering precisely: bit 0 of
+the first byte acknowledges `ack_nr + 2`. `packet.rs`, `state.rs` and
+`transport.rs` carry the header codec, the initiator-versus-acceptor
+connection-ID derivation, and a shared-UDP endpoint that demultiplexes by
+(remote address, receive connection id) so one socket serves many streams.
+
+`mtorrent/mtorrent-core/src/utp/retransmitter.rs:48-50` fixes
+`MAX_PACKET_SIZE = 9 KiB` (the macOS default UDP limit), `MIN_PACKET_SIZE = 1472`
+(Ethernet MTU) and `INITIAL_RTO = 1 s`; `:108` `process_ack` is the
+Jacobson/Karels RTT update applied **only to packets sent once**, with a fast
+retransmit on the second duplicate ack. Its tests use
+`tokio::test(start_paused = true)`, which is the same discipline
+[T-035](performance.md) needed to make a token bucket testable.
+
+`superseedr/src/networking/utp.rs:31-67` is the densest constants block in the
+corpus if a number is wanted rather than an algorithm.
+
+**And the argument against.** anacrolix
+[Issue 1013](https://github.com/anacrolix/torrent/issues/1013) is the
+maintainer of the widest-deployed Go implementation saying the pure-Go uTP is
+buggy and to bind libutp instead. fx-torrent
+[Issue 66](https://github.com/yoep/fx-torrent/issues/66) is one instance of
+what that costs: a packet-parsing failure in the extension chain. A
+hand-rolled uTP is a real and recurring maintenance cost, and this entry is P3
+partly for that reason. If it is built, `librqbit-utp` already being in the
+tree is the cheapest route by a wide margin.
 
 ### T-102 BEP 55 holepunch is not implemented
 
@@ -131,6 +256,35 @@ crate supplies. It is the same wall [T-002](webseed.md) measured and
 So this stays P3 and open, blocked on that boundary and not on a missing
 library. Nobody should reach for a NAT crate for it again.
 
+**The 2026-08-21 corpus supplies both an implementation and the design
+argument, and the design argument is the more valuable half.**
+
+`fx-torrent/src/peer/extension/holepunch.rs` is 678 lines of working
+implementation rather than a codec: `:14` `HolepunchMessage { msg_type,
+addr_type, addr, port, err_code }`, `:149` `NAME = "ut_holepunch"`, message
+types `Rendezvous`, `Connect`, `Error`. It landed in
+[PR 64](https://github.com/yoep/fx-torrent/pull/64). The wire format alone, in
+97 lines, is `torrent/peer_protocol/ut-holepunch/ut-holepunch.go`.
+
+`torrent/NOTES.md:15-31` is the part worth adding to this entry, because it
+answers a question the protocol write-up above does not.
+**Rendezvous only through relays for the same torrent.** The argument: if you
+send a `rendezvous` and later receive a `connect`, you cannot tell whether that
+connect answers *your* rendezvous or one some other peer sent to your relay.
+Relays are not required to respond, so you cannot enforce a timeout and time
+the two apart. Therefore **you do not know which info hash to put in the
+handshake**. Handshaking passively always fails, because the other side may do
+the same and neither initiates. Constraining rendezvous to relays for the same
+torrent removes the ambiguity, and then every `connect` can be handled
+actively. That is a constraint on the design, not an optimisation, and getting
+it wrong produces connections that open and then hang.
+
+The same file carries the arithmetic for whether to bother: with 30 per cent
+of peers unrelayable and 50 per cent behind a bad NAT, relaying takes pairwise
+connectability from 75 per cent to 92.5 per cent. That is the number this
+entry's "raises the reachable swarm size" should be measured against if it is
+ever built.
+
 ### T-103 Filenames that are not valid UTF-8 are refused
 
 Source:      https://github.com/ikatson/rqbit/issues/452 (closed, 2025-07-09)
@@ -152,3 +306,138 @@ Approach:    Add a fixture with a Shift-JIS path and check that `bit-cli info`,
              encoding of the composed URL.
 Acceptance:  A non-UTF-8 fixture parses, lists, and composes a correct web seed
              URL, and the reported path says which encoding was used.
+
+**The practical shape of this is not Shift-JIS, it is the `.utf-8` key
+variants, and that half is cheaper and more common.** intermodal
+[Issue 534](https://github.com/casey/intermodal/issues/534) (CLOSED): uTorrent
+writes **both** `name` and `name.utf-8`, and both `path` and `path.utf-8`, with
+different encodings in each. Neither variant is in BEP 3 and both are universal
+in practice. The reporter's conclusion, which is what anacrolix's
+`Info.BestName()` does and what parse-torrent does, is the rule to adopt:
+**if the `.utf-8` variant exists, prefer it**.
+`parse-torrent/index.js:123-131` treats `info.name` **or** `info['name.utf-8']`
+as satisfying the required-field check, and `path` **or** `path.utf-8`
+per file; `:140` and `:181` then prefer the `.utf-8` spelling throughout.
+parse-torrent [Issue 177](https://github.com/webtorrent/parse-torrent/issues/177)
+adds that `comment.utf-8` exists too. `bit-cli`'s `Metainfo` parser reads
+`name` and `path` only, so a uTorrent torrent carrying a mojibake `name` beside
+a correct `name.utf-8` gets the mojibake.
+
+**The creation side has its own version of this and it is a worse bug, because
+it ships.** mkbrr [Issue 182](https://github.com/autobrr/mkbrr/issues/182) is
+in [T-175](create-seed.md): a torrent created on macOS against an SMB mount
+wrote NFD filenames, verified clean locally including with the tool's own
+check, and broke for everyone else. create-torrent
+[Issue 195](https://github.com/webtorrent/create-torrent/issues/195) is the
+blunter form: `mkdir $'ä'` then create, and the tool cannot stat its own
+input.
+
+So this entry splits into two pieces of work that share one fixture set:
+prefer the `.utf-8` variants on read (small, and the win is immediate), and
+decide what a non-UTF-8 path becomes on the way to a filesystem and to a
+percent-encoded URL (larger, and it interacts with the path planner
+[T-071](windows.md) already built).
+
+### T-167 BEP 54 lt_donthave is not implemented
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    bep
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     A peer's bitfield only ever grows. BEP 3 has `Have` and no
+             inverse, so once a peer has claimed a piece there is no way for
+             it to withdraw the claim, and no way for `bit-cli` to hear one
+             withdrawn.
+Relevance:   This is the cheapest correctness win in the whole corpus for
+             anything that tracks availability, and `bit-cli` tracks
+             availability in two places that matter. The web seed bridge
+             advertises a bitfield of exactly the pieces a source's scope
+             covers in full, and [T-005](webseed.md) is the request to
+             re-scope a source mid-run, which today cannot be expressed on the
+             wire at all: a source that loses a file has no way to say so, and
+             the session keeps asking. `lt_donthave` is that message. It is
+             also what a partial seed needs when a mirror drops a file
+             underneath it, which is the mirror case `bit-cli` exists for.
+Approach:    `fx-torrent/src/peer/extension/donthave.rs` is the whole
+             protocol, and it is small: `:19` `NAME = "lt_donthave"`, and the
+             payload is a 4-byte big-endian piece index that clears one bit in
+             the peer's bitfield. It is a BEP 10 extended message, so it costs
+             one entry in the `m` dictionary the bridge already sends at
+             `webseed/bridge.rs:708` and one handler on the receive side.
+             Send it from the bridge when a scope narrows; honour it on
+             receive by clearing the bit.
+Acceptance:  A source re-scoped mid-run sends `lt_donthave` for every piece it
+             has given up, the session stops requesting those pieces from it
+             without dropping the connection, and a test asserts both. Pairs
+             with [T-005](webseed.md), which is the reason to want it.
+
+### T-168 WebTorrent peers and WSS trackers are not supported
+
+Source:      `reference/RESEARCH.md` section D, 2026-08-21
+Category:    bep
+Priority:    P3
+Effort:      XL
+Status:      open
+
+Problem:     `bit-cli` speaks TCP to peers and HTTP or UDP to trackers. A
+             `wss://` tracker URL in a torrent is not announced to, and a
+             WebTorrent peer cannot be reached at all.
+Relevance:   WebTorrent is a separate swarm sharing the same info hash. A
+             torrent whose `announce-list` carries `wss://` tiers — which is
+             the default for anything created by `create-torrent`, see
+             `create-torrent/index.js:16-24`, where three `wss://` trackers sit
+             beside the `udp://` ones each in its own BEP 12 tier — has peers
+             `bit-cli` cannot see and does not report. `bit-cli trackers`
+             announcing to every tracker in a torrent except the `wss://` ones
+             is the visible half of that.
+
+             Weighed honestly this is completeness rather than reach for
+             `bit-cli`'s stated case. The operator's case is a seedbox and a
+             netdisk, and a browser peer is neither. It is P3 for that reason
+             and not because the work is large.
+Approach:    Three sources, one per layer, and they are unusually complete for
+             a protocol with no BEP.
+
+             `torrust-actix/RtcTorrent.md` is 937 lines and self-contained:
+             tracker announce extensions and their query parameters, the
+             four-step signalling flow, the WebRTC data-channel message types
+             (`MSG_PIECE_REQUEST 0x01`, `MSG_PIECE_DATA 0x02`,
+             `MSG_PIECE_CHUNK 0x04`), chunked transfer, flow control, and a
+             client implementation guide covering the ICE and SDP lifecycle,
+             the announce loop, in-flight request management, piece
+             verification and peer blacklisting. Its section 15 states the
+             interop posture that makes it safe to add: RTC is purely
+             additive, non-RTC clients see one extra `"rtc interval"` key they
+             ignore, and mixed swarms work. Its section 14, five real defects
+             with symptom, cause and fix, is worth reading before writing any
+             of it.
+
+             `torrent/webtorrent/` is the client side.
+             `tracker-protocol.go` has the JSON announce shape with
+             `offers[]`, `answer` and `to_peer_id`, plus `binaryToJsonString`,
+             one rune per byte, which is the de-facto encoding for binary
+             fields in WebTorrent JSON.
+             `torrent/webtorrent/transport.go:261-303` wraps a detached data
+             channel as an `io.ReadWriteCloser` and caps writes.
+
+             `aquatic/crates/ws_protocol/` is the tracker side, and its
+             comments record what the reference client actually does rather
+             than what any document says:
+             `aquatic/crates/ws_protocol/src/incoming/announce.rs:13` notes
+             that `left` may be absent when a magnet is opened, that the
+             length of `offers` **is** the peer count wanted, that the
+             reference client caps it at 10, and that offers are not sent for
+             `stopped` or `completed`.
+
+             superseedr [Issue 319](https://github.com/Jagalite/superseedr/issues/319)
+             scopes the whole job from a client author's side: WebRTC data
+             channels, `ws://` and `wss://` announces, coexistence with TCP
+             peers in one swarm, and a browser-peer test harness.
+Acceptance:  Cannot be met incrementally, so it splits. First half:
+             `bit-cli trackers` announces over `wss://` and reports the peers
+             it is told about, which is useful on its own and needs no WebRTC.
+             Second half: a WebTorrent browser peer and `bit-cli` exchange a
+             verified piece. Record the first half's output here when it lands
+             and leave the second open.

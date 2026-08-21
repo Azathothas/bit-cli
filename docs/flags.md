@@ -10,9 +10,12 @@ Two rules:
    meaning is obvious.
 2. An `aria2` letter is never reassigned to a different concept.
 
-`crates/bit-cli/src/cli.rs` carries a test, `every_short_flag_is_documented`,
-that reads this file's table and fails when the two disagree. Adding a short
-flag without adding a row here fails the build.
+`crates/bit-cli/src/cli.rs` carries a test,
+`every_short_flag_is_documented_in_the_flags_table`, that reads this file's
+table and fails when the two disagree. Adding a short flag without adding a row
+here fails the build. Two more tests sit beside it: `no_short_flag_is_defined_twice`
+rejects a letter used twice in one command, and `short_flags_never_contradict_aria2`
+rejects an `aria2` letter reassigned to a different concept.
 
 ## The -v and -V question
 
