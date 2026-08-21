@@ -403,6 +403,80 @@ The report envelope, the recorder, the warmup window, and the periodic metrics
 are built and shared with `bench webseed`, so what is left is the load
 generator itself.
 
+**The target model, decided before any code was written.**
+
+The acceptance names a command with no `--for` in it:
+
+```
+bit-cli bench swarm <TARGET> --peers 100 --torrents 4 --disk-budget 2GiB --duration 60s
+```
+
+`--torrents 4` says this command generates four torrents. A target that is
+someone else's process cannot be serving a torrent this run just invented, and
+decision 7.4 rules out a daemon and an RPC, so there is no way to hand it one.
+Those two facts cannot both be satisfied by a single load, and the entry could
+not be built until that was resolved. It is resolved as **two loads under one
+verb, chosen by `--for`**, because both are real measurements and each answers
+half of what the entry asks for.
+
+**Leech load, `--for <TORRENT>` repeatable.** The target already serves these
+torrents. `--peers N` synthetic peers connect to it, handshake for the info
+hash, declare interest, request blocks, and check each piece against the
+torrent's own hashes. This is the one that answers the entry's Relevance line,
+"where does my seeding infrastructure fall over": bytes out, per-peer rate, how
+many peers the target accepts before it stops accepting, when it chokes, and
+where the aggregate rate stops rising with peer count.
+
+A swarm is not a hundred leeches, and a load generator that only ever takes is
+not the load a seeder meets. A target that superseeds, or that ranks peers by
+what they have uploaded, behaves completely differently against peers holding
+nothing. So a synthetic peer **keeps** the pieces it has verified, announces
+them, and serves them to the other synthetic peers and to the target if it
+asks. That is what `--disk-budget` bounds, and it is the only thing in this
+command that writes: past the budget a verified block is counted and dropped,
+and the report says how many were dropped, because a swarm that stopped growing
+is a different measurement from one that did not.
+
+**Connection load, no `--for`.** This is the acceptance's literal command.
+`--torrents N` synthetic torrents are generated and the target does not have
+any of them, which is the point: what is measured is the accept and handshake
+path, not the serving path. How fast the target answers a handshake, how many
+connections it accepts before it stops, whether the listener survives, and
+whether it strands a socket per rejected connection.
+
+That is not a fallback reading, it is the load that has already broken this
+software once. [T-020](peers.md) is exactly this shape: 3000 connections that
+closed before handshaking killed `librqbit`'s accept loop in 79 seconds while
+the process kept reporting itself as seeding, and the half of T-020 that is
+still open is that those connections strand a socket about half the time.
+`bench swarm` with no `--for` is the tool that measures that against a host
+rather than against a fixture.
+
+**What generation does and does not produce.** A generated torrent is an info
+dictionary and nothing else: a name, a length, a piece length, and piece
+hashes. No payload bytes are written for it, because nothing will ever verify
+them. `--payload-size` and `--piece-size` decide the shape of that dictionary,
+which decides the info hash and the size of the `.torrent`, and the `.torrent`
+files are written to the scratch directory so a run is reproducible and so the
+operator can add them to a target and come back with `--for`.
+
+**The deviation, recorded.** In connection mode `--disk-budget 2GiB` bounds
+kilobytes: four torrents describing 256 MiB at 1 MiB pieces are about 20 KiB of
+piece hashes between them. The budget is enforced and the bytes written are
+counted and reported either way, so "never exceeds 2 GiB on disk" is a measured
+number rather than a claim, but in the acceptance's own command it is not a
+tight bound. It is tight in leech mode, which is where a synthetic peer holds
+real pieces. Both are run as the acceptance rather than only the literal one.
+
+**"Refuses to load-test a host it was not explicitly pointed at."** Read as a
+property of the whole run and not only of argument parsing, because a required
+positional is something `clap` gives for free and is not worth an acceptance
+clause. `bench swarm` dials the target and nothing else, ever: no tracker
+announce, no DHT, no PEX, and no peer list read out of a `--for` torrent or out
+of the configuration file. The report carries `target.discovery: "none"` and
+the peer count actually dialled, and the acceptance runs it with a config file
+naming a different peer to show that peer is never contacted.
+
 ### T-093 --baseline comparison is not implemented
 
 Source:      PROMPT.md A3.11
