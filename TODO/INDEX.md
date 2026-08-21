@@ -161,9 +161,10 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-167](bep-coverage.md) | P2 | bep | blocked | BEP 54 lt_donthave is not implemented |
 | [T-168](bep-coverage.md) | P3 | bep | open | WebTorrent peers and WSS trackers are not supported |
 | [T-171](metainfo.md) | P2 | metainfo | **done** | httpseeds written as a bencoded string is silently dropped |
-| [T-172](metainfo.md) | P2 | metainfo | open | Strictness on read is undecided, and the error does not say |
+| [T-172](metainfo.md) | P2 | metainfo | **done** | Strictness on read is undecided, and the error does not say |
 | [T-173](metainfo.md) | P3 | metainfo | open | A zero-length path component has no defined meaning |
 | [T-174](metainfo.md) | P2 | metainfo | **done** | A piece length that is not a multiple of 16 KiB has no fixture |
+| [T-187](metainfo.md) | P3 | metainfo | open | Non-canonical integers are refused everywhere, with no instance behind the rule |
 | [T-110](cli-surface.md) | P1 | cli | **done** | The --jsonl event stream is incomplete |
 | [T-111](cli-surface.md) | P2 | cli | open | piece_verified and file_completed are derived from polling |
 | [T-112](cli-surface.md) | P1 | cli | **done** | --log-file does not write or rotate anything |
@@ -219,8 +220,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-145 items: 135 to work through, and 10 deferred to Phase C.
-56 open, 4 partial, 2 blocked, 73 done.
+146 items: 136 to work through, and 10 deferred to Phase C.
+56 open, 4 partial, 2 blocked, 74 done.
 
 **Two entries were closed because another one needed them.**
 [T-005](webseed.md) added two fields to a report, which made the schema check

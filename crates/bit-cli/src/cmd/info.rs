@@ -41,6 +41,17 @@ pub struct Report {
     pub http_seeds: Vec<String>,
     pub nodes: Vec<String>,
     pub magnet: String,
+    /// What this torrent's own encoding did that a canonical encoder would
+    /// not. Absent for a torrent encoded the way BEP 3 describes, which is
+    /// almost all of them.
+    ///
+    /// `bit-cli` reads these rather than refusing them, because the `info`
+    /// bytes are kept verbatim and never re-encoded, so the info hash is
+    /// unaffected. A tool that **does** re-encode would produce a different
+    /// hash from the same file, which is why this is reported rather than
+    /// dropped. See `TODO/metainfo.md`, T-172.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<bit_cli_core::torrent::bencode::Encoding>,
 }
 
 impl Report {
@@ -68,6 +79,10 @@ impl Report {
             http_seeds: meta.http_seeds(),
             nodes: meta.nodes(),
             magnet: bit_cli_core::torrent::Magnet::from_metainfo(meta).to_uri(),
+            encoding: match meta.encoding().is_canonical() {
+                true => None,
+                false => Some(meta.encoding().clone()),
+            },
         }
     }
 
@@ -115,6 +130,14 @@ impl Report {
         for node in &self.nodes {
             out.push(field("dht node", node));
         }
+        // Said in the text output as well as the JSON, because a caller
+        // eyeballing a torrent before publishing it is exactly who needs to
+        // know its encoding is not canonical.
+        if let Some(encoding) = &self.encoding {
+            for note in encoding.notes() {
+                out.push(field("encoding", note));
+            }
+        }
         out.push(field("magnet", &self.magnet));
         out
     }
@@ -138,6 +161,118 @@ pub fn run(
 mod tests {
     use super::*;
     use crate::test_support::{TorrentFixture, run_ok};
+
+    /// A torrent written the way uTorrent/2210 wrote the one in intermodal
+    /// issue 454: keys out of order, and a trailing newline for good measure.
+    ///
+    /// Every field is spelled out here rather than built by `create`, because
+    /// `create` cannot produce this file: it is what this module means by
+    /// canonical. See `TODO/metainfo.md`, T-172.
+    fn sloppy_torrent() -> Vec<u8> {
+        let info = {
+            // Built rather than written as one literal: the piece hashes are
+            // sixty bytes and a line continuation inside a byte string is one
+            // more thing to get wrong in a fixture whose whole point is exact
+            // bytes.
+            let mut info = Vec::new();
+            info.extend_from_slice(b"d12:piece lengthi1024e4:name9:movie.bin");
+            info.extend_from_slice(b"6:lengthi3000e6:pieces60:");
+            info.extend_from_slice(&[b'0'; 60]);
+            info.push(b'e');
+            info
+        };
+        let mut out = Vec::new();
+        out.extend_from_slice(b"d4:info");
+        out.extend_from_slice(&info);
+        out.extend_from_slice(b"8:announce28:udp://tracker.example.com:80e");
+        out.push(b'\n');
+        out
+    }
+
+    /// The bytes above, read rather than refused, with the info hash taken
+    /// over the `info` dictionary exactly as it was written.
+    #[test]
+    fn a_torrent_with_unsorted_keys_and_a_trailing_newline_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sloppy.torrent");
+        let bytes = sloppy_torrent();
+        std::fs::write(&path, &bytes).unwrap();
+
+        let (env, captured) = crate::env::Env::test(
+            &["info", "--json", path.to_str().unwrap()],
+            dir.path().to_path_buf(),
+        );
+        let mut env = env;
+        assert_eq!(
+            crate::run(&mut env),
+            ExitCode::Success,
+            "it must not refuse"
+        );
+        let doc = captured.json().unwrap();
+        assert_eq!(doc["name"], "movie.bin");
+        assert_eq!(doc["total"]["bytes"], 3000);
+
+        // The hash is over the original `info` bytes, not over a re-encoding
+        // of them. That is the property that makes tolerance safe, and it is
+        // why this torrent opens in `bit-cli` with the same info hash every
+        // other client gives it.
+        let start = bytes.windows(7).position(|w| w == b"d4:info").unwrap() + 7;
+        let end = bytes.len() - "8:announce28:udp://tracker.example.com:80e\n".len();
+        let expected: String = <sha1::Sha1 as sha1::Digest>::digest(&bytes[start..end])
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(doc["info_hash"], expected);
+
+        // And it says so rather than accepting it silently.
+        let encoding = &doc["encoding"];
+        assert_eq!(encoding["unsorted_inside_info"], true, "{doc}");
+        assert_eq!(encoding["unsorted_dicts"].as_array().unwrap().len(), 2);
+        assert_eq!(encoding["trailing_bytes"], 1);
+    }
+
+    /// The text output says it too, because a caller eyeballing a torrent
+    /// before publishing it is who needs to know.
+    #[test]
+    fn the_text_output_names_the_rule_that_was_bent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sloppy.torrent");
+        std::fs::write(&path, sloppy_torrent()).unwrap();
+        let out = run_ok(&["info", path.to_str().unwrap()], dir.path().to_path_buf());
+        assert!(out.contains("BEP 3"), "{out}");
+        assert!(out.contains("inside `info`"), "{out}");
+        assert!(out.contains("whitespace or NUL"), "{out}");
+    }
+
+    /// An ordinary torrent reports nothing, so the field is not noise.
+    #[test]
+    fn a_canonical_torrent_reports_no_encoding_notes() {
+        let fixture = TorrentFixture::multi_file();
+        let (env, captured) =
+            crate::env::Env::test(&["info", "--json", fixture.path_str()], fixture.dir());
+        let mut env = env;
+        assert_eq!(crate::run(&mut env), ExitCode::Success);
+        let doc = captured.json().unwrap();
+        assert!(doc.get("encoding").is_none(), "{doc}");
+    }
+
+    /// Bytes after the top-level dictionary that are not whitespace or NUL are
+    /// still refused, and the message says what the rule is.
+    #[test]
+    fn junk_after_the_top_level_dictionary_is_still_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("junk.torrent");
+        let mut bytes = sloppy_torrent();
+        bytes.extend_from_slice(b"XYZ");
+        std::fs::write(&path, &bytes).unwrap();
+        let err = crate::test_support::run_err(
+            &["info", path.to_str().unwrap()],
+            dir.path().to_path_buf(),
+            ExitCode::SourceResolution,
+        );
+        assert!(err.contains("whitespace and NUL"), "{err}");
+        assert!(err.contains("top-level dictionary"), "{err}");
+    }
 
     #[test]
     fn info_reports_the_torrent_in_text() {

@@ -1361,6 +1361,27 @@ fatal_status = ["500-599"]
 bit-cli download release.torrent --web-seed-config web-seeds.toml
 ```
 
+## Reading a torrent somebody else wrote
+
+`bit-cli` reads a `.torrent` whose keys are not in the sorted order BEP 3
+requires, and reads whitespace or NUL after the top-level dictionary, and
+**says so** rather than accepting either silently: `bit-cli info` reports both,
+in the text output and under `encoding` in `--json`.
+
+Tolerance is safe here for one specific reason. The `info` dictionary's bytes
+are kept exactly as they were read and spliced back verbatim on the way out, so
+its keys are never re-sorted and the info hash cannot move. `bit-cli edit` on
+such a torrent re-encodes every key **outside** `info` canonically, leaves
+`info` untouched, and proves the hash did not change before it writes. A tool
+that re-encoded `info` instead would publish a different torrent from the same
+file, which is why the deviation is worth reporting even though it costs
+nothing here.
+
+What is still refused: duplicate keys, integers with a leading zero or `-0`,
+non-string keys, lengths that run past the end, and any trailing byte that is
+not whitespace or NUL. Those are ambiguities rather than untidiness, and the
+error names the rule rather than only the symptom.
+
 ## Protocol support
 
 Three statuses, and the difference between them matters. **Yes** means
@@ -1380,7 +1401,7 @@ not there, and the entry that closes it is named.
 | 12 | Multitracker metadata | yes | `tracker.rs:115` tiers; `create`, `edit`, `trackers` |
 | 14 | Local service discovery | inherited | `--no-lsd` reaches `enable_lsd`, `swarm.rs:161` |
 | 15 | UDP tracker protocol | yes | `tracker.rs:25`, `:301`, `:643` |
-| 17 | HTTP seeding, Hoffman style | yes | `webseed/fetch.rs`; style is declared, not detected ([T-004](TODO/webseed.md)) |
+| 17 | HTTP seeding, Hoffman style | yes | `webseed/fetch.rs`; the style is keyed by the metainfo list a URL came from, and probed for a `--web-seed` given on the command line |
 | 19 | HTTP seeding, GetRight style | yes | `webseed/composition.rs`, the headline feature |
 | 20 | Peer id conventions | yes | `webseed/bridge.rs` handshake |
 | 21 | Extension for partial seeds | yes | `webseed/bridge.rs:897` `upload_only` |

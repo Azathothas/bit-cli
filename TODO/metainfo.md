@@ -172,7 +172,7 @@ Source:      `reference/RESEARCH.md` section C, 2026-08-21
 Category:    metainfo
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, with the recommendation corrected below
 
 Problem:     Two questions about hostile or sloppy bencode have never been
              answered deliberately, and whatever the parser does today it does
@@ -230,6 +230,132 @@ Acceptance:  A fixture with unsorted keys and a fixture with trailing NUL
              bytes each produce the decided outcome, the error text names the
              rule rather than the symptom when one is refused, and `README.md`
              states the position in one sentence.
+
+**Closed 2026-08-21T16:57Z. The recommendation is inverted from what this tree
+can support, and the correction goes here rather than over it**, the way
+[T-017](disk-io.md) and [T-021](peers.md) established.
+
+**First, what the parser actually did**, measured rather than assumed, because
+the entry says "whatever the parser does today it does by accident":
+
+```
+unsorted keys at the top level:  Ok(...)      accepted, silently
+unsorted keys inside `info`:     Ok(...)      accepted, silently
+trailing NUL:                    Err(TrailingData)
+trailing whitespace:             Err(TrailingData)
+trailing junk:                   Err(TrailingData)
+non-canonical integer `i03e`:    Err(NonCanonicalInteger)
+```
+
+So the accidental position was the **opposite** of the recommendation on both
+questions: tolerant on key order everywhere including inside `info`, and strict
+on every trailing byte. Keys go into a `BTreeMap`, which reorders them and keeps
+no record that the original did not.
+
+**Second, why strict-inside-`info` is the wrong half to keep.** The entry's
+argument is that "anything `bit-cli` accepts there it must be able to re-encode
+byte-identically or the info hash moves". `bit-cli` never re-encodes `info`.
+`Metainfo::parse` hashes it from its recorded byte span and
+`Metainfo::write_to_vec` splices those same bytes back, re-encoding only the
+keys around them, and then re-reads its own output and refuses to write if the
+hash moved. So the premise the recommendation rests on does not hold here.
+
+The entry half-knows this: it cites
+`TorrentNG/crates/rt-metainfo/src/parse.rs:20` and says the span technique "is
+what makes strictness survivable at all". It is the other way round. Hashing
+from the span is what makes **tolerance** survivable: a reader that re-encoded
+would have to be strict or publish a different torrent, and a reader that
+splices does not. Being strict on top of the span technique buys nothing and
+costs exactly what intermodal
+[Issue 454](https://github.com/casey/intermodal/issues/454) is about, refusing a
+uTorrent/2210 torrent every other client opens.
+
+**So: tolerant on both questions, and neither is silent.**
+
+- **Keys out of order are read, and recorded.** `bencode::Encoding` carries
+  `unsorted_dicts`, the byte offset of each dictionary whose keys arrived out
+  of order, and `unsorted_inside_info`, which is the one worth separating:
+  outside `info` the keys are re-encoded sorted on the way out anyway, and
+  inside it they are not, ever.
+- **Trailing whitespace and NUL are read, and counted.** mkbrr's list from
+  `torrent/update.go:210`: space, tab, CR, LF, NUL. Anything else after the
+  top-level dictionary is still refused, and the error now names the rule:
+  "`bit-cli` accepts only whitespace and NUL after the top-level dictionary".
+- **Reported.** `bit-cli info` carries `encoding` in `--json` and an `encoding`
+  line per deviation in the text output, absent for a canonical torrent. The
+  reason to report rather than drop is the one the tolerance argument turns on:
+  a tool that **does** re-encode `info` produces a different info hash from the
+  same file, and the only way to know that ahead of time is to be told.
+
+**The split between `decode` and `decode_torrent` is the load-bearing part.**
+`decode_torrent` is the `.torrent` read path and tolerates. `decode` is the
+general one, used for an `info` dictionary on its own and for tracker responses,
+and it tolerates nothing: trailing bytes inside something that gets hashed are a
+different question from trailing bytes after a file.
+`the_general_decoder_tolerates_nothing_after_the_value` pins both halves in one
+test.
+
+**What is still refused, and why each is an ambiguity rather than untidiness.**
+Duplicate keys: a reader taking the first and a reader taking the last disagree
+about what the torrent says while agreeing on its hash. Non-canonical integers,
+non-string keys, lengths past the end, truncation. Key **order** is in none of
+these categories, because the map is the same whichever order it was written in.
+
+**Proved end to end, and the `edit` test is the one that matters.**
+`editing_a_torrent_with_unsorted_keys_keeps_its_info_hash` reads a torrent with
+`info` before `announce` and `info`'s own keys out of order, adds a web seed,
+and asserts the result: the info hash is unchanged, `info_bytes` are identical
+byte for byte, the top-level dictionary comes out **sorted** because everything
+outside `info` is re-encoded canonically, and `info` comes out **still
+unsorted** because it was spliced. The edited file is canonical everywhere the
+hash does not depend on and untouched everywhere it does, which is the whole
+design in one assertion.
+
+```
+$ cargo test -p bit-cli --lib -- cmd::info editing_a_torrent_with_unsorted
+test cmd::info::tests::a_torrent_with_unsorted_keys_and_a_trailing_newline_is_read ... ok
+test cmd::info::tests::the_text_output_names_the_rule_that_was_bent ... ok
+test cmd::info::tests::a_canonical_torrent_reports_no_encoding_notes ... ok
+test cmd::info::tests::junk_after_the_top_level_dictionary_is_still_refused ... ok
+test cmd::edit::tests::editing_a_torrent_with_unsorted_keys_keeps_its_info_hash ... ok
+```
+
+Twelve more in `torrent/bencode.rs`, including that one tolerated byte does not
+excuse the one after it and that the recorded offset names the dictionary rather
+than the key.
+
+`README.md` states the position under "Reading a torrent somebody else wrote",
+which is the acceptance's last clause.
+
+**One thing the measurement turned up that this entry does not cover.**
+Non-canonical integers are refused **everywhere**, `info` and out, and by the
+argument above the ones outside `info` could be read the same way key order now
+is. It is left alone deliberately: unlike the uTorrent key-sorting case, no
+real-world torrent carrying `i03e` is in evidence, and changing a rule with no
+instance behind it is how a parser grows tolerance nobody needed. Filed as [T-187](#t-187-non-canonical-integers-are-refused-everywhere-with-no-instance-behind-the-rule)
+so it is not rediscovered.
+
+**And one the checklist found that had to be fixed here rather than filed.**
+The entry says to turn `rustorrent/docs/DEEP_AUDIT_REPORT_2026-07-13.md`'s
+adversarial set into fixtures. Duplicate keys, non-string keys, invalid lengths
+and truncation each already had a test. **Excessive depth had neither a test nor
+a bound, and the fixture does not fail, it kills the process.** `Parser::value`
+recurses and nothing stopped it: 1,000 deep parsed fine and 10,000 deep exited
+with `STATUS_STACK_OVERFLOW`, which is not a panic and which `catch_unwind`
+cannot see. A `.torrent` fetched from a URL and a tracker's response are both
+untrusted input, so that is a denial of service in twenty kilobytes, and leaving
+it filed while the module was open was not defensible.
+
+`MAX_DEPTH` is 100, counted in `value` because that is the one place every
+nested value passes through and a bound two call sites have to remember is a
+bound one of them will forget. A real torrent reaches about six and
+`announce-list` reaches three, so nothing legitimate is near it;
+`nesting_a_real_torrent_reaches_is_well_inside_the_bound` asserts both ends of
+that, and `a_long_flat_list_is_not_deep` asserts a hundred thousand flat entries
+still read, because the bound is on nesting and not on size. Excessive **value
+counts**, the other half of that checklist line, is bounded already by the
+length prefix: every value costs at least two input bytes, so a document cannot
+declare more values than it carries.
 
 ### T-173 A zero-length path component has no defined meaning
 
@@ -377,3 +503,51 @@ test the_last_block_of_a_non_final_piece_is_four_kibibytes ... ok
 test result: ok. 1 passed; 0 failed
 ```
 
+
+### T-187 Non-canonical integers are refused everywhere, with no instance behind the rule
+
+Source:      found while measuring [T-172](#t-172-strictness-on-read-is-undecided-and-the-error-does-not-say), 2026-08-21
+Category:    metainfo
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `i03e` and `i-0e` are refused wherever they appear, `info` and
+             out, by `NonCanonicalInteger` in
+             `crates/bit-cli-core/src/torrent/bencode.rs`. T-172's closing
+             established that key **order** can be tolerated because the `info`
+             bytes are hashed from their recorded span and never re-encoded.
+             The same argument applies to an integer's byte form: outside
+             `info` nothing is hashed, and inside it the original bytes are
+             what the hash is taken over, so a leading zero cannot move it
+             either.
+Relevance:   Two things keep this at P3 rather than making it the same defect
+             T-172 fixed.
+
+             **No instance is in evidence.** intermodal
+             [Issue 454](https://github.com/casey/intermodal/issues/454) is a
+             real uTorrent/2210 torrent with unsorted keys, reported by a user
+             whose file other clients open. Nothing comparable is recorded for
+             non-canonical integers: `rustorrent`'s audit lists them as an
+             adversarial case to handle, which is not the same as a torrent in
+             the wild carrying one. Relaxing a rule with no instance behind it
+             is how a parser grows tolerance nobody needed, and every relaxation
+             is a shape a hostile file can take.
+
+             **It is not free the way key order is.** A `BTreeMap` discards key
+             order at no cost, so tolerating it required only recording that it
+             happened. An integer's byte form would have to be recorded per
+             value to be reportable at all, and a report that says "some integer
+             somewhere had a leading zero" is not worth the field.
+Approach:    Wait for an instance. If one turns up, the shape is T-172's:
+             accept, record in `bencode::Encoding`, report in
+             `bit-cli info --json`, and keep `decode` strict for the paths where
+             the bytes are hashed on their own.
+
+             If none turns up, close this by writing down that the rule is
+             deliberate, which is the outcome it most likely has. What must not
+             happen is the rule staying unexamined a third time.
+Acceptance:  Either a fixture from a real torrent that carries one, read and
+             reported the way T-172 reads unsorted keys, or a line in
+             `README.md` under "Reading a torrent somebody else wrote" saying
+             the rule is deliberate and why.

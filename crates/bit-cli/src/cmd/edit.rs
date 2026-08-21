@@ -268,6 +268,79 @@ mod tests {
     use bit_cli_core::ExitCode;
     use bit_cli_core::torrent::Metainfo;
 
+    /// Editing a torrent whose own encoding is not canonical keeps its info
+    /// hash, which is the property that makes reading one safe at all.
+    ///
+    /// `write_to_vec` re-encodes every key **outside** `info` canonically and
+    /// splices the original `info` bytes back verbatim, so the top-level keys
+    /// come out sorted, the `info` keys stay exactly as they were, and the
+    /// hash does not move. A tool that re-encoded `info` instead would publish
+    /// a different torrent from the same file. See `TODO/metainfo.md`, T-172.
+    #[test]
+    fn editing_a_torrent_with_unsorted_keys_keeps_its_info_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sloppy.torrent");
+        // `info` before `announce`, and `info`'s own keys out of order.
+        let info = {
+            // Built rather than written as one literal: the piece hashes are
+            // sixty bytes and a line continuation inside a byte string is one
+            // more thing to get wrong in a fixture whose whole point is exact
+            // bytes.
+            let mut info = Vec::new();
+            info.extend_from_slice(b"d12:piece lengthi1024e4:name9:movie.bin");
+            info.extend_from_slice(b"6:lengthi3000e6:pieces60:");
+            info.extend_from_slice(&[b'0'; 60]);
+            info.push(b'e');
+            info
+        };
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"d4:info");
+        bytes.extend_from_slice(&info);
+        bytes.extend_from_slice(b"8:announce28:udp://tracker.example.com:80e");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let before = Metainfo::read(&path).unwrap();
+        assert!(!before.encoding().is_canonical());
+        assert!(before.encoding().unsorted_inside_info);
+
+        let doc = run_json(
+            &[
+                "edit",
+                "--web-seed",
+                "https://a.example.com/pub/",
+                path.to_str().unwrap(),
+            ],
+            dir.path().to_path_buf(),
+        );
+        assert_eq!(doc["info_hash_changed"], false, "{doc}");
+        assert_eq!(doc["info_hash_after"], before.info_hash().hex());
+
+        let after = Metainfo::read(&path.with_extension("edited.torrent"))
+            .or_else(|_| Metainfo::read(dir.path().join("sloppy.edited.torrent").as_path()))
+            .expect("the edited torrent");
+        assert_eq!(after.info_hash(), before.info_hash());
+        assert_eq!(
+            after.info_bytes(),
+            before.info_bytes(),
+            "the `info` bytes are spliced back exactly, out-of-order keys and all"
+        );
+        // The top level came out sorted, because everything outside `info` is
+        // re-encoded canonically. `info` did not, because it was spliced back
+        // byte for byte. So the edited file is canonical everywhere the info
+        // hash does not depend on, and untouched everywhere it does, which is
+        // the whole design in one assertion.
+        assert!(
+            !after.encoding().unsorted_dicts.contains(&0),
+            "the top level should have been re-encoded sorted: {:?}",
+            after.encoding()
+        );
+        assert!(
+            after.encoding().unsorted_inside_info,
+            "`info` keeps the order it was written in, or the hash would move: {:?}",
+            after.encoding()
+        );
+    }
+
     #[test]
     fn adding_web_seeds_keeps_the_info_hash() {
         let fixture = TorrentFixture::multi_file();

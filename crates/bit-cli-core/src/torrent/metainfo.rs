@@ -170,12 +170,15 @@ pub struct Metainfo {
     info_hash: InfoHash,
     /// The parsed `info` dictionary.
     info: Info,
+    /// What this torrent's own encoding did that a canonical encoder would
+    /// not. See `TODO/metainfo.md`, T-172.
+    encoding: bencode::Encoding,
 }
 
 impl Metainfo {
     /// Parse a `.torrent` from bytes.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        let (root, span) = bencode::decode_with_info_span(bytes)
+        let (root, span, encoding) = bencode::decode_torrent(bytes)
             .map_err(|e| Error::source_resolution(format!("not a valid torrent: {e}")))?;
         let span =
             span.ok_or_else(|| Error::source_resolution("torrent has no `info` dictionary"))?;
@@ -187,6 +190,7 @@ impl Metainfo {
             info_bytes,
             info_hash,
             info,
+            encoding,
         })
     }
 
@@ -225,6 +229,9 @@ impl Metainfo {
             info_bytes,
             info_hash,
             info,
+            // Built here rather than read: `create` encodes the `info`
+            // dictionary itself and this module is what canonical means.
+            encoding: bencode::Encoding::default(),
         })
     }
 
@@ -251,6 +258,18 @@ impl Metainfo {
     /// The top-level dictionary, for fields this type does not name.
     pub fn root(&self) -> &Value {
         &self.root
+    }
+
+    /// What this torrent's own encoding did that a canonical encoder would
+    /// not: keys out of order, and tolerated bytes after the top-level
+    /// dictionary.
+    ///
+    /// Neither refuses the torrent. Both are worth knowing, because a tool
+    /// that re-encodes the `info` dictionary rather than splicing it, as
+    /// [`Self::write_to_vec`] does, would produce a different info hash from
+    /// the same file. See `TODO/metainfo.md`, T-172.
+    pub fn encoding(&self) -> &bencode::Encoding {
+        &self.encoding
     }
 
     /// The primary tracker.
