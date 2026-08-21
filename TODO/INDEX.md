@@ -186,7 +186,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-160](cli-surface.md) | P1 | ci | **done** | A peers test raced its own seeder |
 | [T-161](cli-surface.md) | P3 | ci | open | A CI action still targets Node.js 20, which is deprecated *(four call sites, not two)* |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
-| [T-181](cli-surface.md) | P1 | cli | open | Four flags are accepted in silence and reach no code |
+| [T-181](cli-surface.md) | P1 | cli | **done** | Four flags are accepted in silence and reach no code |
+| [T-183](cli-surface.md) | P1 | cli | **done** | --web-seed-list-url is read, only into a refusal |
 | [T-182](cli-surface.md) | P1 | ci | **done** | A macOS test asserted an invariant across two kernel subsystems |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
@@ -215,7 +216,17 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-141 items: 131 to work through, and 10 deferred to Phase C.
+142 items: 132 to work through, and 10 deferred to Phase C.
+60 open, 4 partial, 1 blocked, 67 done.
+
+**One was added by building another.** [T-183](cli-surface.md) is
+`--web-seed-list-url`, which is read and read only into a function that always
+errors, on every command that accepts it. It was found while wiring
+`--tracker-list-url` through the same file for
+[T-181](cli-surface.md), and neither the audit that found T-181's four flags
+nor the `clap`-tree test T-181 built to stop a fifth would have caught it: both
+look for a field with no reader, and this one has a reader. A field with no
+reader and a field whose reader cannot succeed look identical from the outside.
 
 **Twenty were added on 2026-08-21 by reading the twenty-two tree corpus
 against this tree**, T-163 to T-182. Nineteen of them are open, so the open

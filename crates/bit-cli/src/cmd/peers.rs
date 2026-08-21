@@ -142,6 +142,11 @@ pub fn run(
     let count = args.count;
     let initial_peers = swarm::peer_addrs(&args.peers)?;
     let no_trackers = args.trackers.no_tracker;
+    // `--max-download-rate` is a per-torrent cap and goes on the add, which is
+    // the comment above made to still be true. Before T-181 it reached the
+    // session field instead, where it happened to bound this command because
+    // this command adds one torrent. See `TODO/cli-surface.md`, T-181.
+    let (torrent_download_rate, torrent_upload_rate) = setup.torrent_rates()?;
     let _ = kind;
     let runtime = swarm::runtime()?;
 
@@ -168,6 +173,8 @@ pub fn run(
             list_only: false,
             initial_peers: initial_peers.clone(),
             disable_trackers: no_trackers,
+            download_rate: torrent_download_rate,
+            upload_rate: torrent_upload_rate,
             ..Default::default()
         };
         let handle = engine.add(&source, &add).await?;

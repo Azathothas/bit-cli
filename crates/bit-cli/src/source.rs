@@ -252,6 +252,103 @@ pub async fn resolve_metalink(document: &Metalink, user_agent: &str) -> Result<R
     .with("torrents_tried", tried))
 }
 
+/// Longest a list fetch may take, connect and body together.
+///
+/// A tracker list that never finishes arriving must not hold up a download
+/// that has everything else it needs.
+const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Largest list body accepted, in bytes.
+///
+/// A tracker list is a few kilobytes. One megabyte is four orders of magnitude
+/// of headroom and still bounds a URL that answers with a payload.
+const MAX_LIST_BYTES: usize = 1024 * 1024;
+
+/// Fetch a plain-text list over HTTP.
+///
+/// Backs `--tracker-list-url` and `--web-seed-list-url`. The URL comes from the
+/// caller and the response comes from whoever answers it, so neither is
+/// trusted: the scheme has to be HTTP or HTTPS, the whole exchange is under a
+/// deadline, and the body is capped.
+///
+/// A body that exceeds the cap is refused rather than truncated. Half a
+/// tracker list is a run announcing to a set of trackers nobody chose, and a
+/// truncated last line is a URL that is not the URL anyone wrote.
+///
+/// See `TODO/cli-surface.md`, T-181 and T-183.
+pub async fn fetch_list(url: &str, user_agent: &str) -> Result<String> {
+    // The scheme is matched on the raw string rather than through a URL
+    // parser, because the only question here is whether this is an HTTP URL
+    // and a parser would be a dependency to answer it. Schemes are
+    // case-insensitive, so `HTTPS://` is the same URL.
+    let scheme_is_http = {
+        let lower = url.to_ascii_lowercase();
+        lower.starts_with("http://") || lower.starts_with("https://")
+    };
+    if !scheme_is_http {
+        return Err(Error::usage(format!(
+            "{url} is not an HTTP URL, and a list is fetched over HTTP only"
+        ))
+        .with("url", url.to_string()));
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent(user_agent)
+        .timeout(LIST_TIMEOUT)
+        .build()
+        .map_err(|e| Error::network(format!("cannot build an HTTP client: {e}")))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| Error::network(format!("cannot fetch {url}: {e}")))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(Error::network(format!("{url}: {status}"))
+            .with("url", url.to_string())
+            .with("http_status", status.as_u16()));
+    }
+
+    // Read in chunks rather than calling `bytes()`, so the cap bounds what is
+    // held in memory rather than only what is returned. A server declaring a
+    // small `Content-Length` and sending more would otherwise be read in full
+    // before anything checked it.
+    let mut response = response;
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| Error::network(format!("cannot read the body of {url}: {e}")))?
+    {
+        body.extend_from_slice(&chunk);
+        if body.len() > MAX_LIST_BYTES {
+            return Err(Error::network(format!(
+                "{url} answered with more than {MAX_LIST_BYTES} bytes, which is not a list"
+            ))
+            .with("url", url.to_string())
+            .with("max_bytes", MAX_LIST_BYTES));
+        }
+    }
+
+    String::from_utf8(body).map_err(|_| {
+        Error::network(format!("{url} answered with bytes that are not UTF-8 text"))
+            .with("url", url.to_string())
+    })
+}
+
+/// A list fetcher that runs on an existing runtime.
+///
+/// The list flags are read while the command is still synchronous, so the
+/// fetch borrows the runtime the command has already built rather than
+/// building one of its own. Building a second runtime inside the first is what
+/// this avoids.
+pub fn list_fetcher<'a>(
+    runtime: &'a tokio::runtime::Runtime,
+    user_agent: &'a str,
+) -> impl Fn(&str) -> Result<String> + 'a {
+    move |url: &str| runtime.block_on(fetch_list(url, user_agent))
+}
+
 fn reqwest_client(user_agent: &str) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent(user_agent)

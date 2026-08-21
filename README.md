@@ -1334,7 +1334,7 @@ not there, and the entry that closes it is named.
 | 7 | IPv6 tracker extension | yes | `peers6` at `tracker.rs:493`, 18 bytes per entry |
 | 9 | Metadata from peers | inherited | magnets resolve through the session |
 | 10 | Extension protocol | yes | `webseed/bridge.rs:83`, `:708` |
-| 11 | PEX | inherited | no `bit-cli` code; `--no-pex` does not reach it, [T-181](TODO/cli-surface.md) |
+| 11 | PEX | inherited | no `bit-cli` code; `--no-pex` warns that it cannot turn it off, [T-181](TODO/cli-surface.md) |
 | 12 | Multitracker metadata | yes | `tracker.rs:115` tiers; `create`, `edit`, `trackers` |
 | 14 | Local service discovery | inherited | `--no-lsd` reaches `enable_lsd`, `swarm.rs:161` |
 | 15 | UDP tracker protocol | yes | `tracker.rs:25`, `:301`, `:643` |

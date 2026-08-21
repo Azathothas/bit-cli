@@ -1079,16 +1079,16 @@ pub fn leech(
         SourceKind::File(path) => Some(Metainfo::read(path)?),
         _ => None,
     };
-    let specs = webseed_args::collect(
-        &args.web_seeds,
-        meta.as_ref(),
-        None,
-        env,
-        webseed_args::no_network,
-    )?;
-    let trackers = setup.tracker_list(meta.as_ref(), env)?;
-
     if global.dry_run {
+        // A dry run reports without doing, so a list URL is refused rather
+        // than fetched, the same way `download --dry-run` refuses one.
+        let specs = webseed_args::collect(
+            &args.web_seeds,
+            meta.as_ref(),
+            None,
+            env,
+            webseed_args::no_network,
+        )?;
         report.note("dry run: nothing was downloaded");
         report.target.endpoints = specs.iter().map(|spec| spec.url.clone()).collect();
         if let Some(meta) = &meta {
@@ -1100,6 +1100,23 @@ pub fn leech(
     }
 
     let runtime = crate::swarm::runtime()?;
+    // Both list flags are fetches, so both are read after the dry-run branch
+    // and after there is a runtime to fetch on. See `TODO/cli-surface.md`,
+    // T-181 and T-183.
+    let user_agent = bit_cli_core::webseed::fetch::default_user_agent();
+    let specs = webseed_args::collect(
+        &args.web_seeds,
+        meta.as_ref(),
+        None,
+        env,
+        crate::source::list_fetcher(&runtime, &user_agent),
+    )?;
+    let trackers = setup.tracker_list(
+        meta.as_ref(),
+        env,
+        crate::source::list_fetcher(&runtime, &user_agent),
+    )?;
+    let (torrent_download_rate, torrent_upload_rate) = setup.torrent_rates()?;
     let outcome = runtime.block_on(async {
         let engine = Arc::new(Engine::start(&engine_options).await?);
         for warning in engine.warnings() {
@@ -1110,6 +1127,8 @@ pub fn leech(
             trackers: trackers.clone(),
             disable_trackers: trackers.as_ref().is_some_and(Vec::is_empty),
             initial_peers: peers.clone(),
+            download_rate: torrent_download_rate,
+            upload_rate: torrent_upload_rate,
             ..Default::default()
         };
         let handle = engine.add(&args.source.source, &add).await?;
@@ -1301,8 +1320,6 @@ pub fn seed(
         SourceKind::File(path) => Some(Metainfo::read(path)?),
         _ => None,
     };
-    let trackers = setup.tracker_list(meta.as_ref(), env)?;
-
     if global.dry_run {
         report.note("dry run: nothing was served");
         if let Some(meta) = &meta {
@@ -1336,6 +1353,15 @@ pub fn seed(
     }
 
     let runtime = crate::swarm::runtime()?;
+    // Same as `bench leech` above: a fetch, so it happens once the dry-run
+    // branch has been passed and there is a runtime to fetch on.
+    let user_agent = bit_cli_core::webseed::fetch::default_user_agent();
+    let trackers = setup.tracker_list(
+        meta.as_ref(),
+        env,
+        crate::source::list_fetcher(&runtime, &user_agent),
+    )?;
+    let (torrent_download_rate, torrent_upload_rate) = setup.torrent_rates()?;
     let outcome = runtime.block_on(async {
         let engine = Arc::new(Engine::start(&engine_options).await?);
         for warning in engine.warnings() {
@@ -1352,6 +1378,8 @@ pub fn seed(
                 &args.trackers.tracker_interval,
                 "tracker-interval",
             )?,
+            download_rate: torrent_download_rate,
+            upload_rate: torrent_upload_rate,
             ..Default::default()
         };
 

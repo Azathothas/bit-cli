@@ -2103,6 +2103,140 @@ mod tests {
         assert!(args.check_integrity, "-V has to keep its aria2 meaning");
     }
 
+    /// Every flag reaches code, or is on a named list of the ones that do not.
+    ///
+    /// The audit that found [T-181](../../../TODO/cli-surface.md) was one
+    /// command: every `pub` field in this file grepped for a reader outside
+    /// it. Four flags had none, and nothing had noticed because a flag that
+    /// parses and is never read looks exactly like one that works. This is
+    /// that command, mechanised, so a fifth cannot be added silently.
+    ///
+    /// "Reaches code" here means the field name appears somewhere in the
+    /// workspace outside this file. That is deliberately weak: it cannot tell
+    /// a flag that works from one that only warns, and warning is the honest
+    /// behaviour for a flag that cannot yet do what it says
+    /// (`cmd/seed.rs`, `--superseed` and `--no-pex`). What it does catch is
+    /// the case that hid for a whole session, which is a field nothing reads
+    /// at all.
+    #[test]
+    fn every_flag_reaches_code_or_is_a_named_exception() {
+        /// Fields nothing outside `cli.rs` reads, each with the entry that
+        /// owns it.
+        ///
+        /// A name belongs here only while an entry is open that will remove
+        /// it. Adding one without an entry is how a review list stops being a
+        /// review.
+        const ACCEPTED_WITHOUT_A_READER: &[(&str, &str)] = &[
+            (
+                "index_out",
+                "TODO/cli-surface.md T-116, -O cannot rename a file",
+            ),
+            (
+                "on_piece_verified",
+                "TODO/cli-surface.md T-115, hooks do not fire for every trigger",
+            ),
+        ];
+
+        // Read the workspace source rather than `include_str!`ing a fixed
+        // list, because a file added later would otherwise silently stop
+        // being searched, which is the same class of gap this test exists for.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let roots = [
+            manifest.join("src"),
+            manifest.join("tests"),
+            manifest.join("../bit-cli-core/src"),
+            manifest.join("../bit-cli-core/tests"),
+        ];
+        let this_file = manifest.join("src").join("cli.rs");
+        let mut haystack = String::new();
+        let mut files_read = 0usize;
+        for root in &roots {
+            let mut stack = vec![root.clone()];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|e| e == "rs")
+                        && path.canonicalize().ok() != this_file.canonicalize().ok()
+                        && let Ok(text) = std::fs::read_to_string(&path)
+                    {
+                        haystack.push_str(&text);
+                        files_read += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            files_read > 20,
+            "only {files_read} source files were read, so this test is not looking at the workspace and would pass whatever it was given"
+        );
+
+        let command = Cli::command();
+        let mut fields: Vec<(String, String)> = Vec::new();
+        let mut collect = |cmd: &clap::Command, path: &str| {
+            for arg in cmd.get_arguments() {
+                // `--help` and `--version` are clap's own and have no field.
+                if arg.get_long().is_none() || arg.is_global_set() && arg.get_id() == "help" {
+                    continue;
+                }
+                if matches!(arg.get_id().as_str(), "help" | "version") {
+                    continue;
+                }
+                fields.push((arg.get_id().to_string(), path.to_string()));
+            }
+        };
+        collect(&command, "bit-cli");
+        for sub in command.get_subcommands() {
+            let name = format!("bit-cli {}", sub.get_name());
+            collect(sub, &name);
+            for nested in sub.get_subcommands() {
+                collect(nested, &format!("{name} {}", nested.get_name()));
+            }
+        }
+        assert!(
+            fields.len() > 100,
+            "only {} flags found, which cannot be right",
+            fields.len()
+        );
+
+        let accepted: std::collections::HashMap<&str, &str> =
+            ACCEPTED_WITHOUT_A_READER.iter().copied().collect();
+        let mut unread: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (field, path) in &fields {
+            if !seen.insert(field.clone()) {
+                continue;
+            }
+            if accepted.contains_key(field.as_str()) {
+                continue;
+            }
+            if !haystack.contains(field.as_str()) {
+                unread.push(format!("  {field}  ({path})"));
+            }
+        }
+        assert!(
+            unread.is_empty(),
+            "these flags parse and nothing outside cli.rs reads them. Wire each one up, or warn the way `--superseed` does in cmd/seed.rs and add it to ACCEPTED_WITHOUT_A_READER with the TODO/ entry that owns it:\n{}",
+            unread.join(
+                "
+"
+            )
+        );
+
+        // The list is a review, so an entry that is no longer needed has to
+        // leave it. A name here that something does read is stale.
+        for (field, owner) in ACCEPTED_WITHOUT_A_READER {
+            assert!(
+                !haystack.contains(field),
+                "`{field}` is on ACCEPTED_WITHOUT_A_READER for {owner}, and something now reads it. Remove the exception."
+            );
+        }
+    }
+
     #[test]
     fn every_short_flag_is_documented_in_the_flags_table() {
         // `docs/flags.md` is the table A3.2 requires, and a table nothing

@@ -162,8 +162,19 @@ impl SessionSetup<'_> {
             enable_trackers: !http_only && !self.trackers.no_tracker,
             enable_peers: !http_only,
             max_peers: self.limits.max_peers,
-            download_rate: rate_flag(&self.limits.max_download_rate, "max-download-rate")?,
-            upload_rate: rate_flag(&self.limits.max_upload_rate, "max-upload-rate")?,
+            // The session caps, which is what "overall" means. The per-torrent
+            // pair goes on the add, through [`Self::torrent_rates`]. Before
+            // T-181 both pairs aimed here and only one of them arrived, so
+            // `--max-download-rate` capped the whole run and
+            // `--max-overall-download-rate` capped nothing.
+            download_rate: rate_flag(
+                &self.limits.max_overall_download_rate,
+                "max-overall-download-rate",
+            )?,
+            upload_rate: rate_flag(
+                &self.limits.max_overall_upload_rate,
+                "max-overall-upload-rate",
+            )?,
             extra_trackers: Vec::new(),
             ipv4_only: false,
             client_name: Some(format!("bit-cli {}", bit_cli_core::VERSION)),
@@ -172,12 +183,35 @@ impl SessionSetup<'_> {
         })
     }
 
+    /// The per-torrent rate caps, as `(download, upload)` bytes per second.
+    ///
+    /// These go on `AddOptions` rather than on the session, which is the whole
+    /// difference between `--max-download-rate` and
+    /// `--max-overall-download-rate`. Both are parsed here so a command cannot
+    /// wire one and forget the other. See `TODO/cli-surface.md`, T-181.
+    pub fn torrent_rates(&self) -> Result<(Option<u64>, Option<u64>)> {
+        Ok((
+            rate_flag(&self.limits.max_download_rate, "max-download-rate")?,
+            rate_flag(&self.limits.max_upload_rate, "max-upload-rate")?,
+        ))
+    }
+
     /// The tracker list for one torrent, after the runtime edits.
     ///
     /// `--tracker`, `--tracker-file`, and `--tracker-list-url` add;
     /// `--exclude-tracker` removes; `--replace-trackers` drops the torrent's
     /// own list first. The `.torrent` is never rewritten.
-    pub fn tracker_list(&self, meta: Option<&Metainfo>, env: &Env) -> Result<Option<Vec<String>>> {
+    ///
+    /// `fetch_list` fetches a `--tracker-list-url`, injected the way
+    /// [`crate::webseed_args::collect`] takes its own, so the assembly is
+    /// testable without a network and a command that must not reach out passes
+    /// [`crate::webseed_args::no_network`]. See `TODO/cli-surface.md`, T-181.
+    pub fn tracker_list(
+        &self,
+        meta: Option<&Metainfo>,
+        env: &Env,
+        fetch_list: impl Fn(&str) -> Result<String>,
+    ) -> Result<Option<Vec<String>>> {
         let args = self.trackers;
         if args.no_tracker || self.web_seeds.web_seed_only {
             return Ok(Some(Vec::new()));
@@ -196,6 +230,15 @@ impl SessionSetup<'_> {
             })?;
             out.extend(bit_cli_core::webseed::table::parse_url_list(&text));
         }
+        // Read with the same parser `--tracker-file` uses, so two flags that
+        // read identically in `--help` behave identically. That parser
+        // flattens: a blank line does not start a new BEP 12 tier here any
+        // more than it does in a file, and announcing in tier order is
+        // [T-063](../TODO/trackers.md) rather than this.
+        for url in &args.tracker_list_url {
+            let text = fetch_list(url)?;
+            out.extend(bit_cli_core::webseed::table::parse_url_list(&text));
+        }
 
         let excluded: HashSet<&str> = args.exclude_tracker.iter().map(String::as_str).collect();
         if excluded.contains("*") {
@@ -208,7 +251,11 @@ impl SessionSetup<'_> {
         let mut seen = HashSet::new();
         out.retain(|url| seen.insert(url.clone()));
 
-        match out.is_empty() && args.tracker.is_empty() && args.tracker_file.is_empty() {
+        match out.is_empty()
+            && args.tracker.is_empty()
+            && args.tracker_file.is_empty()
+            && args.tracker_list_url.is_empty()
+        {
             true => Ok(None),
             false => Ok(Some(out)),
         }
@@ -992,6 +1039,172 @@ mod tests {
             peers: PeerCounts::default(),
             error: None,
         }
+    }
+
+    /// Build a `SessionSetup` from a `download` command line.
+    ///
+    /// The whole point of these is the flags, so they are parsed rather than
+    /// hand-built: a struct filled in by hand cannot catch a flag that stopped
+    /// reaching the struct.
+    fn setup_from(argv: &[&str]) -> (crate::cli::DownloadArgs, crate::cli::Global) {
+        use clap::Parser;
+        let mut full = vec!["bit-cli", "download"];
+        full.extend_from_slice(argv);
+        full.push("x.torrent");
+        let cli = crate::cli::Cli::try_parse_from(full).expect("parse");
+        let Some(crate::cli::Command::Download(args)) = cli.command else {
+            panic!("expected download");
+        };
+        (args, cli.global)
+    }
+
+    fn session_setup<'a>(
+        args: &'a crate::cli::DownloadArgs,
+        global: &'a crate::cli::Global,
+    ) -> SessionSetup<'a> {
+        SessionSetup {
+            global,
+            trackers: &args.trackers,
+            limits: &args.limits,
+            web_seeds: &args.web_seeds,
+            listen_ports: 6881..=6889,
+            no_dht: args.no_dht,
+            no_lsd: args.no_lsd,
+            allocation: bit_cli_core::alloc::Allocation::default(),
+        }
+    }
+
+    /// `TODO/cli-surface.md` T-181. `--tracker-list-url` fetched three
+    /// trackers and every one of them is announced to.
+    #[test]
+    fn a_tracker_list_url_contributes_every_tracker_it_names() {
+        let (args, global) = setup_from(&["--tracker-list-url", "https://e.com/trackers.txt"]);
+        let setup = session_setup(&args, &global);
+        let env = Env::test(&[], "/work").0;
+        let trackers = setup
+            .tracker_list(None, &env, |url| {
+                assert_eq!(url, "https://e.com/trackers.txt");
+                Ok("# mirrors
+udp://a.example:80
+
+udp://b.example:80
+udp://c.example:80
+"
+                .to_string())
+            })
+            .unwrap()
+            .expect("a list");
+        assert_eq!(
+            trackers,
+            vec![
+                "udp://a.example:80".to_string(),
+                "udp://b.example:80".to_string(),
+                "udp://c.example:80".to_string(),
+            ],
+            "comments and blank lines are dropped, the rest are announced to"
+        );
+    }
+
+    /// A list URL and the two flags beside it compose, and a tracker named
+    /// twice is announced to once.
+    #[test]
+    fn a_tracker_list_url_composes_with_the_flags_beside_it() {
+        let (args, global) = setup_from(&[
+            "--tracker",
+            "udp://cli.example:80",
+            "--tracker-list-url",
+            "https://e.com/trackers.txt",
+            "--exclude-tracker",
+            "udp://b.example:80",
+        ]);
+        let setup = session_setup(&args, &global);
+        let env = Env::test(&[], "/work").0;
+        let trackers = setup
+            .tracker_list(None, &env, |_| {
+                Ok("udp://a.example:80
+udp://b.example:80
+udp://cli.example:80
+"
+                .to_string())
+            })
+            .unwrap()
+            .expect("a list");
+        assert_eq!(
+            trackers,
+            vec![
+                "udp://cli.example:80".to_string(),
+                "udp://a.example:80".to_string(),
+            ],
+            "--tracker first, the excluded one gone, and the repeat dropped"
+        );
+    }
+
+    /// A command that must not reach the network says so rather than fetching.
+    #[test]
+    fn a_tracker_list_url_on_a_no_network_command_fails_clearly() {
+        let (args, global) = setup_from(&["--tracker-list-url", "https://e.com/trackers.txt"]);
+        let setup = session_setup(&args, &global);
+        let env = Env::test(&[], "/work").0;
+        let err = setup
+            .tracker_list(None, &env, crate::webseed_args::no_network)
+            .unwrap_err();
+        assert_eq!(err.code(), bit_cli_core::ExitCode::Usage);
+        assert!(
+            err.message().contains("needs the network"),
+            "{}",
+            err.message()
+        );
+    }
+
+    /// `TODO/cli-surface.md` T-181. The two rate scopes are two different
+    /// `librqbit` fields, and this is the test that says which is which.
+    ///
+    /// `--max-overall-*` is the session cap and reaches `EngineOptions`.
+    /// `--max-*` is the per-torrent cap and reaches the add. Before T-181 both
+    /// aimed at the session field, so capping one torrent capped the whole run
+    /// and capping the whole run did nothing at all.
+    #[test]
+    fn the_overall_rate_caps_the_session_and_the_plain_one_caps_a_torrent() {
+        let (args, global) = setup_from(&[
+            "--max-download-rate",
+            "1MiB/s",
+            "--max-upload-rate",
+            "2MiB/s",
+            "--max-overall-download-rate",
+            "4MiB/s",
+            "--max-overall-upload-rate",
+            "8MiB/s",
+        ]);
+        let setup = session_setup(&args, &global);
+        let env = Env::test(&[], "/work").0;
+
+        let options = setup.engine_options(&env).unwrap();
+        assert_eq!(options.download_rate, Some(4 * 1024 * 1024));
+        assert_eq!(options.upload_rate, Some(8 * 1024 * 1024));
+
+        let (down, up) = setup.torrent_rates().unwrap();
+        assert_eq!(down, Some(1024 * 1024));
+        assert_eq!(up, Some(2 * 1024 * 1024));
+    }
+
+    /// Neither scope is filled in from the other. A run that caps only one
+    /// torrent has no session cap, and a run that caps the session has no
+    /// per-torrent one.
+    #[test]
+    fn one_rate_scope_never_stands_in_for_the_other() {
+        let (args, global) = setup_from(&["--max-download-rate", "1MiB/s"]);
+        let setup = session_setup(&args, &global);
+        let env = Env::test(&[], "/work").0;
+        assert_eq!(setup.engine_options(&env).unwrap().download_rate, None);
+        assert_eq!(setup.torrent_rates().unwrap().0, Some(1024 * 1024));
+
+        let (args, global) = setup_from(&["--max-overall-download-rate", "4MiB/s"]);
+        let setup = session_setup(&args, &global);
+        assert_eq!(
+            setup.engine_options(&env).unwrap().download_rate,
+            Some(4 * 1024 * 1024)
+        );
+        assert_eq!(setup.torrent_rates().unwrap().0, None);
     }
 
     #[test]

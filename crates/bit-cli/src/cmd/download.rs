@@ -315,6 +315,10 @@ pub fn run(
         allocation: allocation_of(args.selection.file_allocation),
     };
     let engine_options = setup.engine_options(env)?;
+    // Parsed here so a bad rate fails before the session starts, next to the
+    // session caps that `engine_options` just read. See `TODO/cli-surface.md`,
+    // T-181.
+    let (torrent_download_rate, torrent_upload_rate) = setup.torrent_rates()?;
     let directory = engine_options.download_directory.clone();
 
     if global.dry_run {
@@ -386,14 +390,25 @@ pub fn run(
         if let Some(meta) = &meta {
             known_hashes.insert(meta.info_hash().hex().to_ascii_lowercase());
         }
+        // `--web-seed-list-url` is fetched here, on the runtime this command
+        // already built. Every caller used to pass `no_network`, including
+        // this one, so the flag parsed, was read, and could only ever fail.
+        // See `TODO/cli-surface.md`, T-183.
         let specs = webseed_args::collect(
             &args.web_seeds,
             meta.as_ref(),
             one.as_ref().map(|m| &m.file),
             env,
-            webseed_args::no_network,
+            crate::source::list_fetcher(&runtime, &user_agent),
         )?;
-        let trackers = setup.tracker_list(meta.as_ref(), env)?;
+        // `--tracker-list-url` is fetched on the runtime this command already
+        // built, rather than on one of its own. See `TODO/cli-surface.md`,
+        // T-181.
+        let trackers = setup.tracker_list(
+            meta.as_ref(),
+            env,
+            crate::source::list_fetcher(&runtime, &user_agent),
+        )?;
         let (torrent_bytes, metalink) = match one {
             None => (None, None),
             Some(one) => {
@@ -608,6 +623,8 @@ pub fn run(
                 donors: donor_files.clone(),
                 tracker_timeout,
                 tracker_connect_timeout,
+                torrent_download_rate,
+                torrent_upload_rate,
             };
             workers.spawn(async move {
                 loop {
@@ -731,6 +748,11 @@ struct Options {
     /// `TODO/trackers.md`, T-062.
     tracker_timeout: Duration,
     tracker_connect_timeout: Duration,
+    /// The per-torrent rate caps, from `--max-download-rate` and
+    /// `--max-upload-rate`. The whole-run pair is on the session instead. See
+    /// `TODO/cli-surface.md`, T-181.
+    torrent_download_rate: Option<u64>,
+    torrent_upload_rate: Option<u64>,
 }
 
 /// Whether a selector asks for pieces front to back.
@@ -925,6 +947,8 @@ async fn one_inner(
         trackers: plan.trackers.clone(),
         disable_trackers: plan.trackers.as_ref().is_some_and(Vec::is_empty),
         initial_peers: options.peers.clone(),
+        download_rate: options.torrent_download_rate,
+        upload_rate: options.torrent_upload_rate,
         ..Default::default()
     };
     let handle = match plan.torrent_bytes.clone() {
@@ -1994,7 +2018,12 @@ fn dry_run(
             env,
             webseed_args::no_network,
         )?;
-        let trackers = setup.tracker_list(meta.as_ref(), env)?.unwrap_or_default();
+        // A dry run reports without doing, so a list URL is refused rather
+        // than fetched. That is the decision `--web-seed-list-url` already
+        // takes on this same command.
+        let trackers = setup
+            .tracker_list(meta.as_ref(), env, webseed_args::no_network)?
+            .unwrap_or_default();
         let coverage = match (&meta, specs.is_empty()) {
             (Some(meta), false) => {
                 let layout = meta.layout();
@@ -3024,6 +3053,145 @@ mod tests {
     /// complete on its hash check finishes before the session's own `started`
     /// announce has left, and the order the tracker sees is then a race rather
     /// than a sequence.
+    /// `TODO/cli-surface.md` T-183. `--web-seed-list-url` is fetched over
+    /// loopback HTTP and the sources it names are used.
+    ///
+    /// The flag parsed and was read, and every call site handed the reader a
+    /// function that refuses, so it could only ever fail. That is why the flag
+    /// audit that found T-181 missed it: it looked for a field nothing reads,
+    /// and this one is read.
+    #[test]
+    fn a_web_seed_list_url_is_fetched_and_its_sources_are_used() {
+        let fixture = TorrentFixture::multi_file();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        std::fs::write(
+            fixture.dir().join("mirrors.txt"),
+            format!(
+                "# the mirror list
+{}payload/
+",
+                server.base
+            ),
+        )
+        .unwrap();
+
+        let out = fixture.dir().join("out");
+        let list_url = format!("{}mirrors.txt", server.base);
+
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-torrent-web-seed",
+                "--web-seed-list-url",
+                &list_url,
+                "--web-seed-mode",
+                "prefix",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--report-interval",
+                "100ms",
+                "--stop-after",
+                "20s",
+            ],
+            fixture.dir(),
+            ExitCode::Success,
+        );
+
+        let torrent = &report["torrents"][0];
+        assert_eq!(torrent["finished"], true, "{report}");
+        let sources = torrent["sources"].as_array().expect("a sources array");
+        assert_eq!(sources.len(), 1, "{report}");
+        assert_eq!(sources[0]["origin"], "list_url", "{report}");
+        assert_eq!(
+            sources[0]["served_bytes"], 2000,
+            "the fetched source has to have served the whole payload: {report}"
+        );
+    }
+
+    /// `TODO/cli-surface.md` T-181. `--tracker-list-url` is fetched over
+    /// loopback HTTP and every tracker it names is announced to.
+    ///
+    /// Three trackers rather than one, because the failure this guards against
+    /// is a list that is read and then partly dropped, and one tracker cannot
+    /// tell a whole list from the first line of one. Each tracker records what
+    /// it was asked, so the proof is on the tracker's side rather than in a
+    /// count the run reports about itself.
+    #[test]
+    fn a_tracker_list_url_is_fetched_and_every_tracker_in_it_is_announced_to() {
+        let fixture = TorrentFixture::multi_file();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let trackers = [
+            crate::test_support::Tracker::start(&[]),
+            crate::test_support::Tracker::start(&[]),
+            crate::test_support::Tracker::start(&[]),
+        ];
+        std::fs::write(
+            fixture.dir().join("trackers.txt"),
+            format!(
+                "# the mirror list
+{}
+
+{}
+{}
+",
+                trackers[0].announce, trackers[1].announce, trackers[2].announce
+            ),
+        )
+        .unwrap();
+
+        let out = fixture.dir().join("out");
+        let source = format!("{}payload/", server.base);
+        let list_url = format!("{}trackers.txt", server.base);
+
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--replace-trackers",
+                "--tracker-list-url",
+                &list_url,
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "--report-interval",
+                "100ms",
+                "--stop-after",
+                "20s",
+            ],
+            fixture.dir(),
+            ExitCode::Success,
+        );
+
+        for (index, tracker) in trackers.iter().enumerate() {
+            assert!(
+                !tracker.seen().is_empty(),
+                "tracker {index} was never announced to, so the fetched list did not reach the session: {report}"
+            );
+        }
+
+        let announced = report["torrents"][0]["announced"]
+            .as_array()
+            .expect("an announced array");
+        assert!(
+            announced.iter().any(|sent| sent["trackers"] == 3),
+            "the report has to say three trackers were announced to: {report}"
+        );
+    }
+
     #[test]
     fn a_run_announces_started_then_completed_then_stopped() {
         let fixture = TorrentFixture::multi_file();

@@ -83,9 +83,16 @@ pub struct EngineOptions {
     pub enable_peers: bool,
     /// Peer connections per torrent.
     pub max_peers: Option<usize>,
-    /// Download rate cap in bytes per second.
+    /// Download rate cap in bytes per second, **across the whole session**.
+    ///
+    /// `librqbit` has two rate limits and they are different fields:
+    /// `SessionOptions::ratelimits` caps the session and
+    /// `AddTorrentOptions::ratelimits` caps one torrent. This is the session
+    /// one, so it is where `--max-overall-download-rate` belongs. The
+    /// per-torrent flag is [`AddOptions::download_rate`]. See
+    /// `TODO/cli-surface.md`, T-181.
     pub download_rate: Option<u64>,
-    /// Upload rate cap in bytes per second.
+    /// Upload rate cap in bytes per second, across the whole session.
     pub upload_rate: Option<u64>,
     /// Trackers added to every torrent in this run.
     pub extra_trackers: Vec<String>,
@@ -144,6 +151,15 @@ pub struct AddOptions {
     pub initial_peers: Vec<SocketAddr>,
     /// Peer connections for this torrent.
     pub peer_limit: Option<usize>,
+    /// Download rate cap in bytes per second, **for this torrent alone**.
+    ///
+    /// `AddTorrentOptions::ratelimits` rather than `SessionOptions::ratelimits`,
+    /// which is what makes `--max-download-rate` a per-torrent cap and
+    /// `--max-overall-download-rate` a session one. Before T-181 both flags
+    /// aimed at the session field and only one of them reached it.
+    pub download_rate: Option<u64>,
+    /// Upload rate cap in bytes per second, for this torrent alone.
+    pub upload_rate: Option<u64>,
 }
 
 /// Coarse state of one torrent.
@@ -545,6 +561,10 @@ impl Engine {
             initial_peers: (!options.initial_peers.is_empty())
                 .then(|| options.initial_peers.clone()),
             peer_limit: options.peer_limit,
+            ratelimits: LimitsConfig {
+                download_bps: rate_to_bps(options.download_rate),
+                upload_bps: rate_to_bps(options.upload_rate),
+            },
             storage_factory: Some(storage.boxed()),
             ..Default::default()
         };

@@ -363,14 +363,15 @@ fn metalink_scope(file: &MetalinkFile, meta: Option<&Metainfo>) -> Result<Option
     }
 }
 
-/// Refuse to fetch a list over HTTP when nothing was asked for.
+/// Refuse to fetch a list over HTTP.
 ///
-/// Commands that must not touch the network pass this, so a
-/// `--web-seed-list-url` on a no-network command fails clearly instead of
-/// quietly reaching out.
+/// Commands that must not touch the network pass this, so a list URL on one of
+/// them fails clearly instead of quietly reaching out. It backs both
+/// `--web-seed-list-url` and `--tracker-list-url`, so the message names the URL
+/// rather than a flag.
 pub fn no_network(url: &str) -> Result<String> {
     Err(Error::usage(format!(
-        "--web-seed-list-url {url} needs the network, and this command does not use it"
+        "fetching the list at {url} needs the network, and this command does not use it"
     ))
     .with("url", url.to_string()))
 }

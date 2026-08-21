@@ -522,16 +522,24 @@ peer encryption ([T-163](TODO/peers.md)), non-UTF-8 filenames
 ([T-114](TODO/cli-surface.md)). Each has an entry in `TODO/` with what closes
 it.
 
-**No command is stubbed, and four flags are.** A command that is not
-implemented says so and exits with a code a script can branch on, and
-`--superseed` warns that BEP 16 is not there. But `--no-pex`,
-`--tracker-list-url`, `--max-overall-download-rate` and
-`--max-overall-upload-rate` are accepted in silence and reach no code, and
-`-O/--index-out` and `--on-piece-verified` do the same. That is
-[T-181](TODO/cli-surface.md), [T-116](TODO/cli-surface.md) and
-[T-115](TODO/cli-surface.md). An earlier revision of this section claimed
-nothing was stubbed; six flags are, and the fix pattern is the one
-`crates/bit-cli/src/cmd/seed.rs:105` already uses for `--superseed`.
+**No command is stubbed, and two flags are.** A command that is not
+implemented says so and exits with a code a script can branch on, and a flag
+that cannot yet do what it says warns rather than staying silent:
+`--superseed` for BEP 16, and `--no-pex`, because `librqbit` 9.0.0 has no
+switch for peer exchange.
+
+The two that are still silent are `-O/--index-out`
+([T-116](TODO/cli-surface.md)) and `--on-piece-verified`
+([T-115](TODO/cli-surface.md)), and they are now the whole list rather than
+part of it. A test walks the `clap` tree and fails on any flag outside it that
+nothing reads, so a third cannot be added quietly
+(`crates/bit-cli/src/cli.rs`, `every_flag_reaches_code_or_is_a_named_exception`).
+
+Two revisions of this section have been wrong about this in opposite
+directions. The first claimed nothing was stubbed and six flags were. The
+second listed six and missed a seventh, `--web-seed-list-url`, which is read
+but only into a refusal ([T-183](TODO/cli-surface.md)). The count is not the
+point; the test is.
 
 `bench swarm` ships and is not finished. Both loads work and the two halves
 that are missing are named above rather than left for a reader to discover.

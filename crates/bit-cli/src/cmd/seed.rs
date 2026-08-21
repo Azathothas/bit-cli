@@ -105,6 +105,18 @@ pub fn run(
             "--superseed is accepted but BEP 16 superseeding is not implemented yet; see TODO/create-seed.md",
         );
     }
+    // `librqbit` 9.0.0 has no switch for peer exchange: `SessionOptions`
+    // carries `dht` and `disable_local_service_discovery` and nothing beside
+    // them for PEX. A caller passing this believes their address has stopped
+    // being gossiped to the swarm, so silence here is a privacy expectation
+    // quietly unmet rather than a performance knob quietly ignored. See
+    // `TODO/cli-surface.md`, T-181.
+    if args.no_pex {
+        renderer.warn(
+            env,
+            "--no-pex is accepted but peer exchange stays on: librqbit 9.0.0 has no switch for it, so your address is still gossiped to the swarm; see TODO/cli-surface.md T-181",
+        );
+    }
 
     let web_seeds = crate::cli::WebSeedArgs::default();
     let setup = SessionSetup {
@@ -131,9 +143,16 @@ pub fn run(
         Kind::File(path) => Some(Metainfo::read(path)?),
         _ => None,
     };
-    let trackers = setup.tracker_list(meta.as_ref(), env)?;
-
     if global.dry_run {
+        // A dry run reports without doing, so a `--tracker-list-url` is
+        // refused rather than fetched. That is the decision
+        // `--web-seed-list-url` already takes on `download --dry-run`.
+        let trackers = crate::swarm::SessionSetup::tracker_list(
+            &setup,
+            meta.as_ref(),
+            env,
+            crate::webseed_args::no_network,
+        )?;
         let report = json!({
             "dry_run": true,
             "source": args.source.source,
@@ -174,7 +193,16 @@ pub fn run(
     let init_timeout = swarm::duration_flag(&args.limits.init_timeout, "init-timeout")?;
     let source = args.source.source.clone();
     let announce_only = args.announce_only;
+    let (torrent_download_rate, torrent_upload_rate) = setup.torrent_rates()?;
     let runtime = swarm::runtime()?;
+    // `--tracker-list-url` is fetched on the runtime this command already
+    // built. See `TODO/cli-surface.md`, T-181.
+    let user_agent = bit_cli_core::webseed::fetch::default_user_agent();
+    let trackers = setup.tracker_list(
+        meta.as_ref(),
+        env,
+        crate::source::list_fetcher(&runtime, &user_agent),
+    )?;
 
     let report = runtime.block_on(async {
         let engine = Engine::start(&engine_options).await?;
@@ -193,6 +221,8 @@ pub fn run(
                 &args.trackers.tracker_interval,
                 "tracker-interval",
             )?,
+            download_rate: torrent_download_rate,
+            upload_rate: torrent_upload_rate,
             ..Default::default()
         };
         let handle = engine.add(&source, &add).await?;
@@ -532,6 +562,64 @@ mod tests {
         assert!(text.contains("203.0.113.5:6881"), "{text}");
         assert!(text.contains("0.0.0.0:6881"), "{text}");
         assert!(text.contains("peak RSS"), "the cost is not display-only");
+    }
+
+    /// `TODO/cli-surface.md` T-181. `--no-pex` cannot be built against
+    /// `librqbit` 9.0.0, so it says so instead of pretending.
+    ///
+    /// A caller passing this believes peer exchange is off. It is not, and
+    /// their address keeps being gossiped to the swarm, which is a privacy
+    /// expectation quietly unmet rather than a knob quietly ignored. The
+    /// warning names the entry so a reader can find out when it will change.
+    #[test]
+    fn no_pex_warns_that_peer_exchange_stays_on() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "seed",
+                "--dry-run",
+                "--no-pex",
+                "--data",
+                fixture.dir().to_str().unwrap(),
+                fixture.path_str(),
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(crate::run(&mut env), ExitCode::Success);
+        let err = captured.err();
+        assert!(err.contains("--no-pex"), "{err}");
+        assert!(
+            err.contains("peer exchange stays on"),
+            "the warning has to say what is still happening: {err}"
+        );
+        assert!(
+            err.contains("T-181"),
+            "the warning has to name the entry that owns it: {err}"
+        );
+        assert!(!captured.out().is_empty(), "the report still prints");
+    }
+
+    /// Without the flag there is no warning, so the message is about the flag
+    /// rather than something every seed prints.
+    #[test]
+    fn a_seed_without_no_pex_says_nothing_about_peer_exchange() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "seed",
+                "--dry-run",
+                "--data",
+                fixture.dir().to_str().unwrap(),
+                fixture.path_str(),
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(crate::run(&mut env), ExitCode::Success);
+        assert!(
+            !captured.err().contains("peer exchange"),
+            "{}",
+            captured.err()
+        );
     }
 
     /// A seeder is the long-lived process, so its own high-water marks are

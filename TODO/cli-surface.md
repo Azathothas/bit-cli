@@ -1355,7 +1355,7 @@ Source:      the flag audit of 2026-08-21
 Category:    cli
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     Four flags parse, are carried into a struct, and are never read
              again anywhere in the workspace:
@@ -1457,6 +1457,160 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              `--no-pex` warns, naming this entry, until the upstream switch
              exists.
 
+**All four are resolved, and building two of them found a fifth this entry's
+own audit could not have caught.**
+
+| Flag | Now | Where |
+| --- | --- | --- |
+| `--max-overall-download-rate` | works, session-wide | `swarm.rs` `engine_options` |
+| `--max-overall-upload-rate` | works, session-wide | the same |
+| `--tracker-list-url` | works, fetched over HTTP | `swarm.rs` `tracker_list` |
+| `--no-pex` | warns, naming this entry | `cmd/seed.rs` |
+
+**The rate pair was two flags aiming at one field, and the wrong one arrived.**
+`librqbit` 9.0.0 has two rate limits and they are different structures:
+`SessionOptions::ratelimits` caps the session and `AddTorrentOptions::ratelimits`
+caps one torrent. `bit-cli` set only the session one, and it set it from
+`--max-download-rate`. So the per-torrent flag capped the whole run and the
+whole-run flag capped nothing. Each flag now goes to the field it names, and
+`SessionSetup::torrent_rates` parses the per-torrent pair in one place so a
+command cannot wire one and forget the other.
+
+`--max-download-rate` therefore changes behaviour, and the change is the fix.
+[T-031](performance.md) measured it at `-j 1`, where per-torrent and whole-run
+are the same number, so that measurement stays true. This is the measurement
+that tells them apart:
+
+```
+$ pwsh -NoProfile -File scripts/check-overall-rate.ps1 -Rate 4MiB/s -PayloadSize 64MiB -Torrents 4
+
+phase       exit wall  bytes     rate
+uncapped       0 0.2s  64.00 MiB 392.64 MiB/s
+overall        0 15.2s 64.00 MiB 4.20 MiB/s
+per_torrent    0 3.3s  64.00 MiB 19.69 MiB/s
+
+verdict: both scopes hold
+```
+
+`--max-overall-download-rate 4MiB/s` over `-j 4` holds at **4.20 MiB/s**, 5.05%
+over the cap and inside the ten per cent this entry asked for, against **392.64
+MiB/s** uncapped, which is 93 times faster. The third phase is the one that
+proves the two flags are two fields: `--max-download-rate 4MiB/s` over the same
+four torrents reaches **19.69 MiB/s**, near the 16 MiB/s that four torrents at
+4 MiB/s each should sum to, and 4.7 times what the whole-run cap allows. Before
+this change phases 2 and 3 were the same run.
+
+Evidence: `bench/overall-rate-20260821T140422453Z.json`, and
+`scripts/check-overall-rate.ps1` is the script. The sources are HTTP web seeds
+rather than peers, which is deliberate: a web seed reaches the session as a
+peer, so the session limiter is what bounds it, and that is exactly the
+interaction [T-132](multi-source.md) is about. The rate is computed from the
+wall clock and the bytes the report says landed, never from the report's own
+mean, so the limiter is not measured by the thing it limits.
+
+**`--tracker-list-url` is a bounded fetch, and the bound is the point.** The
+URL comes from the caller and the body comes from whoever answers it, so
+`crate::source::fetch_list` refuses a scheme that is not HTTP or HTTPS, sets a
+thirty second deadline over the whole exchange, and caps the body at one
+mebibyte. It reads in chunks rather than calling `bytes()`, so a server
+declaring a small `Content-Length` and sending more is stopped at the cap
+rather than after it. A body over the cap is **refused rather than truncated**:
+half a tracker list is a run announcing to a set of trackers nobody chose, and
+a truncated last line is a URL that is not the URL anyone wrote.
+
+It reads with the same parser `--tracker-file` uses, so two flags that read
+identically in `--help` behave identically. That parser flattens, and a blank
+line does not open a BEP 12 tier here any more than it does in a file;
+announcing in tier order is [T-063](trackers.md) and is not this.
+
+The fetcher is injected the way `webseed_args::collect` already takes one, so
+the assembly is testable without a network and a command that must not reach
+out passes `no_network`. `download --dry-run` is one of those: a dry run
+reports without doing, which is the decision `--web-seed-list-url` already
+took on that same command.
+
+Proven end to end against three loopback trackers, in
+`a_tracker_list_url_is_fetched_and_every_tracker_in_it_is_announced_to`. Three
+rather than one, because the failure this guards against is a list read and
+then partly dropped, and one tracker cannot tell a whole list from its first
+line. Each tracker records what it was asked, so the proof is on the tracker's
+side rather than in a count the run reports about itself.
+
+**`--no-pex` cannot be built and now says so.** `librqbit` 9.0.0's
+`SessionOptions` carries `dht` and `disable_local_service_discovery` and
+nothing beside them for peer exchange, which `swarm.rs` shows: `--no-dht` and
+`--no-lsd` reach `enable_dht` and `enable_lsd` and there is no `enable_pex` to
+reach. `nanotorrent/patches/0004-pex-toggle.patch` adds exactly that,
+`SessionOptions::disable_pex` gating both directions, which is the shape of the
+upstream change needed and the evidence that it is a small one.
+
+The warning names what is still happening rather than what is missing, because
+this flag's failure is a privacy expectation and not a performance knob:
+
+```
+--no-pex is accepted but peer exchange stays on: librqbit 9.0.0 has no switch
+for it, so your address is still gossiped to the swarm; see
+TODO/cli-surface.md T-181
+```
+
+`--no-pex` is declared on `seed` and on no other command, so there is one place
+to warn from and it is the one `--superseed` already warns from.
+
+**The test that stops this recurring is
+`every_flag_reaches_code_or_is_a_named_exception` in `crates/bit-cli/src/cli.rs`.**
+It walks the `clap` tree, reads every `.rs` file in both crates except `cli.rs`
+itself, and fails on any flag whose field name appears nowhere. Two names are
+on the exception list and each carries the entry that owns it:
+`index_out` ([T-116](#t-116--o--index-out-cannot-rename-a-file)) and
+`on_piece_verified` ([T-115](#t-115-hooks-do-not-fire-for-every-documented-trigger)).
+The list is checked in both directions, so a name that something now reads
+fails as stale rather than sitting there.
+
+It reads the tree rather than `include_str!`ing a fixed list, because a file
+added later would otherwise silently stop being searched, which is the same
+class of gap this test exists for. It asserts it read more than twenty files
+and found more than a hundred flags, so a test that is looking at nothing fails
+instead of passing.
+
+Proven by unwiring one flag:
+
+```
+$ cargo test -p bit-cli --lib -- every_flag_reaches_code   # engine_options download_rate set to None
+these flags parse and nothing outside cli.rs reads them...
+  max_overall_download_rate  (bit-cli download)
+test result: FAILED. 0 passed; 1 failed
+```
+
+**What the check is deliberately weak about, and why.** It cannot tell a flag
+that works from one that only warns, because `--superseed` and `--no-pex` both
+read their field and both do nothing but print. Warning is the honest behaviour
+for a flag that cannot yet do what it says, so a test that failed on it would
+push the wrong way. What it catches is the case that hid for a whole session: a
+field nothing reads at all.
+
+**And it is weak in a second way, which a fifth flag found immediately.**
+`--web-seed-list-url` passes this test. Its field is read, in
+`crates/bit-cli/src/webseed_args.rs`, and what it was read into was a function
+that always errors, on every call site including `download`. So the flag
+parsed, was read, and could only ever fail. That is
+[T-183](#t-183---web-seed-list-url-is-read-only-into-a-refusal), filed and
+fixed in the same session, and it is why the count in `CHANGELOG.md` is now
+written as "the test is the point" rather than as a number. Two revisions of
+that section have been wrong about the number in opposite directions.
+
+```
+$ cargo test --workspace
+test cli::tests::every_flag_reaches_code_or_is_a_named_exception ... ok
+test swarm::tests::a_tracker_list_url_contributes_every_tracker_it_names ... ok
+test swarm::tests::a_tracker_list_url_composes_with_the_flags_beside_it ... ok
+test swarm::tests::a_tracker_list_url_on_a_no_network_command_fails_clearly ... ok
+test swarm::tests::the_overall_rate_caps_the_session_and_the_plain_one_caps_a_torrent ... ok
+test swarm::tests::one_rate_scope_never_stands_in_for_the_other ... ok
+test cmd::seed::tests::no_pex_warns_that_peer_exchange_stays_on ... ok
+test cmd::seed::tests::a_seed_without_no_pex_says_nothing_about_peer_exchange ... ok
+test cmd::download::tests::a_tracker_list_url_is_fetched_and_every_tracker_in_it_is_announced_to ... ok
+```
+
 ### T-182 A macOS test asserted an invariant across two kernel subsystems
 
 Source:      CI run 32478382564, 2026-08-21
@@ -1539,3 +1693,87 @@ $ cargo test -p bit-cli-core --lib sysinfo
 test sysinfo::tests::a_process_sample_reports_memory_cpu_and_handles ... ok
 test result: ok. 20 passed; 0 failed
 ```
+
+### T-183 --web-seed-list-url is read, only into a refusal
+
+Source:      found while building [T-181](#t-181-four-flags-are-accepted-in-silence-and-reach-no-code), 2026-08-21
+Category:    cli
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `--web-seed-list-url <URL>` fetches a newline-separated list of
+             web seed URLs. Its field was read, at
+             `crates/bit-cli/src/webseed_args.rs`, and what it was read into
+             was `webseed_args::no_network`, a function whose entire body is an
+             error. **Every** call site passed it: `download`, `bench leech`,
+             `bench webseed`, `webseed list`, and the dry runs. So the flag
+             parsed, was read, and could only ever fail, on every command that
+             accepts it, with a message telling the caller that "this command
+             does not use the network" on a command whose whole job is the
+             network.
+Relevance:   This is the P1 definition in `INDEX.md` verbatim, and it is worse
+             than the four T-181 found in one specific way: it is invisible to
+             the audit that found them. That audit was "every `pub` field in
+             `cli.rs` grepped for a reader outside that file", and this field
+             has a reader. So does the `clap`-tree test T-181 built to stop a
+             fifth appearing, which is why that test's own entry now says what
+             it is weak about.
+
+             The flag is also undocumented. It appears in no table in
+             `README.md` and in no row of `docs/flags.md`, which is how it
+             stayed unnoticed: nothing described it, so nothing contradicted
+             what it did.
+Approach:    Give the commands that use the network a real fetcher, and leave
+             the ones that must not with the refusal. The fetch itself is
+             shared with `--tracker-list-url`, because the two flags read the
+             same format, take the same risks, and were built in the same
+             session.
+Acceptance:  A loopback URL serving one mirror produces one source with
+             `origin: "list_url"` in `download --json`, and that source serves
+             the payload.
+
+**Fixed with the same bounded fetcher T-181 built.**
+`crate::source::fetch_list` refuses a scheme that is not HTTP or HTTPS, sets a
+thirty second deadline, caps the body at one mebibyte, and reads in chunks so
+the cap bounds what is held rather than only what is returned.
+`crate::source::list_fetcher` binds it to the runtime the command has already
+made, rather than building a second runtime inside the first.
+
+**Which commands fetch, and which still refuse, is now a decision rather than
+an accident.**
+
+| Command | Behaviour | Why |
+| --- | --- | --- |
+| `download` | fetches | it is the command that downloads |
+| `bench leech` | fetches | it downloads for real, and measures what it downloads |
+| `download --dry-run` | refuses | a dry run reports without doing |
+| `bench leech --dry-run` | refuses | the same |
+| `webseed list`, `test`, `fetch` | refuses | `cmd/webseed.rs` `resolve` is documented as resolving "without touching the network", which is what makes `webseed list` safe to run against an unknown torrent |
+| `bench webseed` | refuses | it measures the sources it is given, and fetching a list would change what is being measured |
+
+The refusal's message was rewritten while it was there. It named
+`--web-seed-list-url` specifically, and it now backs `--tracker-list-url` too,
+so it names the URL rather than a flag.
+
+**The lesson is about the audit, not the flag.** "A field with no reader" and
+"a field whose reader cannot succeed" look identical from the outside and are
+found by different methods. The first is one `grep`. The second was found by
+reading the call sites of the function the field is read into, while wiring an
+unrelated flag through the same file. Nothing systematic found it, and the
+`clap`-tree test in [T-181](#t-181-four-flags-are-accepted-in-silence-and-reach-no-code)
+does not find it either. What that test does is stop the cheap case, and the
+honest thing is to say so in its own docstring, which it does.
+
+```
+$ cargo test -p bit-cli --lib -- a_web_seed_list_url_is_fetched
+test cmd::download::tests::a_web_seed_list_url_is_fetched_and_its_sources_are_used ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+The test points `--web-seed-list-url` at a loopback file server serving a
+one-line list, and asserts the torrent finishes, that its single source has
+`origin: "list_url"`, and that the source served all 2000 bytes. Before the
+fix the run exits on a usage error, so the assertion that fails first is the
+exit code.
+
