@@ -92,7 +92,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-016](disk-io.md) | P2 | disk-io | blocked | fastresume is not used when adding a torrent |
 | [T-017](disk-io.md) | P1 | disk-io | **done** | Concurrent receive paths contend on the payload file |
 | [T-018](disk-io.md) | P2 | disk-io | open | The write path issues one operation per 16 KiB block |
-| [T-177](disk-io.md) | P2 | disk-io | open | A piece that spans a file boundary has no adversarial fixture |
+| [T-177](disk-io.md) | P2 | disk-io | **done** | A piece that spans a file boundary has no adversarial fixture |
+| [T-184](disk-io.md) | P2 | disk-io | open | A boundary piece under --select-file has no decided behaviour |
 | [T-020](peers.md) | P0 | peers | open | Connections accumulate in CLOSE_WAIT until TCP is unusable |
 | [T-021](peers.md) | P0 | peers | **done** | A temporary network drop stops the download permanently |
 | [T-022](peers.md) | P1 | peers | open | Peer connections churn on IPv6-only swarms |
@@ -157,12 +158,12 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested *(title disproved: it is not reachable)* |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
 | [T-103](bep-coverage.md) | P2 | bep | open | Filenames that are not valid UTF-8 are refused |
-| [T-167](bep-coverage.md) | P2 | bep | open | BEP 54 lt_donthave is not implemented |
+| [T-167](bep-coverage.md) | P2 | bep | blocked | BEP 54 lt_donthave is not implemented |
 | [T-168](bep-coverage.md) | P3 | bep | open | WebTorrent peers and WSS trackers are not supported |
 | [T-171](metainfo.md) | P2 | metainfo | **done** | httpseeds written as a bencoded string is silently dropped |
 | [T-172](metainfo.md) | P2 | metainfo | open | Strictness on read is undecided, and the error does not say |
 | [T-173](metainfo.md) | P3 | metainfo | open | A zero-length path component has no defined meaning |
-| [T-174](metainfo.md) | P2 | metainfo | open | A piece length that is not a multiple of 16 KiB has no fixture |
+| [T-174](metainfo.md) | P2 | metainfo | **done** | A piece length that is not a multiple of 16 KiB has no fixture |
 | [T-110](cli-surface.md) | P1 | cli | **done** | The --jsonl event stream is incomplete |
 | [T-111](cli-surface.md) | P2 | cli | open | piece_verified and file_completed are derived from polling |
 | [T-112](cli-surface.md) | P1 | cli | **done** | --log-file does not write or rotate anything |
@@ -216,8 +217,22 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-142 items: 132 to work through, and 10 deferred to Phase C.
-60 open, 4 partial, 1 blocked, 67 done.
+143 items: 133 to work through, and 10 deferred to Phase C.
+58 open, 4 partial, 2 blocked, 69 done.
+
+**Two were added by building others**, which is the usual way this list grows.
+[T-184](disk-io.md) came out of [T-177](disk-io.md)'s fixture: a piece that
+straddles a boundary between a selected file and an unselected one has no
+decided behaviour, and `seed` will announce a piece it cannot prove.
+
+**One entry moved to blocked rather than done**, and reading the code is what
+moved it. [T-167](bep-coverage.md), BEP 54 `lt_donthave`, is twenty lines to
+send and nothing to receive: `librqbit` 9.0.0 has `on_have` and no inverse, and
+every extension message it does not know reaches a catch-all that logs
+"received unsupported message" and ignores it. Sending one would be noise that
+looks like a feature. The entry names the two upstream changes that would
+unblock it and the `pub` function inside a private module that is the near
+miss.
 
 **One was added by building another.** [T-183](cli-surface.md) is
 `--web-seed-list-url`, which is read and read only into a function that always

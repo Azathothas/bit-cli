@@ -275,7 +275,7 @@ Source:      `reference/RESEARCH.md` section C, 2026-08-21
 Category:    metainfo
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     BEP 3 permits any `piece length`. Every fixture in this
              repository uses a power of two, so the arithmetic on the last
@@ -314,3 +314,66 @@ Acceptance:  `bit-cli verify`, `bit-cli webseed fetch` and a bridge round trip
              all succeed on a `piece length = 1986560` fixture, and the last
              block of a non-final piece is asserted to be 4096 bytes rather
              than 16384.
+
+**The arithmetic was already right. This was a fixture, and it cost one test,
+which is the outcome the entry allowed for and named first.**
+
+The fixture is shared with [T-177](disk-io.md) and is described in full there:
+piece length **1,986,560**, which is `121 * 16384 + 4096`, over three files of
+1,500,000, 2,500,000 and 900,000 bytes. One piece length serves both entries
+because a piece that is not a whole number of blocks and a file boundary that
+falls inside a piece are the two halves of the same adversarial case.
+
+**What the number is chosen to break.** vortex
+[PR 124](https://github.com/Nehliin/vortex/pull/124) is the failure: with a
+piece length like this the **last subpiece of every non-final piece is short**,
+4,096 bytes rather than 16,384. That tree computed `end_idx = offset + 16384`,
+ran past the buffer, panicked, and then double-panicked in the destructor, so
+the process died without a usable message. The fix was one `min`.
+
+`the_last_block_of_a_non_final_piece_is_four_kibibytes` asserts the numbers
+rather than the absence of a panic, because a fixture that can only fail by
+panicking tells a reader nothing when it passes:
+
+- `1,986,560 % 16,384 == 4,096`, and `1,986,560 / 16,384 == 121`. So 121 whole
+  blocks and a tail, on every piece but the last.
+- The tail block of piece 0 starts at `121 * 16384 = 1,982,464` and is 4,096
+  bytes.
+- Those 4,096 bytes map into **`b.bin`**, not `a.bin`, because piece 0 crossed
+  the boundary at 1,500,000 long before its tail. `split_by_file` puts them at
+  offset 482,464 in `b.bin`. A reader that clamped a block to the file its
+  piece started in would put them 482,464 bytes into the wrong file.
+- The final piece is 926,880 bytes, which is short in a **different** way from
+  the tail block, so the two short cases are not the same case and neither
+  stands in for the other.
+
+**The whole path is exercised too, not just the arithmetic.** The same fixture
+runs through a real `librqbit` session and a real ranged HTTP mirror in
+`a_torrent_whose_pieces_straddle_every_boundary_downloads_byte_for_byte`, and
+through `Fetcher::read` in
+`a_block_that_straddles_a_boundary_is_fetched_as_one_request_per_file`. That
+covers the two places the entry named: the web seed bridge turning a piece
+request into byte ranges, and the storage layer's span mapping.
+
+**`create` refuses this piece length, and that is correct.** The lint
+`piece-length-not-power-of-two` (`crates/bit-cli-core/src/torrent/lint.rs`)
+fires, so the fixture is built with that one lint allowed. The asymmetry is
+deliberate and worth stating: **strict on write, tolerant on read.** BEP 52
+requires a power of two at least 16 KiB
+(`nanotorrent/src/bittorrent/torrent_create.rs:390`,
+`rustorrent/src/torrent.rs:300`) and the v1 convention is the same, so a
+torrent `bit-cli` writes should never have an odd piece length. A torrent
+somebody else wrote may, BEP 3 permits it, and refusing to read it would be
+refusing a legal torrent over a preference. That is the same position
+[T-172](#t-172-strictness-on-read-is-undecided-and-the-error-does-not-say)
+recommends for the keys around `info`, arrived at independently.
+
+This stays a v1-only hazard after [T-081](create-seed.md), because v1 torrents
+do not stop existing.
+
+```
+$ cargo test -p bit-cli-core --test webseed_e2e -- the_last_block_of_a_non_final
+test the_last_block_of_a_non_final_piece_is_four_kibibytes ... ok
+test result: ok. 1 passed; 0 failed
+```
+

@@ -350,7 +350,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    bep
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      blocked
 
 Problem:     A peer's bitfield only ever grows. BEP 3 has `Have` and no
              inverse, so once a peer has claimed a piece there is no way for
@@ -378,6 +378,75 @@ Acceptance:  A source re-scoped mid-run sends `lt_donthave` for every piece it
              has given up, the session stops requesting those pieces from it
              without dropping the connection, and a test asserts both. Pairs
              with [T-005](webseed.md), which is the reason to want it.
+
+**Blocked on `librqbit` 9.0.0, and the blocker is the receive side rather than
+the send side.** Read before writing any of it, which is what
+[RULES.md](RULES.md) asks for and what this entry's own approach did not do.
+
+Sending `lt_donthave` is as small as this entry says. Honouring one is not
+`bit-cli`'s to do, and nothing in the session does it.
+
+`librqbit-9.0.0/src/torrent_state/live/mod.rs:1076` dispatches
+`Message::Have(h) => self.on_have(h)`, and `on_have` at `:1523` sets one bit in
+`live.bitfield`. There is no inverse. Every extension message the session does
+not know falls to the catch-all at `:1111`:
+
+```rust
+message => {
+    warn!("received unsupported message {:?}, ignoring", message)
+}
+```
+
+An `lt_donthave` arrives there as `ExtendedMessage::Dyn(id, ..)`, because
+`PeerExtendedMessageIds` (`librqbit-peer-protocol-9.0.0/src/extended/mod.rs`)
+carries `ut_metadata` and `ut_pex` and nothing else. So the bridge sending one
+would produce a log line per retracted piece and change nothing about what the
+session requests. That is worse than not sending it: a message the far end
+warns about and ignores is noise that looks like a feature.
+
+**There is no seam to do it locally either, and the near miss is worth
+recording so nobody re-derives it.**
+`librqbit-9.0.0/src/torrent_state/live/peers/mod.rs:114` is
+`pub fn update_bitfield(&self, handle: PeerHandle, bitfield: BF)`, which is
+exactly the operation needed and is declared `pub`. It is unreachable:
+`lib.rs:75` declares `mod torrent_state;` with no `pub`, so the whole module
+tree under it is private to the crate and `pub` inside a private module reaches
+nothing. `bit-cli` holds a `ManagedTorrent` and has no path to its live peer
+state.
+
+**What would unblock it**, in the order of how much has to change upstream:
+
+1. `librqbit` adds `lt_donthave` to `PeerExtendedMessageIds` and an
+   `on_donthave` beside `on_have` that clears the bit. That is the correct fix
+   and it is small: `on_have` is twenty lines and the inverse is the same
+   twenty with `false` instead of `true`.
+2. Failing that, `librqbit` makes `torrent_state` public, or exposes
+   `update_bitfield` through `ManagedTorrent`. Then `bit-cli` could parse the
+   message in the bridge and clear the bit locally, which is not the protocol
+   but is the same outcome for an in-process pair.
+
+`fx-torrent/src/peer/extension/donthave.rs:19` is still the whole protocol and
+still the reference to build from: `NAME = "lt_donthave"`, a 4-byte big-endian
+piece index, and `set_remote_has_piece(piece, false)`. What that tree has and
+this one does not is a peer layer of its own. `bit-cli`'s peer layer is
+`librqbit`'s, by decision 7.3.
+
+**One half of this entry is not blocked, and it is deliberately not built
+yet.** Any extension message the bridge **sends** needs the peer's numbering,
+read out of the peer's own extended handshake, which is the second of the two
+BEP 10 tables [T-166](peers.md) names. The first table, `OUR_EXTENSIONS` in
+`crates/bit-cli-core/src/webseed/bridge.rs`, exists and is the receive
+direction. The second does not, because nothing sends an extension message and
+a table with no caller is infrastructure written against a guess. T-166 records
+the seam; this entry is the first thing that will need it.
+
+**[T-005](webseed.md) does not wait on this.** That entry's own approach,
+narrow the scope and reconnect with the smaller bitfield, needs no extension at
+all. What `lt_donthave` would have bought is one message instead of one
+reconnect, which is an optimisation of a path that has to exist either way.
+T-005 was built on the reconnect, and this entry becomes an optimisation of it
+rather than a prerequisite for it. The work order that put this first was
+written before the dispatch above had been read.
 
 ### T-168 WebTorrent peers and WSS trackers are not supported
 

@@ -803,7 +803,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    disk-io
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     In a multi-file torrent a piece may straddle a file boundary: its
              first bytes belong to one file and its last to the next. Writing
@@ -858,3 +858,169 @@ Acceptance:  A multi-file fixture whose pieces straddle every boundary, with
              asserted individually rather than by the torrent-level hash. Plus
              one assertion that a piece spanning two files issues two writes,
              not one.
+
+**The arithmetic was already right, so this cost the one test the entry said it
+would.** That is the result, and it is worth stating plainly rather than
+quietly: the entry allowed for the other outcome, where a missing case was
+hiding a P0, and it is not what happened. What was missing was the proof, and
+the proof is now four tests over one fixture.
+
+**The fixture is one torrent, and it serves this entry and
+[T-174](metainfo.md) together**, because a piece length that is not a multiple
+of 16 KiB and a set of files whose boundaries fall inside pieces are the same
+fixture seen from two sides. It lives in
+`crates/bit-cli-core/tests/webseed_e2e.rs`:
+
+| | |
+| --- | --- |
+| piece length | 1,986,560, which is `121 * 16384 + 4096` |
+| `a.bin` | 1,500,000 bytes, **shorter than one piece** |
+| `b.bin` | 2,500,000 |
+| `c.bin` | 900,000 |
+| total | 4,900,000, so three pieces and the last one short |
+
+Piece 0 covers 0 to 1,986,560 and the `a`/`b` boundary at 1,500,000 falls
+inside it. Piece 2 is short and the `b`/`c` boundary at 4,000,000 falls inside
+it. Piece 1 is entirely inside `b.bin`, which is the control case. **Every
+boundary in the torrent is straddled**, and one test asserts that rather than
+assuming it, so a later edit to the file lengths that accidentally aligns a
+boundary fails instead of quietly weakening the fixture.
+
+`a.bin` being shorter than a piece is the part that matters most: it means
+piece 0 **cannot** be contained in the file it starts in, so a writer that
+clamps a piece to its starting file has nowhere to hide.
+
+**Four tests, each covering a different layer of the same claim.**
+
+1. `a_piece_that_straddles_a_boundary_splits_into_one_slice_per_file` is
+   `Layout::split_by_file` with no session and no server in the way. Piece 0
+   yields two slices, piece 1 yields one, piece 2 yields two, and each set sums
+   to the piece's own length.
+2. `the_last_block_of_a_non_final_piece_is_four_kibibytes` is
+   [T-174](metainfo.md), recorded there.
+3. `a_block_that_straddles_a_boundary_is_fetched_as_one_request_per_file` is
+   the web seed side: a 16 KiB block positioned with 8192 bytes on each side of
+   the `a`/`b` boundary produces **two** `RangeRequest`s, and
+   `Fetcher::read` returns the two files' bytes in order.
+4. `a_torrent_whose_pieces_straddle_every_boundary_downloads_byte_for_byte` is
+   the whole path: a real `librqbit` session, a real ranged HTTP mirror, and
+   this fixture.
+
+**The end-to-end assertion is per file, which is the entry's point.** fx-torrent
+[issue 98](https://github.com/yoep/fx-torrent/issues/98) is a payload where
+every byte transferred, every piece hashed against something, and only the
+first file of a multi-file album was playable. A check that read the
+torrent-level result would have passed it. So each of the three files is
+compared to the bytes that were written, individually, and each file is filled
+from a different seed so a byte landing in the wrong file is a mismatch rather
+than a coincidence.
+
+**The write fan-out is counted exactly, not bounded.** The first draft asserted
+`write_ops >= pieces + 2`, which is five, and the real number is **303**. That
+assertion was true and tested nothing, which is the failure mode
+[RULES.md](RULES.md) warns about in a different form: a test that passes for a
+reason other than the one it names.
+
+The real number is arithmetic, and the test computes it rather than hard-coding
+it. `bit-cli`'s storage layer is addressed by file index
+(`crates/bit-cli-core/src/storage.rs`, `pwrite_all(file_id, offset, buf)`), so
+it never sees a cross-file write at all: something above it splits at the
+boundary. What reaches it is one write per 16 KiB block, plus one extra for
+each block a file boundary falls inside.
+
+```
+piece 0: 1,986,560 -> 121 whole blocks + 4,096  = 122
+piece 1: 1,986,560 ->                            122
+piece 2:   926,880 ->  56 whole blocks + 9,376  =  57
+                                          blocks  301
+        both boundaries fall inside a block        +2
+                                     write_ops    303
+```
+
+`assert_eq!(counts.write_ops, blocks + straddling_blocks)`. A payload written
+without the split would report 301, and a whole piece landing in one file would
+report fewer still. `write_bytes` is asserted equal to the payload length, so
+nothing is written twice.
+
+**`--select-file` and a boundary piece is a real gap and it is not this entry.**
+`FluxDown/native/engine/src/bt_partfile.rs` documents the case: the bytes of an
+*unselected* file inside a boundary piece are discarded, so those pieces can
+never be verified or uploaded afterwards. `bit-cli` has `--select-file` and a
+`seed` command, so it has that problem too. This fixture selects every file, so
+it does not touch it. Filed as [T-184](#t-184-a-boundary-piece-under---select-file-has-no-decided-behaviour)
+rather than folded in here, because it is a decision about what `seed` may
+claim after a partial download and not an arithmetic bug.
+
+```
+$ cargo test -p bit-cli-core --test webseed_e2e
+test a_piece_that_straddles_a_boundary_splits_into_one_slice_per_file ... ok
+test the_last_block_of_a_non_final_piece_is_four_kibibytes ... ok
+test a_block_that_straddles_a_boundary_is_fetched_as_one_request_per_file ... ok
+test a_torrent_whose_pieces_straddle_every_boundary_downloads_byte_for_byte ... ok
+```
+
+### T-184 A boundary piece under --select-file has no decided behaviour
+
+Source:      split out of [T-177](#t-177-a-piece-that-spans-a-file-boundary-has-no-adversarial-fixture) while building its fixture, 2026-08-21
+Category:    disk-io
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `--select-file` downloads a subset of a multi-file torrent. A
+             piece that straddles a boundary between a selected file and an
+             unselected one contains bytes of both, and nothing in `bit-cli`
+             says what happens to the unselected half.
+
+             Whatever happens, the piece cannot be verified afterwards without
+             it, because a piece hash covers the whole piece. So a torrent
+             downloaded with `--select-file` may hold pieces it can never
+             prove, and `bit-cli seed` will offer them.
+Relevance:   `FluxDown/native/engine/src/bt_partfile.rs` documents the case
+             directly: the bytes of an unselected file inside a boundary piece
+             are discarded, so those pieces can never be verified or uploaded
+             afterwards. That tree carries a partfile abstraction to hold them
+             instead, which is the shape of the answer.
+
+             `bit-cli` has both halves of the problem and neither is written
+             down. [T-013](#t-013-selecting-a-subset-of-files-still-creates-all-of-them)
+             is closed, so a subset selection now creates only the files it
+             selected, which means the unselected half of a boundary piece has
+             nowhere on disk to go at all. And `seed` exists, so those pieces
+             are offered to a swarm.
+
+             The failure is quiet in the way this project keeps finding: a
+             seeder that announces a piece it cannot serve looks to a peer like
+             a peer that lies, and gets dropped. It is the same family as
+             [T-074](windows.md), a false hash-check pass, and
+             [T-177](#t-177-a-piece-that-spans-a-file-boundary-has-no-adversarial-fixture),
+             a payload that hashes and is wrong.
+Approach:    Decide first, then measure. Three positions, and the first is the
+             recommendation:
+
+             1. **Announce only whole pieces the selection covers.** A boundary
+                piece is not announced by `seed` and is reported as unverifiable
+                by `verify`. Costs nothing on disk, is honest to the swarm, and
+                matches how the web seed bridge already decides its bitfield:
+                `webseed/bridge.rs` announces only pieces a source covers **in
+                full**, and the reasoning is identical.
+             2. Keep the unselected bytes, in the file or beside it. Correct
+                and complete, and it contradicts T-013, which exists because
+                creating files a caller did not ask for was a defect.
+             3. Refuse a selection whose boundary pieces are not whole. Simple
+                and wrong: it refuses the common case, because a boundary that
+                falls on a piece edge is the exception rather than the rule.
+
+             Position 1 needs the piece-to-selection map that
+             `Layout::split_by_file` already provides, and the bitfield filter
+             `seed` does not yet have.
+Acceptance:  A three-file fixture whose boundaries all fall inside pieces, at
+             the piece length [T-177](#t-177-a-piece-that-spans-a-file-boundary-has-no-adversarial-fixture)
+             already uses, downloaded with `--select-file` naming the middle
+             file only. `verify --json` names the boundary pieces as
+             unverifiable rather than bad, `seed --json` does not announce
+             them, and a second client fetching from that seeder never requests
+             one. The distinction between "unverifiable" and "bad" is the part
+             a test has to pin: they are different words for the caller and the
+             same symptom on the wire.
+

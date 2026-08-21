@@ -298,6 +298,14 @@ async fn engine(download_dir: &Path) -> Engine {
 /// count, this one included. `TODO/create-seed.md` records the upstream
 /// defect.
 async fn make_torrent(source: &Path, path: &Path) -> Vec<u8> {
+    make_torrent_with(source, path, PIECE_LENGTH).await
+}
+
+/// [`make_torrent`] at a piece length the caller chooses.
+///
+/// Every other fixture here uses a power of two, which only ever exercises the
+/// easy case of the last-block arithmetic. See `TODO/metainfo.md`, T-174.
+async fn make_torrent_with(source: &Path, path: &Path, piece_length: u32) -> Vec<u8> {
     use bit_cli_core::torrent::create::{CreateOptions, InputFile, create};
 
     let mut files = Vec::new();
@@ -338,8 +346,17 @@ async fn make_torrent(source: &Path, path: &Path) -> Vec<u8> {
         &CreateOptions {
             name,
             multi_file,
-            piece_length: Some(PIECE_LENGTH),
+            piece_length: Some(piece_length),
             creation_date: None,
+            // A piece length that is not a power of two is refused on the
+            // writing side, correctly: BEP 52 requires one and the v1
+            // convention is one too. This fixture is about the **reading**
+            // side, where a torrent somebody else wrote turns up with an odd
+            // piece length and has to be handled rather than refused. See
+            // `TODO/metainfo.md`, T-174.
+            allowed_lints: std::collections::BTreeSet::from([
+                bit_cli_core::torrent::Lint::PieceLengthNotPowerOfTwo,
+            ]),
             ..Default::default()
         },
         |path| {
@@ -422,8 +439,19 @@ async fn attach(
     torrent_dir: &Path,
     specs: Vec<SourceSpec>,
 ) -> Attached {
+    attach_with(source, download_dir, torrent_dir, specs, PIECE_LENGTH).await
+}
+
+/// [`attach`] at a piece length the caller chooses.
+async fn attach_with(
+    source: &Path,
+    download_dir: &Path,
+    torrent_dir: &Path,
+    specs: Vec<SourceSpec>,
+    piece_length: u32,
+) -> Attached {
     let torrent_path = torrent_dir.join("fixture.torrent");
-    make_torrent(source, &torrent_path).await;
+    make_torrent_with(source, &torrent_path, piece_length).await;
 
     let engine = engine(download_dir).await;
     let handle = engine
@@ -1875,4 +1903,308 @@ async fn a_file_source_composes_a_directory_the_way_an_http_one_does() {
         second
     );
     run.engine.stop().await;
+}
+
+// ---------------------------------------------------------------------------
+// Piece alignment: `TODO/disk-io.md` T-177 and `TODO/metainfo.md` T-174.
+//
+// Every other fixture in this repository uses a power-of-two piece length, so
+// the arithmetic on the last block of a piece is only ever exercised on the
+// easy case, and no fixture is built so that pieces straddle file boundaries
+// on purpose. The two entries are one fixture: a piece length that is not a
+// multiple of 16 KiB, over files chosen so that every boundary falls inside a
+// piece.
+// ---------------------------------------------------------------------------
+
+/// 121 * 16384 + 4096. Not a power of two, not a multiple of 16 KiB.
+///
+/// This is vortex [PR 124](https://github.com/Nehliin/vortex/pull/124)'s
+/// number scaled to a fixture: with a piece length like this the **last
+/// subpiece of every non-final piece is short**, 4096 bytes rather than
+/// 16384. That tree computed `end_idx = offset + 16384`, ran past the buffer,
+/// panicked, and then double-panicked in the destructor.
+const ODD_PIECE_LENGTH: u32 = 121 * 16384 + 4096;
+
+/// The three files of the alignment fixture, as `(name, length)`.
+///
+/// Chosen so that:
+///
+/// - `a.bin` is **shorter than one piece**, so piece 0 cannot be contained in
+///   the file it starts in.
+/// - the `a.bin`/`b.bin` boundary at 1,500,000 falls inside piece 0.
+/// - the `b.bin`/`c.bin` boundary at 4,000,000 falls inside piece 2.
+/// - the final piece is short.
+///
+/// So both boundaries straddle, which is the case fx-torrent
+/// [issue 98](https://github.com/yoep/fx-torrent/issues/98) reported as "only
+/// the first file is playable" on a multi-file album.
+const ALIGNMENT_FILES: &[(&str, usize)] = &[
+    ("a.bin", 1_500_000),
+    ("b.bin", 2_500_000),
+    ("c.bin", 900_000),
+];
+
+/// Write the alignment fixture under `root`, returning each file's bytes.
+fn alignment_payload(root: &Path) -> Vec<(String, Vec<u8>)> {
+    std::fs::create_dir_all(root).unwrap();
+    let mut out = Vec::new();
+    for (index, (name, length)) in ALIGNMENT_FILES.iter().enumerate() {
+        // A different seed per file, so a byte written into the wrong file is
+        // a mismatch rather than a coincidence.
+        let bytes = content(*length, 101 + index as u64);
+        std::fs::write(root.join(name), &bytes).unwrap();
+        out.push(((*name).to_string(), bytes));
+    }
+    out
+}
+
+fn alignment_layout() -> Layout {
+    Layout::from_lengths(
+        "album",
+        true,
+        ODD_PIECE_LENGTH,
+        ALIGNMENT_FILES
+            .iter()
+            .map(|(name, length)| ((*name).to_string(), *length as u64)),
+    )
+}
+
+/// The arithmetic itself, with no session and no server in the way.
+///
+/// This is the part that has to be right before any of the rest means
+/// anything: if `split_by_file` does not split at the boundary, a piece is
+/// written entirely into the file it starts in and every byte after the first
+/// file is wrong.
+#[test]
+fn a_piece_that_straddles_a_boundary_splits_into_one_slice_per_file() {
+    let layout = alignment_layout();
+    let piece = u64::from(ODD_PIECE_LENGTH);
+
+    assert_eq!(layout.total_length, 4_900_000);
+    assert_eq!(layout.piece_count(), 3, "three pieces at this piece length");
+    assert!(
+        (ALIGNMENT_FILES[0].1 as u64) < piece,
+        "a.bin has to be shorter than one piece, or piece 0 does not straddle"
+    );
+
+    // Piece 0 covers 0..1_986_560 and the a/b boundary is at 1_500_000.
+    let first = layout.split_by_file(0..piece);
+    assert_eq!(first.len(), 2, "piece 0 spans two files: {first:?}");
+    assert_eq!(first[0].file, 0);
+    assert_eq!(first[0].offset, 0);
+    assert_eq!(first[0].length, 1_500_000);
+    assert_eq!(first[1].file, 1);
+    assert_eq!(first[1].offset, 0);
+    assert_eq!(first[1].length, piece - 1_500_000);
+    assert_eq!(
+        first.iter().map(|s| s.length).sum::<u64>(),
+        piece,
+        "the split has to account for every byte of the piece"
+    );
+
+    // Piece 1 is entirely inside b.bin, so it is the control case.
+    let middle = layout.split_by_file(piece..piece * 2);
+    assert_eq!(middle.len(), 1, "piece 1 is inside one file: {middle:?}");
+    assert_eq!(middle[0].file, 1);
+
+    // Piece 2 is short and covers the b/c boundary at 4_000_000.
+    let last = layout.split_by_file(piece * 2..layout.total_length);
+    assert_eq!(last.len(), 2, "piece 2 spans two files: {last:?}");
+    assert_eq!(last[0].file, 1);
+    assert_eq!(last[1].file, 2);
+    assert_eq!(
+        last.iter().map(|s| s.length).sum::<u64>(),
+        layout.total_length - piece * 2,
+        "the short last piece has to account for every remaining byte"
+    );
+
+    // Every boundary in the torrent falls strictly inside a piece, which is
+    // what makes this fixture adversarial rather than incidental.
+    let mut offset = 0u64;
+    for (name, length) in &ALIGNMENT_FILES[..ALIGNMENT_FILES.len() - 1] {
+        offset += *length as u64;
+        assert_ne!(
+            offset % piece,
+            0,
+            "the boundary after {name} at {offset} lands on a piece edge, so it is not straddled"
+        );
+    }
+}
+
+/// `TODO/metainfo.md` T-174. The last block of a non-final piece is short.
+///
+/// A reader that assumes every block is 16 KiB reads 16384 bytes from an
+/// offset 4096 bytes before the end of the piece, which is the overrun vortex
+/// PR 124 fixed with one `min`. The assertion here is on the numbers rather
+/// than on a panic, because a fixture that only fails by panicking tells you
+/// nothing when it passes.
+#[test]
+fn the_last_block_of_a_non_final_piece_is_four_kibibytes() {
+    const BLOCK: u32 = 16 * 1024;
+    let layout = alignment_layout();
+
+    assert_ne!(
+        ODD_PIECE_LENGTH % BLOCK,
+        0,
+        "the whole point of this piece length is that it is not a multiple of 16 KiB"
+    );
+    assert_eq!(ODD_PIECE_LENGTH % BLOCK, 4096);
+    assert_eq!(ODD_PIECE_LENGTH / BLOCK, 121, "121 whole blocks and a tail");
+
+    // The tail block of piece 0, addressed the way a `request` message does.
+    let begin = 121 * BLOCK;
+    let tail = u64::from(ODD_PIECE_LENGTH - begin);
+    assert_eq!(tail, 4096);
+
+    // It maps into b.bin, because piece 0 has already crossed out of a.bin by
+    // then. A reader that clamped the block to the file it started in would
+    // put these bytes at the wrong place.
+    let start = u64::from(begin);
+    let slices = layout.split_by_file(start..start + tail);
+    assert_eq!(slices.len(), 1, "{slices:?}");
+    assert_eq!(slices[0].file, 1, "the tail of piece 0 is inside b.bin");
+    assert_eq!(slices[0].offset, start - 1_500_000);
+    assert_eq!(slices[0].length, 4096);
+
+    // And the final piece is shorter still, so the two short cases are not the
+    // same case.
+    let last_piece_length = layout.total_length - u64::from(ODD_PIECE_LENGTH) * 2;
+    assert_eq!(last_piece_length, 926_880);
+    assert!(last_piece_length < u64::from(ODD_PIECE_LENGTH));
+}
+
+/// The whole path, end to end: a real session, a real HTTP mirror, and this
+/// fixture.
+///
+/// The assertion is **per file** rather than on the torrent as a whole. That
+/// is the point of the entry: fx-torrent issue 98 is a payload where every
+/// piece hashed against something and only the first file was playable, so a
+/// check that reads the torrent-level result would have passed it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_torrent_whose_pieces_straddle_every_boundary_downloads_byte_for_byte() {
+    let src = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = src.path().join("album");
+    let files = alignment_payload(&root);
+
+    let (base, _served) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+    let run = attach_with(
+        &root,
+        out.path(),
+        tmp.path(),
+        vec![whole(&base)],
+        ODD_PIECE_LENGTH,
+    )
+    .await;
+
+    assert!(
+        wait_for(Duration::from_secs(120), || run.finished()).await,
+        "did not complete: {:?}",
+        run.reasons()
+    );
+
+    for (name, bytes) in &files {
+        let landed = std::fs::read(out.path().join("album").join(name))
+            .unwrap_or_else(|e| panic!("{name} was not written: {e}"));
+        assert_eq!(
+            landed.len(),
+            bytes.len(),
+            "{name} landed at the wrong length"
+        );
+        assert!(
+            landed == *bytes,
+            "{name} landed with the wrong bytes, which is the fx-torrent issue 98 shape: every piece hashed and one file is wrong"
+        );
+    }
+
+    // The write fan-out, counted exactly rather than bounded.
+    //
+    // The storage layer is addressed by file index, so it never sees a
+    // cross-file write: something above it has to split at the boundary. What
+    // reaches it is one write per block, plus one extra for each block that a
+    // file boundary falls inside. This fixture has two boundaries and both
+    // fall strictly inside a block, so the count is `blocks + 2` and nothing
+    // else. `blocks` alone would mean a straddling block went into one file,
+    // which is the fx-torrent issue 98 shape asserted from the disk side.
+    const BLOCK: u64 = 16 * 1024;
+    let layout = alignment_layout();
+    let piece = u64::from(ODD_PIECE_LENGTH);
+    let blocks: u64 = (0..u64::from(layout.piece_count()))
+        .map(|index| {
+            let length = (layout.total_length - index * piece).min(piece);
+            length.div_ceil(BLOCK)
+        })
+        .sum();
+    assert_eq!(blocks, 301, "122 + 122 + 57 blocks at this piece length");
+
+    let straddling_blocks = {
+        let mut offset = 0u64;
+        let mut count = 0u64;
+        for (_, length) in &ALIGNMENT_FILES[..ALIGNMENT_FILES.len() - 1] {
+            offset += *length as u64;
+            // Where the boundary sits inside its own piece decides whether it
+            // sits inside a block: blocks restart at every piece.
+            let within_piece = offset % piece;
+            if !within_piece.is_multiple_of(BLOCK) {
+                count += 1;
+            }
+        }
+        count
+    };
+    assert_eq!(straddling_blocks, 2, "both boundaries fall inside a block");
+
+    let counts = run.engine.storage_counts();
+    assert_eq!(
+        counts.write_ops,
+        blocks + straddling_blocks,
+        "{} write operations for {blocks} blocks and {straddling_blocks} straddling ones: a block that spans a boundary has to issue one write per file",
+        counts.write_ops
+    );
+    assert_eq!(
+        counts.write_bytes, layout.total_length,
+        "every byte of the payload is written exactly once"
+    );
+    run.engine.stop().await;
+}
+
+/// The same fixture through the bridge alone, which is the other place this
+/// arithmetic lives.
+///
+/// `webseed/fetch.rs` turns a byte range into one HTTP request per file, and a
+/// block that straddles a boundary is where that fans out. A block wholly
+/// inside one file is the case every other test covers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_block_that_straddles_a_boundary_is_fetched_as_one_request_per_file() {
+    let src = tempfile::tempdir().unwrap();
+    let root = src.path().join("album");
+    let files = alignment_payload(&root);
+    let (base, _served) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
+
+    let layout = Arc::new(alignment_layout());
+    let hash = "0".repeat(40);
+    let set = BindingSet::resolve(&layout, &hash, &[whole(&base)]).unwrap();
+    let binding = &set.bindings[0];
+
+    // A 16 KiB block positioned so the a/b boundary at 1,500,000 falls inside
+    // it: eight kibibytes on each side.
+    let start = 1_500_000 - 8192;
+    let requests = binding
+        .request_urls(&layout, &hash, start..start + 16384)
+        .unwrap();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(requests[0].file, 0);
+    assert_eq!(requests[0].length, 8192);
+    assert_eq!(requests[1].file, 1);
+    assert_eq!(requests[1].file_offset, 0);
+    assert_eq!(requests[1].length, 8192);
+
+    let fetcher = Arc::new(Fetcher::new(binding.clone(), layout.clone(), hash, 4, false).unwrap());
+    let got = fetcher.read(start, 16384).await.unwrap();
+    let mut want = files[0].1[files[0].1.len() - 8192..].to_vec();
+    want.extend_from_slice(&files[1].1[..8192]);
+    assert_eq!(
+        got, want,
+        "a block spanning two files has to come back as the two files' bytes in order"
+    );
 }
