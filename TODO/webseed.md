@@ -965,3 +965,58 @@ from the client's wall clock and distinguishable in one line of
 `Get-NetTCPConnection`. When a measurement says a flag does nothing, check that
 the condition the flag names is the condition being produced.
 
+
+### T-162 Two bench webseed tests assumed a loaded runner cannot also fail
+
+Source:      CI run 32460302583, `Test (macos-latest)`, 2026-08-21
+Category:    bench
+Priority:    P1
+Effort:      S
+Status:      **done**
+
+Problem:     `bench_webseed_names_a_server_that_ignores_range` asserted that
+             `errors.by_class["range_ignored"]` equals `errors.total`, and
+             `bench_webseed_counts_a_404_by_class_and_by_status` asserted the
+             same for `not_found`. Both say "this is the only way a request in
+             this run can fail", which is a claim about the machine and not
+             about the code.
+Relevance:   It turned `Test (macos-latest)` red on a **documentation-only
+             commit**, which is the second time in one session that a green
+             matrix hid a test making an assumption about timing rather than
+             about behaviour. [T-160](cli-surface.md) is the first.
+Approach:    Assert what the code is responsible for. The class is present and
+             counted, every response that arrived is the one the class names,
+             and every error carries a class. Not that no other class can
+             exist.
+Acceptance:  Both tests pass on all three platforms, and an error with no class
+             still fails them.
+
+The numbers, from `crates/bit-cli-core/tests/webseed_e2e.rs:1198`:
+
+```
+assertion `left == right` failed
+  left: Some(1828)
+ right: Some(7557)
+```
+
+7,557 requests failed in a 500 ms burst at concurrency 4 and 1,828 of them were
+classified `range_ignored`. The rest never reached the range check: under that
+rate a loopback server's accept backlog fills and connections are refused or
+reset, which is a transport failure and correctly a different class. The run
+was still right about everything it exists to prove: zero usable bytes,
+`range_support: No`, and a note naming the server.
+
+What each test asserts now:
+
+- `summary.bytes.0 == 0`, unchanged, and the point of the test.
+- The named class is present and above zero.
+- `by_status["200"]` equals `by_class["range_ignored"]`, and `by_status["404"]`
+  equals `by_class["not_found"]`. That ties the class to the status without
+  claiming the status is the only outcome.
+- `by_class.values().sum() == errors.total`, which is **stronger** than what
+  was there: an error that reaches the total and no class is now a failure,
+  and it was not before.
+
+The last one is the point. Replacing a brittle assertion with a weaker one
+would have traded a red job for a blind spot. This one is narrower about the
+machine and wider about the code.

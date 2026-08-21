@@ -1195,18 +1195,32 @@ async fn bench_webseed_names_a_server_that_ignores_range() {
         "a server that ignores Range serves no usable byte"
     );
     assert!(outcome.summary.errors.total > 0);
-    assert_eq!(
-        outcome
-            .summary
-            .errors
-            .by_class
-            .get("range_ignored")
-            .copied(),
-        Some(outcome.summary.errors.total)
-    );
+    // Every response that came back is a range-ignored one, and every error
+    // carries a class. Not "range_ignored is the only class there is": under a
+    // 500 ms burst at concurrency 4 a loaded runner refuses or resets some
+    // connections before they reach the range check, and those are transport
+    // errors rather than this server's answer. Asserting the stricter thing
+    // turned `Test (macos-latest)` red on a documentation-only commit with
+    // 1,828 of 7,557. See TODO/webseed.md, T-162.
+    let ignored = outcome
+        .summary
+        .errors
+        .by_class
+        .get("range_ignored")
+        .copied()
+        .unwrap_or(0);
+    assert!(ignored > 0, "{:?}", outcome.summary.errors.by_class);
     assert_eq!(
         outcome.summary.errors.by_status.get("200").copied(),
-        Some(outcome.summary.errors.total)
+        Some(ignored),
+        "every 200 that arrived is what range_ignored counts: {:?}",
+        outcome.summary.errors.by_status
+    );
+    assert_eq!(
+        outcome.summary.errors.by_class.values().sum::<u64>(),
+        outcome.summary.errors.total,
+        "an error with no class is an error nobody can act on: {:?}",
+        outcome.summary.errors.by_class
     );
     assert_eq!(
         outcome.sources[0].range_support,
@@ -1232,13 +1246,28 @@ async fn bench_webseed_counts_a_404_by_class_and_by_status() {
 
     assert_eq!(outcome.summary.bytes.0, 0);
     assert!(outcome.summary.errors.total > 0);
-    assert_eq!(
-        outcome.summary.errors.by_class.get("not_found").copied(),
-        Some(outcome.summary.errors.total)
-    );
+    // Same shape as the range test above and the same reason: what is asserted
+    // is that a 404 is classified and counted, not that a loaded runner is
+    // incapable of also resetting a connection. See TODO/webseed.md, T-162.
+    let missing = outcome
+        .summary
+        .errors
+        .by_class
+        .get("not_found")
+        .copied()
+        .unwrap_or(0);
+    assert!(missing > 0, "{:?}", outcome.summary.errors.by_class);
     assert_eq!(
         outcome.summary.errors.by_status.get("404").copied(),
-        Some(outcome.summary.errors.total)
+        Some(missing),
+        "every 404 that arrived is what not_found counts: {:?}",
+        outcome.summary.errors.by_status
+    );
+    assert_eq!(
+        outcome.summary.errors.by_class.values().sum::<u64>(),
+        outcome.summary.errors.total,
+        "an error with no class is an error nobody can act on: {:?}",
+        outcome.summary.errors.by_class
     );
     assert!(
         outcome.summary.latency.complete.count > 0,

@@ -54,6 +54,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
 | [T-009](webseed.md) | P1 | webseed | **done** | A source cannot be attached over more than one connection |
 | [T-141](webseed.md) | P1 | webseed | **done** | --web-seed-connect-timeout does not bound a connect that never answers |
+| [T-162](webseed.md) | P1 | bench | **done** | Two bench webseed tests assumed a loaded runner cannot also fail |
 | [T-010](disk-io.md) | P1 | disk-io | **done** | pwrite takes a read lock where it needs a write lock |
 | [T-011](disk-io.md) | P1 | disk-io | **done** | No file handle pool, so long runs exhaust descriptors |
 | [T-012](disk-io.md) | P2 | disk-io | **done** | Preallocation is not implemented |
@@ -167,7 +168,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-120 items: 110 to work through, and 10 deferred to Phase C. Thirty-three were
+121 items: 111 to work through, and 10 deferred to Phase C. Thirty-four were
 added by measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -286,11 +287,11 @@ down, arrived at twice more.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 | 11 |
-| P1 | 3 | 1 | 0 | 41 | 45 |
+| P1 | 3 | 1 | 0 | 42 | 46 |
 | P2 | 25 | 1 | 1 | 12 | 39 |
 | P3 | 15 | 0 | 0 | 0 | 15 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **44** | **4** | **1** | **61** | **120** |
+| **All** | **44** | **4** | **1** | **62** | **121** |
 
 `blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4
