@@ -13,11 +13,15 @@
 //! | `prealloc` | Zeroes are written across the whole file. Slow, and the space is certainly there. |
 //! | `falloc` | The filesystem is asked to reserve the blocks without writing them. |
 //!
-//! `falloc` is not available everywhere. On Linux it is `posix_fallocate`. On
-//! Windows the equivalent, `SetFileValidData`, needs `SeManageVolumePrivilege`,
-//! which an ordinary process does not hold, so it degrades to `prealloc` and
-//! says so rather than failing. A benchmark that silently did something other
-//! than what it was told is worse than one that refuses.
+//! `falloc` is a different call on every platform, and on one of them it is no
+//! call at all. On Linux and the BSDs it is `posix_fallocate`. On the Apple
+//! platforms that symbol does not exist and the interface is
+//! `fcntl(F_PREALLOCATE)`, which reserves blocks without moving the end of the
+//! file. On Windows the nearest equivalent, `SetFileValidData`, needs
+//! `SeManageVolumePrivilege`, which an ordinary process does not hold, so it
+//! degrades to `prealloc` and says so rather than failing. A benchmark that
+//! silently did something other than what it was told is worse than one that
+//! refuses.
 
 use std::fs::File;
 use std::io::Write;
@@ -245,7 +249,20 @@ fn mark_sparse(_file: &File) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(unix)]
+/// `posix_fallocate` is not a unix interface, it is a Linux and BSD one.
+///
+/// The Apple platforms do not have the symbol at all, and OpenBSD does not
+/// either, so a `#[cfg(unix)]` extern block declaring it compiles everywhere
+/// and then fails at **link** time on those targets:
+///
+/// ```text
+/// Undefined symbols for architecture arm64:
+///   "_posix_fallocate", referenced from: ...
+/// ```
+///
+/// That is what `Test (macos-latest)` had been failing on. See
+/// `TODO/cli-surface.md`, T-145.
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "openbsd")))]
 fn fallocate(file: &File, length: u64) -> Result<(), String> {
     use std::os::unix::io::AsRawFd;
 
@@ -267,6 +284,101 @@ fn fallocate(file: &File, length: u64) -> Result<(), String> {
             std::io::Error::from_raw_os_error(code)
         )),
     }
+}
+
+/// `F_PREALLOCATE` is the Apple equivalent, and it is a different shape.
+///
+/// Three differences from `posix_fallocate`, and each one is a line of code
+/// here. It reserves blocks without moving the end of the file, so the length
+/// is set afterwards. It measures from the current end of the file rather than
+/// from an absolute offset, so what is asked for is the shortfall rather than
+/// the total. And it takes a contiguous run first, which is what the
+/// filesystem prefers and is allowed to refuse, so the request is repeated
+/// without that constraint before it counts as a failure.
+///
+/// A refusal is not an error here: the caller falls back to `prealloc` and
+/// reports the reason, the same as on Windows.
+#[cfg(target_vendor = "apple")]
+fn fallocate(file: &File, length: u64) -> Result<(), String> {
+    use std::os::unix::io::AsRawFd;
+
+    /// `fcntl(2)`, `F_PREALLOCATE`.
+    const F_PREALLOCATE: i32 = 42;
+    /// Allocate as one contiguous run. The filesystem may refuse.
+    const F_ALLOCATECONTIG: u32 = 0x0000_0002;
+    /// Allocate all of it, contiguous or not.
+    const F_ALLOCATEALL: u32 = 0x0000_0004;
+    /// `fst_length` is measured from the current end of the file.
+    const F_PEOFPOSMODE: i32 = 3;
+
+    /// `fstore_t` from `<sys/fcntl.h>`. `off_t` is 64 bits on every Apple
+    /// target Rust supports.
+    ///
+    /// `offset` and `bytesalloc` are set here and read by the kernel rather
+    /// than by this code. They stay because the layout is the interface.
+    #[repr(C)]
+    struct Fstore {
+        flags: u32,
+        posmode: i32,
+        offset: i64,
+        length: i64,
+        bytesalloc: i64,
+    }
+
+    unsafe extern "C" {
+        // Declared variadic because it is: on `aarch64-apple-darwin` a
+        // variadic argument is passed on the stack rather than in a register,
+        // so calling this through a fixed-arity declaration passes garbage.
+        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    }
+
+    if length == 0 {
+        return Ok(());
+    }
+    let current = file
+        .metadata()
+        .map_err(|e| format!("cannot read the file length: {e}"))?
+        .len();
+    // `posix_fallocate` grows a file that is shorter than the region and never
+    // shrinks one that is longer. Match that, so `falloc` means the same thing
+    // on both.
+    if current >= length {
+        return Ok(());
+    }
+    let shortfall = (length - current) as i64;
+
+    let mut store = Fstore {
+        flags: F_ALLOCATECONTIG,
+        posmode: F_PEOFPOSMODE,
+        offset: 0,
+        length: shortfall,
+        bytesalloc: 0,
+    };
+    // SAFETY: the descriptor comes from an open `File` this call does not
+    // outlive, and `store` is a live, correctly shaped `fstore_t`.
+    let mut code = unsafe { fcntl(file.as_raw_fd(), F_PREALLOCATE, &raw mut store) };
+    if code == -1 {
+        store.flags = F_ALLOCATEALL;
+        store.bytesalloc = 0;
+        // SAFETY: as above.
+        code = unsafe { fcntl(file.as_raw_fd(), F_PREALLOCATE, &raw mut store) };
+    }
+    if code == -1 {
+        return Err(format!(
+            "F_PREALLOCATE: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // The blocks are reserved but the file is still its old length.
+    file.set_len(length)
+        .map_err(|e| format!("F_PREALLOCATE reserved the space and set_len failed: {e}"))
+}
+
+/// OpenBSD has no interface that reserves blocks without writing them, so
+/// `falloc` degrades to `prealloc` there the same way it does on Windows.
+#[cfg(all(unix, target_os = "openbsd"))]
+fn fallocate(_file: &File, _length: u64) -> Result<(), String> {
+    Err("OpenBSD has no fallocate interface".to_string())
 }
 
 /// `SetFileValidData` is the Windows equivalent and needs

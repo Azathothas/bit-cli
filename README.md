@@ -34,6 +34,18 @@ are no published binaries yet.
 cargo install --path crates/bit-cli --locked
 ```
 
+The minimum supported Rust version is **1.88**. That is not a preference: it
+is the highest `rust-version` in the resolved dependency graph, which
+`cargo metadata` will tell you.
+
+```bash
+cargo metadata --format-version 1 --all-features
+```
+
+CI pins exactly that toolchain in its `MSRV` job, and a test fails if the
+number in `Cargo.toml`, the number in the workflow, and the number in this
+paragraph stop agreeing.
+
 `.github/workflows/release.yml` builds `x86_64-linux`, `aarch64-linux`, and
 `x86_64-windows` on a `v*` tag, each with a BLAKE3 checksum and a build
 provenance attestation. When a release exists, verify it with:

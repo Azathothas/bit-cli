@@ -410,6 +410,44 @@ Approach:    Three ways, and the choice is the operator's rather than the
 Acceptance:  The `MSRV` job passes, and the version it pins is the version
              `Cargo.toml` and the README name.
 
+**Raised to 1.88, which is measured rather than chosen.** 1.88 is the highest
+`rust-version` in the resolved dependency graph, and the graph is what says so:
+
+```
+$ cargo metadata --format-version 1 --all-features
+```
+
+Nine packages ask for it. `serde_with`, `serde_with_macros`, and `hdrhistogram`
+are direct dependencies; `time`, `time-core`, `time-macros`, `darling`,
+`darling_core`, and `darling_macro` arrive underneath them. Nothing in the
+graph asks for more. So 1.88 is not a round number picked to make a job pass:
+it is the number the tree already needed while claiming 1.85.
+
+Three files carried the claim and none of them checked the others, which is how
+it drifted in the first place. `crates/bit-cli/tests/msrv_is_declared_once.rs`
+now ties them together: it reads `rust-version` out of `Cargo.toml` and fails
+if `.github/workflows/ci.yml` does not pin exactly that toolchain, or if
+`README.md` does not name it, or if the version grows a patch level that
+`cargo` would ignore and `dtolnay/rust-toolchain` would not.
+
+```
+$ cargo test -p bit-cli --test msrv_is_declared_once
+test result: ok. 3 passed; 0 failed
+```
+
+**Raising it turned on two clippy lints and both were real.** Clippy suppresses
+a lint whose fix needs an API newer than the declared `rust-version`, so the
+1.85 claim had been hiding them:
+
+- `manual_is_multiple_of` in `webseed/fetch.rs`, because `u64::is_multiple_of`
+  stabilised in 1.87.
+- `collapsible_if` in `source.rs`, because let-chains stabilised in 1.88.
+
+Both are fixed rather than allowed. That is the second thing a wrong MSRV
+costs: not just a red job, but lint coverage nobody knew was off.
+
+Closing evidence is a green `MSRV` job, recorded below.
+
 ### T-145 The macOS test job fails to link
 
 Source:      CI run 32386960166, 2026-08-20
@@ -446,6 +484,53 @@ Approach:    Two honest options. Fix the link, which means finding which native
 Acceptance:  Either `Test (macos-latest)` passes, or the matrix does not
              include it and `README.md` says which platforms are tested.
 
+**The entry's premise is wrong and the log says so.** None of the three native
+dependencies fails to build. The undefined symbol is ours:
+
+```
+Undefined symbols for architecture arm64:
+  "_posix_fallocate", referenced from: ...
+ld: symbol(s) not found for architecture arm64
+```
+
+`bit_cli_core::alloc::fallocate` was written under `#[cfg(unix)]` with an
+`extern "C"` declaration of `posix_fallocate`. That compiles on any unix,
+because an extern declaration is a promise rather than a lookup, and it links
+only where the symbol exists. It does not exist on the Apple platforms, and it
+does not exist on OpenBSD either. So the failure had nothing to do with
+`aws-lc-sys`, `ring`, or `network-interface`: those three names are on the
+linker line because everything is on the linker line. The `ld:` warnings about
+`ring` objects built for a newer macOS are warnings, and they are noise here.
+
+The lesson is the cheaper half of the entry: `cfg(unix)` is not a platform, it
+is a family, and an FFI symbol needs the platform.
+
+**Fixed by giving each platform the call it actually has.** Linux and the BSDs
+keep `posix_fallocate`. The Apple platforms get `fcntl(F_PREALLOCATE)`, which
+is the same idea in a different shape: it reserves blocks without moving the
+end of the file, it measures from the current end rather than from an absolute
+offset, and it takes a contiguous run first and may refuse, so the request is
+repeated without that constraint before it counts as a failure. The length is
+set afterwards, which is what makes `falloc` mean the same thing on both.
+OpenBSD returns a reason and degrades to `prealloc`, exactly as Windows does.
+
+The Apple path cannot be run on this machine, so what was checked here is that
+it compiles for the real target with warnings denied:
+
+```
+$ rustup target add aarch64-apple-darwin
+$ rustc --target aarch64-apple-darwin --edition 2024 --emit=metadata -D warnings <the function>
+```
+
+The behaviour is checked by CI. `alloc::tests::falloc_either_works_or_says_why_it_fell_back`
+runs on `macos-latest` and asserts that the file ends up 65536 bytes long and
+that the outcome is either `falloc` with no note or `prealloc` with a reason,
+and `every_strategy_sets_the_length` runs `Falloc` alongside the other three.
+So the macOS job stops being a job nobody reads and becomes the evidence for
+this entry.
+
+Closing evidence is a green `Test (macos-latest)`, recorded below.
+
 
 ### T-146 CI built a Windows binary against the dynamic C runtime
 
@@ -453,8 +538,7 @@ Source:      CI run 32405312793, 2026-08-20
 Category:    ci
 Priority:    P1
 Effort:      S
-Status:      partial: the cause is understood and the fix is pushed, the green
-             run is not recorded
+Status:      **done**
 
 Problem:     `Build (x86_64-pc-windows-msvc)` failed its own static CRT check:
 
@@ -479,6 +563,14 @@ Approach:    Repeat the flag where the variable is set. The build step now
              with a comment saying why it cannot be inherited.
 Acceptance:  `Build (x86_64-pc-windows-msvc)` passes, and the run is named
              here.
+
+**The run is in.** `Build (x86_64-pc-windows-msvc)` passed in 8m44s on CI run
+32407214253, 2026-08-20, which is the first run carrying the repeated flag:
+
+https://github.com/Azathothas/bit-cli/actions/runs/32407214253
+
+The job runs `scripts/check-static.ps1` against the binary it just built, so
+the pass is the check rather than the absence of a failure.
 
 **`release.yml` was never affected, which is the part worth knowing.** It sets
 no `RUSTFLAGS` at all, so `.cargo/config.toml` applies there and every

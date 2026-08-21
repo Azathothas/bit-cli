@@ -99,12 +99,13 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-082](create-seed.md) | P2 | seeding | open | BEP 16 superseeding is not implemented |
 | [T-083](create-seed.md) | P2 | seeding | open | Seeding does not report choke state or disconnect reasons |
 | [T-084](create-seed.md) | P0 | create | **done** | The create round trip has not been proven against another client |
-| [T-085](create-seed.md) | P1 | create | partial | Creation determinism is not proven across platforms |
+| [T-085](create-seed.md) | P1 | create | **done** | Creation determinism is not proven across platforms |
 | [T-090](bench.md) | P0 | bench | partial | bit-cli bench is not implemented |
 | [T-091](bench.md) | P0 | bench | **done** | Bench reports do not capture their environment |
 | [T-092](bench.md) | P1 | bench | open | bench swarm has no synthetic load generator |
 | [T-093](bench.md) | P2 | bench | **done** | --baseline comparison is not implemented |
 | [T-094](bench.md) | P2 | bench | open | Trace output has no measured cost |
+| [T-148](bench.md) | P2 | bench | **done** | The peer probe test asserted an exit code inside its own retry loop |
 | [T-100](bep-coverage.md) | P2 | bep | open | BEP 6 fast extension is not implemented |
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
@@ -118,9 +119,10 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-116](cli-surface.md) | P3 | cli | open | -O/--index-out cannot rename a file |
 | [T-117](cli-surface.md) | P1 | cli | **done** | --schema-version has no schema behind it |
 | [T-118](cli-surface.md) | P2 | cli | open | The short-flag table is not checked in CI |
-| [T-144](cli-surface.md) | P1 | ci | open | The MSRV job fails: the tree needs a newer rustc than it claims |
-| [T-145](cli-surface.md) | P2 | ci | open | The macOS test job fails to link |
-| [T-146](cli-surface.md) | P1 | ci | partial | CI built a Windows binary against the dynamic C runtime |
+| [T-144](cli-surface.md) | P1 | ci | **done** | The MSRV job fails: the tree needs a newer rustc than it claims |
+| [T-145](cli-surface.md) | P2 | ci | **done** | The macOS test job fails to link |
+| [T-146](cli-surface.md) | P1 | ci | **done** | CI built a Windows binary against the dynamic C runtime |
+| [T-147](windows.md) | P1 | windows | **done** | The rename reason differed by host, so two tests only passed on Windows |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | open | reference/ is not deleted at the end of Phase B |
@@ -148,7 +150,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-105 items: 95 to work through, and 10 deferred to Phase C. Eighteen were added by
+107 items: 97 to work through, and 10 deferred to Phase C. Twenty were added by
 measurements rather than by the triage. T-007 came out of T-001: a stalling
 source takes 24 seconds to give up. T-008, T-009, and T-017 came out of
 T-090's `bench leech` runs: a duplicate block request is fetched twice, a
@@ -178,18 +180,27 @@ And `bit-cli peers` added its torrent paused, which in `librqbit` 9.0.0 means
 it never announced: every run of that command had reported an empty swarm.
 T-143 is what T-140 left behind: a source can only be attached before a
 torrent starts, so a file donated by another torrent in the same run is used
-under `-j 1` and not above it. T-144 and T-145 came from reading CI rather
-than the code: the MSRV job has been failing because the tree needs rustc
-1.88 and claims 1.85.1, the macOS test job fails to link on a platform nothing
-ships to, and T-146 is the one that mattered: a workflow-level `RUSTFLAGS`
-replaced the per-target rustflags that make the Windows build static, so CI
-built against the dynamic C runtime and its own check caught it.
+under `-j 1` and not above it. T-144 through T-148 came from reading CI rather
+than the code, and between them they say what a red job costs. The MSRV job
+had been failing because the tree needs rustc 1.88 and claims 1.85.1, which
+also turned off two clippy lints nobody knew were off. The macOS test job
+failed to link, and not on any of the three native dependencies its entry
+guessed at: `posix_fallocate` was declared under `cfg(unix)` and does not
+exist on Darwin. T-146 is the one that mattered most: a workflow-level
+`RUSTFLAGS` replaced the per-target rustflags that make the Windows build
+static, so CI built against the dynamic C runtime and its own check caught it.
+T-147 is the one those three were hiding. Two tests failed on `ubuntu-latest`
+and passed on Windows, because the path planner asked the host's own parser
+whether a component would escape the output directory, and `C:` is a drive on
+one host and a file name on the other. The disk paths agreed; the reason in
+`--json` did not. T-148 is the flaky test sitting beside it, which asserted an
+exit code inside its own retry loop.
 
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 |
-| P1 | 8 | 2 | 0 | 30 |
-| P2 | 24 | 1 | 1 | 8 |
+| P1 | 7 | 0 | 0 | 34 |
+| P2 | 23 | 1 | 1 | 10 |
 | P3 | 10 | 0 | 0 | 0 |
 | Phase C | 10 deferred | | | |
 

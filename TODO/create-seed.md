@@ -256,7 +256,7 @@ Source:      PROMPT.md A3.4a, section 3 matrix item 15
 Category:    create
 Priority:    P1
 Effort:      S
-Status:      partial: the job and a constant are in, the green run is not
+Status:      **done**
 
 Problem:     Byte-identical output on repeat runs is tested. Byte-identical
              output between a Windows and a Linux build is not, and path
@@ -288,5 +288,18 @@ fixture` so the temporary directory's own name cannot reach the metainfo. The
 last one is what makes the constant stable across runs on one machine as well
 as across platforms.
 
-What is left is the CI run itself, which needs a push. This closes when a
-green `determinism-compare` is recorded here with its run URL.
+**The run is in.** CI run 32407214253, 2026-08-20:
+
+| job | result |
+| --- | --- |
+| `Create determinism (ubuntu-latest)` | pass, 38s |
+| `Create determinism (windows-latest)` | pass, 1m35s |
+| `Compare determinism hashes` | pass, 4s |
+
+https://github.com/Azathothas/bit-cli/actions/runs/32407214253
+
+The compare job is the one that matters: it is what fails when the two
+platforms disagree, and it had never been green before because the run it
+first appeared in was red for other reasons. The two hashes it compared are
+equal, and the same commit's `Test (windows-latest)` asserted the constant, so
+the number both platforms produce is also the number written down.

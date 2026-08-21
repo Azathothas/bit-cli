@@ -63,12 +63,11 @@ impl Kind {
         // A bare info hash is 40 hex or 32 base32 characters and nothing else.
         // Checked before the path branch so a hash is never taken for a
         // relative filename.
-        if (trimmed.len() == 40 && trimmed.chars().all(|c| c.is_ascii_hexdigit()))
-            || (trimmed.len() == 32 && trimmed.chars().all(|c| c.is_ascii_alphanumeric()))
+        if ((trimmed.len() == 40 && trimmed.chars().all(|c| c.is_ascii_hexdigit()))
+            || (trimmed.len() == 32 && trimmed.chars().all(|c| c.is_ascii_alphanumeric())))
+            && let Ok(hash) = InfoHash::parse(trimmed)
         {
-            if let Ok(hash) = InfoHash::parse(trimmed) {
-                return Ok(Self::InfoHash(hash));
-            }
+            return Ok(Self::InfoHash(hash));
         }
         let path = env.resolve(Path::new(trimmed));
         if lower.ends_with(".meta4") || lower.ends_with(".metalink") {
