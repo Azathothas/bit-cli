@@ -283,7 +283,10 @@ pub async fn test_source(
                     request_url,
                     method,
                     started.elapsed(),
-                    format!("{current}: {e}"),
+                    // The same classification the fetch path uses, so
+                    // `webseed test` and a download name the same cause and
+                    // the same flag for the same failure.
+                    crate::webseed::fetch::transport_reason(&current, &e),
                 );
             }
         };

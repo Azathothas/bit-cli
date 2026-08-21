@@ -783,7 +783,7 @@ Source:      found building [T-117](cli-surface.md)'s `source_failed` fixture
 Category:    webseed
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**
 
 Problem:     `--web-seed-connect-timeout` parses, reaches
              `Limits::connect_timeout_ms`, and is handed to
@@ -840,3 +840,128 @@ retired. A `--web-seed-only` run against one such mirror reports the source as
 else to fetch from, the whole run takes **30.364s** against a blackholed
 address and **1.109s** against a live server answering 404. That is the same
 defect from the other end, and it is why the generator uses the 404.
+
+---
+
+## The correction: the flag was never broken, and the address was not a blackhole
+
+**Everything above is measured correctly and concludes the wrong thing.**
+`127.0.0.1:9` is not blackholed on this machine. Port 9 is `discard`, and
+Windows ships it in the optional **Simple TCP/IP Services** feature, which is
+installed here:
+
+```
+$ Get-NetTCPConnection -LocalPort 9 -State Listen
+LocalAddress  LocalPort  OwningProcess
+0.0.0.0       9          5736          # TCPSVCS
+```
+
+It **accepts** the connection and never sends a byte. Watching the socket while
+a request is in flight is what shows it, and it is not subtle:
+
+```
+0.0s  n=1  49946:Established
+5.4s  n=1  49946:Established
+```
+
+`Established`, not `SYN_SENT`. So the connect succeeded in microseconds, the
+run was correctly bounded by the request timeout, and
+`--web-seed-connect-timeout` was doing exactly what its name says by not
+firing. The entry accused the flag of bounding nothing on the strength of a
+case where there was nothing for it to bound.
+
+**Against an address that really does drop the SYN, the flag is the only bound
+in play.** RFC 5737 reserves `192.0.2.0/24` as TEST-NET-1 and no network routes
+it. First with no `bit-cli` in the way, which is what the approach above asked
+for as step one:
+
+| connect timeout | request timeout | wall time | what `reqwest` said |
+| --- | --- | --- | --- |
+| 2s | 30s | **2.013s** | `is_connect=true is_timeout=true`, deadline has elapsed |
+| 6s | 30s | **6.011s** | same |
+| none | 30s | 21.038s | os error 10060, Windows' own TCP connect timeout |
+
+Then through `bit-cli webseed test`, sweeping both flags against each other:
+
+| connect timeout | request timeout | wall time |
+| --- | --- | --- |
+| 2s | 30s | **2.063s** |
+| 2s | 45s | **2.074s** |
+| 5s | 30s | **5.061s** |
+| 5s | 45s | **5.056s** |
+| 10s | 30s | **10.050s** |
+| 10s | 45s | **10.056s** |
+| default, 10s | 45s | 10.053s |
+
+The request timeout moves the number by 11 ms across a 15 second change in it.
+The connect timeout moves it by exactly itself. That is the acceptance's "about
+2 seconds rather than 45", met.
+
+**The second effect does not reproduce either.** A `--web-seed-only` download
+against the blackholed address, with `--web-seed-connect-timeout 2s
+--web-seed-timeout 30s --web-seed-max-errors 1 --web-seed-retries 0`, ends in
+**3.07s** with the source retired:
+
+```json
+{"state": "failed", "http_requests": 1, "cooldowns": 1, "retries": 0,
+ "error": "http://192.0.2.1/...: connect timed out, raise --web-seed-connect-timeout"}
+```
+
+`http_requests` is 1 and the state is `failed`, where the entry predicted 0 and
+`active`. The same run against the discard service takes 30.4s and is bounded
+by the request timeout, which is right: that connect succeeded.
+
+**One real defect came out of it, and it is the reporting.** A connect timeout
+sets both `is_connect()` and `is_timeout()` on a `reqwest::Error`, and
+`classify_transport` asked about the timeout first, so every connect timeout
+was reported as `timed out` and the connect branch below it was unreachable. A
+reader raising `--web-seed-timeout` in response would have changed nothing. The
+messages now name which of the two expired, and both paths give the same one:
+`webseed test` used to print `reqwest`'s own `error sending request for url
+(...)` because it formatted the error itself rather than classifying it, so the
+same failure read differently depending on which command found it. Both go
+through `fetch::transport_reason` now.
+
+**Acceptance.** `scripts/check-connect-timeout.ps1` drives both directions,
+because a flag that bounds everything is as wrong as one that bounds nothing:
+
+- On a blackholed address the connect timeout must be the bound, and the
+  request timeout must not move the wall clock.
+- On a listener that accepts and never answers, the reverse. That listener is
+  served by the script rather than borrowed from the machine, so the check does
+  not depend on Simple TCP/IP Services being installed.
+- Each run's message must name the timeout that expired.
+
+The blackhole cannot be served, because it is the absence of an answer. So the
+script proves the address is one before it measures anything: a raw connect
+must still be pending after `-ProbeSeconds`, and it exits 2 rather than passing
+if the network answers.
+
+```
+$ pwsh -NoProfile -File scripts/check-connect-timeout.ps1
+2026-08-21T02:13:00.994Z 192.0.2.1:80 is still pending after 2s
+  blackhole connect= 2s request=30s     2053 ms  connect timed out, raise --web-seed-connect-timeout
+  blackhole connect= 2s request=45s     2071 ms  connect timed out, raise --web-seed-connect-timeout
+  blackhole connect= 5s request=30s     5056 ms  connect timed out, raise --web-seed-connect-timeout
+  blackhole connect= 5s request=45s     5057 ms  connect timed out, raise --web-seed-connect-timeout
+  discard   connect= 2s request=30s    30055 ms  timed out waiting for the response, raise --web-seed-timeout
+  discard   connect= 2s request=45s    45057 ms  timed out waiting for the response, raise --web-seed-timeout
+  discard   connect= 5s request=30s    30041 ms  timed out waiting for the response, raise --web-seed-timeout
+  discard   connect= 5s request=45s    45075 ms  timed out waiting for the response, raise --web-seed-timeout
+verdict: pass
+```
+
+`webseed::fetch::tests::a_transport_failure_names_the_timeout_that_expired`
+covers the classification with no network and no firewall: a listener that
+accepts and never answers is a request timeout, and a port nothing listens on
+is a refused connect. The third shape, a connect that never completes, is what
+the script above is for.
+
+**What this cost, and what to take from it.** A P1 stood for a session against
+a flag that worked, and the fixture was what was wrong. `curl -m 6` against the
+same address also "times out with no response", which is what made the original
+reading look confirmed: a discard service and a blackhole are indistinguishable
+from the client's wall clock and distinguishable in one line of
+`Get-NetTCPConnection`. When a measurement says a flag does nothing, check that
+the condition the flag names is the condition being produced.
+

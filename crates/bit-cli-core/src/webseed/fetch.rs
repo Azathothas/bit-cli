@@ -1393,21 +1393,50 @@ fn classify_status(url: &str, status: StatusCode) -> FetchError {
     }
 }
 
-/// Turn a transport failure into a classified error.
-fn classify_transport(url: &str, err: &reqwest::Error) -> FetchError {
-    if err.is_timeout() {
-        return FetchError::transient(format!("{url}: timed out"));
-    }
+/// One line naming what a transport failure was, in the reader's terms.
+///
+/// Shared with [`crate::webseed::probe`] so `webseed test` and a download say
+/// the same thing about the same failure. They used to disagree: the download
+/// path classified, and the probe path printed `reqwest`'s own
+/// `error sending request for url (...)`, which names neither the cause nor
+/// the flag that bounds it.
+pub(crate) fn transport_reason(url: &str, err: &reqwest::Error) -> String {
+    // The connect case is asked first because a connect timeout sets both
+    // `is_connect` and `is_timeout`, so asking about the timeout first
+    // reported every one of them as an ordinary request timeout and the
+    // reader turned the wrong knob. The two are bounded by two different
+    // flags with two different defaults, and which one expired is the only
+    // thing the message has to say. See TODO/webseed.md, T-141.
     if err.is_connect() {
-        return FetchError::transient(format!("{url}: could not connect: {err}"));
+        return match err.is_timeout() {
+            true => format!("{url}: connect timed out, raise --web-seed-connect-timeout"),
+            false => format!("{url}: could not connect: {err}"),
+        };
+    }
+    if err.is_timeout() {
+        return format!("{url}: timed out waiting for the response, raise --web-seed-timeout");
     }
     if err.is_redirect() {
-        return FetchError::permanent(format!("{url}: too many redirects: {err}"));
+        return format!("{url}: too many redirects: {err}");
     }
     if err.is_builder() {
-        return FetchError::permanent(format!("{url}: malformed request: {err}"));
+        return format!("{url}: malformed request: {err}");
     }
-    FetchError::transient(format!("{url}: {err}"))
+    format!("{url}: {err}")
+}
+
+/// Turn a transport failure into a classified error.
+///
+/// Two shapes are permanent and the rest are worth another attempt. A redirect
+/// loop and a request this client could not build will not come out
+/// differently on a retry; a timeout, a refused connection, and a reset one
+/// all might.
+fn classify_transport(url: &str, err: &reqwest::Error) -> FetchError {
+    let reason = transport_reason(url, err);
+    match err.is_redirect() || err.is_builder() {
+        true => FetchError::permanent(reason),
+        false => FetchError::transient(reason),
+    }
 }
 
 /// Check the response is actually the range that was asked for.
@@ -1747,6 +1776,79 @@ mod tests {
             classify_status("u", StatusCode::NOT_FOUND).class(),
             "not_found"
         );
+    }
+
+    /// A transport failure says which timeout expired, or which did not.
+    ///
+    /// The two timeouts are two flags with two defaults, and `reqwest` sets
+    /// `is_timeout()` on a connect timeout as well as on a request one, so
+    /// asking about the timeout first reports every connect timeout as a
+    /// request timeout and the reader raises the wrong flag. That is what
+    /// this pins. See `TODO/webseed.md`, T-141.
+    ///
+    /// Two of the three shapes are reachable with no network and no firewall:
+    /// a listener that accepts and never answers is a request timeout, and a
+    /// port nothing listens on is a refused connect. The third, a connect that
+    /// never completes, needs an address the network does not route, which is
+    /// what `scripts/check-connect-timeout.ps1` drives.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_transport_failure_names_the_timeout_that_expired() {
+        use std::time::Duration;
+
+        // Accept and hold. Nothing is ever written, so the client waits out
+        // its request timeout with the connection already established.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = tokio::spawn(async move {
+            let mut sockets = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                sockets.push(socket);
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(300))
+            .connect_timeout(Duration::from_secs(30))
+            .build()
+            .unwrap();
+        let url = format!("http://127.0.0.1:{port}/x");
+        let err = client.get(&url).send().await.expect_err("it cannot answer");
+        assert!(err.is_timeout(), "{err}");
+        assert!(!err.is_connect(), "the connection was established: {err}");
+        let reason = transport_reason(&url, &err);
+        assert!(
+            reason.contains("timed out waiting for the response")
+                && reason.contains("--web-seed-timeout"),
+            "{reason}"
+        );
+        assert!(
+            !reason.contains("connect timed out"),
+            "a request timeout must not be reported as a connect timeout: {reason}"
+        );
+        // Transient: the same request might work on the next attempt.
+        assert!(classify_transport(&url, &err).is_retryable(), "{reason}");
+        held.abort();
+
+        // A port nothing listens on is refused rather than timed out, and the
+        // message says so without naming either flag, because neither would
+        // have helped.
+        let closed = {
+            let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = socket.local_addr().unwrap().port();
+            drop(socket);
+            port
+        };
+        let url = format!("http://127.0.0.1:{closed}/x");
+        let err = client
+            .get(&url)
+            .send()
+            .await
+            .expect_err("nothing is listening");
+        if err.is_connect() && !err.is_timeout() {
+            let reason = transport_reason(&url, &err);
+            assert!(reason.contains("could not connect"), "{reason}");
+            assert!(!reason.contains("--web-seed-connect-timeout"), "{reason}");
+        }
     }
 
     #[test]
