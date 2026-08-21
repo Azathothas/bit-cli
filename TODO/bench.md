@@ -615,3 +615,8 @@ test result: ok. 8 passed; 0 failed
 The generator's parameters were left alone. Raising the payload size would have
 moved the margin without removing the dependence on it, and the dependence is
 the defect.
+
+**The run is in.** `Test (macos-latest)` passed in 2m10s on CI run
+32444424026, 2026-08-21, alongside every other job in that run:
+
+https://github.com/Azathothas/bit-cli/actions/runs/32444424026

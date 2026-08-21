@@ -222,6 +222,13 @@ that runner and one everywhere else. It is T-149 in the other bench target. Two
 targets, the same sampler mistake, and both were found by fixing whatever was
 red above them.
 
+**CI run 32444424026 is green on every job**, which is the first time the whole
+matrix has been. It took four rounds and each one uncovered the next: the macOS
+link failure hid six `sysinfo` failures, which hid T-152, which hid one
+per-platform assertion that turned out to be the test rather than the code. A
+red job does not cost one defect, it costs every defect behind it, and that is
+the argument for never leaving one.
+
 | Priority | Open | Partial | Blocked | Done |
 | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 |

@@ -646,13 +646,27 @@ Checked here the same way the link fix was, since this machine is not a Mac:
 $ rustc --target aarch64-apple-darwin --edition 2024 --emit=metadata -D warnings <the module>
 ```
 
-**Where it stands.** CI run 32440386139 links on `macos-latest` and runs the
-suite: the link failure is gone and all six `sysinfo` failures with it, so both
-defects this entry names are closed. That run's macOS job is still red on one
-unrelated test, `coverage_of_the_documented_names_matches_what_is_recorded`,
-which is [T-152](bench.md) and has nothing to do with the platform reader: a
-`bench disk` phase finished inside one metrics interval and emitted no sample.
-This entry closes on the fix for that landing green.
+**The run is in.** `Test (macos-latest)` passed in 2m10s on CI run
+32444424026, 2026-08-21:
+
+https://github.com/Azathothas/bit-cli/actions/runs/32444424026
+
+Every job in that run is green, which is the first time the whole matrix has
+been. Getting there took four rounds, and each one uncovered the next: the link
+failure hid six `sysinfo` failures, which hid [T-152](bench.md), which hid one
+last per-platform assertion. A red job does not cost one defect, it costs every
+defect behind it.
+
+The last of those is worth naming because it is not a defect.
+`sysinfo::tests::the_host_names_its_cpu_os_and_memory` asserted
+`host.unavailable.is_empty()`, and the Apple reader reports `network` as
+unavailable on purpose: link speeds need `getifaddrs` plus an `SIOCGIFMEDIA`
+ioctl per interface, which nothing measured here compares across machines yet,
+and saying so beats reporting an empty list as though the machine had no
+interfaces. The test now compares the set to `["network"]` on Apple and to `[]`
+elsewhere, so a second field going unreadable still fails the build, and so
+does this one being fixed without the expectation being updated. That gap is
+[T-153](#t-153-link-speeds-are-not-read-on-macos).
 
 
 ### T-146 CI built a Windows binary against the dynamic C runtime
