@@ -1172,3 +1172,81 @@ the defect.
 32444424026, 2026-08-21, alongside every other job in that run:
 
 https://github.com/Azathothas/bit-cli/actions/runs/32444424026
+
+---
+
+### T-211 Two bench tests fail on the CI runner and pass on every local run
+
+Source:      two red CI runs on main, 2026-08-22
+Category:    bench
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     `cmd::bench::tests::a_leech_measures_the_transfer_the_hashing_and_the_disk`
+             and
+             `cmd::bench::tests::a_source_over_several_connections_stays_one_row_and_serves_between_them`
+             each failed once on `Test (ubuntu-latest)`, on different commits,
+             with a green run between them, and neither reproduces here.
+Relevance:   A test that fails one run in three is worse than no test: it
+             costs a session's attention every time, and the next real
+             regression it catches will be read as the flake.
+Approach:    Both assert an exact byte or piece count over a loopback swarm
+             running to a wall-clock budget, which is the shape
+             [RULES.md](RULES.md) section 5 warns about. Find which side of
+             each assertion is the scheduling outcome and arrange it instead,
+             the way [T-179](webseed.md) did. Do not widen the assertion to
+             make it pass.
+Acceptance:  Both tests run 50 times under `--test-threads` pressure without
+             failing, and the run that proves it is recorded here.
+
+**What was seen, exactly.**
+
+| run | commit subject | test | assertion |
+| --- | --- | --- | --- |
+| 32592590875 | Receive a message larger than the buffer it lands in | `a_leech_measures_...` | `hashing["pieces"]` was **2**, expected 3 |
+| 32594170837 | Keep the hash check between runs without keeping the session | `a_source_over_several_connections_...` | `summary.bytes` was **4024**, expected 3000 |
+
+Both were the only failure in a run of 384 tests, both on `ubuntu-latest`, and
+both are `bench.rs`. The push between them, `Name the filter value instead of
+parsing it out of a literal`, was green on all sixteen jobs, and so were the
+three before them.
+
+**4024 is 3000 plus 1024**, which is one block counted twice. That test
+reconnects a source part way through, so a block requested before the
+disconnect and served again after it is the obvious candidate. The other
+direction, two pieces hashed where three were expected, is the same run ending
+before the third piece arrived.
+
+**Locally both pass.** Three consecutive runs of each, release toolchain
+1.98.0, and `cargo test --workspace` passes 1,131 tests on every run this
+session, which is more than ten.
+
+**What is not known and matters.** Whether a vendored change this session made
+it more likely. Both failures land after the vendored work started, and the
+changes that could plausibly touch peer accounting are
+[T-210](peers.md), which changed the peer id recorded for an **incoming** peer,
+and [T-132](multi-source.md), which added a second limiter acquire on the
+download path. The green run at 32589619210 already carried both, which is
+evidence against but not proof: one green run does not clear a test that fails
+one time in three.
+
+**The commit is not the variable, and that is measured.** `Test
+(ubuntu-latest)` from run 32594170837 was re-run on its own commit, unchanged,
+and **passed**. So the same code fails and passes on the same runner image, and
+what differs between them is the run rather than the tree. That clears the
+vendored work of causing it and leaves the test itself.
+
+The other one, 32592590875, could not be re-run: it had already been cancelled
+by the concurrency group, and GitHub refuses to retry a cancelled run. Worth
+knowing before trying: the CI workflow groups by `workflow-ref` with
+`cancel-in-progress`, so re-running an older commit's job while a newer push is
+in flight cancels one of them, and a cancelled run is then permanently
+un-retryable.
+
+**Where to start.** `assert_eq!` on `summary.bytes` is the wrong assertion for a
+test that reconnects a source mid-transfer: a block served twice is a
+legitimate outcome of a reconnect, and the payload on disk being correct is the
+invariant. `hashing.pieces` is the same shape read the other way. Arrange each
+so the count is not a race, the way [T-179](webseed.md) did, rather than
+widening the comparison until it stops failing.

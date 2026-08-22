@@ -209,6 +209,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-198](cli-surface.md) | P1 | cli | **done** | An agent that wants a flag name greps for it |
 | [T-199](cli-surface.md) | P2 | cli | **done** | The CI supply chain was unwatched and one action was abandoned |
 | [T-182](cli-surface.md) | P1 | ci | **done** | A macOS test asserted an invariant across two kernel subsystems |
+| [T-211](bench.md) | P1 | bench | open | Two bench tests fail on the CI runner and pass on every local run |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -236,8 +237,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-159 items: 149 to work through, and 10 deferred to Phase C.
-45 open, 5 partial, 0 blocked, 99 done.
+160 items: 150 to work through, and 10 deferred to Phase C.
+46 open, 5 partial, 0 blocked, 99 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -495,11 +496,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 1 | 0 | 11 | 12 |
-| P1 | 1 | 0 | 0 | 53 | 54 |
+| P1 | 2 | 0 | 0 | 53 | 55 |
 | P2 | 23 | 4 | 0 | 32 | 59 |
 | P3 | 21 | 0 | 0 | 3 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **45** | **5** | **0** | **99** | **159** |
+| **All** | **46** | **5** | **0** | **99** | **160** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
