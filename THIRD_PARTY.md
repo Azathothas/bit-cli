@@ -5027,7 +5027,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `bit-cli 0.1.0`, `bit-cli-core 0.1.0`, `async-stream-impl 0.3.6`, `async-stream 0.3.6`, `chrono 0.4.45`, `governor 0.10.4`, `windows-collections 0.3.2`, `windows-core 0.62.2`, `windows-future 0.3.2`, `windows-implement 0.60.2`, `windows-interface 0.59.3`, `windows-link 0.2.1`, `windows-numerics 0.3.1`, `windows-result 0.4.1`, `windows-strings 0.5.1`, `windows-sys 0.52.0`, `windows-sys 0.61.2`, `windows-targets 0.52.6`, `windows-threading 0.2.1`, `windows 0.62.2`, `windows_x86_64_msvc 0.52.6`
+Used by `bit-cli 0.2.0`, `bit-cli-core 0.2.0`, `async-stream-impl 0.3.6`, `async-stream 0.3.6`, `chrono 0.4.45`, `governor 0.10.4`, `windows-collections 0.3.2`, `windows-core 0.62.2`, `windows-future 0.3.2`, `windows-implement 0.60.2`, `windows-interface 0.59.3`, `windows-link 0.2.1`, `windows-numerics 0.3.1`, `windows-result 0.4.1`, `windows-strings 0.5.1`, `windows-sys 0.52.0`, `windows-sys 0.61.2`, `windows-targets 0.52.6`, `windows-threading 0.2.1`, `windows 0.62.2`, `windows_x86_64_msvc 0.52.6`
 
 ```
 MIT License

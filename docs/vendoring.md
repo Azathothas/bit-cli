@@ -67,21 +67,24 @@ redirects the source, so every edge in the graph resolves to the same tree.
 `vendor/librqbit-utp/Cargo.toml`, finds this workspace, and refuses to build a
 package that is neither a member nor excluded.
 
-The vendored crates are **not** workspace members and are not linted or tested
-by `scripts/gates.ps1`. That is deliberate: upstream's warnings are upstream's,
-and `clippy -D warnings` over somebody else's tree would fail this build for a
-lint released after they last touched it.
+The vendored crates are **not** workspace members, so `cargo clippy --workspace`
+does not lint them and `cargo test --workspace` does not run their tests.
 
-**That took a CI failure to get right, and the reason is worth knowing.** Cargo
-passes `--cap-lints allow` to a dependency it resolved from a registry and does
-not pass it to a path dependency. `[patch.crates-io]` turns a registry crate
-into a path dependency, so on the vendoring commit an unused parameter in
-`vendor/librqbit-dualstack-sockets/src/bind_device.rs:27` became an error under
-the workflow-level `RUSTFLAGS: -D warnings` and failed four Windows jobs.
-Nobody here wrote it. `-D warnings` now lives only in the clippy job, scoped to
-`--workspace`, which is what excludes `vendor/`; clippy runs every rustc lint
-as well as its own, so the only thing no longer covered is a warning that
-appears on a platform the clippy job does not run on.
+**They are still compiled under `-D warnings`, and that is a decision rather
+than an accident.** Cargo passes `--cap-lints allow` to a dependency it resolved
+from a registry and does **not** pass it to a path dependency, so
+`[patch.crates-io]` made every warning in the vendored trees ours. On the
+vendoring commit an unused parameter in
+`vendor/librqbit-dualstack-sockets/src/bind_device.rs:27` failed four Windows
+jobs, and nobody here wrote it.
+
+Dropping the flag was tried and reverted. Development happens on Windows, so CI
+is the only place a warning on another platform is ever seen, and a build that
+does not fail on one cannot catch sloppy work. The cost is that an upstream
+warning has to be patched in the vendored tree, and
+[`patches/UPSTREAM.md`](../patches/UPSTREAM.md) is where each is recorded. The
+first entry in that file is exactly this warning, and it is what proved the
+whole patch workflow.
 
 `vendor/rqbit` is its own workspace and its own tests are run on purpose, not
 by default:

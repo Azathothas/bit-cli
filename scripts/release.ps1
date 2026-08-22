@@ -213,8 +213,12 @@ if ([regex]::IsMatch($cargo, $internalPattern)) {
 
 Say "$current -> $next in $cargoPath and $changelogPath"
 Write-Host ""
-Write-Host "Cargo.lock has to follow, and the gates have to pass:"
-Write-Host "  cargo update --workspace --offline"
+Write-Host "Three things follow a version, and CI fails on each of them separately:"
+Write-Host "  cargo update --workspace --offline                 # Cargo.lock"
+Write-Host "  cargo about generate --config about.toml --output-file THIRD_PARTY.md about.hbs"
 Write-Host "  pwsh scripts/gates.ps1"
 Write-Host "  pwsh scripts/release.ps1 -Check"
+Write-Host ""
+Write-Host "THIRD_PARTY.md carries every crate version including this one, and the"
+Write-Host "notices job regenerates and diffs it. Bumping without it is a red run."
 exit 0

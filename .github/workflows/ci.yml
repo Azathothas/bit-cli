@@ -15,23 +15,21 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # `-D warnings` is NOT set here, and that is deliberate since the librqbit
-  # crates were vendored on 2026-08-22.
+  # `-D warnings` applies to the vendored crates too, and that is on purpose.
   #
   # Cargo passes `--cap-lints allow` to a dependency it resolved from a
-  # registry and does not pass it to a path dependency. `[patch.crates-io]`
-  # turned thirteen registry crates into path dependencies, so upstream's
-  # warnings became ours: an unused parameter in
-  # `vendor/librqbit-dualstack-sockets/src/bind_device.rs` failed four Windows
-  # jobs on the vendoring commit, and nobody here wrote it. rustc gains lints
-  # every release, so that build breaks on a toolchain update rather than on a
-  # change, which is the worst shape a failure can have.
+  # registry and does not pass it to a path dependency, so `[patch.crates-io]`
+  # made upstream's warnings ours the day the trees were vendored. Dropping the
+  # flag was tried and reverted: this is a Windows machine and CI is the only
+  # place a warning on another platform is ever seen, so a build that does not
+  # fail on one is a build that cannot catch sloppy work.
   #
-  # Our own code keeps `-D warnings` in the clippy job below, scoped to
-  # `--workspace`, which is what excludes `vendor/`. clippy runs every rustc
-  # lint as well as its own, so nothing is uncovered except a warning that only
-  # appears on a platform the clippy job does not run on. See
+  # The cost is that an upstream warning has to be patched in the vendored
+  # tree. That is a real cost and it is the right one: a warning in code this
+  # repository ships is this repository's problem whoever wrote it, and
+  # `patches/UPSTREAM.md` is where each one is recorded. See
   # `docs/vendoring.md`.
+  RUSTFLAGS: -D warnings
 
 jobs:
   fmt:
@@ -127,6 +125,7 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
         env:
           RUSTFLAGS: >-
+            -D warnings
             -C target-feature=+crt-static
             -C prefer-dynamic=no
             -C link-self-contained=yes
@@ -135,7 +134,7 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo build --release --locked --target ${{ matrix.target }}
         env:
-          RUSTFLAGS: -C target-feature=+crt-static -C prefer-dynamic=no
+          RUSTFLAGS: -D warnings -C target-feature=+crt-static -C prefer-dynamic=no
       # Every release target makes the same promise: the binary runs on a
       # machine with nothing installed. On Windows that means no Visual C++
       # redistributable, and the failure is a dialog box rather than an error a
