@@ -60,9 +60,12 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green at run **32580352540** against commit `592900b`. The push that
-  carries this session's second half starts a run that has not been read yet;
-  read it first.
+- **CI:** green at run **32583835258** against commit `a1b440e`, all sixteen
+  jobs. That run is the one that matters for this session: every Windows job in
+  it installed NASM with `scripts/setup-nasm.ps1` rather than the abandoned
+  action, so the replacement is proved on a real runner rather than only here.
+  GitHub picked up `.github/dependabot.yml` on the same push and started a
+  Dependabot run against it.
 - **Entries:** 158 items. 48 open, 6 partial, 2 blocked, 92 done, 10 deferred to
   Phase C. 92 of 148 workable done, 56 left.
 - **Tree:** 86 Rust files, 50,406 lines of code, 11,741 of comment,
@@ -154,7 +157,7 @@ Nothing is half-written.
 **The vendor patching list, [`patches/TASKS.md`](../patches/TASKS.md), and the
 hope is to finish it.** Items 0, 1 and 2 are done or bounded.
 
-1. Read the CI run this session's last push started.
+1. Nothing to read first. CI is green at **32583835258** against the tip.
 2. **[T-040](memory.md) to done**: run `scripts/soak.ps1` for six hours on the
    `steady` workload and record the slope of each series. That is the whole of
    what is left, and it is a measurement rather than a change. Start it early:
