@@ -157,10 +157,14 @@ transcript shows the push carried no proof.
 jobs and about five minutes, and the workflow's concurrency group cancels one
 in flight when the next push lands, so a documentation push both costs a run
 and destroys the one before it. `-NoCi` puts `[skip ci]` on the commit. It is
-refused unless every staged path is under `TODO/`, `docs/`, `bench/`, or a
-handful of root files: a "documentation-only" push carrying a source file is
-exactly the one that needed CI. `.github/` is deliberately not in the safe set,
-because a workflow edit is the change whose effect is only visible in a run.
+refused unless every staged path is under `TODO/`, `docs/`, `bench/`, `scripts/`
+or a handful of root files: a "documentation-only" push carrying a source file
+is exactly the one that needed CI. Two exceptions, both derived rather than
+listed. `.github/` is never safe, because a workflow edit is the change whose
+effect is only visible in a run. And a script the workflows actually invoke is
+not safe either, which the script works out by reading `.github/workflows/`, so
+a workflow that starts calling a new script makes that script unsafe on the same
+commit with nothing for anybody to remember.
 
 What it enforces, and why each rule exists:
 

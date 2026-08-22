@@ -245,16 +245,35 @@ $script:SafeForNoCi = @(
     '^TODO/',
     '^docs/',
     '^bench/',
+    '^scripts/',
     '^README\.md$',
     '^LICENSE',
     '^\.gitignore$',
     '^\.gitattributes$'
 )
 
+# `scripts/` is safe except for the scripts a workflow actually runs, and which
+# those are is derived from the workflows rather than listed here. A workflow
+# that starts calling a new script makes that script unsafe on the same commit,
+# with nothing to remember.
+function Get-ScriptsCiRuns {
+    $dir = Join-Path $script:RepoRoot ".github/workflows"
+    if (-not (Test-Path $dir)) { return @() }
+    $names = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($file in (Get-ChildItem -Path $dir -File)) {
+        foreach ($m in [regex]::Matches([System.IO.File]::ReadAllText($file.FullName), 'scripts/[A-Za-z0-9._-]+')) {
+            [void]$names.Add($m.Value)
+        }
+    }
+    return @($names)
+}
+
 function Test-NeedsCi {
     param([string[]]$staged)
+    $ciRuns = Get-ScriptsCiRuns
     return @($staged | Where-Object {
             $path = $_
+            if ($ciRuns -contains $path) { return $true }
             -not ($script:SafeForNoCi | Where-Object { $path -match $_ })
         })
 }

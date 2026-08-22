@@ -147,7 +147,10 @@ foreach ($state in $now.Values) {
 $advanced = @()
 $filed = @()
 foreach ($id in $now.Keys) {
-    if (-not $before.ContainsKey($id)) { $filed += $id; continue }
+    # A row that did not exist at the base is filed, and its state matters:
+    # an entry filed and closed in one session is not the same as one filed and
+    # left open, and both happen.
+    if (-not $before.ContainsKey($id)) { $filed += "$id ($($now[$id]))"; continue }
     if ($before[$id] -ne $now[$id]) { $advanced += "$id ($($before[$id]) -> $($now[$id]))" }
 }
 $closed = @($advanced | Where-Object { $_ -match '-> done\)$' })
