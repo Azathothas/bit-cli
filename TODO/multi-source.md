@@ -798,7 +798,7 @@ Source:      the residue of [T-140](#t-140-a-proven-shared-file-is-not-turned-in
 Category:    webseed
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**, 2026-08-22T02:00Z
 
 Problem:     Sources attach in `cmd::download::one_inner` before `watch` runs,
              and nothing can add one after that. So a source that becomes
@@ -849,6 +849,99 @@ as 64 MiB by default. `bit-cli` has a bounded per-source window cache that
 that bound can cause once sources appear and disappear mid-run. Attaching a
 source late is exactly the case that makes the window and the availability
 disagree, so measure it here rather than discovering it under `-j 3`.
+
+**Closed 2026-08-22T02:00Z, and the failure above `-j 1` was worse than the
+entry says.** The entry has the takers fetching the shared file rather than
+reading it. They do not fetch it: they have no source at all, so they do not
+finish.
+
+Measured first, before anything was built. `scripts/check-shared-files.ps1`
+grew a `-Jobs` parameter, which is what the acceptance needed anyway, and at
+`-Jobs 3` against `76e33e8`'s behaviour:
+
+```
+torrent   finished over http from disk resumed  shared proven hash
+payload_c     True 20.00 MiB 20.00 MiB 0.00 B        0 0.00 B 42ee6db050db50ce
+payload_a    False 0.00 B    0.00 B    3.00 MiB      0 0.00 B 080acf35a507ac98
+payload_b    False 0.00 B    0.00 B    3.00 MiB      0 0.00 B 080acf35a507ac98
+
+check-shared-files: the run exited 9, not 0
+distinct hashes across three output directories: 2
+```
+
+Report: `bench/shared-files-20260822T014247442Z.json`, `ok: false`, fourteen
+failures. The donor fetched its 20 MiB and the two takers sat on 3 MiB of
+resumed data for the whole run. Exit 9 is no usable sources, which is the
+honest code for what happened.
+
+After, same script, same fixture, `-Jobs 3`:
+
+```
+torrent   finished over http from disk resumed  shared proven    hash
+payload_c     True 20.00 MiB 20.00 MiB 0.00 B        0 0.00 B    42ee6db050db50ce
+payload_a     True 0.00 B    16.00 MiB 3.00 MiB      1 16.00 MiB 42ee6db050db50ce
+payload_b     True 0.00 B    16.00 MiB 3.00 MiB      1 16.00 MiB 42ee6db050db50ce
+
+over http:    20.00 MiB for the whole run
+distinct hashes across three output directories: 1
+verdict: one fetch, three copies, one hash
+```
+
+Report: `bench/shared-files-20260822T015216397Z.json`, `ok: true`, 649 ms.
+`-Jobs 1` still passes, which is [T-140](#t-140-a-proven-shared-file-is-not-turned-into-a-source-on-its-own)'s
+own acceptance and had to keep passing.
+
+**What was built, and it is the split the approach named.**
+`swarm::attach_bindings` is the per-binding half of `attach_sources_with`,
+called once with every binding at the start and once with one binding for a
+late attach. `swarm::attach_late` resolves one spec on its own and renumbers
+its binding, because a set resolved alone always numbers from zero and the
+ledger is keyed on the source index: two sources sharing one index would
+convict each other. Coverage is not re-checked, because
+`--web-seed-require` asks about the sources a run declared and a late one can
+only add.
+
+`donated_sources` now returns a third list, the donations whose donor has not
+published where it wrote. `Attachments` carries the sources, the ledger, the
+report rows and that pending list together, and `watch` takes it by mutable
+reference; `attach_pending` runs at the top of each report tick, before the
+accounting reads the list, so the tick that attaches a source already counts
+it. Once the pending list is empty it costs nothing, which under `-j 1` is
+from the first tick.
+
+**The report needed less than the approach expected.** `sources` is read once
+at the end and already tolerates a row that appeared partway through, because
+it is built from the list rather than from the specs. The `source_added` event
+is the same event for a late source as for an early one, and `origin:
+shared_file` plus its position in the stream is what distinguishes it. What
+did need deciding is the request budget: `--web-seed-max-total` divides across
+the declared sources, and a pending donation is not in the list because its URL
+is the path the donor has not written yet. `apply_max_total` takes the divisor
+explicitly now, so a pending donation's share is reserved at the start and
+attaching it never takes requests back off a bridge that is already serving.
+
+**The deadlock the entry warned about did not happen, and the reason is worth
+recording rather than treating as luck.** anacrolix discussion 916's case is a
+leecher filling its unverified-bytes window with pieces no seeder has yet.
+`bit-cli`'s window cache is per source and holds what that source fetched, and
+a source here is attached against a live handle with the piece list it can
+serve, so a source that does not exist yet contributes no window. The two
+cannot disagree, because the window is created by the same call that makes the
+pieces available. What would reproduce 916 is a source that attaches and then
+loses pieces, which is [T-005](webseed.md)'s re-scope and not this.
+
+`a_donated_file_attaches_to_a_torrent_that_has_already_started` is the
+in-process test, and it was run against the old behaviour first: the receiver
+never finishes and the run exits `Timeout`. The mirror is bound to the donor's
+info hash alone, so the receiver cannot reach it and the 4,096 bytes it takes
+can only have come off the donor's disk.
+
+One script defect fixed on the way. `check-shared-files.ps1` waited exactly
+`-TimeoutSeconds` for a run whose own `--stop-after` is `-TimeoutSeconds`, so a
+run that stopped on its own deadline and wrote its report was killed at the
+same instant and read as a run that wrote nothing. That is what the first
+`-Jobs 3` measurement did. The wait now carries a thirty second margin, which
+is what separates "it stopped and said so" from "we killed it".
 
 ### T-134 v1 and v2 info hashes are not reconciled
 

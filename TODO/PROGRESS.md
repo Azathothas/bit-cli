@@ -67,7 +67,16 @@ exhausted at `==`, so a chunk starting on a file boundary issues a zero length
 write to the file before it, and `SafeStorage` creates a file for any write.
 P3, effort S, and the cause and the fix are both in the entry.
 
-T-143 next.
+**[T-143](multi-source.md) is done**, 2026-08-22T02:00Z. 1,036 tests passing, 0
+failing. Measured before building, and the entry's premise was too kind: above
+`-j 1` the takers do not fetch the shared file twice, they have no source at
+all and never finish. `scripts/check-shared-files.ps1` gained `-Jobs`, which
+the acceptance needed, and both runs are recorded:
+`bench/shared-files-20260822T014247442Z.json` is the failure and
+`bench/shared-files-20260822T015216397Z.json` is the fix.
+
+T-164 next, and the rule for it is in the work order: read the `librqbit` seam
+and name it in the entry before pricing it.
 
 ## Open questions for the operator
 

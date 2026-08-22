@@ -950,6 +950,128 @@ fn share_plan(metas: &[Option<Metainfo>]) -> Vec<Vec<Donation>> {
     out
 }
 
+/// Every source one torrent has, including the ones that turn up after it
+/// starts.
+///
+/// A donated file is only a source once the torrent holding it has finished
+/// writing, which above `-j 1` is partway through this run rather than before
+/// it. Keeping the sources, the ledger they all record into and the report rows
+/// in one place is what makes attaching one late a call rather than three
+/// separate pieces of bookkeeping that can disagree. See
+/// `TODO/multi-source.md`, T-143.
+struct Attachments {
+    sources: Vec<AttachedSource>,
+    /// Where every block a source served is recorded. One per torrent, so a
+    /// late source is judged on the same evidence as the rest. See
+    /// `TODO/webseed.md`, T-179.
+    ledger: Arc<bit_cli_core::webseed::ledger::BlockLedger>,
+    /// Report rows for the files read off another torrent's disk, in the order
+    /// they attached.
+    shared: Vec<SharedFile>,
+    /// Donations whose donor had not finished yet. Emptied as they attach.
+    pending: Vec<Donation>,
+    /// The next free source index. The ledger is keyed on it, so it only ever
+    /// goes up: two sources sharing an index would convict each other.
+    next_index: usize,
+    options: swarm::AttachOptions,
+    /// How many sources this torrent will have in total, which is what the
+    /// request budget was divided by.
+    total_sources: usize,
+}
+
+/// Announce one source on the event stream.
+///
+/// Late attachments say exactly what the ones present at the start said. The
+/// event already carries everything a caller needs to tell them apart: a
+/// donation's `origin` is `shared_file`, and the event's position in the
+/// stream is when it happened.
+async fn source_added(source: &AttachedSource, tx: &mpsc::Sender<Msg>) {
+    let _ = tx
+        .send(Msg::Event(
+            "source_added",
+            json!({
+                "index": source.index,
+                "url": source.url,
+                "origin": source.origin,
+                "scope": source.scope,
+                "whole_pieces": source.whole_pieces,
+            }),
+        ))
+        .await;
+}
+
+/// Attach any donation whose donor has finished since the last tick.
+///
+/// Called from the watch loop, so a torrent that started with no source at all
+/// gets one the moment an earlier torrent in the same invocation writes the
+/// file it is proven to hold. Costs one lock and one `stat` per pending
+/// donation per tick, and nothing at all once the list is empty, which under
+/// `-j 1` it always is. See `TODO/multi-source.md`, T-143.
+async fn attach_pending(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    layout: &Arc<Layout>,
+    options: &Options,
+    attachments: &mut Attachments,
+    tx: &mpsc::Sender<Msg>,
+) {
+    if attachments.pending.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut attachments.pending);
+    let (specs, shared, still_pending) = donated_sources(&pending, options, layout);
+    attachments.pending = still_pending;
+    if specs.is_empty() {
+        return;
+    }
+    // Shaped by the same budget the sources at the start were shaped by. The
+    // divisor counted this source when the run began, so its share was
+    // reserved and nothing running has to give any of it back.
+    let specs = apply_preference(
+        apply_max_total(&specs, options.max_total, attachments.total_sources),
+        options.prefer,
+    );
+    for (spec, file) in specs.iter().zip(shared) {
+        let index = attachments.next_index;
+        match swarm::attach_late(
+            engine,
+            handle,
+            layout,
+            spec,
+            index,
+            &attachments.options,
+            &attachments.ledger,
+        )
+        .await
+        {
+            Ok(source) => {
+                attachments.next_index += 1;
+                let _ = tx
+                    .send(Msg::Warn(format!(
+                        "file {} ({}) is proven to be the file {} holds at index {}, reading it from {} rather than fetching it",
+                        file.index, file.path, file.from_source, file.from_index, file.from_path
+                    )))
+                    .await;
+                source_added(&source, tx).await;
+                attachments.sources.push(source);
+                attachments.shared.push(file);
+            }
+            // A donation that cannot be attached is one file this torrent
+            // fetches instead of reading, not a failed run: everything it
+            // covers is still reachable from the swarm and the mirrors. The
+            // index is not consumed, so the ledger keeps its one to one map.
+            Err(error) => {
+                let _ = tx
+                    .send(Msg::Warn(format!(
+                        "file {} ({}) could not be read from {}, so it is fetched instead: {error}",
+                        file.index, file.path, file.from_path
+                    )))
+                    .await;
+            }
+        }
+    }
+}
+
 /// Fetch one source to completion.
 async fn one(
     engine: &Engine,
@@ -1194,7 +1316,11 @@ async fn one_inner(
     // is proven to hold too. These are sources like any other: scoped to one
     // file, checked per piece on the way in, and reported with their own
     // origin. See `TODO/multi-source.md`, T-140.
-    let (donated, shared) = donated_sources(plan, options, &layout);
+    //
+    // `pending` is the donations whose donor is still running, which above
+    // `-j 1` is all of them at this point. They attach from the watch loop as
+    // their donors finish. See `TODO/multi-source.md`, T-143.
+    let (donated, shared, pending) = donated_sources(&plan.donations, options, &layout);
     for file in &shared {
         let _ = tx
             .send(Msg::Warn(format!(
@@ -1208,47 +1334,43 @@ async fn one_inner(
 
     // The whole-run concurrency cap is shared out across the declared sources,
     // so `--web-seed-max-total 8` with four mirrors means two requests each
-    // rather than eight each.
+    // rather than eight each. A pending donation counts against the divisor
+    // without being in the list, so its share is reserved rather than taken
+    // back off a running bridge when it arrives.
+    let total_sources = declared.len() + pending.len();
     let specs = apply_preference(
-        apply_max_total(&declared, options.max_total),
+        apply_max_total(&declared, options.max_total, total_sources),
         options.prefer,
     );
-    let (sources, _set, ledger) = swarm::attach_sources_tracked(
-        engine,
-        &handle,
-        &layout,
-        &specs,
-        &swarm::AttachOptions {
-            require: options.require,
-            peers_available: !options.web_seed_only,
-            cache_windows: cache_windows(&specs),
-            trace: options.trace_http,
-            verify: options.verify,
-        },
-    )
-    .await?;
+    let attach_options = swarm::AttachOptions {
+        require: options.require,
+        peers_available: !options.web_seed_only,
+        cache_windows: cache_windows(&specs),
+        trace: options.trace_http,
+        verify: options.verify,
+    };
+    let (sources, _set, ledger) =
+        swarm::attach_sources_tracked(engine, &handle, &layout, &specs, &attach_options).await?;
     for source in &sources {
-        let _ = tx
-            .send(Msg::Event(
-                "source_added",
-                json!({
-                    "index": source.index,
-                    "url": source.url,
-                    "origin": source.origin,
-                    "scope": source.scope,
-                    "whole_pieces": source.whole_pieces,
-                }),
-            ))
-            .await;
+        source_added(source, tx).await;
     }
+
+    let mut attachments = Attachments {
+        next_index: specs.len(),
+        sources,
+        ledger,
+        shared,
+        pending,
+        options: attach_options,
+        total_sources,
+    };
 
     let mut announced: Vec<SentAnnounce> = Vec::new();
     let outcome = watch(
         engine,
         &handle,
         &layout,
-        &sources,
-        &ledger,
+        &mut attachments,
         plan,
         options,
         tx,
@@ -1256,6 +1378,12 @@ async fn one_inner(
         ordering.take(),
     )
     .await;
+    let Attachments {
+        sources,
+        ledger,
+        shared,
+        ..
+    } = attachments;
     for source in &sources {
         source.stop();
     }
@@ -1367,10 +1495,11 @@ async fn watch(
     engine: &Engine,
     handle: &bit_cli_core::engine::Handle,
     layout: &Arc<Layout>,
-    sources: &[AttachedSource],
-    // Where every block a source served is recorded, so a piece that failed
-    // can name the mirror that broke it. See `TODO/webseed.md`, T-179.
-    ledger: &bit_cli_core::webseed::ledger::BlockLedger,
+    // Every source, the ledger they record into, and the donations still
+    // waiting for their donor. Taken by reference rather than by value because
+    // a donation attaches from inside this loop. See
+    // `TODO/multi-source.md`, T-143 and `TODO/webseed.md`, T-179.
+    attachments: &mut Attachments,
     plan: &Plan,
     options: &Options,
     tx: &mpsc::Sender<Msg>,
@@ -1505,6 +1634,15 @@ async fn watch(
                 ))
                 .await;
         }
+
+        // A donation whose donor has finished since the last tick becomes a
+        // source here, before the accounting below reads the list, so the tick
+        // that attaches one already counts it. See `TODO/multi-source.md`,
+        // T-143.
+        attach_pending(engine, handle, layout, options, attachments, tx).await;
+        let Attachments {
+            sources, ledger, ..
+        } = &*attachments;
 
         // Attribution runs before the failure reporting below, so a source
         // convicted on this tick is retired and reported as failed on this
@@ -1857,36 +1995,45 @@ fn renames(engine: &Engine, handle: &bit_cli_core::engine::Handle) -> Vec<Rename
         .unwrap_or_default()
 }
 
-/// A `file:` source per donation whose donor has finished, and the report rows
-/// that say where each came from.
+/// A `file:` source per donation whose donor has finished, the report rows that
+/// say where each came from, and the donations whose donor has not finished.
 ///
-/// A donation whose donor has not finished yet is silently nothing: under
-/// `-j 1` the donor ran first and this is decided; above that the two are in
-/// flight together and there is nothing to read. That is the honest behaviour
-/// either way, and it is why the entry prices attaching a source mid-run
-/// separately. See `TODO/multi-source.md`, T-140.
+/// Under `-j 1` the donor ran first, every donation is decided on the first
+/// call, and nothing is ever pending. Above that the two are in flight
+/// together, so the answer at the moment this torrent starts is "not yet" and
+/// the third return is what makes the question askable again. `attach_pending`
+/// asks it on every report tick until the list is empty. See
+/// `TODO/multi-source.md`, T-140 and T-143.
 fn donated_sources(
-    plan: &Plan,
+    donations: &[Donation],
     options: &Options,
     layout: &Layout,
-) -> (Vec<SourceSpec>, Vec<SharedFile>) {
+) -> (Vec<SourceSpec>, Vec<SharedFile>, Vec<Donation>) {
     use bit_cli_core::webseed::binding::Origin;
     use bit_cli_core::webseed::composition::Mode;
     use bit_cli_core::webseed::scope::Scope;
 
     let mut specs = Vec::new();
     let mut shared = Vec::new();
-    if plan.donations.is_empty() {
-        return (specs, shared);
+    let mut pending = Vec::new();
+    if donations.is_empty() {
+        return (specs, shared, pending);
     }
     let Ok(donors) = options.donors.lock() else {
-        return (specs, shared);
+        // A poisoned registry is not a donor that has not finished. Nothing
+        // will ever be readable through it, so nothing is left pending.
+        return (specs, shared, pending);
     };
-    for donation in &plan.donations {
+    for donation in donations {
         let Some(donor) = donors.get(&donation.donor) else {
             continue;
         };
         let Some(relative) = donor.disk_paths.get(donation.donor_index) else {
+            // The donor has not published where it wrote, which is what
+            // finishing does. Above `-j 1` that is the common case at the
+            // moment this torrent starts, and it is what makes the donation
+            // pending rather than absent. See `TODO/multi-source.md`, T-143.
+            pending.push(donation.clone());
             continue;
         };
         let mut path = donor.root.clone();
@@ -1896,6 +2043,7 @@ fn donated_sources(
         // A donor that finished has the file. Checking anyway costs one stat
         // and turns a source that would fail every request into no source.
         if !path.is_file() {
+            pending.push(donation.clone());
             continue;
         }
         let url = bit_cli_core::webseed::local::url_of(&path);
@@ -1922,7 +2070,7 @@ fn donated_sources(
             bytes_proven: Size(donation.bytes_proven),
         });
     }
-    (specs, shared)
+    (specs, shared, pending)
 }
 
 /// Tell every tracker this torrent uses that something happened.
@@ -2098,14 +2246,25 @@ fn apply_preference(specs: Vec<SourceSpec>, prefer: bool) -> Vec<SourceSpec> {
 }
 
 /// Divide the whole-run request budget across the declared sources.
-fn apply_max_total(specs: &[SourceSpec], max_total: Option<usize>) -> Vec<SourceSpec> {
+///
+/// `sources` is how many the run will have, which is not always how many are
+/// in `specs`: a donation whose donor has not finished yet is a source this
+/// torrent will attach and cannot shape yet, because its URL is the path the
+/// donor has not written. Counting it in the divisor reserves its share up
+/// front, so attaching it later never re-scopes a bridge that is already
+/// running. See `TODO/multi-source.md`, T-143.
+fn apply_max_total(
+    specs: &[SourceSpec],
+    max_total: Option<usize>,
+    sources: usize,
+) -> Vec<SourceSpec> {
     let Some(total) = max_total.filter(|t| *t > 0) else {
         return specs.to_vec();
     };
     if specs.is_empty() {
         return Vec::new();
     }
-    let share = (total / specs.len()).max(1);
+    let share = (total / sources.max(specs.len())).max(1);
     specs
         .iter()
         .map(|spec| {
@@ -3165,7 +3324,7 @@ mod tests {
             })
             .collect();
         // Default per-source concurrency is 4, so four sources want 16.
-        let limited = apply_max_total(&specs, Some(8));
+        let limited = apply_max_total(&specs, Some(8), specs.len());
         assert_eq!(limited.len(), 4);
         for spec in &limited {
             assert_eq!(spec.limits.concurrency, 2);
@@ -3182,7 +3341,7 @@ mod tests {
                 )
             })
             .collect();
-        for spec in apply_max_total(&specs, Some(2)) {
+        for spec in apply_max_total(&specs, Some(2), specs.len()) {
             assert_eq!(
                 spec.limits.concurrency, 1,
                 "a source with no budget cannot serve"
@@ -3196,8 +3355,33 @@ mod tests {
             "https://m.example.com/",
             bit_cli_core::webseed::Origin::CommandLine,
         )];
-        assert_eq!(apply_max_total(&specs, None)[0].limits.concurrency, 4);
-        assert_eq!(apply_max_total(&specs, Some(0))[0].limits.concurrency, 4);
+        assert_eq!(apply_max_total(&specs, None, 1)[0].limits.concurrency, 4);
+        assert_eq!(apply_max_total(&specs, Some(0), 1)[0].limits.concurrency, 4);
+    }
+
+    /// A source that will attach later counts against the budget now, so the
+    /// share a running bridge holds is the share it keeps. Attaching one late
+    /// must never mean taking requests back off a mirror already serving. See
+    /// `TODO/multi-source.md`, T-143.
+    #[test]
+    fn a_source_that_has_not_attached_yet_still_takes_its_share_of_the_budget() {
+        let specs: Vec<SourceSpec> = (0..2)
+            .map(|i| {
+                SourceSpec::new(
+                    format!("https://m{i}.example.com/"),
+                    bit_cli_core::webseed::Origin::CommandLine,
+                )
+            })
+            .collect();
+        // Two attached now and two donations still waiting: the budget of
+        // eight is divided by four, not by two.
+        for spec in apply_max_total(&specs, Some(8), 4) {
+            assert_eq!(spec.limits.concurrency, 2);
+        }
+        // And the one that arrives later, shaped on its own against the same
+        // divisor, gets the same share rather than the whole budget.
+        let late = apply_max_total(&specs[..1], Some(8), 4);
+        assert_eq!(late[0].limits.concurrency, 2);
     }
 
     #[test]
@@ -3439,6 +3623,91 @@ mod tests {
         assert_eq!(taken["sources"][0]["scope"], "file:1", "{taken}");
 
         // Same bytes in both output directories.
+        let from_donor = std::fs::read(out.join("donor").join("shared.bin")).expect("donor file");
+        let landed = std::fs::read(out.join("receiver").join("shared.bin")).expect("receiver file");
+        assert_eq!(from_donor, landed);
+    }
+
+    /// The same thing above `-j 1`, where the donor finishes while the
+    /// receiver is already running.
+    ///
+    /// `TODO/multi-source.md` T-143. The donor's payload is **not** on disk:
+    /// it is fetched from a mirror bound to the donor's info hash alone, so
+    /// the donor cannot have finished at the moment the receiver resolves its
+    /// donations, and the receiver starts with no source at all. Before this,
+    /// that was the end of it: the receiver had nothing to fetch from and ran
+    /// to `--stop-after` unfinished, which is what
+    /// `scripts/check-shared-files.ps1 -Jobs 3` measured.
+    ///
+    /// The receiver taking exactly the shared file's 4,096 bytes from a source
+    /// while its own HTTP traffic stays zero is the whole assertion: the
+    /// mirror is not its to reach, so those bytes can only have come off the
+    /// donor's disk, and the source that served them did not exist when the
+    /// receiver started.
+    #[test]
+    fn a_donated_file_attaches_to_a_torrent_that_has_already_started() {
+        let (donor, receiver) = TorrentFixture::sharing_pair();
+        let server = crate::test_support::FileServer::start(donor.dir());
+        let mirror = format!("{}payload/", server.base);
+        let out = donor.dir().join("out");
+        receiver.place(&out, &["extra-b.txt"]);
+
+        let report = run_json_code(
+            &[
+                "download",
+                donor.path_str(),
+                receiver.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-for",
+                &format!("{}:*={mirror}", donor.info_hash),
+                "--web-seed-mode",
+                "prefix",
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "-j",
+                "2",
+                "--report-interval",
+                "100ms",
+                "--stop-after",
+                "30s",
+            ],
+            donor.dir(),
+            ExitCode::Success,
+        );
+
+        let gave = by_name(&report, "donor");
+        assert_eq!(gave["finished"], true, "{gave}");
+        assert_eq!(
+            gave["from_web_seeds"]["bytes"], 5120,
+            "the donor fetched its whole payload from the mirror: {gave}"
+        );
+
+        let taken = by_name(&report, "receiver");
+        assert_eq!(taken["finished"], true, "{taken}");
+        let shared = taken["shared"].as_array().expect("a shared array");
+        assert_eq!(shared.len(), 1, "{taken}");
+        assert_eq!(shared[0]["path"], "shared.bin", "{taken}");
+        assert_eq!(shared[0]["from_info_hash"], donor.info_hash, "{taken}");
+        assert_eq!(shared[0]["bytes_proven"]["bytes"], 4096, "{taken}");
+        assert_eq!(taken["from_web_seeds"]["bytes"], 4096, "{taken}");
+        assert_eq!(taken["from_resume"]["bytes"], 2048, "{taken}");
+        assert_eq!(taken["from_peers"]["bytes"], 0, "{taken}");
+        assert_eq!(taken["sources"][0]["origin"], "shared_file", "{taken}");
+
+        // The mirror is the donor's alone, so what the receiver holds cannot
+        // have come from it. Two requests for the donor's two files and
+        // nothing for the receiver's directory.
+        let asked = server.asked();
+        assert!(
+            !asked.iter().any(|path| path.contains("extra-b")),
+            "the receiver reached a mirror it was not given: {asked:?}"
+        );
+
         let from_donor = std::fs::read(out.join("donor").join("shared.bin")).expect("donor file");
         let landed = std::fs::read(out.join("receiver").join("shared.bin")).expect("receiver file");
         assert_eq!(from_donor, landed);

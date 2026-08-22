@@ -48,6 +48,12 @@ param(
     [ValidateSet("debug", "release")]
     [string]$Profile = "release",
     [int]$TimeoutSeconds = 300,
+    # How many torrents run at once. `-j 1` is T-140's case and makes "an
+    # earlier one has already written it" true by construction. Anything above
+    # 1 is T-143's: the donor finishes while the takers are already running, so
+    # the source has to attach to a torrent that has already started. See
+    # TODO/multi-source.md, T-143.
+    [int]$Jobs = 1,
     [switch]$Keep
 )
 
@@ -189,7 +195,7 @@ $placedBytes = @{
 $arguments = @(
     "download", $torrents.payload_c, $torrents.payload_a, $torrents.payload_b,
     "--dir", $out,
-    "-j", "1",
+    "-j", "$Jobs",
     "--no-tracker", "--no-dht", "--no-lsd",
     "--port", "0",
     "--report-interval", "500ms",
@@ -203,7 +209,11 @@ $stderr = Join-Path $Root "run.err"
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
 $process = Start-Process -FilePath $bitCli -WorkingDirectory $repo -NoNewWindow -PassThru `
     -ArgumentList $arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-$finished = $process.WaitForExit($TimeoutSeconds * 1000)
+# The run's own `--stop-after` is $TimeoutSeconds, so waiting exactly that long
+# races it: a run that stops on its own deadline and writes its report is killed
+# at the same instant and looks like a run that wrote nothing. The margin is
+# what separates "it stopped and said so" from "we killed it".
+$finished = $process.WaitForExit(($TimeoutSeconds + 30) * 1000)
 $clock.Stop()
 if (-not $finished) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
 Stop-Server
@@ -314,6 +324,7 @@ $jsonPath = Join-Path $ReportDir "shared-files-$stamp.json"
         other_size_mib = $OtherSizeMiB
         piece_length   = "1MiB"
         profile        = $Profile
+        jobs           = $Jobs
     }
     command        = $command
     mirror         = $mirror
@@ -331,7 +342,7 @@ $jsonPath = Join-Path $ReportDir "shared-files-$stamp.json"
     notes          = @(
         "No --web-seed-for anywhere. The bindings A and B read from are computed from the metadata: every whole piece inside the shared file has the same SHA-1 in both torrents, which is the same evidence `bit-cli files --against` reports as piece-hashes.",
         "One piece length for all three torrents, which the default fixture deliberately does not use. Two files can be compared by hash only where whole pieces cover the same bytes of each.",
-        "-j 1 is load-bearing: a torrent can only read what an earlier one has already written, and the order is the command line's.",
+        "-j $Jobs. At 1 a torrent can only read what an earlier one has already written and the order is the command line's, which is T-140. Above 1 the donor finishes while the takers are running, so the source attaches to a torrent that has already started, which is T-143.",
         "http_bytes counts only sources that are not shared_file, so it is the traffic that crossed the mirror rather than the bytes that moved."
     )
 } | ConvertTo-Json -Depth 8 | Set-Content -Path $jsonPath -Encoding utf8NoBOM

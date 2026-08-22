@@ -605,6 +605,7 @@ impl AttachedSource {
 /// The torrent's metadata has to have resolved first, because the layout is
 /// what scopes and URLs are computed against. Nothing here touches the
 /// `.torrent`: the sources exist for the length of this invocation only.
+#[derive(Debug, Clone, Copy)]
 pub struct AttachOptions {
     /// Fail the run when the sources leave a gap.
     pub require: bool,
@@ -658,9 +659,7 @@ async fn attach_sources_with(
     let AttachOptions {
         require,
         peers_available,
-        cache_windows,
-        trace,
-        verify,
+        ..
     } = *options;
     // A ledger exists either way, so the returned type does not change with
     // the caller. Only a tracked attach hands it to the bridges, which is what
@@ -685,6 +684,80 @@ async fn attach_sources_with(
     bit_cli_core::webseed::probe::resolve_auto_styles(&mut set, &info_hash).await;
     let set = set;
 
+    let attached = attach_bindings(
+        engine,
+        handle,
+        layout,
+        &set.bindings,
+        options,
+        tracked.then(|| ledger.clone()),
+    )?;
+    Ok((attached, set, ledger))
+}
+
+/// Attach one more source to a torrent that is already running.
+///
+/// Everything [`attach_sources_tracked`] does for one binding, for a source
+/// that did not exist when the run started: a file an earlier torrent in the
+/// same invocation has only just finished writing. See
+/// `TODO/multi-source.md`, T-143.
+///
+/// Coverage is not re-checked. `--web-seed-require` asks whether the sources a
+/// run declared cover the payload, which was answered when the run started; a
+/// source that turns up later can only add.
+///
+/// `index` is the caller's, not this function's. The ledger is keyed on the
+/// source index, so two sources sharing one index would convict each other,
+/// and a binding set resolved on its own always numbers from zero.
+pub async fn attach_late(
+    engine: &Engine,
+    handle: &Handle,
+    layout: &Arc<Layout>,
+    spec: &SourceSpec,
+    index: usize,
+    options: &AttachOptions,
+    ledger: &Arc<BlockLedger>,
+) -> Result<AttachedSource> {
+    let info_hash = handle.info_hash().as_string();
+    let mut set = BindingSet::resolve(layout, &info_hash, std::slice::from_ref(spec))?;
+    bit_cli_core::webseed::probe::resolve_auto_styles(&mut set, &info_hash).await;
+    let mut binding = set
+        .bindings
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::generic(format!("{}: resolved to no binding", spec.url)))?;
+    binding.index = index;
+    attach_bindings(
+        engine,
+        handle,
+        layout,
+        std::slice::from_ref(&binding),
+        options,
+        Some(ledger.clone()),
+    )?
+    .pop()
+    .ok_or_else(|| Error::generic(format!("{}: attached no bridge", spec.url)))
+}
+
+/// Build the fetcher, the connections and the accounting row for each binding.
+///
+/// The piece hashes are read once for the whole call rather than once per
+/// binding, because reading them copies every hash in the torrent.
+fn attach_bindings(
+    engine: &Engine,
+    handle: &Handle,
+    layout: &Arc<Layout>,
+    bindings: &[bit_cli_core::webseed::binding::Binding],
+    options: &AttachOptions,
+    ledger: Option<Arc<BlockLedger>>,
+) -> Result<Vec<AttachedSource>> {
+    let AttachOptions {
+        cache_windows,
+        trace,
+        verify,
+        ..
+    } = *options;
+    let info_hash = handle.info_hash().as_string();
     let target = engine.bridge_target().ok_or_else(|| {
         Error::network(
             "web seeds need an incoming peer port and none was bound, so no HTTP source can attach",
@@ -693,8 +766,8 @@ async fn attach_sources_with(
     let session_peer_id = handle.shared().peer_id;
     let piece_hashes = engine.piece_hashes(handle);
 
-    let mut attached = Vec::with_capacity(set.bindings.len());
-    for binding in &set.bindings {
+    let mut attached = Vec::with_capacity(bindings.len());
+    for binding in bindings {
         let limits = &binding.spec.limits;
         let mut params = BridgeParams::for_binding(
             target,
@@ -704,7 +777,7 @@ async fn attach_sources_with(
             binding,
             limits.per_connection_concurrency(),
         );
-        if tracked {
+        if let Some(ledger) = &ledger {
             params = params.with_ledger(ledger.clone());
         }
         let whole_pieces = params.pieces.len();
@@ -745,7 +818,7 @@ async fn attach_sources_with(
             convictions: std::sync::Mutex::new(Vec::new()),
         });
     }
-    Ok((attached, set, ledger))
+    Ok(attached)
 }
 
 /// Resolve every disputed piece the session has verified, and retire the

@@ -207,7 +207,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-137](multi-source.md) | P2 | webseed | **done** | A cooled-down source never comes back |
 | [T-139](multi-source.md) | P1 | cli | **done** | A resumed download charges its existing bytes to the swarm |
 | [T-140](multi-source.md) | P2 | webseed | **done** | A proven shared file is not turned into a source on its own |
-| [T-143](multi-source.md) | P2 | webseed | open | A source cannot be attached to a torrent that has already started |
+| [T-143](multi-source.md) | P2 | webseed | **done** | A source cannot be attached to a torrent that has already started |
 | [T-200](phase-c.md) | n/a | phase-c | deferred | Session daemon |
 | [T-201](phase-c.md) | n/a | phase-c | deferred | JSON-RPC and XML-RPC, with aria2 method parity |
 | [T-202](phase-c.md) | n/a | phase-c | deferred | Queue management across invocations |
@@ -222,7 +222,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 147 items: 137 to work through, and 10 deferred to Phase C.
-55 open, 4 partial, 2 blocked, 76 done.
+54 open, 4 partial, 2 blocked, 77 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -477,10 +477,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 | 11 |
 | P1 | 3 | 1 | 0 | 47 | 51 |
-| P2 | 27 | 1 | 2 | 21 | 51 |
+| P2 | 26 | 1 | 2 | 22 | 51 |
 | P3 | 24 | 0 | 0 | 0 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **55** | **4** | **2** | **76** | **147** |
+| **All** | **54** | **4** | **2** | **77** | **147** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4
@@ -542,7 +542,12 @@ defect in that path outranks every feature below it, including the P0s, because
 a P0 that takes the process down is visible and a wrong answer that reports
 success is not.
 
-2. **[T-143](multi-source.md)**, attaching a source to a torrent that has
+2. **[T-143](multi-source.md)**, **done 2026-08-22T02:00Z.** The failure above
+   `-j 1` was worse than this paragraph says: the takers do not fetch the
+   shared file twice, they have no source at all and do not finish. Measured
+   before anything was built, and the entry carries both runs.
+
+   Attaching a source to a torrent that has
    already started, and it is now the highest web seed item because everything
    above it closed. [T-005](webseed.md) built the machinery this needs and did
    not use it for this: a bridge reconnects mid-run with a different piece
