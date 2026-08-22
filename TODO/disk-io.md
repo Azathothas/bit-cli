@@ -1179,7 +1179,7 @@ Source:      found running `check-allocation.ps1` during T-018's review, 2026-08
 Category:    disk-io
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-22T10:47Z, with the premise corrected below
 
 Problem:     `crates/bit-cli-core/src/engine.rs:575-577` says "A caller that
              named an output directory gets exactly that directory. Otherwise
@@ -1236,6 +1236,53 @@ falloc   32.00 MiB 32.00 MiB  False   31.91 MiB   True
 `sparse` reserving four kilobytes of volume for a 32 MiB file, against
 `prealloc` reserving all of it, is the distinction the whole script exists to
 draw, and it had been invisible.
+
+**The premise, corrected: the comment was true, and it was about a different
+flag.** The `Problem` above reads "a caller that named an output directory" as
+`--dir`. It is not. `--dir` becomes the **session's** default output directory,
+`Engine`'s `download_directory`, at `crates/bit-cli/src/swarm.rs:240` and
+`crates/bit-cli/src/cmd/download.rs:364`, so it takes the `None` branch of the
+match, `subfolder: true`, and `out/<name>/` is what that branch is for. The
+comment's "output directory" is `AddOptions::output_folder`, whose own field
+doc at `crates/bit-cli-core/src/engine.rs:146` already said "write here instead
+of the session default", and which has exactly one caller in this tree:
+`crates/bit-cli/src/cmd/seed.rs:259`, naming a payload root it has already
+resolved. So no behaviour was wrong and nothing about where bytes land changed.
+
+The `Approach` guessed half of it. `subfolder: false` does prevent a **second**
+copy of the name rather than the first, which is what `seed` needs when
+`--data <parent>/<name>` has already resolved to the torrent directory. The
+other half is wrong: the extra directory is the **factory's**, not the
+session's. `SafeStorage` joins its own `root` for every path it opens,
+`crates/bit-cli-core/src/storage.rs:1047` and `:1191`, and that root is decided
+at `storage.rs:402` from `subfolder_for`, `storage.rs:1329`. librqbit's session
+computes an output folder of its own by the same rule at
+`librqbit-9.0.0/src/session.rs:1286-1296`, but with a storage factory supplied
+that value reaches only the default filesystem storage,
+`librqbit-9.0.0/src/storage/filesystem/fs.rs:133`, and `Session::delete`, which
+deletes through the storage trait anyway and which this tree never calls.
+
+What was really wrong is that the sentence could be read as `--dir` by anyone
+who did not already know the field, and two readers did read it that way: it is
+what pointed `check-allocation.ps1` at `<outDir>/movie.bin`, and it is what
+this entry was filed on. The comment now names both flags and says where a
+`--dir` download lands, at `engine.rs:576-585`.
+
+Acceptance, met: `dir_lands_a_multi_file_torrent_under_its_own_name_and_a_single_file_one_directly`
+in `crates/bit-cli/src/cmd/download.rs` fetches both a multi-file and a
+single-file torrent with `--dir` given explicitly and asserts the directory
+each lands in, and that neither lands in the other's. The per-add override is
+already pinned by `either_spelling_of_data_seeds_the_same_payload`,
+`crates/bit-cli/src/cmd/seed.rs:829`.
+
+```bash
+cargo test -p bit-cli --lib dir_lands_a_multi_file
+```
+
+```
+test cmd::download::tests::dir_lands_a_multi_file_torrent_under_its_own_name_and_a_single_file_one_directly ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 377 filtered out
+```
 
 ### T-184 A boundary piece under --select-file has no decided behaviour
 

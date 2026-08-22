@@ -572,9 +572,17 @@ impl Engine {
         // is untrusted input. The session's default storage joins those names
         // onto the output directory as given, which on Windows is enough to
         // leave it. This factory plans safe paths first. See `crate::storage`.
-        // A caller that named an output directory gets exactly that directory.
-        // Otherwise the session's rule applies and a multi-file torrent goes
-        // into a directory named after itself, which the factory reproduces.
+        //
+        // `AddOptions::output_folder` is the per-add override, not the run's
+        // output directory: `--dir` is `download_directory` and so takes the
+        // `None` branch. An add that sets it gets exactly that directory, and
+        // `subfolder: false` is what stops a second copy of the torrent's name
+        // being appended to a root that already ends in it. `seed` is the only
+        // caller that sets it, for the payload root it resolved. Otherwise the
+        // session's rule applies and a multi-file torrent goes into a
+        // directory named after itself, which the factory reproduces: a
+        // download with `--dir out` lands at `out/<name>/`. See
+        // `TODO/disk-io.md`, T-190.
         let (output_folder, subfolder) = match &options.output_folder {
             Some(folder) => (PathBuf::from(folder), false),
             None => (self.download_directory.clone(), true),

@@ -2774,6 +2774,74 @@ mod tests {
         assert!(report["torrents"][0].get("renamed").is_none());
     }
 
+    /// `TODO/disk-io.md` T-190's acceptance: the landing path, written down.
+    ///
+    /// `--dir` is the run's output directory, which is the session default,
+    /// and it is **not** `AddOptions::output_folder`. So the session's rule
+    /// applies to it: a multi-file torrent unpacks into a directory named
+    /// after itself and a single-file one lands directly in the directory that
+    /// was named. The per-add override belongs to `seed` alone, and
+    /// `cmd/seed.rs`'s `either_spelling_of_data_seeds_the_same_payload` pins
+    /// that half. Reading a comment is what got this wrong twice, so this
+    /// asserts on the directory itself.
+    #[test]
+    fn dir_lands_a_multi_file_torrent_under_its_own_name_and_a_single_file_one_directly() {
+        let fetch = |fixture: &TorrentFixture, out: &std::path::Path| {
+            let server = crate::test_support::FileServer::start(fixture.dir());
+            let source = format!("{}payload/", server.base);
+            let report = crate::test_support::run_json(
+                &[
+                    "download",
+                    fixture.path_str(),
+                    "--dir",
+                    out.to_str().unwrap(),
+                    "--web-seed-only",
+                    "--web-seed",
+                    &source,
+                    "--web-seed-mode",
+                    "prefix",
+                    "--no-torrent-web-seed",
+                    "--no-tracker",
+                    "--port",
+                    "0",
+                    "--stop-after",
+                    "30s",
+                ],
+                fixture.dir(),
+            );
+            assert_eq!(
+                report["torrents"][0]["stopped"], "completed",
+                "the payload has to arrive before where it arrived means anything: {report}"
+            );
+        };
+
+        // The torrent is named `album`, and `--dir` names `out`.
+        let multi = TorrentFixture::straddling();
+        let multi_out = multi.dir().join("out");
+        fetch(&multi, &multi_out);
+        assert!(
+            multi_out.join("album").join("a.bin").is_file(),
+            "a multi-file torrent lands under a directory named after itself"
+        );
+        assert!(
+            !multi_out.join("a.bin").exists(),
+            "and never directly in the directory --dir named"
+        );
+
+        // The same flag, a torrent with no directory of its own.
+        let single = TorrentFixture::single_file();
+        let single_out = single.dir().join("out");
+        fetch(&single, &single_out);
+        assert!(
+            single_out.join("payload.bin").is_file(),
+            "a single-file torrent lands directly in the directory --dir named"
+        );
+        assert!(
+            !single_out.join("payload.bin").join("payload.bin").exists(),
+            "and nothing builds a directory out of its name"
+        );
+    }
+
     /// Writing over an existing payload without permission is a disk failure,
     /// not a generic one.
     ///
