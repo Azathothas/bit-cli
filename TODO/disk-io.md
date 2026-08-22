@@ -812,6 +812,73 @@ writer arriving between two read locks wedges both. That is the same class as
 closed here, and constraint 1 is a re-entrancy invitation of exactly that
 shape: `pread_exact` consulting a buffer that `pwrite_all` holds a lock on.
 
+**Re-measured on the current tree, 2026-08-22, before building anything. The
+gap is still there and it is worth more than the Relevance line says.**
+
+The `bench disk` half of the Acceptance, run as written at 512 MiB:
+
+| block size | 1 thread | 2 | 4 | 8 |
+| --- | --- | --- | --- | --- |
+| `--block-size 16KiB` | 2.35 GiB/s | 1.70 | 1.78 | 1.70 |
+| `--block-size 1MiB` | 3.72 GiB/s | 3.88 | 3.69 | 3.67 |
+
+At eight writers that is **2.16 times**, against the 2.30 T-017 measured, so
+the finding this entry rests on holds. The Acceptance asks for the 16 KiB run
+to come within 10% of the 1 MiB one, and it is at 46% of it.
+
+**The Relevance line's arithmetic does not work and the numbers are not
+comparable.** It reads "writes take about 806 ms of the 2,510 ms an
+eight-bridge `bench leech` run takes", which treats write time as a slice of
+wall clock. It is not. A block is written, and at a piece boundary read back
+and hashed, **inline on the receive path that got it**, so eight paths each
+spend their own write time and the total exceeds the wall clock. Measured now
+at eight bridges over 512 MiB, `bench/leech-20260822T090848152Z.json`:
+
+| | |
+| --- | --- |
+| wall | 1,262 ms |
+| path time, wall times eight bridges | 10,096 ms |
+| writing the payload | **5,101 ms**, 50.52% of path time |
+| piece checks, read plus hash | 1,362 ms, 13.49% |
+| of which reading back | 1,105 ms, 10.94% |
+
+5,101 ms of writing against a 1,262 ms wall is what says the two were never a
+ratio. The report's own `attribution` block compares write time to path time,
+which is the comparison that means something, and by it **writing is the single
+largest thing a receive path does**.
+
+**The same run carries the control that makes the case on its own.** The
+`control` stage moves the same 512 MiB in the same 32,768 write operations over
+**one** receive path instead of eight:
+
+| stage | receive paths | write ops | write time |
+| --- | --- | --- | --- |
+| control, 1 connection | 1 | 32,768 | **468 ms** |
+| leech, 8 connections | 8 | 32,768 | **5,101 ms** |
+| the same URL named 8 times | 8 | 32,768 | 6,155 ms |
+
+Same bytes, same operation count, and **10.9 times the write time** for putting
+eight paths on the file. That is T-017's per-operation serialisation measured
+through the download path rather than through `bench disk`, and it is the whole
+argument for coalescing: the fix removes 63 of every 64 operations, and it is
+operations that contend.
+
+**What it is worth, recomputed.** Writing is 638 ms of each path's 1,262 ms.
+Taking write throughput from the 16 KiB figure to the 1 MiB one is 2.16x, which
+would put it at about 295 ms, saving roughly **342 ms of a 1,262 ms wall, 27%**,
+and 405.71 MiB/s becoming about 555 MiB/s. That is a ceiling and not a
+forecast: the fetch shares the path, so removing write time exposes whatever is
+behind it. It is above the 18% the Relevance line claims, and the reason is the
+control row above rather than a better disk.
+
+**Not built.** The measurement is here so the build starts from the current
+tree rather than from T-017's, and the three correctness constraints in the
+Approach are unchanged. What the numbers add to the Approach is that the
+`--web-seed-connections` count is the multiplier: at one receive path the write
+path costs 468 ms and coalescing would be worth almost nothing, and everything
+this entry is worth appears between one path and eight.
+
+
 ### T-177 A piece that spans a file boundary has no adversarial fixture
 
 Source:      `reference/RESEARCH.md` section D, 2026-08-21
