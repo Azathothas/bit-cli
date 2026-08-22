@@ -493,6 +493,22 @@ if (-not $PushOnly) {
         Exit-With 1 "the commit message carries AI attribution and will not be rewritten for you: $($hits -join '; '). Remove it and run again. See TODO/RULES.md section 4."
     }
 
+    # A commit that says `[skip ci]` skips CI, and GitHub does not care whether
+    # the sentence around it meant it. The commit that introduced -NoCi
+    # explained the marker in prose, and that push shipped without a run:
+    # sixteen jobs skipped, silently, on the one commit that changed the push
+    # tool. Checked here rather than after the gates, because finding it out
+    # after a five minute test run is finding it out late. Refused rather than
+    # rewritten, for the same reason an attribution line is.
+    if (-not $NoCi) {
+        $skips = @($script:CiSkipPatterns | Where-Object { "$Message`n$Body" -match $_ })
+        if ($skips.Count -gt 0) {
+            Exit-With 1 ("the commit message carries a CI skip marker and -NoCi was not passed, so this push would " +
+                "silently start no run. Write the marker some other way, or pass -NoCi if you meant it. " +
+                "Matched: $($skips -join '; '). See TODO/RULES.md section 4.")
+        }
+    }
+
     $onBranch = (Invoke-Git -gitArgs @("rev-parse", "--abbrev-ref", "HEAD")).Trim()
     if ($onBranch -ne $Branch) {
         Write-Step "on '$onBranch', not '$Branch'. Committing there."
@@ -545,21 +561,6 @@ if (-not $PushOnly) {
     Invoke-Gates
 
     $full = if ($Body) { "$Message`n`n$Body" } else { $Message }
-
-    # A commit that says `[skip ci]` skips CI, and GitHub does not care whether
-    # the message meant it. The commit that introduced -NoCi explained the
-    # marker in a sentence, and that push shipped without a run: sixteen jobs
-    # nobody asked to skip, silently, on the one commit that changed the push
-    # tool. Refused rather than rewritten, for the same reason an attribution
-    # line is: silently editing a commit message is worse than refusing one.
-    if (-not $NoCi) {
-        $skips = @($script:CiSkipPatterns | Where-Object { $full -match $_ })
-        if ($skips.Count -gt 0) {
-            Exit-With 1 ("the commit message carries a CI skip marker and -NoCi was not passed, so this push would " +
-                "silently start no run. Write the marker some other way, or pass -NoCi if you meant it. " +
-                "Matched: $($skips -join '; ')")
-        }
-    }
 
     if ($NoCi) {
         # GitHub Actions reads this out of the head commit's message and skips

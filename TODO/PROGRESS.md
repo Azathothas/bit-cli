@@ -31,8 +31,11 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** green at run **32548057725**, against commit `14dd46d`. The three
-  before it were green too: **32543990448**, **32545039478**, **32546921561**.
+- **CI:** green on all sixteen jobs at run **32549428457**, against commit
+  `d94838c`. That run is the one to read: it covers `38d4c24` and `76cb2f4`,
+  which went out with no run of their own for the reason under "the tooling
+  round" below. The four before it were green:
+  **32543990448**, **32545039478**, **32546921561**, **32548057725**.
   Naming a run and the commit it describes is deliberate: that line stays true,
   where "the latest" is wrong by the next push.
 - **Entries:** 147 items. 51 open, 5 partial, 2 blocked, 79 done, 10 deferred
@@ -91,6 +94,15 @@ read as one that wrote no report.
   out of workable, and what closed.
 - [RULES.md](RULES.md) section 3 rewritten: the kickoff prompt is generic now
   and this file carries the work order.
+
+**And the tooling caught its own bug on the first use.** The commit introducing
+`-NoCi` explained the marker in a sentence, GitHub read the marker rather than
+the sentence, and that push shipped with no CI run: sixteen jobs skipped,
+silently, on the one commit that changed the push tool. `git-sync` refuses a
+message carrying any of the five markers unless `-NoCi` was passed, checked
+before the gates rather than after them, because finding it out after a five
+minute test run is finding it out late. Run **32549428457** is the one that
+covers the two commits that went out without one.
 
 ## In progress
 
