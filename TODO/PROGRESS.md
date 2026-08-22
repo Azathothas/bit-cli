@@ -75,8 +75,38 @@ the acceptance needed, and both runs are recorded:
 `bench/shared-files-20260822T014247442Z.json` is the failure and
 `bench/shared-files-20260822T015216397Z.json` is the fix.
 
-T-164 next, and the rule for it is in the work order: read the `librqbit` seam
-and name it in the entry before pricing it.
+**[T-164](peers.md) is partial**, 2026-08-22T02:20Z. 1,043 tests passing, 0
+failing. The seam was read before anything was priced, which is what the work
+order asked, and it split the entry into three parts rather than one.
+
+- `librqbit` already has a peer blocklist, checked at `session.rs:917` before an
+  incoming handshake is read and at `torrent_state/live/mod.rs:629` before an
+  outgoing dial, and `IpRanges::load_from_url` takes a `file:` URL. So
+  **`--block-peer` needed no upstream change and is done**, on `download`,
+  `seed` and `peers`.
+- Adding to that list mid-run is **blocked**: `Session::blocklist` is a plain
+  field behind an `Arc`, and `IpRanges` is in a private module, so even its
+  `pub fn new` is unreachable.
+- Attributing a bad piece to the right peer is **blocked**:
+  `file_ops.rs:310` has the peer and `TorrentStorage::pwrite_all_vectored` does
+  not, and `librqbit` already convicts whichever peer delivered the last chunk
+  of a failed piece, which is the wrong answer [T-179](webseed.md) was written
+  to stop giving.
+
+**One defect found while running T-164's gates, and fixed rather than filed.**
+[T-179](webseed.md)'s acceptance test failed twice under whole-suite load with
+`served [655360, 0]`: the honest mirror had finished the whole payload before
+the liar's bridge task was scheduled, so nothing was ever disputed. It reran
+clean twenty times on an idle machine, including six from a worktree at
+`86445bf` with none of this session's changes, which is what rules out the work
+in flight. `librqbit`'s `piece_tracker.rs:114` assigns a piece to one peer at a
+time unless another steals it, so "both mirrors served" was a scheduling
+outcome the test did not control. The liar now attaches first, scoped to half
+the payload, and the healthy mirror joins once the liar has served a byte. The
+correction is under T-179 and [RULES.md](RULES.md) section 5 carries the shape
+as its own line.
+
+T-186 next.
 
 ## Open questions for the operator
 

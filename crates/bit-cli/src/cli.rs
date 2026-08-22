@@ -752,6 +752,20 @@ pub struct LimitArgs {
     #[arg(long, value_name = "N")]
     pub max_peers_total: Option<usize>,
 
+    /// Refuse this peer for the whole run. Repeatable.
+    ///
+    /// An address, an inclusive `START-END` range, or a CIDR block, in either
+    /// family. A `HOST:PORT` is refused rather than truncated: the session
+    /// blocks an address, so accepting one would block every port on that host
+    /// without saying so.
+    ///
+    /// Checked before an incoming handshake is read and before an outgoing
+    /// connection is dialled, so a blocked address never takes a connection
+    /// slot. There is no state file, so this lasts for the invocation. See
+    /// `TODO/peers.md`, T-164.
+    #[arg(long = "block-peer", value_name = "ADDR")]
+    pub block_peer: Vec<String>,
+
     /// Payload files kept open at once.
     ///
     /// Files open when they are first touched and the least recently opened

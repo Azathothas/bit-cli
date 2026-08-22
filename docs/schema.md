@@ -425,6 +425,8 @@ From `bit-cli peers <TORRENT> --peer <ADDR> --json`.
 | field | type |
 | --- | --- |
 | `bit_cli_version` | string |
+| `blocked.incoming` | integer |
+| `blocked.outgoing` | integer |
 | `connecting` | integer |
 | `dead` | integer |
 | `downloaded.bytes` | integer |

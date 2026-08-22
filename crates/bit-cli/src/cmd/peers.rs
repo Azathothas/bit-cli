@@ -33,6 +33,11 @@ pub struct PeersReport {
     pub seen: u32,
     pub dead: u32,
     pub downloaded: Size,
+    /// Connections `--block-peer` refused, in each direction. Absent when
+    /// nothing was blocked, so an ordinary sample carries no extra field.
+    /// See `TODO/peers.md`, T-164.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<bit_cli_core::engine::BlockedPeers>,
     pub peers: Vec<PeerSnapshot>,
 }
 
@@ -225,6 +230,7 @@ pub fn run(
             seen: snapshot.peers.seen,
             dead: snapshot.peers.dead,
             downloaded: Size(snapshot.progress_bytes),
+            blocked: Some(engine.blocked()).filter(|b| b.any()),
             peers,
         };
         engine.stop().await;
@@ -255,6 +261,17 @@ fn lines(report: &PeersReport) -> Vec<String> {
         field("seen", report.seen),
         field("dead", report.dead),
     ];
+    // Only when something was refused. A run with no `--block-peer` has
+    // nothing to say here, and a zero would read as a flag that did nothing.
+    if let Some(blocked) = report.blocked {
+        out.push(field(
+            "blocked",
+            format!(
+                "{} incoming, {} outgoing",
+                blocked.incoming, blocked.outgoing
+            ),
+        ));
+    }
     if !report.peers.is_empty() {
         out.push(String::new());
         out.extend(swarm::peer_table(&report.peers));
@@ -361,6 +378,128 @@ mod tests {
         peers[0].web_seed = true;
         let text = swarm::peer_table(&peers).join("\n");
         assert!(text.contains("web seed"), "{text}");
+    }
+
+    /// `--block-peer` keeps an address out of the swarm entirely.
+    ///
+    /// The same rig as the test below, with the one peer in it blocked. The
+    /// number this moves is the session's own `blocked_outgoing`: the address
+    /// is refused before a connection permit is taken, so it never holds a
+    /// slot, and `seen` stays at zero where the same run without the flag
+    /// reports one. Exit is `NoUsableSources`, which is what an empty swarm
+    /// means.
+    ///
+    /// The seeder is real rather than an unroutable address, so this measures
+    /// a peer that **would** have connected. See `TODO/peers.md`, T-164.
+    #[test]
+    fn a_blocked_peer_is_never_dialled_and_never_joins_the_swarm() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        let data = dir.join("seeded");
+        for (path, bytes) in &fixture.files {
+            let target = data.join("album").join(path);
+            std::fs::create_dir_all(target.parent().expect("a parent")).expect("mkdir");
+            std::fs::write(&target, bytes).expect("write the seeded payload");
+        }
+
+        let port = crate::test_support::free_port();
+        let seeder = {
+            let torrent = fixture.path_str().to_string();
+            let data = data.to_str().expect("utf-8 path").to_string();
+            let cwd = dir.clone();
+            std::thread::spawn(move || {
+                let (mut env, _) = Env::test(
+                    &[
+                        "seed",
+                        &torrent,
+                        "--data",
+                        &data,
+                        "--port",
+                        &port.to_string(),
+                        "--no-dht",
+                        "--no-lsd",
+                        "--no-tracker",
+                        "--stop-after",
+                        "20s",
+                    ],
+                    cwd,
+                );
+                crate::run(&mut env)
+            })
+        };
+        assert!(
+            crate::test_support::wait_for_listener(port, std::time::Duration::from_secs(10)),
+            "the seeder never listened on {port}"
+        );
+
+        let report = crate::test_support::run_json_code(
+            &[
+                "peers",
+                fixture.path_str(),
+                "--peer",
+                &format!("127.0.0.1:{port}"),
+                "--block-peer",
+                "127.0.0.1",
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--duration",
+                "2s",
+                "--port",
+                "0",
+            ],
+            dir.clone(),
+            ExitCode::Success,
+        );
+        drop(seeder);
+
+        // Never dialled. The same rig without the flag reports the peer live
+        // with bytes against it, which is the test below.
+        assert_eq!(report["live"], 0, "{report}");
+        assert_eq!(report["connecting"], 0, "{report}");
+        assert_eq!(report["dead"], 0, "{report}");
+        assert_eq!(
+            report["blocked"],
+            serde_json::json!({"incoming": 0, "outgoing": 1}),
+            "{report}"
+        );
+
+        // `seen` counts it anyway, and that is `librqbit`'s: the address is
+        // registered when it is queued and the blocklist is checked when it is
+        // taken off the queue, at `torrent_state/live/mod.rs:629`. So the peer
+        // sits at `queued` for the whole run with nothing against it. Asserted
+        // rather than corrected, because subtracting a refusal count from a
+        // peer count would be arithmetic nobody can check: the counter counts
+        // refusals and not addresses. See `TODO/peers.md`, T-164.
+        assert_eq!(report["seen"], 1, "{report}");
+        let peers = report["peers"].as_array().expect("a peer array");
+        assert_eq!(peers.len(), 1, "{report}");
+        assert_eq!(peers[0]["state"], "queued", "{report}");
+        assert_eq!(peers[0]["downloaded_bytes"], 0, "{report}");
+        assert_eq!(report["downloaded"]["bytes"], 0, "{report}");
+    }
+
+    /// A run with no `--block-peer` says nothing about blocking, so the field
+    /// is not a zero on every sample.
+    #[test]
+    fn a_sample_with_nothing_blocked_carries_no_blocked_field() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let report = crate::test_support::run_json_code(
+            &[
+                "peers",
+                fixture.path_str(),
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--duration",
+                "1s",
+                "--port",
+                "0",
+            ],
+            fixture.dir(),
+            ExitCode::NoUsableSources,
+        );
+        assert!(report.get("blocked").is_none(), "{report}");
     }
 
     /// Sampling a swarm means joining it.

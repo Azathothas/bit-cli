@@ -698,6 +698,36 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         &out,
     );
 
+    // Again with the peer blocked, because `blocked` is absent from a sample
+    // that refused nothing and a field no run produces is a field the schema
+    // does not describe. This one needs no live seeder: the address is refused
+    // before it is dialled, so whether anything is listening does not matter.
+    // See `TODO/peers.md`, T-164.
+    let (_, out) = capture(
+        &[
+            "--json",
+            "peers",
+            &torrent,
+            "--peer",
+            &peer,
+            "--block-peer",
+            "127.0.0.1",
+            "--no-tracker",
+            "--no-dht",
+            "--no-lsd",
+            "--duration",
+            "1s",
+            "--port",
+            "0",
+        ],
+        dir.clone(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli peers <TORRENT> --peer <ADDR> --block-peer <ADDR> --json",
+        &out,
+    );
+
     // Two trackers, and the second one is dead on purpose: `failure` is only
     // set on a tracker that did not answer, and a document that never carries
     // it does not describe the field. `--replace-trackers` keeps the fixture's

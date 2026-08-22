@@ -639,7 +639,8 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    peers
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **partial**. Part 1, `--block-peer`, done 2026-08-22T02:20Z.
+             Parts 2 and 3 blocked on `librqbit` 9.0.0, both named below.
 
 Problem:     `bit-cli` has `--web-seed-fatal-status` and
              `--web-seed-max-errors`, so an HTTP source that misbehaves is
@@ -688,6 +689,158 @@ Acceptance:  A synthetic peer that fails a piece hash twice is not redialled
              reason, and the freed slot measurably goes to another peer.
              `bench swarm` drives it, because it already builds peers that
              misbehave on purpose.
+
+**The seam is named, 2026-08-22T02:10Z, and it splits this entry into three
+parts rather than one.** Read before writing any of it, which is what the
+paragraph above asked for. Two of the three are blocked and one is not blocked
+at all, which is not what "effort M, blocked on a librqbit seam" would have
+said.
+
+### 1. A blocklist exists upstream, and it is checked in exactly the right place
+
+This is the part the entry did not know. `librqbit` 9.0.0 has a blocklist and an
+allowlist, and both are consulted in both directions:
+
+- **Incoming**, `session.rs:917`, `if self.blocklist.has(incoming_ip)`, and it
+  is above the `read_handshake` at `:934`. That is the vortex proposal's
+  "check the blocklist **before completing a handshake**", already true.
+- **Outgoing**, `torrent_state/live/mod.rs:629`, in the peer-stream loop, before
+  a permit is taken or a connection task is spawned.
+- Both bump `session_stats` counters, `blocked_incoming` and `blocked_outgoing`.
+
+`SessionOptions::blocklist_url` (`session.rs:461`) is how it is populated, once,
+at `Session::new_with_opts` (`session.rs:739-748`). `IpRanges::load_from_url`
+(`ip_ranges.rs:61`) takes a **`file:` URL** as well as an HTTP one
+(`ip_ranges.rs:64-70`), and the format is PeerGuardian's: `name:start-end` per
+line, `#` for a comment, plain or gzip, parsed at `ip_ranges.rs:152`.
+
+**So `--block-peer <ADDR>` is not blocked.** `bit-cli` writes the ranges it was
+given to a scratch file and points `blocklist_url` at it before the session
+starts. `cmd::peers` already makes a `tempfile::tempdir()` per invocation, so
+the pattern exists and decision 7.4 is not touched: this is a scratch file for
+the length of one process, not state anything reads back.
+
+### 2. Adding to that blocklist during a run is blocked, and it is a near miss
+
+`Session.blocklist` (`session.rs:141`) is a plain `IpRanges` field, not a lock
+and not an `ArcSwap`. `bit-cli` holds an `Arc<Session>` through
+`Engine::session`, so there is no `&mut` to be had and no interior mutability to
+use.
+
+`IpRanges::new` (`ip_ranges.rs:47`) is `pub` and takes the ranges directly, so
+the value could be built. It cannot be named: `lib.rs:60` declares
+`mod ip_ranges;` with no `pub`, so `pub` inside it reaches nothing outside the
+crate. That is the same shape as [T-167](bep-coverage.md)'s `update_bitfield`,
+and it is recorded here for the same reason: so nobody re-derives it.
+
+### 3. Attributing a bad piece to the right peer is blocked, and upstream
+### already gets it wrong
+
+This is the half [T-179](webseed.md) built for HTTP sources, and the seam is
+`TorrentStorage`.
+
+`file_ops.rs:310`, `write_chunk(&self, who_sent: PeerHandle, data, chunk_info)`,
+**has** the peer: `PeerHandle` is `SocketAddr` (`type_aliases.rs:13`). It drops
+it one line later. The trait `bit-cli` implements is
+`storage/mod.rs:136`, `pwrite_all_vectored(&self, file_id, offset, bufs)`, and
+there is no peer in it. `SafeStorage` therefore sees every byte a peer sends and
+never sees who sent it. `mod file_ops;` and `mod torrent_state;` are both
+private, so there is no second place to look.
+
+And `librqbit` already convicts a peer, incorrectly.
+`torrent_state/live/mod.rs:1965-1972`: when `check_piece` returns false it warns
+with `?addr`, marks the piece failed, and
+
+```rust
+anyhow::bail!("i am probably a bogus peer. dying.")
+```
+
+which drops the connection of whichever peer delivered the **last** chunk of
+that piece. With several peers filling one piece that is the peer that finished
+it, not the peer that broke it. That is exactly the wrong answer T-179 was
+written to stop giving, present upstream, and it is why smart ban for peers
+cannot be built beside `librqbit`: the conviction happens inside it, before
+anything `bit-cli` owns is told.
+
+`webseed/ledger.rs` is still the right machinery and still fits. It is keyed on
+a `usize`, and a `SocketAddr` maps to one through a table `bit-cli` would keep.
+What is missing is the one call that would fill it.
+
+**What would unblock parts 2 and 3**, smallest upstream change first:
+
+1. `TorrentStorage` gains a `who_sent: Option<PeerHandle>` on the write methods,
+   or a separate `fn on_chunk_written(&self, who_sent, file_id, offset, len)`
+   with a default empty body. `write_chunk` already holds the value; this is
+   passing it on. That alone unblocks part 3 and lets `bit-cli` convict the
+   right peer with the ledger it already has.
+2. `Session.blocklist` becomes an `ArcSwap<IpRanges>` or a `RwLock`, with a
+   `Session::block_ip` beside it, and `pub mod ip_ranges`. That unblocks part 2.
+3. Failing 1, `librqbit` stops convicting on the last chunk and takes a
+   per-block record of its own. That is the larger change and it is upstream's
+   to want.
+
+**Re-priced.** Part 1 was effort S and is **done, 2026-08-22T02:20Z**. Parts 2
+and 3 stay open and blocked, with the lines above as the blocker. The entry
+keeps its P2 and stays at the height of its value, which is the rule in
+[INDEX.md](INDEX.md).
+
+### Part 1, as built
+
+`--block-peer <ADDR>` on `download`, `seed` and `peers`, because it lives in
+`LimitArgs` and every command that has a session has those. It takes an
+address, an inclusive `START-END` range, or a CIDR block, in either family.
+`swarm::blocked_ranges` parses it. Three decisions in it are worth stating:
+
+- **A `HOST:PORT` is refused**, with the address to write instead. The session
+  blocks an address, so silently dropping the port would block every port on
+  that host without saying so.
+- **Nothing is resolved.** `--peer` takes a name because a caller naming a peer
+  wants to reach it. A blocklist entry that resolved would block whatever the
+  name pointed at when the run started, which is not what a block means.
+- **A `/0` and a `/32` are both exact**, because a shift by the full width is
+  undefined and the widest block is the one a caller reaches for to test the
+  flag.
+
+`Engine::start` writes the ranges to a scratch file in PeerGuardian format and
+points `blocklist_url` at its `file:` URL. The file is a `NamedTempFile` held
+for that one call and deleted when it drops, so decision 7.4 is untouched: it
+is not state, nothing reads it back, and a run that blocks nothing writes no
+file at all.
+
+**Measured**, against `target/release/bit-cli`, one loopback seeder holding an
+8 KiB payload, the same command twice:
+
+```
+$ bit-cli peers blk.torrent --peer 127.0.0.1:51955 --no-tracker --no-dht --no-lsd --duration 4s --port 0
+live 0  connecting 0  queued 0  seen 1  dead 0
+ADDRESS          STATE       DIR       DOWN      PIECES
+127.0.0.1:51955  not needed  outgoing  8.00 KiB  8
+
+$ bit-cli peers blk.torrent --peer 127.0.0.1:51955 --block-peer 127.0.0.1 ...
+live 0  connecting 0  queued 1  seen 1  dead 0
+blocked              0 incoming, 1 outgoing
+ADDRESS          STATE   DIR       DOWN  PIECES
+127.0.0.1:51955  queued  outgoing  0 B   0
+```
+
+8 KiB and eight pieces against the peer, or nothing and a refusal counted. The
+number the flag moves is `blocked_outgoing`, which is the session's own counter
+rather than one this tree keeps, read through `Api::api_session_stats`. It is
+reported as `blocked` on `peers`, absent when nothing was refused so an
+ordinary sample carries no extra field, and it is in `docs/schema.md`.
+
+**`seen` counts a blocked address, and that is recorded rather than
+corrected.** `task_peer_adder` registers the address when it is queued and
+checks the blocklist when it takes it off the queue
+(`torrent_state/live/mod.rs:629`), so a blocked peer sits at `queued` for the
+whole run with nothing against it. Subtracting a refusal count from a peer
+count would be arithmetic nobody can check: the counter counts refusals, not
+addresses, and one address refused twice moves it by two. The two numbers are
+reported side by side instead.
+
+Six tests. `a_blocked_peer_is_never_dialled_and_never_joins_the_swarm` is the
+acceptance and uses the same loopback-seeder rig as
+[T-142](#t-142-bit-cli-peers-never-joined-the-swarm-it-was-sampling)'s.
 
 ### T-165 The peer's reqq is ignored, so the queue depth is a fixed 128
 

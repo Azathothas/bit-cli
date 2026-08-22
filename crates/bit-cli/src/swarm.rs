@@ -6,6 +6,7 @@
 //! flag means one thing across every verb rather than one thing per command.
 
 use std::collections::{BTreeMap, HashSet};
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -92,6 +93,113 @@ pub fn port_range(values: &[String]) -> Result<std::ops::RangeInclusive<u16>> {
 /// fails before the session starts instead of showing up later as a peer that
 /// never connected. A name that resolves to several addresses contributes all
 /// of them, because any of them may be the one that answers.
+/// Parse `--block-peer` values into inclusive address ranges.
+///
+/// Three spellings, because a blocklist is written in all three: one address,
+/// an inclusive `START-END` range, and a CIDR block. A `HOST:PORT` is refused
+/// rather than truncated to its address, because the session blocks an address
+/// and accepting a port would silently block every port on that host.
+///
+/// Nothing is resolved. `--peer` takes a name because a caller naming a peer
+/// wants to reach it; a blocklist entry that resolved would block whatever the
+/// name pointed at when the run started, which is not what a block means. See
+/// `TODO/peers.md`, T-164.
+pub fn blocked_ranges(values: &[String]) -> Result<Vec<(IpAddr, IpAddr)>> {
+    let mut out = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        out.push(blocked_range(value)?);
+    }
+    Ok(out)
+}
+
+fn blocked_range(value: &str) -> Result<(IpAddr, IpAddr)> {
+    if let Some((base, prefix)) = value.split_once('/') {
+        let base: IpAddr = base.parse().map_err(|_| block_error(value))?;
+        let prefix: u32 = prefix.parse().map_err(|_| block_error(value))?;
+        return cidr_range(value, base, prefix);
+    }
+    // IPv6 uses colons and never a hyphen, so a hyphen is unambiguously the
+    // range separator in both families.
+    if let Some((start, end)) = value.split_once('-') {
+        let start: IpAddr = start.trim().parse().map_err(|_| block_error(value))?;
+        let end: IpAddr = end.trim().parse().map_err(|_| block_error(value))?;
+        return match (start, end) {
+            (IpAddr::V4(a), IpAddr::V4(b)) if a <= b => Ok((start, end)),
+            (IpAddr::V6(a), IpAddr::V6(b)) if a <= b => Ok((start, end)),
+            (IpAddr::V4(_), IpAddr::V4(_)) | (IpAddr::V6(_), IpAddr::V6(_)) => Err(Error::usage(
+                format!("--block-peer `{value}` runs backwards"),
+            )
+            .with("value", value.to_string())),
+            _ => Err(Error::usage(format!(
+                "--block-peer `{value}` mixes IPv4 and IPv6 in one range"
+            ))
+            .with("value", value.to_string())),
+        };
+    }
+    if let Ok(one) = value.parse::<IpAddr>() {
+        return Ok((one, one));
+    }
+    if let Ok(addr) = value.parse::<std::net::SocketAddr>() {
+        return Err(Error::usage(format!(
+            "--block-peer `{value}` carries a port; a block is by address, so write `{}`",
+            addr.ip()
+        ))
+        .with("value", value.to_string()));
+    }
+    Err(block_error(value))
+}
+
+/// Expand a CIDR block into the first and last address it holds.
+fn cidr_range(value: &str, base: IpAddr, prefix: u32) -> Result<(IpAddr, IpAddr)> {
+    let width = match base {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
+    };
+    if prefix > width {
+        return Err(Error::usage(format!(
+            "--block-peer `{value}`: a /{prefix} is longer than the {width} bits an address has"
+        ))
+        .with("value", value.to_string()));
+    }
+    Ok(match base {
+        IpAddr::V4(addr) => {
+            // Shifting by the full width is undefined, so a /0 is spelled out
+            // rather than computed.
+            let mask = match prefix {
+                0 => 0,
+                _ => u32::MAX << (32 - prefix),
+            };
+            let start = addr.to_bits() & mask;
+            (
+                std::net::Ipv4Addr::from_bits(start).into(),
+                std::net::Ipv4Addr::from_bits(start | !mask).into(),
+            )
+        }
+        IpAddr::V6(addr) => {
+            let mask = match prefix {
+                0 => 0,
+                _ => u128::MAX << (128 - prefix),
+            };
+            let start = addr.to_bits() & mask;
+            (
+                std::net::Ipv6Addr::from_bits(start).into(),
+                std::net::Ipv6Addr::from_bits(start | !mask).into(),
+            )
+        }
+    })
+}
+
+fn block_error(value: &str) -> Error {
+    Error::usage(format!(
+        "--block-peer `{value}` is not an address, a START-END range, or a CIDR block"
+    ))
+    .with("value", value.to_string())
+}
+
 pub fn peer_addrs(values: &[String]) -> Result<Vec<std::net::SocketAddr>> {
     use std::net::ToSocketAddrs;
 
@@ -181,6 +289,7 @@ impl SessionSetup<'_> {
             client_name: Some(format!("bit-cli {}", bit_cli_core::VERSION)),
             allocation: self.allocation,
             max_open_files: self.limits.max_open_files,
+            blocked_peers: blocked_ranges(&self.limits.block_peer)?,
         })
     }
 
@@ -1248,7 +1357,112 @@ pub fn report_failed_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bit_cli_core::ExitCode;
     use bit_cli_core::engine::{PeerCounts, State};
+
+    fn blocked(values: &[&str]) -> Vec<(IpAddr, IpAddr)> {
+        blocked_ranges(&values.iter().map(ToString::to_string).collect::<Vec<_>>()).unwrap()
+    }
+
+    fn blocked_err(value: &str) -> Error {
+        blocked_ranges(&[value.to_string()]).unwrap_err()
+    }
+
+    fn ip(text: &str) -> IpAddr {
+        text.parse().expect("an address")
+    }
+
+    /// The three spellings a blocklist entry is written in, in both families.
+    /// See `TODO/peers.md`, T-164.
+    #[test]
+    fn an_address_a_range_and_a_cidr_all_resolve_to_the_same_shape() {
+        assert_eq!(
+            blocked(&["203.0.113.5"]),
+            [(ip("203.0.113.5"), ip("203.0.113.5"))]
+        );
+        assert_eq!(
+            blocked(&["203.0.113.0-203.0.113.255"]),
+            [(ip("203.0.113.0"), ip("203.0.113.255"))]
+        );
+        assert_eq!(
+            blocked(&["203.0.113.0/24"]),
+            [(ip("203.0.113.0"), ip("203.0.113.255"))]
+        );
+        // A CIDR is expanded from its block, not from the address given, so a
+        // host address inside one still names the whole block.
+        assert_eq!(
+            blocked(&["203.0.113.77/24"]),
+            [(ip("203.0.113.0"), ip("203.0.113.255"))]
+        );
+        assert_eq!(
+            blocked(&["2001:db8::1"]),
+            [(ip("2001:db8::1"), ip("2001:db8::1"))]
+        );
+        assert_eq!(
+            blocked(&["2001:db8::-2001:db8::ffff"]),
+            [(ip("2001:db8::"), ip("2001:db8::ffff"))]
+        );
+        assert_eq!(
+            blocked(&["2001:db8::/112"]),
+            [(ip("2001:db8::"), ip("2001:db8::ffff"))]
+        );
+    }
+
+    /// The two ends of the prefix range, because both are computed by a shift
+    /// and one of them would be undefined if it were.
+    #[test]
+    fn the_widest_and_narrowest_cidr_blocks_are_both_exact() {
+        assert_eq!(
+            blocked(&["0.0.0.0/0"]),
+            [(ip("0.0.0.0"), ip("255.255.255.255"))]
+        );
+        assert_eq!(
+            blocked(&["203.0.113.5/32"]),
+            [(ip("203.0.113.5"), ip("203.0.113.5"))]
+        );
+        assert_eq!(
+            blocked(&["::/0"]),
+            [(ip("::"), ip("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"))]
+        );
+        assert_eq!(
+            blocked(&["2001:db8::1/128"]),
+            [(ip("2001:db8::1"), ip("2001:db8::1"))]
+        );
+    }
+
+    /// A port is refused rather than dropped. Blocking is by address, so
+    /// taking `127.0.0.1:6881` and blocking `127.0.0.1` would block every port
+    /// on that host without saying so.
+    #[test]
+    fn an_address_with_a_port_is_refused_and_says_what_to_write_instead() {
+        let err = blocked_err("127.0.0.1:6881");
+        assert_eq!(err.code(), ExitCode::Usage);
+        assert!(err.message().contains("127.0.0.1"), "{}", err.message());
+        assert!(err.message().contains("port"), "{}", err.message());
+    }
+
+    #[test]
+    fn a_range_that_is_backwards_or_mixes_families_is_refused() {
+        let err = blocked_err("203.0.113.9-203.0.113.1");
+        assert_eq!(err.code(), ExitCode::Usage);
+        assert!(err.message().contains("backwards"), "{}", err.message());
+
+        let err = blocked_err("203.0.113.1-2001:db8::1");
+        assert!(err.message().contains("IPv4 and IPv6"), "{}", err.message());
+
+        let err = blocked_err("203.0.113.0/40");
+        assert!(err.message().contains("32 bits"), "{}", err.message());
+
+        assert_eq!(blocked_err("not-an-address").code(), ExitCode::Usage);
+    }
+
+    /// Nothing is resolved. A name would block whatever it pointed at when the
+    /// run started, which is not what blocking an address means.
+    #[test]
+    fn a_hostname_is_refused_rather_than_resolved() {
+        let err = blocked_err("localhost");
+        assert_eq!(err.code(), ExitCode::Usage);
+    }
 
     fn snapshot(progress: u64, total: u64) -> TorrentSnapshot {
         TorrentSnapshot {

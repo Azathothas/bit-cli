@@ -45,6 +45,10 @@ serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
 sha2.workspace = true
+# A scratch file for one call, not state: `librqbit` reads its peer blocklist
+# from a URL at session start and there is no in-memory door. See
+# `TODO/peers.md`, T-164.
+tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true

@@ -1543,3 +1543,47 @@ measures the fetch path without it; `attach_sources_tracked` is the one
 `download` calls. The gosh-dl PR 7 hazard the entry names did not arise: the
 ledger counts nothing that a progress report reads, and `served_bytes` is still
 charged once, past `pending.remove()`.
+
+**Correction, 2026-08-22T02:40Z: the acceptance test depended on a race and it
+is now arranged instead.** Found while running the gates for
+[T-164](peers.md), not by reading.
+
+`a_mirror_that_serves_wrong_bytes_is_named_and_the_healthy_one_is_not` failed
+twice under whole-suite load with
+
+```
+the mirror that served wrong bytes was never named: served [655360, 0], reasons []
+```
+
+655,360 bytes is the entire payload, served by the honest mirror, with no
+bridge error against the liar and no piece failed. The liar's bridge task had
+not been scheduled by the time the honest one had finished, so it was never
+asked for anything.
+
+Reran twenty times on an idle machine and passed every time, including six runs
+from a worktree at `86445bf` with none of that session's changes, which is what
+separates a flake from a break and rules out the work in flight.
+
+The mechanism is upstream and it is not subtle.
+`librqbit-9.0.0/src/piece_tracker.rs:114` assigns a piece to one peer at a time
+unless another peer steals it from one that is three or ten times slower. Which
+mirror gets work is therefore a scheduling outcome, and a 640 KiB payload on
+loopback is finished by whichever bridge connects first long before a second
+task needs to be scheduled at all. "Both mirrors served" was a hope.
+
+**Arranged now.** The liar attaches first, scoped to `piece:0-9`, so it is the
+only source there is and cannot finish the torrent alone. The test waits on the
+condition, its first served byte, and then attaches the healthy mirror over the
+whole payload. Every assertion is structural after that: the liar has served
+because it was the only source, the healthy mirror has served because it is the
+only source of pieces 10 to 19, neither can starve the other, and the healthy
+mirror still covers everything so it finishes alone once the liar is retired.
+The harness grew `Attached::attach_more`, which is the same shape
+`swarm::attach_late` has for [T-143](multi-source.md).
+
+This is the fourth test in this tree to assert that the machine cannot fail
+some other way, after [T-148](bench.md), [T-160](cli-surface.md) and
+[T-162](webseed.md), and the first whose assumption was about a scheduler
+rather than about a clock. [RULES.md](RULES.md) section 5 carries the rule; the
+shape it did not spell out is that "two things will both happen" is the same
+assumption as "this will happen within N seconds".

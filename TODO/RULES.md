@@ -194,6 +194,12 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   asserts that the machine cannot fail some other way.
   [T-148](bench.md), [T-160](cli-surface.md) and [T-162](webseed.md) are the
   three worked examples, and all three cost a red job.
+- **"Both of these will happen" is the same assumption as "this will happen in
+  N seconds".** A fixture with two sources, two peers or two tasks that asserts
+  each did some work is asserting a scheduling outcome it does not control.
+  Arrange it: make each one the only supplier of something, and wait on the
+  condition between the stages. [T-179](webseed.md)'s acceptance is the worked
+  example, and it is the fourth entry on this line.
 - **An acceptance script that measures an open defect must not fail the build
   for that defect alone.** `scripts/check-close-wait.ps1` is the pattern, and
   `scripts/check-swarm.ps1`'s `listener_poisoned` case follows it with

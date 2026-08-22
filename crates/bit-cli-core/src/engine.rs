@@ -104,6 +104,14 @@ pub struct EngineOptions {
     pub allocation: crate::alloc::Allocation,
     /// How many payload files stay open at once. Zero means the default.
     pub max_open_files: usize,
+    /// Peer addresses this run refuses, as inclusive ranges.
+    ///
+    /// The session checks these before it reads an incoming handshake and
+    /// before it dials, so a blocked address never takes a connection slot.
+    /// They are fixed for the life of the session: `librqbit` 9.0.0 loads its
+    /// blocklist once and holds it in a plain field, so nothing can be added
+    /// after the session starts. See `TODO/peers.md`, T-164.
+    pub blocked_peers: Vec<(IpAddr, IpAddr)>,
 }
 
 impl Default for EngineOptions {
@@ -124,6 +132,7 @@ impl Default for EngineOptions {
             client_name: Some(format!("bit-cli {}", crate::VERSION)),
             allocation: crate::alloc::Allocation::default(),
             max_open_files: crate::storage::DEFAULT_MAX_OPEN_FILES,
+            blocked_peers: Vec::new(),
         }
     }
 }
@@ -325,7 +334,17 @@ impl Engine {
             .filter_map(|t| url::Url::parse(t).ok())
             .collect();
 
+        // `librqbit` reads its peer blocklist from a URL at session start and
+        // offers no in-memory door: `Session::blocklist` is a plain `IpRanges`
+        // field behind an `Arc` and `IpRanges` lives in a private module. A
+        // `file:` URL is accepted, so this is the whole seam. The file exists
+        // for the length of this call and is deleted when `_blocklist` drops,
+        // which makes it a scratch file rather than the state decision 7.4
+        // rules out. See `TODO/peers.md`, T-164.
+        let _blocklist = write_blocklist(&options.blocked_peers)?;
+
         let opts = SessionOptions {
+            blocklist_url: _blocklist.as_ref().map(|(_, url)| url.clone()),
             dht: options.enable_dht.then(DhtSessionConfig::default),
             disable_trackers: !options.enable_trackers,
             disable_local_service_discovery: !options.enable_lsd,
@@ -673,6 +692,19 @@ impl Engine {
             .collect();
         rows.sort_by(|a, b| a.addr.cmp(&b.addr));
         rows
+    }
+
+    /// How many connections `--block-peer` refused, incoming and outgoing.
+    ///
+    /// This is the number the flag moves, and it is the session's own count
+    /// rather than one this crate keeps: `librqbit` bumps it at both check
+    /// sites. See `TODO/peers.md`, T-164.
+    pub fn blocked(&self) -> BlockedPeers {
+        let stats = self.api.api_session_stats();
+        BlockedPeers {
+            incoming: stats.counters.blocked_incoming,
+            outgoing: stats.counters.blocked_outgoing,
+        }
     }
 
     /// Which pieces are present, one bool per piece.
@@ -1083,6 +1115,61 @@ fn bind_on(ip: IpAddr, ports: &std::ops::RangeInclusive<u16>) -> SocketAddr {
 /// error rather than a wrong result.
 fn bindable(addr: &SocketAddr) -> bool {
     std::net::TcpListener::bind(addr).is_ok()
+}
+
+/// Connections `--block-peer` refused, in each direction.
+///
+/// Kept apart because they answer different questions: `outgoing` is a peer the
+/// run was told about and refused to dial, and `incoming` is one that dialled
+/// this session and was refused before its handshake was read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockedPeers {
+    pub incoming: u64,
+    pub outgoing: u64,
+}
+
+impl BlockedPeers {
+    /// Whether anything was refused at all.
+    pub const fn any(self) -> bool {
+        self.incoming > 0 || self.outgoing > 0
+    }
+}
+
+/// Write the blocked ranges where `librqbit` will read them, as a `file:` URL.
+///
+/// The format is PeerGuardian's, which is what `IpRanges` parses: one
+/// `name:start-end` per line, `#` for a comment. Its parser splits an IPv4 line
+/// at the **last** colon and an IPv6 line at the first, so the name must not
+/// contain one; `blocked` does not.
+///
+/// `None` when nothing is blocked, so an ordinary run writes no file at all.
+fn write_blocklist(
+    ranges: &[(IpAddr, IpAddr)],
+) -> Result<Option<(tempfile::NamedTempFile, String)>> {
+    use std::io::Write;
+
+    if ranges.is_empty() {
+        return Ok(None);
+    }
+    let mut body = String::from("# bit-cli --block-peer, for this invocation only\n");
+    for (start, end) in ranges {
+        body.push_str(&format!("blocked:{start}-{end}\n"));
+    }
+    let mut file = tempfile::Builder::new()
+        .prefix("bit-cli-blocklist-")
+        .suffix(".txt")
+        .tempfile()
+        .map_err(|e| crate::error::from_io(e, "cannot write the peer blocklist"))?;
+    file.write_all(body.as_bytes())
+        .and_then(|()| file.flush())
+        .map_err(|e| crate::error::from_io(e, "cannot write the peer blocklist"))?;
+    let url = url::Url::from_file_path(file.path())
+        .map_err(|()| {
+            Error::generic("the peer blocklist landed on a path that is not a file URL")
+                .with("path", file.path().display().to_string())
+        })?
+        .to_string();
+    Ok(Some((file, url)))
 }
 
 /// Where a bridge dials to reach the session's own peer listener.

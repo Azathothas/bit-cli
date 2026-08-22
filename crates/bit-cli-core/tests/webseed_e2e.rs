@@ -434,6 +434,38 @@ impl Attached {
         self.handle.stats().finished
     }
 
+    /// Attach one more source to a run that has already started.
+    ///
+    /// The same shape `swarm::attach_late` has, for the tests that need a
+    /// source to arrive after another one has done some work. It takes the run's
+    /// own ledger, so a late source is judged on the same evidence, and it
+    /// numbers the binding itself: a set resolved on its own is always index
+    /// zero, and the ledger is keyed on the index. See
+    /// `TODO/multi-source.md`, T-143.
+    async fn attach_more(&mut self, spec: SourceSpec) {
+        let info_hash = self.handle.info_hash().as_string();
+        let mut set = BindingSet::resolve(&self.layout, &info_hash, &[spec]).unwrap();
+        bit_cli_core::webseed::probe::resolve_auto_styles(&mut set, &info_hash).await;
+        let mut binding = set.bindings.into_iter().next().unwrap();
+        binding.index = self.statuses.len();
+        let params = BridgeParams::for_binding(
+            self.engine.bridge_target().unwrap(),
+            self.handle.info_hash(),
+            self.handle.shared().peer_id,
+            &self.layout,
+            &binding,
+            4,
+        )
+        .with_ledger(self.ledger.clone());
+        let fetcher = Arc::new(
+            Fetcher::new(binding.clone(), self.layout.clone(), info_hash, 4, false).unwrap(),
+        );
+        self.fetchers.push(fetcher.clone());
+        let status = Arc::new(BridgeStatus::default());
+        self.statuses.push(status.clone());
+        tokio::spawn(bridge::run(params, fetcher, status));
+    }
+
     /// Resolve the ledger against what the session has verified, reading the
     /// correct bytes back out of the payload on disk.
     ///
@@ -854,13 +886,30 @@ async fn two_scoped_sources_cover_a_torrent_between_them() {
 /// The acceptance for `TODO/webseed.md` T-179.
 ///
 /// Two mirrors of one payload, one of which lies once about every range it is
-/// asked for. Pieces are filled from both, so a failed piece names neither of
-/// them on the wire; the ledger names the one that lied, and only that one.
+/// asked for. A failed piece names neither of them on the wire; the ledger
+/// names the one that lied, and only that one.
 ///
 /// The healthy mirror still being usable at the end is the assertion that
 /// matters most: retiring both is the failure this entry exists to prevent,
 /// and "the piece failed, so blame everyone who touched it" would pass every
 /// other check here.
+///
+/// **Both mirrors serving is arranged rather than hoped for**, and the first
+/// shape of this test hoped. `librqbit`'s `piece_tracker.rs:114` assigns a
+/// piece to one peer at a time unless another steals it, so which mirror gets
+/// work is a scheduling outcome. Attached together against a 640 KiB payload
+/// on loopback, the first bridge to connect can finish the whole thing before
+/// the second bridge's task is scheduled at all, and then the liar serves
+/// nothing, no piece fails, and the run waits out its timeout. That happened
+/// twice on 2026-08-22 under whole-suite load, with `served [655360, 0]` and
+/// no bridge error, and reran clean twenty times on an idle machine, which is
+/// what a fixture that depends on a race looks like.
+///
+/// So the liar goes first, scoped to half the payload, and the healthy mirror
+/// joins once the liar has served something. Every assertion below is then
+/// structural: the liar has served by construction, the healthy mirror is the
+/// only source of pieces 10 to 19 so it has too, and neither can be starved by
+/// the other. See `TODO/webseed.md`, T-179.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_mirror_that_serves_wrong_bytes_is_named_and_the_healthy_one_is_not() {
     let src = tempfile::tempdir().unwrap();
@@ -873,14 +922,30 @@ async fn a_mirror_that_serves_wrong_bytes_is_named_and_the_healthy_one_is_not() 
 
     let (honest, _) = serve(src.path().to_path_buf(), ServeMode::Ranges).await;
     let (liar, _) = serve(src.path().to_path_buf(), ServeMode::CorruptOnce).await;
-    let run = attach(
+    // Source 0 is the liar, alone, and it holds half the payload. It cannot
+    // finish the torrent by itself, which is what leaves work for the mirror
+    // that joins next.
+    let mut run = attach(
         &src.path().join("movie.bin"),
         out.path(),
         tmp.path(),
-        vec![whole(&honest), whole(&liar)],
+        vec![whole(&liar).with_scope(Scope::parse("piece:0-9").unwrap())],
     )
     .await;
     assert_eq!(run.layout.piece_count(), 20);
+
+    // Waiting on the condition. The liar has contributed when it has served a
+    // byte, whenever that is.
+    assert!(
+        wait_for(Duration::from_secs(60), || run.statuses[0].served_bytes()
+            > 0)
+        .await,
+        "the liar never served anything: {:?}",
+        run.reasons()
+    );
+    // Source 1 is the healthy mirror, and it covers everything, so it can
+    // finish the torrent once the liar is retired.
+    run.attach_more(whole(&honest)).await;
 
     // The ledger is resolved on a tick, exactly as `download`'s watch loop
     // does it. Waiting on the conviction rather than on a duration: the run
@@ -907,13 +972,13 @@ async fn a_mirror_that_serves_wrong_bytes_is_named_and_the_healthy_one_is_not() 
         run.reasons()
     );
 
-    // Source 1 is the liar. Every conviction has to be against it, because a
-    // conviction against source 0 is a healthy mirror retired for someone
+    // Source 0 is the liar. Every conviction has to be against it, because a
+    // conviction against source 1 is a healthy mirror retired for someone
     // else's bytes.
     let guilty: std::collections::BTreeSet<usize> = convicted.iter().map(|c| c.source).collect();
     assert_eq!(
         guilty,
-        std::collections::BTreeSet::from([1]),
+        std::collections::BTreeSet::from([0]),
         "only the mirror that lied should be convicted: {convicted:?}"
     );
     for conviction in &convicted {
@@ -925,32 +990,33 @@ async fn a_mirror_that_serves_wrong_bytes_is_named_and_the_healthy_one_is_not() 
     }
 
     // Both mirrors served, which is what makes this the case the entry is
-    // about: a piece filled from two sources at once. With one of them idle
-    // the pieces would never have been split and "blame whoever filled it"
-    // would give the same answer as attribution does. Measured on this
-    // fixture: the honest mirror serves 655,360 bytes and the liar 327,680,
-    // and every one of the liar's blocks is convicted.
-    for (index, status) in run.statuses.iter().enumerate() {
-        assert!(
-            status.served_bytes() > 0,
-            "mirror {index} served nothing, so no piece was split"
-        );
-    }
+    // about: pieces filled from two sources rather than one. With one of them
+    // idle, "blame whoever filled it" would give the same answer as
+    // attribution does. Structural here rather than measured: the liar was
+    // waited on above, and the healthy mirror is the only source of pieces 10
+    // to 19.
+    assert!(
+        wait_for(Duration::from_secs(60), || run.statuses[1].served_bytes()
+            > 0)
+        .await,
+        "the healthy mirror served nothing, so no piece was split: {:?}",
+        run.reasons()
+    );
 
     // The liar is retired and the honest mirror is not.
     assert!(
         wait_for(Duration::from_secs(30), || {
-            run.statuses[1].state() == BridgeState::Failed
+            run.statuses[0].state() == BridgeState::Failed
         })
         .await,
         "a convicted mirror is retired: {:?}",
-        run.statuses[1].state()
+        run.statuses[0].state()
     );
     assert_ne!(
-        run.statuses[0].state(),
+        run.statuses[1].state(),
         BridgeState::Failed,
         "the healthy mirror must survive its neighbour lying: {:?}",
-        run.statuses[0].error()
+        run.statuses[1].error()
     );
 
     // And the payload still arrives, from the mirror that was telling the

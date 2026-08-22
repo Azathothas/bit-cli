@@ -104,7 +104,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-142](peers.md) | P1 | peers | **done** | bit-cli peers never joined the swarm it was sampling |
 | [T-138](peers.md) | P2 | peers | **done** | A peer that comes back waits out a backoff that grows by six |
 | [T-163](peers.md) | P2 | peers | open | MSE/PE peer encryption is not implemented |
-| [T-164](peers.md) | P2 | peers | open | A peer that sends garbage keeps its connection slot |
+| [T-164](peers.md) | P2 | peers | partial | A peer that sends garbage keeps its connection slot |
 | [T-165](peers.md) | P2 | peers | open | The peer's reqq is ignored, so the queue depth is a fixed 128 |
 | [T-166](peers.md) | P1 | peers | **done** | BEP 10 extension ids are not proven to map in both directions |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
@@ -222,7 +222,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 147 items: 137 to work through, and 10 deferred to Phase C.
-54 open, 4 partial, 2 blocked, 77 done.
+53 open, 5 partial, 2 blocked, 77 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -477,16 +477,22 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 | 11 |
 | P1 | 3 | 1 | 0 | 47 | 51 |
-| P2 | 26 | 1 | 2 | 22 | 51 |
+| P2 | 25 | 2 | 2 | 22 | 51 |
 | P3 | 24 | 0 | 0 | 0 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **54** | **4** | **2** | **77** | **147** |
+| **All** | **53** | **5** | **2** | **77** | **147** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4
 puts in Phase C. [T-167](bep-coverage.md): BEP 54's send side is inert without
 an upstream receive side. Both stay here rather than moving, with the upstream
 lines that block them and what would unblock them.
+
+A third entry carries a blocker without being counted here.
+[T-164](peers.md) is `partial` rather than `blocked` because one of its three
+parts shipped: `--block-peer` works, and the other two are blocked on
+`Session::blocklist` being immutable and on `TorrentStorage` carrying no peer
+identity. The entry names both, with the lines.
 
 ## Start here
 
@@ -557,7 +563,18 @@ success is not.
    and hands it a ledger, so attaching one more is a call rather than a
    redesign. What is left is where the binding comes from once the run is under
    way, which is a command-line question rather than a protocol one. Effort M.
-3. **[T-164](peers.md)**, the peer half of smart ban, and it sits here rather
+3. **[T-164](peers.md)**, **partial 2026-08-22T02:20Z, and the seam is named.**
+   It splits into three parts rather than one, and only two are blocked.
+   `librqbit` already has a peer blocklist, checked before an incoming
+   handshake is read and before an outgoing dial, and it loads from a `file:`
+   URL, so `--block-peer` needed no upstream change and is done. Adding to that
+   list mid-run is blocked on `Session::blocklist` being a plain field behind
+   an `Arc` in a private module. Attributing a bad piece to the right peer is
+   blocked on `TorrentStorage` carrying no peer identity, and upstream already
+   convicts whichever peer delivered the last chunk. The entry has all three
+   with the lines.
+
+   The peer half of smart ban, and it sits here rather
    than under the P0s because [T-179](webseed.md) built everything about it
    that is not peer-specific. `webseed/ledger.rs` records a hash per block per
    supplier and convicts every supplier whose hash differs from the verified
