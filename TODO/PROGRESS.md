@@ -31,10 +31,10 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** green on all sixteen jobs at run **32549428457**, against commit
-  `d94838c`. That run is the one to read: it covers `38d4c24` and `76cb2f4`,
-  which went out with no run of their own for the reason under "the tooling
-  round" below. The four before it were green:
+- **CI:** green on all sixteen jobs at run **32550159811**, against commit
+  `81f6c53`, which is the last commit of the session. Run **32549428457**
+  against `d94838c` is the one that covers `38d4c24` and `76cb2f4`, which went
+  out with no run of their own for the reason under "the tooling round" below. The four before it were green:
   **32543990448**, **32545039478**, **32546921561**, **32548057725**.
   Naming a run and the commit it describes is deliberate: that line stays true,
   where "the latest" is wrong by the next push.
