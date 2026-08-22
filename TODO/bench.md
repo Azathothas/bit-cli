@@ -344,16 +344,28 @@ Relevance:   The file's own rule is that "a versioned contract nobody has
              `scripts/check-swarm.ps1` and `scripts/bench-leech.ps1` select
              fields out of them by name. A field renamed in one of them breaks
              a consumer and nothing fails.
-Approach:    `schema_gen::collect` runs every command and reads what it wrote.
-             The `bench` subcommands are missing from that list because they
-             need a target: `webseed` needs a source, `leech` and `swarm` need
-             something to talk to, `seed` needs a payload. `bench disk` needs
-             none of those and is the one to start with, because it already
-             produces the `bench_sample` event the file does carry, so the
-             generator can reach it. The rest need the loopback fixtures the
-             `check-*` scripts already stand up, which is why this is S rather
-             than XS: the work is deciding whether `schema_gen` may start a
-             fixture, not writing the rows.
+Approach:    **The exclusion is deliberate and it is written down**, so the
+             first job is to argue with the reason rather than to assume it
+             was an oversight. `schema_gen::collect` already runs
+             `bit-cli bench disk --jsonl` and folds in **only its events**,
+             with a comment saying why: a `bench` report is "a versioned
+             document of its own, with `report_version` and its own `kind`",
+             and under `--jsonl` it renders as an NDJSON record carrying
+             `record` rather than `type`, so `observe_events` does not pick it
+             up.
+             The half of that reason which does not hold is
+             `report_version`. It is a constant at 1, nothing bumps it when a
+             field moves, and the only thing that reads it is `--baseline`
+             refusing a report from a **newer** build. So it protects a reader
+             from a future format and protects nothing from a rename today.
+             Adding a field is harmless either way; what is unprotected is a
+             field **renamed or removed**, which is what `check-swarm.ps1`,
+             `bench-leech.ps1` and `--baseline` all break on.
+             Two ways out, and the entry does not pick one: document the
+             reports in `docs/schema.md` beside the rest, starting with
+             `bench disk` because the generator already reaches it; or leave
+             them out and make `report_version` mean something by failing the
+             build when the report's field set changes without it moving.
 Acceptance:  `docs/schema.md` carries a section for at least the `bench disk`
              report, `every_produced_kind_and_event_is_documented` covers it,
              and adding a field to that report fails the build until the file
@@ -363,8 +375,13 @@ Acceptance:  `docs/schema.md` carries a section for at least the `bench disk`
 [T-018](disk-io.md) added `write_calls` to `bench::report::Disk`, a field every
 `bench leech` and `bench seed` report now carries. `BIT_CLI_UPDATE_SCHEMA=1`
 produced **no diff at all**, and the schema test passed. A new field in a
-document consumers parse went in with the contract check green, which is the
-one thing that check exists to prevent.
+document consumers parse went in with the contract check green.
+
+An added field is the harmless case, and that is the point: the same silence
+covers a renamed one. `scripts/check-swarm.ps1` selects `swarm.serving.
+pieces_announced`, `scripts/bench-leech.ps1` selects
+`summary.disk.write_time.ms`, and `--baseline` compares fifteen metrics by
+name. Renaming any of them passes every gate in this repository.
 
 The same session added seven fields to the `trackers` document and the schema
 test caught every one, so the mechanism works where it reaches. It just does

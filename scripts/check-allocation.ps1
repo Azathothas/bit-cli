@@ -137,6 +137,13 @@ try {
     }
 } finally { $stream.Dispose() }
 
+# The torrent is built from a directory, so it is a multi-file torrent named
+# `payload` and its one file lands under a directory of that name. Both paths
+# below carry it. They did not until 2026-08-22, and `Test-Path` on a path that
+# is not there returns a length of zero and a hash of nothing, so the script
+# reported the payload as not matching the source and nothing reserved, on all
+# four methods, while every download was byte for byte correct. See
+# `TODO/disk-io.md`, T-190.
 $torrent = Join-Path $Root "payload.torrent"
 & $bitCli create (Join-Path $Root "payload") --name payload --piece-length 1MiB `
     --no-creation-date --output $torrent --force --json 2>&1 | Out-Null
@@ -215,7 +222,7 @@ foreach ($method in @("none", "sparse", "prealloc", "falloc")) {
     $before = Get-FreeSpace
     $reserved = Invoke-Download $method $reservedDir "http://127.0.0.1:1/" "6s" "reserve-$method"
     $after = Get-FreeSpace
-    $reservedFile = Join-Path $reservedDir "movie.bin"
+    $reservedFile = Join-Path $reservedDir "payload/movie.bin"
     $reservedApparent = if (Test-Path $reservedFile) { (Get-Item $reservedFile).Length } else { 0 }
     $reservedAllocated = if (Test-Path $reservedFile) { Get-AllocatedSize $reservedFile } else { $null }
     $reservedSparse = if (Test-Path $reservedFile) { Get-SparseFlag $reservedFile } else { $null }
@@ -226,7 +233,7 @@ foreach ($method in @("none", "sparse", "prealloc", "falloc")) {
     # 2. Downloaded for real, and checked.
     $completeDir = Join-Path $Root "complete-$method"
     $complete = Invoke-Download $method $completeDir $webSeed $null "complete-$method"
-    $completeFile = Join-Path $completeDir "movie.bin"
+    $completeFile = Join-Path $completeDir "payload/movie.bin"
     $completeHash = if (Test-Path $completeFile) {
         (Get-FileHash -Algorithm SHA256 $completeFile).Hash.ToLower()
     } else { $null }

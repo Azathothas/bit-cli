@@ -22,9 +22,10 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 
 ## State
 
-- **Last session:** 2026-08-22T07:17:07Z to 10:02Z, 2h 44m, unattended
-  throughout. The whole four-item work order, then the two reviews, which found
-  three stale claims and one entry's worth of gap.
+- **Last session:** 2026-08-22T07:17:07Z to 10:56Z, unattended throughout and
+  ended on the operator's word. The whole four-item work order, then the two
+  reviews, then the storage-shaped acceptance scripts run against the one
+  change that touches the write path.
 - **Tests:** 1,113 passing, 0 failing. The baseline at the start was 1,091.
 - **Gates:** clean. One command:
 
@@ -32,12 +33,11 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** green at run **32566011119**, against commit `bca3d11`, the last run
-  read. **32566533746** was queued for `4ee2948` as the session ended and is
-  not read; read it first. Two commits carry `[skip ci]` because they change no
-  source, `ec82a24` and `f46d4fd`.
-- **Entries:** 148 items. 46 open, 7 partial, 2 blocked, 83 done, 10 deferred
-  to Phase C. 83 of 138 workable done, 55 left.
+- **CI:** green on every push this session, last read at run
+  **32566533746** against commit `4ee2948`. Three commits carry `[skip ci]`
+  because they change no source: `ec82a24`, `f46d4fd` and `47a6cea`.
+- **Entries:** 149 items. 47 open, 7 partial, 2 blocked, 83 done, 10 deferred
+  to Phase C. 83 of 139 workable done, 56 left.
 - **Tree:** 84 Rust files, 49,649 lines of code, 11,471 of comment, measured
   with `scc --no-cocomo crates/`.
 
@@ -116,12 +116,29 @@ this session's own work hours earlier.
 - **T-178's Blocker** said its no-progress guard should wait for somewhere that
   batches writes to exist. It exists, and the entry names the function.
 
-And one gap worth an entry, filed as **[T-189](bench.md)**: `docs/schema.md` is
-the versioned contract and the **`bench` reports are not in it at all**. T-018
-added `write_calls` to `bench::report::Disk`, a field every `leech` and `seed`
-report carries, and regenerating the schema produced **no diff** with the test
-green. The same session added seven fields to the `trackers` document and the
-check caught every one, so the mechanism works where it reaches.
+And two gaps worth entries of their own.
+
+**[T-189](bench.md)**: `docs/schema.md` is the versioned contract and the
+**`bench` reports are not in it at all**. T-018 added `write_calls` to
+`bench::report::Disk`, a field every `leech` and `seed` report carries, and
+regenerating the schema produced **no diff** with the test green. The same
+session added seven fields to the `trackers` document and the check caught
+every one, so the mechanism works where it reaches. The exclusion turns out to
+be deliberate and written down, and the entry argues with the reason rather
+than assuming an oversight.
+
+**[T-190](disk-io.md)**, found running `check-allocation.ps1` against the new
+write buffer. The script reported **the payload does not match the source** on
+all four allocation methods, which read as data corruption from a change made
+an hour earlier. It is not: every download was byte for byte correct, and the
+script was looking one directory too high. It fails the same way on a worktree
+at `f46d4fd`, before the buffer landed. What it exposed is real, though:
+`engine.rs:575-577` says a caller who named an output directory "gets exactly
+that directory" and a multi-file torrent with `--dir` lands under
+`<dir>/<name>/` anyway, which is what every end-to-end test asserts. The
+paths are fixed and the script measures again; `sparse` reserving four
+kilobytes of volume for a 32 MiB file against `prealloc` reserving all of it
+is the distinction it exists to draw and it had been invisible.
 
 ## In progress
 
@@ -148,23 +165,31 @@ Re-derived after the last work order closed. [INDEX.md](INDEX.md)'s "How an
 ordering is derived" was read for the four questions it asks; its own list is
 the derivation of 2026-08-21 and is kept as written.
 
-1. **Read CI run 32566533746** against `4ee2948`, which was queued as the
-   session ended. Everything before it was green.
-2. **[T-189](bench.md)**, P2, effort S, and it is the only item here that a
+1. **Read the CI run the last push started.** Everything before it was green,
+   last read at 32566533746.
+2. **[T-190](disk-io.md)**, P2, effort S. One comment and one behaviour
+   disagree about where somebody else's bytes are written, and the evidence
+   that the behaviour is right is already in the entry. Read what
+   `subfolder: false` achieves before changing the comment: the extra
+   directory may be the session's rather than the factory's, and then the
+   comment should say so.
+   Corpus: none needed; `engine.rs:575-577` and `storage.rs:402` are the
+   whole surface.
+3. **[T-189](bench.md)**, P2, effort S, and it is the only item here that a
    measurement has already justified rather than estimated. The `bench` reports
    are outside `docs/schema.md`, and a field went into one this session with
-   the contract check green. `bench disk` needs no fixture and is the one to
-   start with, because the generator already reaches it for `bench_sample`.
+   the contract check green. The exclusion is deliberate and the entry names
+   both ways out; pick one.
    Corpus: none needed; `crates/bit-cli/src/schema_gen.rs`'s `collect` is the
    whole surface.
-3. **[T-018](disk-io.md)**, P2, partial, and what is left is **not** the write
+4. **[T-018](disk-io.md)**, P2, partial, and what is left is **not** the write
    path. Decide whether `bench disk`'s `shared` layout should stop striding, so
    the instrument can show what the download path does, or whether the
    acceptance clause should move to `--layout split`. Either is a decision
    about [T-017](disk-io.md)'s question. The measurements are all in the entry.
    Corpus: `TorrentNG/crates/rt-storage/src/io_class.rs:7` for per-class
    concurrency caps, which is the piece this tree still does not have.
-4. **[T-024](peers.md)**, P2, the choke and unchoke history a peer row does not
+5. **[T-024](peers.md)**, P2, the choke and unchoke history a peer row does not
    carry. It is the last of A3.4b that is missing and `bench swarm` can now
    generate the events to test it against, which it could not before this
    session.

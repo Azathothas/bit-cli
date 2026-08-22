@@ -992,6 +992,15 @@ four interleaved streams not flushing each other, a ninth stream displacing the
 oldest, a write over held bytes keeping the later one, a full region going
 straight through, `Drop` writing what it held, and `remove_file` discarding it.
 
+**And the storage-shaped acceptance scripts were run against it afterwards**,
+because this is new code in the one path where a defect is silent and
+permanent. `check-shared-files.ps1`: three torrents holding one file, one
+fetch, three copies, one hash. `check-piece-order.ps1`: pass.
+`check-allocation.ps1`: every method behaving as [T-012](#t-012-preallocation-is-not-implemented)
+documents, once its own stale paths were fixed, which is
+[T-190](#t-190-the-rule-for-where-a-payload-lands-says-one-thing-and-the-code-does-another)
+and was failing before this change as well.
+
 
 
 ### T-177 A piece that spans a file boundary has no adversarial fixture
@@ -1163,6 +1172,70 @@ test the_last_block_of_a_non_final_piece_is_four_kibibytes ... ok
 test a_block_that_straddles_a_boundary_is_fetched_as_one_request_per_file ... ok
 test a_torrent_whose_pieces_straddle_every_boundary_downloads_byte_for_byte ... ok
 ```
+
+### T-190 The rule for where a payload lands says one thing and the code does another
+
+Source:      found running `check-allocation.ps1` during T-018's review, 2026-08-22
+Category:    disk-io
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `crates/bit-cli-core/src/engine.rs:575-577` says "A caller that
+             named an output directory gets exactly that directory. Otherwise
+             the session's rule applies and a multi-file torrent goes into a
+             directory named after itself", and passes `subfolder: false` when
+             `--dir` was given. A multi-file torrent downloaded with `--dir out`
+             lands at `out/<name>/...` anyway.
+Relevance:   It is not a data bug: the bytes are right and the layout is what
+             every end-to-end test asserts. It is a comment that describes a
+             behaviour this tool does not have, in the function that decides
+             where somebody else's bytes are written, and it is the kind of
+             claim `RULES.md` says costs a session every time.
+Approach:    Decide which is true and make the other match. The evidence says
+             the behaviour is intended: `webseed_e2e.rs` reads its results back
+             from `out.path().join("album")` in three separate tests, including
+             the multi-file alignment one, and all of them pass. So the comment
+             is probably the wrong half. What has to be read before changing it
+             is what `subfolder: false` **does** achieve, because
+             `SafeStorageFactory` uses it at `storage.rs:402` to decide its own
+             path plan while `AddTorrentOptions::output_folder` goes to the
+             session as well, and the extra directory may be the session's
+             rather than the factory's. If it is the session's, then
+             `subfolder: false` prevents a **second** copy of the name rather
+             than the first, and the comment should say that.
+Acceptance:  The comment and the behaviour agree, and a test names the landing
+             path for a multi-file torrent with `--dir` given explicitly so the
+             next reader does not have to run one to find out.
+
+**How it was found, and the script it had broken.**
+`scripts/check-allocation.ps1` builds a multi-file torrent named `payload` and
+looked for the result at `<outDir>/movie.bin`, which is what the comment above
+describes. The file is at `<outDir>/payload/movie.bin`. `Test-Path` on a path
+that is not there gives a length of zero and a hash of nothing, so the script
+reported **the payload does not match the source** and **reserved 0 bytes** on
+all four allocation methods, while every download was byte for byte correct.
+
+It failed the same way on the tree before [T-018](#t-018-the-write-path-issues-one-operation-per-16-kib-block)
+landed, checked in a worktree at `f46d4fd`, so it is not that change. The last
+committed record, `bench/allocation-20260820T005250659Z.json`, passed, so it
+broke somewhere between 2026-08-20 and now and nothing noticed: this script is
+not in `gates.ps1` and nothing else runs it.
+
+The paths are corrected and the script measures again, with every method
+behaving as [T-012](#t-012-preallocation-is-not-implemented) documents:
+
+```
+method   reserved  allocated  sparse  free delta  matches source
+none     32.00 MiB 32.00 MiB  False   31.94 MiB   True
+sparse   32.00 MiB 0 B        True    4.00 KiB    True
+prealloc 32.00 MiB 32.00 MiB  False   32.01 MiB   True
+falloc   32.00 MiB 32.00 MiB  False   31.91 MiB   True
+```
+
+`sparse` reserving four kilobytes of volume for a 32 MiB file, against
+`prealloc` reserving all of it, is the distinction the whole script exists to
+draw, and it had been invisible.
 
 ### T-184 A boundary piece under --select-file has no decided behaviour
 
