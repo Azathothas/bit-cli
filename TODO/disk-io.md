@@ -727,7 +727,7 @@ Source:      the [T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-
 Category:    disk-io
 Priority:    P2
 Effort:      M
-Status:      **done**, 2026-08-22T11:12Z, with the last clause's fixture
+Status:      **done**, 2026-08-22T11:13Z, with the last clause's fixture
              corrected below
 
 Problem:     The session hands storage one 16 KiB block at a time and storage
@@ -880,7 +880,9 @@ path costs 468 ms and coalescing would be worth almost nothing, and everything
 this entry is worth appears between one path and eight.
 
 **Built 2026-08-22. The download path is 25% faster and one acceptance clause
-is not met, which is why this is partial rather than done.**
+is not met, which is why this was partial rather than done.** The clause was
+met later the same day once the fixture stopped standing in its way; that is
+the last section of this entry and it is what closed it.
 
 `Coalescer` in `crates/bit-cli-core/src/storage.rs` holds up to `WRITE_RUNS`
 contiguous runs of at most `WRITE_REGION`, one per **active region** rather
@@ -976,7 +978,7 @@ still not 90%. Neither is a change to the write path, and both are decisions
 about what `bench disk` is for, which is [T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-file)'s
 question rather than this one's.
 
-**Decided 2026-08-22T11:12Z, and neither of the two was the answer.** Striding
+**Decided 2026-08-22T11:13Z, and neither of the two was the answer.** Striding
 is not a property of `shared` worth removing and `split` is not the fixture to
 move to. Striding is one end of a scale nothing could name, so the scale is
 named: `--run-length N` is how many consecutive blocks one thread writes before
@@ -1338,7 +1340,7 @@ Source:      found running `check-allocation.ps1` during T-018's review, 2026-08
 Category:    disk-io
 Priority:    P2
 Effort:      S
-Status:      **done**, 2026-08-22T10:47Z, with the premise corrected below
+Status:      **done**, 2026-08-22T10:38Z, with the premise corrected below
 
 Problem:     `crates/bit-cli-core/src/engine.rs` said, at :575-577 before
              2026-08-22, "A caller that

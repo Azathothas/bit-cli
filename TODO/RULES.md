@@ -274,9 +274,9 @@ pwsh -NoProfile -File scripts/gates.ps1
   every `.rs` under `crates/`, skipping a name two files share. And where the
   prose names a symbol beside the citation and that symbol occurs exactly once
   in the file, the line has to be within a few lines of it, so a citation whose
-  target moved is reported with the line it moved to. It found seven stale
-  citations the day it was written, two of them made stale hours earlier by
-  this repository's own change and five older than that.
+  target moved is reported with the line it moved to. It found nine stale line
+  numbers the day it was written, three of them made stale hours earlier by
+  this repository's own change and the rest older than that.
   [T-193](cli-surface.md) is the entry and it says what the check cannot see.
 
 ```bash

@@ -238,6 +238,13 @@ foreach ($block in $blocks) {
         $row["t${count}_rate_bytes"] = $rate
         $row["t${count}_rate_human"] = Format-Rate $rate
         $row["t${count}_mean_write_us"] = [int64](Get-Median ([double[]]@($matching | ForEach-Object { [double]$_.mean_write_us })))
+        # The asks, not what reached the device. This phase is about the block
+        # size, so the number that means something is how many writes the same
+        # bytes were split into. Since the write buffer landed the two are not
+        # one number, and reporting the device count here would say how well
+        # the buffer coalesced rather than how large a write was.
+        # See TODO/disk-io.md, T-018.
+        $row["t${count}_write_calls"] = [int64](Get-Median ([double[]]@($matching | ForEach-Object { [double]$_.write_calls })))
         $row["t${count}_write_ops"] = [int64](Get-Median ([double[]]@($matching | ForEach-Object { [double]$_.write_ops })))
     }
     [void]$blockCurve.Add($row)
@@ -335,7 +342,8 @@ Write-Host "What one write costs, shared layout:"
 $blockCurve | ForEach-Object {
     $row = [ordered]@{ block = $_.block_size }
     foreach ($count in ($threads | Sort-Object)) { $row["t$count"] = $_["t${count}_rate_human"] }
-    $row["ops"] = $_["t${deepest}_write_ops"]
+    $row["calls"] = $_["t${deepest}_write_calls"]
+    $row["device"] = $_["t${deepest}_write_ops"]
     [pscustomobject]$row
 } | Format-Table -AutoSize | Out-String | Write-Host
 Write-Host "charged: $charge"

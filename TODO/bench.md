@@ -329,7 +329,7 @@ Source:      found doing T-018's review, 2026-08-22
 Category:    bench
 Priority:    P2
 Effort:      S
-Status:      **done**, 2026-08-22T11:02Z
+Status:      **done**, 2026-08-22T10:52Z
 
 Problem:     `docs/schema.md` documents every `--json` document and every
              `--jsonl` event, and `schema_gen` fails the build when a field

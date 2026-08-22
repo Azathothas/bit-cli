@@ -2199,7 +2199,7 @@ Source:      found in this session's own review 1, 2026-08-22
 Category:    cli-surface
 Priority:    P2
 Effort:      S
-Status:      **done**, 2026-08-22T11:26Z
+Status:      **done**, 2026-08-22T11:21Z
 
 Problem:     `scripts/check-todo.ps1` resolved a citation written long, as
              `crates/bit-cli/src/cli.rs:2103`, and checked only that the file
@@ -2222,8 +2222,8 @@ Approach:    Index every `.rs` under `crates/` by bare name and resolve a short
 Acceptance:  A citation whose target has moved fails the check, named, with the
              line it moved to.
 
-**What it found the day it was written: seven stale citations, in prose four
-sessions of two-deep-reviews had passed.**
+**What it found the day it was written: nine stale line numbers across seven
+citations, in prose four sessions of two-deep-reviews had passed.**
 
 The old line numbers are written without their file here, so this record does
 not read as seven live citations and report itself.
@@ -2238,9 +2238,13 @@ not read as seven live citations and report itself.
 | `storage.rs` | the two BEP 47 padding guards | 728 and 870 | 1048 and 1216 |
 | `storage.rs` | `pwrite_all_vectored` and `pwrite_all` | 799 and 781 | 1119 and 1107 |
 
-The last two rows were correct at `f46d4fd` and were moved by the write buffer
-[T-018](disk-io.md) landed the same morning, checked by reading the file at that
-commit. The others had been wrong for longer. Every one of them points at
+Three of the four `storage.rs` numbers, 728, 799 and 781, were correct at
+`f46d4fd` and were moved by the write buffer [T-018](disk-io.md) landed the same
+morning, checked by reading the file at that commit. 870 was already wrong
+there: the guard it names was at 891. The five in `cli.rs` and `schema_gen.rs`
+had been wrong for longer. A tenth, `storage.rs:402` in
+[T-190](disk-io.md)'s own Approach, was made stale by this session and is
+corrected there. Every one of them points at
 plausible code, which is what makes them expensive: a reader following the old
 line 870 of `storage.rs` lands on `let wanted = slash_path(path)` and has no
 reason to doubt it.
