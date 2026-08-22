@@ -11,15 +11,15 @@ with its own acceptance run. `TODO/` remains the authoritative record.
 Written 2026-08-22, the session that vendored the trees and changed nothing in
 them. Rewritten 2026-08-22T16:41Z by the session that worked sections 4 and 5,
 after that session found the table below still describing a state two sessions
-old. `scripts/check-todo.ps1` compares every row here against the entry it
+old, and kept current through that session as each item closed. `scripts/check-todo.ps1` compares every row here against the entry it
 names now, and `scripts/gates.ps1` runs it, so this file cannot say `open`
 about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**11 entries: 6 done, 3 partial, 0 blocked, 2 open.** Every one of them was
+**13 entries: 8 done, 3 partial, 0 blocked, 2 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
-record.**
+record, and nothing in the record is blocked.**
 
 | entry | priority | status | what it is waiting for |
 | --- | --- | --- | --- |
@@ -33,11 +33,23 @@ record.**
 | [T-163](../TODO/peers.md) | P2 | open | MSE, a wire-level handshake |
 | [T-167](../TODO/bep-coverage.md) | P2 | partial | **has** an inverse of `on_have` now |
 | [T-195](../TODO/peers.md) | P2 | **done** | the read side of T-194, at 262,104 pieces |
+| [T-210](../TODO/peers.md) | P1 | **done** | an incoming peer filed under our own peer id |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
+| [T-025](../TODO/peers.md) | P3 | **done** | one `pub use`, and the filter had no name |
 
-Five are not done, and one of those is not waiting on a seam at all:
-[T-040](../TODO/memory.md) is bounded and waiting on a six hour measurement.
-The other four are sections 3, 4 and 5, in that order.
+Five are not done. [T-040](../TODO/memory.md) is not waiting on a seam at all,
+only on the six hour measurement its acceptance names.
+[T-167](../TODO/bep-coverage.md) is no longer waiting on `librqbit` either: the
+receive side is built and the send half is this repository's own bridge. The
+remaining three are sections 3 and 5.
+
+**Two entries were added to this table by the work rather than found before
+it.** [T-210](../TODO/peers.md) came out of building
+[T-132](../TODO/multi-source.md): a rate limit keyed on peer identity did not
+limit, because every incoming peer was filed under this session's own peer id.
+[T-025](../TODO/peers.md) is one `pub use` that had been sitting open as an
+upstream API gap. Neither could have been fixed without the fork and neither
+was on anyone's list.
 
 **Before reconciling anything**, read `README.md` under "Upstream is not
 automatically right". A new release is a proposal, not an authority, and a hunk

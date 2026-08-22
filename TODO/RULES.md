@@ -461,7 +461,8 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   that runs `check-todo.ps1`, so a push cannot carry a `TASKS.md` row that
   disagrees with the entry it names, a count that disagrees with the rows, or a
   `PROGRESS.md` missing something section 2 step 2 requires. It is not skipped
-  by `-Fast`: it is the cheapest gate there is.
+  by `-Fast`: it costs about three seconds, and it is the one gate that catches
+  a claim rather than a defect.
 
   **What it cost to learn.** The session of 2026-08-22 closed both P0 entries,
   wrote it into the entries, into `INDEX.md` and into `PROGRESS.md`, and pushed.

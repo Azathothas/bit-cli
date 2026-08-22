@@ -456,6 +456,12 @@ of hashing plus process startup, so a 40 GiB payload costs about eight minutes
 of disk read on every `seed` invocation. That is the number the entry was
 asking for.
 
+**Those two numbers are wrong and the correction is under "Closed 2026-08-22"
+below.** Most of the six seconds was `--exit-when-idle 1s` waiting for a peer,
+not hashing. The measured rate is about 1.6 GiB/s and 40 GiB is about 25
+seconds. The paragraph above is kept as written because it is what the entry
+claimed and the correction belongs under it rather than in place of it.
+
 ## The blocker
 
 **`fastresume` in `librqbit` 9.0.0 does nothing without session persistence.**

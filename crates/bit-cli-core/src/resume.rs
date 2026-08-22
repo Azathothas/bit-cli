@@ -1,9 +1,10 @@
 //! A resume cache: the verified bitfield of a torrent, kept between runs.
 //!
-//! Seeding a payload re-hashes all of it. 512 MiB costs about six seconds here
-//! and 40 GiB costs about eight minutes, on every invocation, which for a
-//! foreground one-shot tool is the difference between usable and not.
-//! `TODO/disk-io.md` T-016 measured that.
+//! Seeding a payload re-hashes all of it, on every invocation, and the session
+//! offers no way to skip the check. Measured: **0.32 s for 512 MiB**, about
+//! 1.6 GiB/s, so a 40 GiB seed spends about **25 seconds** of disk read before
+//! it announces anything. `TODO/disk-io.md` T-016 has the measurement and the
+//! correction to the eight minute figure that entry used to carry.
 //!
 //! `librqbit` has the machinery for this already, in `fastresume`: it loads a
 //! bitfield, checks its length against the torrent, re-verifies a sample of

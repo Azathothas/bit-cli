@@ -1560,7 +1560,7 @@ exactly as before:
   sends its bitfield immediately after the handshake, before this side has the
   metadata, so the message that arrives is as large as the torrent makes it
   while the piece count is the exact thing not known yet. It answers with a
-  constant, `MAX_BITFIELD_BEFORE_METADATA` = 1 MiB, which is 8,388,600 pieces:
+  constant, `MAX_BITFIELD_BEFORE_METADATA` = 1 MiB, which is 8,388,568 pieces:
   128 GiB at a 16 KiB piece length and 32 TiB at 4 MiB.
 
 **That second one is why the first attempt did not work end to end.** The unit
@@ -1605,7 +1605,7 @@ constant rather than a fact about the torrent, so it is a limit, not the
 absence of one. Removing it properly means skipping a message this side has no
 use for rather than buffering it, which changes `read_message`'s contract from
 "return a message" to "may drop one". Nothing in this repository needs it: a
-torrent past 8,388,600 pieces is 128 GiB at the smallest piece length anyone
+torrent past 8,388,568 pieces is 128 GiB at the smallest piece length anyone
 uses.
 
 ---

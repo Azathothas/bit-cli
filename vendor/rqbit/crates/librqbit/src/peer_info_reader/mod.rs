@@ -174,7 +174,7 @@ impl PeerConnectionHandler for Handler {
     /// arrives here is as large as the torrent makes it while the piece count
     /// is exactly the thing not known yet, and there is nothing honest to
     /// derive a bound from. `MAX_BITFIELD_BEFORE_METADATA` is that bound: an
-    /// 8,388,600 piece torrent, which is 128 GiB at a 16 KiB piece length and
+    /// 8,388,568 piece torrent, which is 128 GiB at a 16 KiB piece length and
     /// 32 TiB at 4 MiB. Past it the connection fails as it always did.
     ///
     /// Bounded rather than unbounded because the length prefix is the peer's

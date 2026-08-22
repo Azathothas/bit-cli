@@ -1,9 +1,14 @@
 # Whether a second seed of the same payload still re-hashes it.
 #
 # This is the acceptance for `TODO/disk-io.md` T-016. Seeding hash-checks the
-# whole payload on every add: 512 MiB costs about six seconds here and 40 GiB
-# about eight minutes, on every invocation, and for a foreground one-shot tool
-# that is the difference between usable and not.
+# whole payload on every add, on every invocation, and never offers to skip it.
+# Measured here: **0.32 s for 512 MiB**, about 1.6 GiB/s, so a 40 GiB seed
+# spends about **25 seconds** of disk read before it announces anything.
+#
+# The entry read 6,087 ms for that same 512 MiB and inferred eight minutes for
+# 40 GiB. Most of those six seconds was `--exit-when-idle 1s` waiting for a
+# peer that never came, which is why this script stops at `--announce-only`
+# instead. The correction is under the entry.
 #
 # `--fastresume` keeps the verified bitfield in a cache and reuses it. The
 # entry's acceptance asks for two things and this measures both: a documented
@@ -38,8 +43,10 @@
 
 [CmdletBinding()]
 param(
-    # Big enough that hashing dominates process start. 512 MiB is about six
-    # seconds here, and the warm run is under one.
+    # Big enough that the hashing is visible over the fixed cost of a run.
+    # 512 MiB is about a third of a second of hashing here, against a two
+    # second settle that both runs pay, which is why the judging below is a
+    # difference and not a ratio.
     [int]$PayloadMiB = 512,
     # How many seconds the warm run has to save over the cold one. A
     # difference rather than a ratio: see the judging at the bottom. 512 MiB

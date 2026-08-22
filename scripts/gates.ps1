@@ -182,7 +182,8 @@ Record "text" ($binaryish.Count -eq 0) $(if ($binaryish.Count -eq 0) { "" }
 # count against the rows, and PROGRESS.md against what RULES.md section 2 step
 # 2 says it must carry. That is a second, and it runs here so that a push
 # cannot carry a record contradicting the tree it describes. It is not skipped
-# by -Fast: it is the cheapest gate of the seven.
+# by -Fast: it costs about three seconds, and it is the one gate here that
+# catches a claim rather than a defect.
 
 $todoArgs = @("-NoProfile", "-File", (Join-Path $PSScriptRoot "check-todo.ps1"))
 $todoOut = (& pwsh @todoArgs 2>&1 | Out-String)
