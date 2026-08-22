@@ -42,6 +42,22 @@ pub trait PeerConnectionHandler {
     /// implementor knows how large it has to be.
     fn serialize_bitfield_message_to_buf(&self, buf: &mut Vec<u8>) -> anyhow::Result<usize>;
     fn on_handshake(&self, handshake: Handshake, ckind: ConnectionKind) -> anyhow::Result<()>;
+
+    /// The largest message this peer may send us, in bytes.
+    ///
+    /// The read buffer starts at `BUFLEN` and grows to this. It exists because
+    /// one message is not bounded by any constant: a bitfield is one bit per
+    /// piece, so a torrent past 262,104 pieces sends one that does not fit in
+    /// 32,768 bytes and the connection died on it whatever either end did.
+    /// See `TODO/peers.md` T-195.
+    ///
+    /// The implementor answers from the **torrent**, never from what the peer
+    /// says it is about to send, because the second is a number a hostile peer
+    /// picks. The default is the buffer that already exists, which is the
+    /// behaviour every implementor had before this method.
+    fn max_incoming_message_len(&self) -> usize {
+        crate::read_buf::BUFLEN
+    }
     fn on_extended_handshake(
         &self,
         extended_handshake: &ExtendedHandshake<ByteBuf>,
@@ -198,9 +214,15 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
             .on_handshake(incoming.handshake, incoming.kind)
             .map_err(Error::Anyhow)?;
 
+        // The session read the handshake into this buffer before it knew which
+        // torrent the connection was for, so the bound is raised here, where
+        // the handler is known.
+        let mut read_buf = incoming.read_buf;
+        read_buf.set_max_len(self.handler.max_incoming_message_len());
+
         self.manage_peer(ManagePeerArgs {
             handshake_supports_extended,
-            read_buf: incoming.read_buf,
+            read_buf,
             write_buf,
             read: incoming.reader,
             write: incoming.writer,
@@ -250,6 +272,7 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
             .await?;
 
             let mut read_buf = ReadBuf::new();
+            read_buf.set_max_len(self.handler.max_incoming_message_len());
             let h = read_buf.read_handshake(&mut read, rwtimeout).await?;
             let handshake_supports_extended = h.supports_extended();
             trace!(

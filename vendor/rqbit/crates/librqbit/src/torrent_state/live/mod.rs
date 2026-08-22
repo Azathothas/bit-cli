@@ -1159,6 +1159,19 @@ impl PeerConnectionHandler for &'_ PeerHandler {
         Ok(len)
     }
 
+    /// One bitfield for this torrent, and a little slack.
+    ///
+    /// This is what stops a peer growing the read buffer past what the torrent
+    /// could honestly need: the piece count is ours, not theirs. Never below
+    /// the default, so a small torrent keeps the buffer it always had.
+    fn max_incoming_message_len(&self) -> usize {
+        let pieces = self.state.lengths.total_pieces() as usize;
+        let bitfield = Message::bitfield_message_len(pieces.div_ceil(8));
+        bitfield
+            .saturating_add(peer_binary_protocol::MAX_MSG_LEN)
+            .max(crate::read_buf::BUFLEN)
+    }
+
     fn on_handshake(&self, handshake: Handshake, ckind: ConnectionKind) -> anyhow::Result<()> {
         let _ = self.peer_id.set(handshake.peer_id);
         self.state.set_peer_live(self.addr, handshake, ckind);

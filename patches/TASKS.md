@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**11 entries: 4 done, 2 partial, 2 blocked, 3 open.** Every one of them was
+**11 entries: 5 done, 2 partial, 2 blocked, 2 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
 record.**
 
@@ -32,12 +32,12 @@ record.**
 | [T-100](../TODO/bep-coverage.md) | P2 | partial | the send half of an extension message |
 | [T-163](../TODO/peers.md) | P2 | open | MSE, a wire-level handshake |
 | [T-167](../TODO/bep-coverage.md) | P2 | blocked | no inverse of `on_have` |
-| [T-195](../TODO/peers.md) | P2 | open | the read side of T-194, at 262,104 pieces |
+| [T-195](../TODO/peers.md) | P2 | **done** | the read side of T-194, at 262,104 pieces |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 
-Seven are not done, and one of those is not waiting on a seam at all:
+Six are not done, and one of those is not waiting on a seam at all:
 [T-040](../TODO/memory.md) is bounded and waiting on a six hour measurement.
-The other six are sections 3, 4 and 5, in that order.
+The other five are sections 3, 4 and 5, in that order.
 
 **Before reconciling anything**, read `README.md` under "Upstream is not
 automatically right". A new release is a proposal, not an authority, and a hunk
@@ -64,9 +64,12 @@ was exposed. **It was**, and the answer is [T-194](../TODO/peers.md), P0, done.
 - The question this section asked last, whether `bit-cli create` could build
   such a fixture quickly enough to test with, is answered: **0.195 s** from
   160 MiB of payload.
-- Residual, measured, and open: [T-195](../TODO/peers.md), the read side, at
-  262,104 pieces. `scripts/check-bitfield.ps1` is the acceptance and it fails
-  on that case, which is how it is known to be able to fail at all.
+- The residual this left, [T-195](../TODO/peers.md), the read side at 262,104
+  pieces, is **done** too. `ReadBuf` grows now, bounded by what the connection
+  says the torrent could need rather than by what the peer claims to be
+  sending, and 1,048,576 pieces resolve. `scripts/check-bitfield.ps1` is the
+  acceptance for both halves and its two default cases are the two counts a
+  client here has actually died on.
 
 ## 1. DONE. T-020, and it was one match arm
 

@@ -104,8 +104,8 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0004-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0005-crates-librqbit-src-peer_info_reader-mod.rs.patch
-             patches/rqbit/0007-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0009-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0008-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0010-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -168,11 +168,11 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 that the fixed buffer refuses a 131,961 piece bitfield and a sized one round
 trips it.
 
-**What it does not fix.** The read side. `ReadBuf` is a 32,768 byte ring
-buffer, so the same message fails on receipt past **262,104 pieces** with "read
-buffer is full". Both halves now cap at the same place, twice as far out as
-before. [`TODO/peers.md`](../TODO/peers.md) T-195 is that limit, open, with the
-measurement.
+**What it did not fix, until later the same day.** The read side. `ReadBuf`
+was a 32,768 byte ring buffer, so the same message failed on receipt past
+**262,104 pieces** with "read buffer is full". That was
+[`TODO/peers.md`](../TODO/peers.md) T-195, and it is closed: the section below,
+"a message larger than the read buffer cannot be received", is the change.
 
 **Offer it upstream.** It is a defect in their code with a one line reproduction
 and no behaviour attached beyond the message getting sent. Until it is offered
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0011-package-lock.json.patch
+             patches/rqbit/0012-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -245,7 +245,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```
 Unblocks:    T-020, TODO/peers.md, the record's only open P0
 Files:       vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0006-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-session.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T14:37Z
 ```
@@ -316,8 +316,8 @@ open since before this repository existed, and the change is one match arm.
 Unblocks:    T-040, TODO/memory.md, the record's other P0
 Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0007-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0008-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0008-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0009-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T15:30Z
 ```
@@ -389,8 +389,8 @@ open, and reported as exactly this: RSS climbing in a long-lived server.
 Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0006-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0010-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0011-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T17:26Z
 ```
@@ -551,7 +551,7 @@ Unblocks:    T-132, TODO/multi-source.md
 Files:       vendor/rqbit/crates/librqbit/src/limits.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0003-crates-librqbit-src-limits.rs.patch
-             patches/rqbit/0007-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0008-crates-librqbit-src-torrent_state-live-mod.rs.patch
 Upstream:    not offered yet
 Added:       2026-08-22T17:55Z
 ```
@@ -619,3 +619,111 @@ feature, and a maintainer may want the exemption expressed differently, for
 example as a per-connection `LimitsConfig` rather than as a list of peer id
 prefixes on the session. It is worth offering as a question rather than as a
 patch.
+---
+
+## librqbit: a message larger than the read buffer cannot be received
+
+```
+Unblocks:    T-195, TODO/peers.md, the residual T-194 left behind
+Files:       vendor/rqbit/crates/librqbit/src/read_buf.rs
+             vendor/rqbit/crates/librqbit/src/peer_connection.rs
+             vendor/rqbit/crates/librqbit/src/peer_info_reader/mod.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
+Upstream:    not offered yet, and it should be
+Added:       2026-08-22T18:57Z
+```
+
+`ReadBuf` is the ring buffer every peer connection reads into, and it was a
+`Box<[u8; BUFLEN]>` with `BUFLEN` = 32,768. A message that does not fit in it
+fails with "read buffer is full" and the connection dies. One message is not
+bounded by anything that constant knows about: a bitfield is one bit per piece,
+so past **262,104 pieces** it does not fit, and no configuration of either end
+changes that. T-194 moved the send side off a fixed buffer; this is the same
+defect read from the other side, and it was the binding limit afterwards.
+
+The change is that the buffer grows:
+
+- `buf` is a `Box<[u8]>`, and every place the ring arithmetic said `BUFLEN`
+  reads the current capacity instead. `BUFLEN` is what a connection starts
+  with.
+- `grow` doubles into a new allocation and copies the two halves contiguously
+  to the front, which is what `make_contiguous` already did for a different
+  reason. It is called from one place, the `NotEnoughData` arm, when the buffer
+  is full and the message is not finished. When it refuses, the caller fails
+  exactly as it did before.
+- `ReadBuf::max_len` bounds it, and `set_max_len` never lowers it below
+  `BUFLEN`, so this can only ever permit more than the old behaviour.
+
+**Where the bound comes from is the whole of the design.** It is never the
+length prefix the peer sent, which is the number a hostile peer picks. It comes
+from a new trait method, `PeerConnectionHandler::max_incoming_message_len`,
+whose default is `BUFLEN`, so an implementor that does not answer keeps the
+behaviour it had:
+
+- The live torrent's handler answers from **its own piece count**: one bitfield
+  plus `MAX_MSG_LEN` of slack. A peer can make the buffer as large as one
+  bitfield for the torrent it is talking about and no larger.
+- `peer_info_reader` cannot, and that is the interesting case. A seeder sends
+  its bitfield immediately after the handshake, before this side has the
+  metadata, so the message that arrives is as large as the torrent makes it
+  while the piece count is the exact thing not known yet. It answers with a
+  constant, `MAX_BITFIELD_BEFORE_METADATA` = 1 MiB, which is 8,388,600 pieces,
+  128 GiB at a 16 KiB piece length and 32 TiB at 4 MiB.
+
+The connection sets it: `manage_peer_outgoing` on the buffer it creates, and
+`manage_peer_incoming` on the one the session handed it, which was filled with
+the handshake before anyone knew which torrent it was for.
+
+**Why it has to be here.** `ReadBuf` is private to `librqbit`, the buffer is a
+private field, `read_message` is where the failure is raised, and
+`PeerConnectionHandler` is `pub(crate)`. There is no option, no builder and no
+trait a dependent crate can reach any of it through. `bit-cli` cannot fetch a
+torrent past 262,104 pieces by any configuration.
+
+**How it was measured.** `scripts/check-bitfield.ps1`, a seeder and a magnet
+fetch on loopback with trackers and DHT off. Metadata resolving and the file
+appearing is the pass, and both need the bitfield to have crossed:
+
+| pieces | `.torrent` | bitfield | before | after |
+| --- | --- | --- | --- | --- |
+| 262,104 | 5,242,219 B | 32,768 B | resolves | resolves |
+| **262,105** | 5,242,239 B | 32,769 B | `read buffer is full` | **resolves** |
+| **524,288** | 10,485,900 B | 65,541 B | `read buffer is full` | **resolves** |
+| **1,048,576** | 20,971,661 B | 131,077 B | `read buffer is full` | **resolves** |
+
+`bench/bitfield-20260822T185725425Z.json` is the million-piece run.
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+```
+
+140 upstream tests pass, one of them new:
+`test_read_buf_grows_for_a_message_larger_than_itself`, which asserts both
+directions, that the message is refused with the default bound and read with a
+raised one.
+
+**The unsafe reborrow is still sound and the growth path is inside what proves
+it.** `read_message` holds a stacked reborrow of `self` across the deserialize,
+and growth reallocates the buffer that reborrow points into.
+`test_read_buf_miri` reads an oversized bitfield as well as a piece now, so
+that happens under miri:
+
+```bash
+cargo +nightly miri test --manifest-path vendor/rqbit/Cargo.toml -p librqbit --features miri test_read_buf_miri -- --ignored
+```
+
+Two things about running that on Windows, because both cost time here.
+`cargo-miri` fails with "cargo uses an argfile to invoke rustc" once the
+command line gets long, and a short `CARGO_TARGET_DIR` is the way past it. And
+`with_timeout` is a no-op only under `--features miri`, so a test that reaches
+it cannot run outside miri without a tokio runtime.
+
+**What it does not fix.** The pre-metadata bound is a constant rather than a
+fact about the torrent, so it is a limit rather than the absence of one.
+Removing it properly means skipping a message this side has no use for instead
+of buffering it, which changes `read_message` from "return a message" to "may
+drop one". T-195 records that and nothing in this repository needs it.
+
+**Offer it upstream.** It is a defect in their code with a one line
+reproduction, and the trait method's default means no implementor of theirs has
+to change.

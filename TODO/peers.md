@@ -1483,7 +1483,7 @@ Source:      measured while closing [T-194](peers.md), 2026-08-22
 Category:    peers
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**, 2026-08-22T18:57Z
 
 Problem:     `ReadBuf` is a ring buffer of `BUFLEN`, 32,768 bytes, in
              `vendor/rqbit/crates/librqbit/src/read_buf.rs:12`. A message that
@@ -1517,6 +1517,80 @@ clients raise the piece length as the payload grows, so this is reachable but
 uncommon. `bit-cli create` refuses to build one above 100,000 pieces without
 `--allow piece-count`, which is not a fix and does not help a torrent somebody
 else made.
+
+**Closed 2026-08-22, and the Approach's worry was the right one to have.** It
+said the ring buffer needs an overflow path and that `read_message` holds an
+unsafe reborrow with a miri test around it. Both are true and neither stopped
+it.
+
+**The buffer grows.** `buf` is a `Box<[u8]>` rather than a `Box<[u8; BUFLEN]>`,
+every use of `BUFLEN` in the ring arithmetic reads the current capacity, and
+`grow` doubles into a new allocation, copying the two halves contiguously to
+the front. It is called from exactly one place: the `NotEnoughData` arm, when
+the buffer is full and the message is not finished. `BUFLEN` is still what a
+connection starts with.
+
+**What stops a peer using it to make this process allocate.** Growth is bounded
+by `max_len`, and `max_len` is never taken from the length prefix the peer
+sent, which is the number a hostile peer picks. It comes from
+`PeerConnectionHandler::max_incoming_message_len`, a new trait method whose
+default is the old buffer, so an implementor that does not answer behaves
+exactly as before:
+
+- **A live torrent answers from its own piece count**, one bitfield plus
+  `MAX_MSG_LEN` of slack. A peer can make the buffer as large as one bitfield
+  for the torrent it is talking about and no larger.
+- **`peer_info_reader` cannot**, and that is the interesting case. A seeder
+  sends its bitfield immediately after the handshake, before this side has the
+  metadata, so the message that arrives is as large as the torrent makes it
+  while the piece count is the exact thing not known yet. It answers with a
+  constant, `MAX_BITFIELD_BEFORE_METADATA` = 1 MiB, which is 8,388,600 pieces:
+  128 GiB at a 16 KiB piece length and 32 TiB at 4 MiB.
+
+**That second one is why the first attempt did not work end to end.** The unit
+test passed and `check-bitfield.ps1` still failed at 262,105, because a magnet
+resolves through `peer_info_reader` and it was still holding the default. The
+bitfield it choked on was one it had no use for.
+
+**Measured.** `scripts/check-bitfield.ps1`, a seeder and a magnet fetch on
+loopback with trackers and DHT off:
+
+| pieces | `.torrent` | bitfield | before | after |
+| --- | --- | --- | --- | --- |
+| 262,104 | 5,242,219 B | 32,768 B | resolves | resolves |
+| **262,105** | 5,242,239 B | 32,769 B | `read buffer is full` | **resolves** |
+| **524,288** | 10,485,900 B | 65,541 B | `read buffer is full` | **resolves** |
+| **1,048,576** | 20,971,661 B | 131,077 B | `read buffer is full` | **resolves** |
+
+```bash
+pwsh -NoProfile -File scripts/check-bitfield.ps1
+```
+
+The default cases are now 131,961 and 262,105, which are the two counts this
+repository has measured a client dying on, one per side.
+
+**The unsafe reborrow is still sound, and the growth path is inside what proves
+it.** `test_read_buf_miri` now reads an oversized bitfield as well as a piece,
+so the reallocation happens under miri while the reborrow is in play:
+
+```bash
+cargo +nightly miri test --manifest-path vendor/rqbit/Cargo.toml -p librqbit --features miri test_read_buf_miri -- --ignored
+```
+
+**Two things about running that on Windows**, because both cost time.
+`cargo-miri` fails with "cargo uses an argfile to invoke rustc" when the
+command line gets long, and a short `CARGO_TARGET_DIR` is the way past it. And
+`with_timeout` is a no-op only under `--features miri`, so a test that reaches
+it cannot run outside miri without a tokio runtime; the growth test is a
+`#[tokio::test]` for the ordinary suite and the miri one covers the same path.
+
+**What is left, and it is a different shape.** The pre-metadata ceiling is a
+constant rather than a fact about the torrent, so it is a limit, not the
+absence of one. Removing it properly means skipping a message this side has no
+use for rather than buffering it, which changes `read_message`'s contract from
+"return a message" to "may drop one". Nothing in this repository needs it: a
+torrent past 8,388,600 pieces is 128 GiB at the smallest piece length anyone
+uses.
 
 ---
 

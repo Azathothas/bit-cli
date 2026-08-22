@@ -25,18 +25,23 @@
 # Exits 0 when every case resolved, 1 when one did not, and 2 when the check
 # could not run. The record goes to bench/bitfield-<timestamp>.json.
 #
-# The ceiling this does NOT clear is the read side: `BUFLEN` is 32,768 bytes in
-# vendor/rqbit/crates/librqbit/src/read_buf.rs, so 262,105 pieces still fails
-# with "read buffer is full". That is T-195, which is open. Passing -Pieces
-# above 262,104 is expected to fail until it closes.
+# The read side had a ceiling of its own until 2026-08-22 and no longer does.
+# `ReadBuf` was a fixed 32,768 byte ring buffer, so 262,105 pieces failed with
+# "read buffer is full" however well the send side behaved. It grows now, up to
+# what the connection says the torrent could need, which is T-195. 1,048,576
+# pieces resolve, four times the old ceiling and a 21 MB `.torrent`.
+#
+# The default cases below are the two thresholds this repository has actually
+# measured a client dying on, one for each side.
 #
 # See TODO/peers.md, T-194 and T-195.
 
 [CmdletBinding()]
 param(
-    # Piece counts to prove. The default is the first count the old fixed
-    # buffer could not hold, plus one comfortably past it.
-    [int[]]$Pieces = @(131961, 163840),
+    # Piece counts to prove. The two the old code died on, one per side:
+    # 131,961 is the first count the fixed write buffer could not hold, and
+    # 262,105 the first the fixed read buffer could not.
+    [int[]]$Pieces = @(131961, 262105),
     # Bytes per piece. 1 KiB keeps the payload small enough to build in a
     # second: the piece count is what is being tested, not the piece length.
     [int]$PieceLength = 1024,

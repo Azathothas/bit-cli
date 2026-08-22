@@ -5,7 +5,7 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/crates/librqbit/src/torrent_state/live/mod.rs b/crates/librqbit/src/torrent_state/live/mod.rs
-index b4146d8..cf4ebd1 100644
+index b4146d8..368e4f0 100644
 --- a/crates/librqbit/src/torrent_state/live/mod.rs
 +++ b/crates/librqbit/src/torrent_state/live/mod.rs
 @@ -265,6 +265,7 @@ impl TorrentStateLive {
@@ -77,7 +77,7 @@ index b4146d8..cf4ebd1 100644
      first_message_received: AtomicBool,
  
      cancel_token: CancellationToken,
-@@ -1120,15 +1145,22 @@ impl PeerConnectionHandler for &'_ PeerHandler {
+@@ -1120,15 +1145,35 @@ impl PeerConnectionHandler for &'_ PeerHandler {
          Ok(())
      }
  
@@ -97,12 +97,25 @@ index b4146d8..cf4ebd1 100644
          Ok(len)
      }
  
++    /// One bitfield for this torrent, and a little slack.
++    ///
++    /// This is what stops a peer growing the read buffer past what the torrent
++    /// could honestly need: the piece count is ours, not theirs. Never below
++    /// the default, so a small torrent keeps the buffer it always had.
++    fn max_incoming_message_len(&self) -> usize {
++        let pieces = self.state.lengths.total_pieces() as usize;
++        let bitfield = Message::bitfield_message_len(pieces.div_ceil(8));
++        bitfield
++            .saturating_add(peer_binary_protocol::MAX_MSG_LEN)
++            .max(crate::read_buf::BUFLEN)
++    }
++
      fn on_handshake(&self, handshake: Handshake, ckind: ConnectionKind) -> anyhow::Result<()> {
 +        let _ = self.peer_id.set(handshake.peer_id);
          self.state.set_peer_live(self.addr, handshake, ckind);
          Ok(())
      }
-@@ -1693,15 +1725,20 @@ impl PeerHandler {
+@@ -1693,15 +1738,20 @@ impl PeerHandler {
  
                  aframe!(self.wait_for_request_slot()).await;
  

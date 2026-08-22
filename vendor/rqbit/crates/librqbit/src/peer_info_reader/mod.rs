@@ -167,6 +167,27 @@ impl PeerConnectionHandler for Handler {
         false
     }
 
+    /// A bitfield this side cannot use yet, and still has to survive.
+    ///
+    /// A seeder sends its bitfield right after the handshake, before this has
+    /// the metadata, and a bitfield is one bit per piece. So the message that
+    /// arrives here is as large as the torrent makes it while the piece count
+    /// is exactly the thing not known yet, and there is nothing honest to
+    /// derive a bound from. `MAX_BITFIELD_BEFORE_METADATA` is that bound: an
+    /// 8,388,600 piece torrent, which is 128 GiB at a 16 KiB piece length and
+    /// 32 TiB at 4 MiB. Past it the connection fails as it always did.
+    ///
+    /// Bounded rather than unbounded because the length prefix is the peer's
+    /// number, and this is the one handler that cannot check it against
+    /// anything. The alternative, skipping a message this side has no use for
+    /// instead of buffering it, would cost nothing at all and is a larger
+    /// change to `read_message`'s contract: it would have to drop a message
+    /// rather than return one. See `TODO/peers.md` T-195.
+    fn max_incoming_message_len(&self) -> usize {
+        const MAX_BITFIELD_BEFORE_METADATA: usize = 1024 * 1024;
+        MAX_BITFIELD_BEFORE_METADATA
+    }
+
     fn serialize_bitfield_message_to_buf(&self, _buf: &mut Vec<u8>) -> anyhow::Result<usize> {
         Ok(0)
     }

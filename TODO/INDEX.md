@@ -113,7 +113,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-165](peers.md) | P2 | peers | open | The peer's reqq is ignored, so the queue depth is a fixed 128 |
 | [T-166](peers.md) | P1 | peers | **done** | BEP 10 extension ids are not proven to map in both directions |
 | [T-194](peers.md) | P0 | peers | **done** | A torrent past 131,960 pieces cannot be served or fetched at all |
-| [T-195](peers.md) | P2 | peers | open | The read side caps the same message at 262,104 pieces |
+| [T-195](peers.md) | P2 | peers | done | The read side caps the same message at 262,104 pieces |
 | [T-210](peers.md) | P1 | peers | done | An incoming peer is recorded under this session's own peer id |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
@@ -237,7 +237,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 159 items: 149 to work through, and 10 deferred to Phase C.
-47 open, 4 partial, 2 blocked, 96 done.
+46 open, 4 partial, 2 blocked, 97 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -492,10 +492,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 1 | 0 | 11 | 12 |
 | P1 | 1 | 0 | 0 | 53 | 54 |
-| P2 | 24 | 3 | 2 | 30 | 59 |
+| P2 | 23 | 3 | 2 | 31 | 59 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **47** | **4** | **2** | **96** | **159** |
+| **All** | **46** | **4** | **2** | **97** | **159** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

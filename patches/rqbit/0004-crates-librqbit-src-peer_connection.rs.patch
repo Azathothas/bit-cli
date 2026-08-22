@@ -5,10 +5,10 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/crates/librqbit/src/peer_connection.rs b/crates/librqbit/src/peer_connection.rs
-index c06259a..8710771 100644
+index c06259a..3d3ed7d 100644
 --- a/crates/librqbit/src/peer_connection.rs
 +++ b/crates/librqbit/src/peer_connection.rs
-@@ -36,7 +36,11 @@ use crate::{
+@@ -36,8 +36,28 @@ use crate::{
  pub trait PeerConnectionHandler {
      fn on_connected(&self, _connection_time: Duration) {}
      fn should_send_bitfield(&self) -> bool;
@@ -19,9 +19,26 @@ index c06259a..8710771 100644
 +    /// implementor knows how large it has to be.
 +    fn serialize_bitfield_message_to_buf(&self, buf: &mut Vec<u8>) -> anyhow::Result<usize>;
      fn on_handshake(&self, handshake: Handshake, ckind: ConnectionKind) -> anyhow::Result<()>;
++
++    /// The largest message this peer may send us, in bytes.
++    ///
++    /// The read buffer starts at `BUFLEN` and grows to this. It exists because
++    /// one message is not bounded by any constant: a bitfield is one bit per
++    /// piece, so a torrent past 262,104 pieces sends one that does not fit in
++    /// 32,768 bytes and the connection died on it whatever either end did.
++    /// See `TODO/peers.md` T-195.
++    ///
++    /// The implementor answers from the **torrent**, never from what the peer
++    /// says it is about to send, because the second is a number a hostile peer
++    /// picks. The default is the buffer that already exists, which is the
++    /// behaviour every implementor had before this method.
++    fn max_incoming_message_len(&self) -> usize {
++        crate::read_buf::BUFLEN
++    }
      fn on_extended_handshake(
          &self,
-@@ -170,8 +174,8 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+         extended_handshake: &ExtendedHandshake<ByteBuf>,
+@@ -170,8 +190,8 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
          );
  
          let mut write_buf = Box::new([0u8; MAX_MSG_LEN]);
@@ -32,7 +49,7 @@ index c06259a..8710771 100644
          with_timeout(
              "writing handshake",
              rwtimeout,
-@@ -182,10 +186,16 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+@@ -182,15 +202,27 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
          )
          .await?;
  
@@ -50,8 +67,28 @@ index c06259a..8710771 100644
 +            .on_handshake(incoming.handshake, incoming.kind)
              .map_err(Error::Anyhow)?;
  
++        // The session read the handshake into this buffer before it knew which
++        // torrent the connection was for, so the bound is raised here, where
++        // the handler is known.
++        let mut read_buf = incoming.read_buf;
++        read_buf.set_max_len(self.handler.max_incoming_message_len());
++
          self.manage_peer(ManagePeerArgs {
-@@ -319,14 +329,20 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+             handshake_supports_extended,
+-            read_buf: incoming.read_buf,
++            read_buf,
+             write_buf,
+             read: incoming.reader,
+             write: incoming.writer,
+@@ -240,6 +272,7 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+             .await?;
+ 
+             let mut read_buf = ReadBuf::new();
++            read_buf.set_max_len(self.handler.max_incoming_message_len());
+             let h = read_buf.read_handshake(&mut read, rwtimeout).await?;
+             let handshake_supports_extended = h.supports_extended();
+             trace!(
+@@ -319,14 +352,20 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
                  .unwrap_or_else(|| Duration::from_secs(120));
  
              if self.handler.should_send_bitfield() {
