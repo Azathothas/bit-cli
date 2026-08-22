@@ -93,6 +93,10 @@ pub const DOCUMENT_KINDS: &[(&str, &str)] = &[
         "version",
         "The build, its features, and the exit code table.",
     ),
+    (
+        "disk",
+        "The report a `bench` run writes, measured here from `bench disk`. Every target writes this document with its own `kind`. `environment` describes the machine rather than the measurement and is left out: it carries fields one platform has and another does not, so a contract holding it would say which machine last regenerated this file. See `TODO/bench.md`, T-189.",
+    ),
 ];
 
 /// Every event `type` `bit-cli` emits under `--jsonl`, with what it means.
@@ -311,6 +315,13 @@ never sees a log line.
 Every document carries four fields before its own: `schema_version`,
 `bit_cli_version`, `generated_at`, and `kind`. Every event carries `type`,
 `seq`, and `at`.
+
+A `bench` report is the exception, and it is the only one. It carries `kind`
+and a `report_version` of its own, because `--baseline` reads a report written
+by an older build and has to know which format it is holding. Its `environment`
+object is not listed below either: that describes the machine a run was taken
+on, and it carries fields one platform has and another does not. See
+`TODO/bench.md`, T-189.
 
 Sizes and durations are always an integer plus a rendered string, never the
 string alone: `{"bytes": 1048576, "human": "1.00 MiB"}` and

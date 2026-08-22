@@ -12,6 +12,13 @@ Every document carries four fields before its own: `schema_version`,
 `bit_cli_version`, `generated_at`, and `kind`. Every event carries `type`,
 `seq`, and `at`.
 
+A `bench` report is the exception, and it is the only one. It carries `kind`
+and a `report_version` of its own, because `--baseline` reads a report written
+by an older build and has to know which format it is holding. Its `environment`
+object is not listed below either: that describes the machine a run was taken
+on, and it carries fields one platform has and another does not. See
+`TODO/bench.md`, T-189.
+
 Sizes and durations are always an integer plus a rendered string, never the
 string alone: `{"bytes": 1048576, "human": "1.00 MiB"}` and
 `{"ms": 1500, "human": "1s"}`. Rates use the same shape as a size with
@@ -740,6 +747,143 @@ From `bit-cli version --json`.
 | `trace_subsystems[].description` | string |
 | `trace_subsystems[].name` | string |
 | `version` | string |
+
+### `disk`
+
+The report a `bench` run writes, measured here from `bench disk`. Every target writes this document with its own `kind`. `environment` describes the machine rather than the measurement and is left out: it carries fields one platform has and another does not, so a contract holding it would say which machine last regenerated this file. See `TODO/bench.md`, T-189.
+
+From `bit-cli bench disk --json`.
+
+| field | type |
+| --- | --- |
+| `concurrency_curve[].bytes.bytes` | integer |
+| `concurrency_curve[].bytes.human` | string |
+| `concurrency_curve[].concurrency` | integer |
+| `concurrency_curve[].elapsed.human` | string |
+| `concurrency_curve[].elapsed.ms` | integer |
+| `concurrency_curve[].errors` | integer |
+| `concurrency_curve[].latency.complete.count` | integer |
+| `concurrency_curve[].latency.complete.max_ms` | integer |
+| `concurrency_curve[].latency.complete.mean_ms` | integer |
+| `concurrency_curve[].latency.complete.p50_ms` | integer |
+| `concurrency_curve[].latency.complete.p90_ms` | integer |
+| `concurrency_curve[].latency.complete.p999_ms` | integer |
+| `concurrency_curve[].latency.complete.p99_ms` | integer |
+| `concurrency_curve[].latency.connect.count` | integer |
+| `concurrency_curve[].latency.connect.max_ms` | integer |
+| `concurrency_curve[].latency.connect.mean_ms` | integer |
+| `concurrency_curve[].latency.connect.p50_ms` | integer |
+| `concurrency_curve[].latency.connect.p90_ms` | integer |
+| `concurrency_curve[].latency.connect.p999_ms` | integer |
+| `concurrency_curve[].latency.connect.p99_ms` | integer |
+| `concurrency_curve[].latency.first_byte.count` | integer |
+| `concurrency_curve[].latency.first_byte.max_ms` | integer |
+| `concurrency_curve[].latency.first_byte.mean_ms` | integer |
+| `concurrency_curve[].latency.first_byte.p50_ms` | integer |
+| `concurrency_curve[].latency.first_byte.p90_ms` | integer |
+| `concurrency_curve[].latency.first_byte.p999_ms` | integer |
+| `concurrency_curve[].latency.first_byte.p99_ms` | integer |
+| `concurrency_curve[].rate.bytes` | integer |
+| `concurrency_curve[].rate.human` | string |
+| `concurrency_curve[].requests` | integer |
+| `disk_steps[].bytes.bytes` | integer |
+| `disk_steps[].bytes.human` | string |
+| `disk_steps[].concurrency_achieved` | string |
+| `disk_steps[].elapsed.human` | string |
+| `disk_steps[].elapsed.ms` | integer |
+| `disk_steps[].files` | integer |
+| `disk_steps[].flush.human` | string |
+| `disk_steps[].flush.ms` | integer |
+| `disk_steps[].layout` | string |
+| `disk_steps[].mean_write_us` | integer |
+| `disk_steps[].rate.bytes` | integer |
+| `disk_steps[].rate.human` | string |
+| `disk_steps[].threads` | integer |
+| `disk_steps[].threads_detail[].blocks` | integer |
+| `disk_steps[].threads_detail[].bytes.bytes` | integer |
+| `disk_steps[].threads_detail[].bytes.human` | string |
+| `disk_steps[].threads_detail[].index` | integer |
+| `disk_steps[].threads_detail[].mean_write_us` | integer |
+| `disk_steps[].threads_detail[].write_time.human` | string |
+| `disk_steps[].threads_detail[].write_time.ms` | integer |
+| `disk_steps[].total_write_time.human` | string |
+| `disk_steps[].total_write_time.ms` | integer |
+| `disk_steps[].write_ops` | integer |
+| `kind` | string |
+| `notes[]` | string |
+| `parameters.concurrency` | integer |
+| `parameters.duration.human` | string |
+| `parameters.duration.ms` | integer |
+| `parameters.metrics_interval.human` | string |
+| `parameters.metrics_interval.ms` | integer |
+| `parameters.payload_size.bytes` | integer |
+| `parameters.payload_size.human` | string |
+| `parameters.piece_size.bytes` | integer |
+| `parameters.piece_size.human` | string |
+| `parameters.warmup.human` | string |
+| `parameters.warmup.ms` | integer |
+| `report_version` | integer |
+| `series[].at.epoch_ms` | integer |
+| `series[].at.iso` | string |
+| `series[].bytes.bytes` | integer |
+| `series[].bytes.human` | string |
+| `series[].concurrency` | integer |
+| `series[].costs.disk_read.human` | string |
+| `series[].costs.disk_read.ms` | integer |
+| `series[].costs.disk_read_bytes.bytes` | integer |
+| `series[].costs.disk_read_bytes.human` | string |
+| `series[].costs.disk_write.human` | string |
+| `series[].costs.disk_write.ms` | integer |
+| `series[].costs.disk_write_bytes.bytes` | integer |
+| `series[].costs.disk_write_bytes.human` | string |
+| `series[].costs.mean_service_us` | integer |
+| `series[].costs.verify.human` | string |
+| `series[].costs.verify.ms` | integer |
+| `series[].costs.verify_bytes.bytes` | integer |
+| `series[].costs.verify_bytes.human` | string |
+| `series[].cumulative_bytes.bytes` | integer |
+| `series[].cumulative_bytes.human` | string |
+| `series[].elapsed.human` | string |
+| `series[].elapsed.ms` | integer |
+| `series[].errors` | integer |
+| `series[].process.cpu_ms` | integer |
+| `series[].process.cpu_system_ms` | integer |
+| `series[].process.cpu_user_ms` | integer |
+| `series[].process.open_handles` | integer |
+| `series[].process.peak_rss_bytes` | integer |
+| `series[].process.rss_bytes` | integer |
+| `series[].rate.bytes` | integer |
+| `series[].rate.human` | string |
+| `series[].requests` | integer |
+| `series[].warmup` | bool |
+| `summary.best_concurrency` | integer |
+| `summary.bytes.bytes` | integer |
+| `summary.bytes.human` | string |
+| `summary.disk.read_bytes.bytes` | integer |
+| `summary.disk.read_bytes.human` | string |
+| `summary.disk.read_ops` | integer |
+| `summary.disk.read_time.human` | string |
+| `summary.disk.read_time.ms` | integer |
+| `summary.disk.write_bytes.bytes` | integer |
+| `summary.disk.write_bytes.human` | string |
+| `summary.disk.write_calls` | integer |
+| `summary.disk.write_ops` | integer |
+| `summary.disk.write_time.human` | string |
+| `summary.disk.write_time.ms` | integer |
+| `summary.duration.human` | string |
+| `summary.duration.ms` | integer |
+| `summary.errors.total` | integer |
+| `summary.peak_rate.bytes` | integer |
+| `summary.peak_rate.human` | string |
+| `summary.requests` | integer |
+| `summary.sustained_rate.bytes` | integer |
+| `summary.sustained_rate.human` | string |
+| `target.name` | string |
+| `target.piece_length.bytes` | integer |
+| `target.piece_length.human` | string |
+| `target.source` | string |
+| `target.total.bytes` | integer |
+| `target.total.human` | string |
 
 ## Events
 

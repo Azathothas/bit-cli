@@ -329,7 +329,7 @@ Source:      found doing T-018's review, 2026-08-22
 Category:    bench
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-22T11:02Z
 
 Problem:     `docs/schema.md` documents every `--json` document and every
              `--jsonl` event, and `schema_gen` fails the build when a field
@@ -386,6 +386,115 @@ name. Renaming any of them passes every gate in this repository.
 The same session added seven fields to the `trackers` document and the schema
 test caught every one, so the mechanism works where it reaches. It just does
 not reach here.
+
+**Which of the two ways out was taken, and why.** The reports are documented,
+which is the half the `Acceptance` names. `docs/schema.md` now carries a
+`disk` section generated from a run of its own, and every field a consumer
+selects is in it: `summary.disk.write_time.ms` for `scripts/bench-leech.ps1`,
+the whole `summary` object `--baseline` compares, and `summary.disk.write_calls`,
+the field [T-018](disk-io.md) added with the contract check green.
+
+`report_version` was not made to mean something, and the entry's argument
+against it stands: it is a constant at 1, nothing bumps it, and the only reader
+is `--baseline` refusing a **newer** report. Documenting the fields protects
+against the rename; a version nobody bumps protects against nothing. The two
+were never exclusive, and the second is still available if a format break ever
+needs announcing.
+
+**A second run, because `--jsonl` pins the format.** `Output::resolve` at
+`crates/bit-cli/src/cmd/bench.rs:221-225` sets NDJSON whenever `--jsonl` is
+given, whatever `--format` says, so the existing run in `schema_gen::collect`
+cannot also produce the JSON document. Folding in the NDJSON head instead would
+have documented the wrong thing: `render::ndjson` at
+`crates/bit-cli-core/src/bench/render.rs:60-64` empties `series`, `sources`,
+`concurrency_curve` and `disk_steps` out of the head and splits them into
+records of their own, so the head is missing four of the report's arrays and
+carries a `record` field the JSON form does not have. The generator runs
+`bench disk --json` a second time, at 16 MiB rather than 64. It costs nothing
+measurable: the schema test was **31.21 s** before the change and **31.28 s**
+after, because 16 MiB is written well inside the ten second cap.
+
+**What is left out, and the reason it had to be.** `environment`, and nothing
+else. Folding it in would have made the contract a record of whichever machine
+last regenerated it and turned CI red on the next platform, which is three
+jobs: `Test` runs on `ubuntu-latest`, `windows-latest` and `macos-latest`.
+
+- `Os::distribution` is read from `/etc/os-release` and is
+  `skip_serializing_if = "Option::is_none"`, so the row exists on Linux and
+  nowhere else. `crates/bit-cli-core/src/sysinfo.rs:114-124`.
+- The macOS module does not import `Nic` at all, so `host.network` is empty
+  there and that one row renders as `array`, where Windows and Linux produce
+  the object rows under it. `crates/bit-cli-core/src/sysinfo.rs:869-873`, and
+  the three-implementation split is [T-145](cli-surface.md)'s.
+- Both `unavailable` lists are `skip_serializing_if = "Vec::is_empty"` and
+  appear only when a read failed.
+
+Nothing any consumer selects is under `environment`, so the gap is bounded and
+it is written down in the generated file itself rather than only here.
+
+**The header claim that would have become false.** `docs/schema.md` said "every
+document carries four fields before its own: `schema_version`,
+`bit_cli_version`, `generated_at`, and `kind`". A `bench` report carries
+`kind` and `report_version` and none of the other three, so adding the section
+without touching the header would have left the file contradicting its own
+table one screen further down. The header names the exception now.
+
+Acceptance, met, and the third clause measured rather than argued. Renaming
+`Disk::write_calls` to `writes_asked_for` with one `#[serde(rename)]`:
+
+```bash
+cargo test -p bit-cli --lib the_committed_schema_matches
+```
+
+```
+test schema_gen::tests::the_committed_schema_matches_what_the_program_writes ... FAILED
+docs/schema.md does not describe 1 field(s) this run produced:
+  | `summary.disk.writes_asked_for` | integer |
+```
+
+The rename was reverted and the tests are green. Before this change the same
+rename passed every gate, and it could not have failed: the file held no row
+under `summary.disk` at all, so there was nothing for a rename to go missing
+from.
+
+**What it found on the way out: [T-191](#t-191-two-different-documents-answer-to-kind-seed).**
+`bit-cli seed --json` writes `kind: "seed"` and so does a `bench seed` report.
+
+### T-191 Two different documents answer to kind seed
+
+Source:      found closing [T-189](#t-189-the-bench-reports-are-not-in-the-schema-contract), 2026-08-22
+Category:    bench
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `bit-cli seed <TORRENT> --json` writes a document with
+             `kind: "seed"`, holding `data_directory`, `complete` and who
+             connected. `bit-cli bench seed --json` writes a report with
+             `kind: "seed"` too, holding `report_version`, `parameters` and
+             `summary`. They share nothing but the discriminator.
+Relevance:   `RULES.md` says anything consuming this output selects by `type`
+             or `kind` and never by position, and for these two `kind` does not
+             decide which document is in hand. It is also a live hazard in the
+             generator: `schema_gen::fold_document` keys the sample map by
+             `kind`, so the day somebody folds `bench seed` in beside
+             `bench disk`, the two field lists union silently into the one
+             section headed `seed`, and the file claims a document that exists
+             nowhere. Nothing would fail.
+Approach:    Decide whether the report's discriminator should be the bench
+             target or the document. `Kind::as_str` at
+             `crates/bit-cli-core/src/bench/report.rs:47-55` is the whole
+             surface, and changing what it emits is a break in the report
+             format, which is what `report_version` is for and would be the
+             first thing to bump it. The alternative is to leave the wire
+             format alone and make the collision impossible to reach by
+             accident: key the generator's document map by something that
+             already distinguishes them, and fail rather than merge when two
+             runs claim one name. `leech`, `webseed`, `swarm` and `probe` do
+             not collide with anything today, so `seed` is the only pair.
+Acceptance:  Two runs whose documents share a `kind` cannot merge into one
+             schema section without something failing, and a test names the
+             pair.
 
 ### T-091 Bench reports do not capture their environment
 

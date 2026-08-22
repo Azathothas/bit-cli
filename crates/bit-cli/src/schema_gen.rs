@@ -37,10 +37,15 @@ fn observe_document(into: &mut BTreeMap<String, Sample>, command: &str, out: &st
     let Ok(value) = serde_json::from_str::<serde_json::Value>(out) else {
         return;
     };
+    fold_document(into, command, &value);
+}
+
+/// The half of [`observe_document`] that works on a value already parsed.
+fn fold_document(into: &mut BTreeMap<String, Sample>, command: &str, value: &serde_json::Value) {
     let Some(kind) = value.get("kind").and_then(|k| k.as_str()) else {
         return;
     };
-    let flattened = fields(&value);
+    let flattened = fields(value);
     into.entry(kind.to_string())
         .and_modify(|sample| sample.merge(flattened.clone()))
         .or_insert_with(|| Sample {
@@ -48,6 +53,31 @@ fn observe_document(into: &mut BTreeMap<String, Sample>, command: &str, out: &st
             command: command.to_string(),
             fields: flattened,
         });
+}
+
+/// Fold one `bench` report in, without the machine it ran on.
+///
+/// `environment` is the only thing dropped, and it is dropped because it
+/// describes the machine rather than the measurement. `host.os.distribution`
+/// is read from `/etc/os-release` and so exists on Linux and nowhere else; the
+/// macOS reader has no interface table at all, so `host.network` is empty
+/// there and that one row is `array` where Windows and Linux produce the
+/// object rows under it; and both `unavailable` lists appear only when a read
+/// failed. Folding it in would make the contract a record of whichever machine
+/// last regenerated it, and turn the next platform's run red for saying so.
+///
+/// Nothing a consumer selects is under it. `scripts/check-swarm.ps1` reads
+/// `swarm.serving.pieces_announced`, `scripts/bench-leech.ps1` reads
+/// `summary.disk.write_time.ms`, and `--baseline` compares `summary`. See
+/// `TODO/bench.md`, T-189.
+fn observe_report(into: &mut BTreeMap<String, Sample>, command: &str, out: &str) {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(out) else {
+        return;
+    };
+    if let Some(fields) = value.as_object_mut() {
+        fields.remove("environment");
+    }
+    fold_document(into, command, &value);
 }
 
 /// Fold one run's events into the sample for each `type`.
@@ -775,10 +805,13 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
     // finished in 5 ms on this machine and produced no sample at all, which is
     // the same reason a two minute soak says nothing about a six hour one.
     //
-    // Only the events are folded in. A `bench` report is a versioned document
-    // of its own, with `report_version` and its own `kind`, and it is not part
-    // of this contract: under `--jsonl` it renders as NDJSON records carrying
-    // `record` rather than `type`, so nothing here picks it up.
+    // This run gives the events only. Under `--jsonl` the report renders as
+    // NDJSON records carrying `record` rather than `type`, so `observe_events`
+    // does not pick it up, and the head of that stream is not the report
+    // anyway: `render::ndjson` empties `series`, `sources`,
+    // `concurrency_curve` and `disk_steps` out of it and splits them into
+    // records of their own. The report is taken from its own run below, in the
+    // form `--baseline` and the acceptance scripts actually read.
     let (_, out) = capture(
         &[
             "--jsonl",
@@ -801,6 +834,36 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         dir.clone(),
     );
     observe_events(&mut events, "bit-cli bench disk --jsonl", &out);
+
+    // The report itself, from a second run, because `--jsonl` pins the format
+    // to NDJSON whatever `--format` says. `bench disk` is the target that
+    // needs no source, no port and no network, and every other target writes
+    // the same document with a different `kind`. Shorter than the run above:
+    // this one is measuring nothing, it only has to produce every field once,
+    // and a 10 ms sample interval fills `series` long before the payload is
+    // written. See `TODO/bench.md`, T-189.
+    let (_, out) = capture(
+        &[
+            "--json",
+            "bench",
+            "disk",
+            "--dir",
+            dir.join("bench-report").to_str().unwrap(),
+            "--payload-size",
+            "16MiB",
+            "--block-size",
+            "64KiB",
+            "--concurrency",
+            "2",
+            "--metrics-interval",
+            "10ms",
+            "--duration",
+            "10s",
+            "--no-verify",
+        ],
+        dir.clone(),
+    );
+    observe_report(&mut documents, "bit-cli bench disk --json", &out);
 
     let mut documents: Vec<Sample> = documents.into_values().collect();
     let mut events: Vec<Sample> = events.into_values().collect();
