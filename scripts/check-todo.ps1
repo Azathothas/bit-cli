@@ -250,11 +250,64 @@ foreach ($id in $entries.Keys) { [void]$known.Add($id) }
 $corpus = Join-Path $repo "reference"
 $corpusPresent = Test-Path $corpus -PathType Container
 
+# Every Rust file under crates/, indexed by bare name, so a citation written
+# short resolves too. `cli.rs:2103` is how most of TODO/ cites this tree and
+# the long-form check below never saw one: five citations had drifted 84 to
+# 334 lines and every review passed them. A name two files share resolves to
+# nothing on purpose, because guessing which one was meant is worse than
+# saying nothing.
+$byName = @{}
+foreach ($rs in Get-ChildItem -Path (Join-Path $repo "crates") -Filter *.rs -Recurse -File) {
+    if ($byName.ContainsKey($rs.Name)) { $byName[$rs.Name] = $null; continue }
+    $byName[$rs.Name] = $rs.FullName
+}
+
+# Read once per file rather than once per citation.
+$lineCache = @{}
+function Get-Lines([string]$path) {
+    if (-not $lineCache.ContainsKey($path)) {
+        $lineCache[$path] = @([System.IO.File]::ReadAllLines($path))
+    }
+    $lineCache[$path]
+}
+
+# Whether a citation's line still holds the symbol the prose names beside it.
+#
+# Only a name that occurs exactly once in the file is judged: a name the file
+# uses twice cannot say which occurrence was meant, and a wrong complaint about
+# a citation is worse than a missing one. `$Cursor` is allowed a few lines of
+# slack, because a citation often names the doc comment above a function.
+function Test-Citation([string]$Path, [string]$Cited, [int]$Cursor, [string]$Prose, [string]$Where) {
+    $lines = Get-Lines $Path
+    foreach ($m in [regex]::Matches($Prose, '`(?<s>[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)`')) {
+        $name = ($m.Groups['s'].Value -split '::')[-1]
+        # A snake_case name of some length is a function or a field. Anything
+        # shorter is as often an English word in backticks.
+        if ($name.Length -lt 10 -or $name -notmatch '_') { continue }
+        $pattern = "(?<![A-Za-z0-9_])" + [regex]::Escape($name) + "(?![A-Za-z0-9_])"
+        $hits = @()
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -cmatch $pattern) { $hits += ($i + 1) }
+        }
+        if ($hits.Count -ne 1) { continue }
+        if ([math]::Abs($hits[0] - $Cursor) -le 4) { continue }
+        Problem "drifted-line" "$Where cites ${Cited}:$Cursor for ``$name``, which is at :$($hits[0])"
+    }
+}
+
 foreach ($file in $files) {
     $text = [System.IO.File]::ReadAllText($file.FullName)
     $lineNo = 0
+    # Inside a fenced block the text is quoted output, a command, or a
+    # transcript. A path there is still checked, because a command a reader is
+    # told to run has to exist. A drifted line is not: an entry that records
+    # what a citation used to say, or quotes a checker naming a stale one, is
+    # evidence and has to keep the number it was wrong at. T-193 is the worked
+    # example and it reported itself seven times before this.
+    $fenced = $false
     foreach ($line in ($text -split "`r?`n")) {
         $lineNo++
+        if ($line -match '^\s*```') { $fenced = -not $fenced }
         # A T-NNN that names no entry. Anchors and links both.
         foreach ($m in [regex]::Matches($line, '\bT-(\d{3})\b')) {
             $id = "T-$($m.Groups[1].Value)"
@@ -284,10 +337,28 @@ foreach ($file in $files) {
                 continue
             }
             if ($m.Groups['l'].Success) {
-                $count = (Get-Content -LiteralPath $path | Measure-Object -Line).Lines
+                $count = (Get-Lines $path).Count
                 if ([int]$m.Groups['l'].Value -gt $count) {
                     Problem "dead-line" "$($file.Name):$lineNo cites ${cited}:$($m.Groups['l'].Value) and that file has $count lines"
+                } elseif (-not $fenced) {
+                    Test-Citation $path $cited ([int]$m.Groups['l'].Value) $line "$($file.Name):$lineNo"
                 }
+            }
+        }
+        # The same citation written short, as `cli.rs:2103`. Resolved through
+        # the bare-name index above, and skipped when the name is not unique.
+        foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<p>[a-z0-9_]+\.rs):(?<l>\d+)')) {
+            $short = $m.Groups['p'].Value
+            if (-not $byName.ContainsKey($short)) { continue }
+            $path = $byName[$short]
+            if ($null -eq $path) { continue }
+            $lines = Get-Lines $path
+            if ([int]$m.Groups['l'].Value -gt $lines.Count) {
+                Problem "dead-line" "$($file.Name):$lineNo cites ${short}:$($m.Groups['l'].Value) and that file has $($lines.Count) lines"
+                continue
+            }
+            if (-not $fenced) {
+                Test-Citation $path $short ([int]$m.Groups['l'].Value) $line "$($file.Name):$lineNo"
             }
         }
         # A citation into the corpus, as `TorrentNG/crates/a/b.rs:123`. Only

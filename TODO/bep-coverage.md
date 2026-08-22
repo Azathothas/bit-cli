@@ -50,7 +50,7 @@ the table described intent rather than the tree.**
   no switch. See [T-101](#t-101-utp-is-available-but-untested).
 - **BEP 47 said "not implemented".** The read side is implemented and tested.
   `torrent/metainfo.rs:107` parses the `attr` key, `:116` `InfoFile::is_padding`
-  is the predicate, `storage.rs:728` and `:870` never open a padding file
+  is the predicate, `storage.rs:1048` and `:1216` never open a padding file
   because it is alignment rather than data, `cmd/files.rs:176` reports it, and
   `torrent/metainfo.rs:825` `padding_files_are_recognised` is the test. What is
   missing is the **write** side: `create` emits no padding files, which is a

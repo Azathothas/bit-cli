@@ -1340,7 +1340,8 @@ Priority:    P2
 Effort:      S
 Status:      **done**, 2026-08-22T10:47Z, with the premise corrected below
 
-Problem:     `crates/bit-cli-core/src/engine.rs:575-577` says "A caller that
+Problem:     `crates/bit-cli-core/src/engine.rs` said, at :575-577 before
+             2026-08-22, "A caller that
              named an output directory gets exactly that directory. Otherwise
              the session's rule applies and a multi-file torrent goes into a
              directory named after itself", and passes `subfolder: false` when
@@ -1357,7 +1358,7 @@ Approach:    Decide which is true and make the other match. The evidence says
              the multi-file alignment one, and all of them pass. So the comment
              is probably the wrong half. What has to be read before changing it
              is what `subfolder: false` **does** achieve, because
-             `SafeStorageFactory` uses it at `storage.rs:402` to decide its own
+             `SafeStorageFactory` uses it at `storage.rs:410` to decide its own
              path plan while `AddTorrentOptions::output_folder` goes to the
              session as well, and the extra directory may be the session's
              rather than the factory's. If it is the session's, then
@@ -1413,8 +1414,8 @@ copy of the name rather than the first, which is what `seed` needs when
 `--data <parent>/<name>` has already resolved to the torrent directory. The
 other half is wrong: the extra directory is the **factory's**, not the
 session's. `SafeStorage` joins its own `root` for every path it opens,
-`crates/bit-cli-core/src/storage.rs:1047` and `:1191`, and that root is decided
-at `storage.rs:402` from `subfolder_for`, `storage.rs:1329`. librqbit's session
+`crates/bit-cli-core/src/storage.rs:1055` and `:1199`, and that root is decided
+at `storage.rs:410` from `subfolder_for`, `storage.rs:1337`. librqbit's session
 computes an output folder of its own by the same rule at
 `librqbit-9.0.0/src/session.rs:1286-1296`, but with a storage factory supplied
 that value reaches only the default filesystem storage,
@@ -1669,10 +1670,10 @@ Approach:    The cause is upstream and the fix is local.
              is called with nothing to write.
 
              `SafeStorage::pwrite_all_vectored` in
-             `crates/bit-cli-core/src/storage.rs:799` takes `Intent::Write`
+             `crates/bit-cli-core/src/storage.rs:1119` takes `Intent::Write`
              before it looks at the slices, and `Intent::Write` is what creates
              a file that is not there. The empty slices are skipped inside the
-             closure, after the file exists. `pwrite_all` at :781 has the same
+             closure, after the file exists. `pwrite_all` at :1107 has the same
              shape.
 
              So: return `Ok` for a write of zero bytes before opening anything.

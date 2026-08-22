@@ -200,6 +200,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-183](cli-surface.md) | P1 | cli | **done** | --web-seed-list-url is read, only into a refusal |
 | [T-185](cli-surface.md) | P1 | cli | **done** | --exclude-file on its own selects nothing and downloads everything |
 | [T-186](cli-surface.md) | P3 | cli | **done** | seed --data and verify --data resolve the payload differently |
+| [T-193](cli-surface.md) | P2 | cli | done | A citation written short was never checked at all |
 | [T-182](cli-surface.md) | P1 | ci | **done** | A macOS test asserted an invariant across two kernel subsystems |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
@@ -228,8 +229,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-151 items: 141 to work through, and 10 deferred to Phase C.
-47 open, 6 partial, 2 blocked, 86 done.
+152 items: 142 to work through, and 10 deferred to Phase C.
+47 open, 6 partial, 2 blocked, 87 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -484,10 +485,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 1 | 0 | 9 | 11 |
 | P1 | 1 | 2 | 0 | 48 | 51 |
-| P2 | 23 | 3 | 2 | 27 | 55 |
+| P2 | 23 | 3 | 2 | 28 | 56 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **47** | **6** | **2** | **86** | **151** |
+| **All** | **47** | **6** | **2** | **87** | **152** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

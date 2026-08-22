@@ -553,10 +553,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2107` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2012` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2048` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:1833` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2332` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2103` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2139` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:1924` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -1175,7 +1175,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:734` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1068` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -1564,7 +1564,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2107` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2332` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -2192,3 +2192,71 @@ and was run against the old behaviour first: the torrent directory reports
 `have: 0` where the parent reports 2,000.
 `a_seed_that_holds_nothing_names_the_directories_it_searched` runs twice over,
 because a message keyed on the files existing would pass once and fail after.
+
+### T-193 A citation written short was never checked at all
+
+Source:      found in this session's own review 1, 2026-08-22
+Category:    cli-surface
+Priority:    P2
+Effort:      S
+Status:      **done**, 2026-08-22T11:26Z
+
+Problem:     `scripts/check-todo.ps1` resolved a citation written long, as
+             `crates/bit-cli/src/cli.rs:2103`, and checked only that the file
+             had that many lines. Most of `TODO/` does not write them long. A
+             citation written as `cli.rs:2103` matched nothing in the pattern,
+             so it was never resolved, never range checked, and never read.
+Relevance:   `RULES.md` section 2 step 4 says the mechanical half of the two
+             reviews answers "a cited path that does not resolve". For the
+             common spelling it answered nothing, and the record is built on
+             citations.
+Approach:    Index every `.rs` under `crates/` by bare name and resolve a short
+             citation through it, skipping a name two files share, because
+             guessing which one was meant is worse than saying nothing. Then
+             check the line rather than only the count: where the prose names a
+             symbol beside the citation, and that symbol occurs **exactly
+             once** in the file, the citation has to be within a few lines of
+             it. Once, because a name the file uses twice cannot say which
+             occurrence was meant, and a wrong complaint is worse than a
+             missing one.
+Acceptance:  A citation whose target has moved fails the check, named, with the
+             line it moved to.
+
+**What it found the day it was written: seven stale citations, in prose four
+sessions of two-deep-reviews had passed.**
+
+The old line numbers are written without their file here, so this record does
+not read as seven live citations and report itself.
+
+| file | what it names | said | is at |
+| --- | --- | --- | --- |
+| `cli.rs` | `short_flags_keep_their_aria2_meanings` | 1833 | 1924 |
+| `cli.rs` | `no_short_flag_is_defined_twice` | 2012 | 2103 |
+| `cli.rs` | `short_flags_never_contradict_aria2` | 2048 | 2139 |
+| `cli.rs` | `every_short_flag_is_documented_in_the_flags_table` | 2107 | 2332 |
+| `schema_gen.rs` | `the_committed_schema_matches_what_the_program_writes` | 734 | 1068 |
+| `storage.rs` | the two BEP 47 padding guards | 728 and 870 | 1048 and 1216 |
+| `storage.rs` | `pwrite_all_vectored` and `pwrite_all` | 799 and 781 | 1119 and 1107 |
+
+The last two rows were correct at `f46d4fd` and were moved by the write buffer
+[T-018](disk-io.md) landed the same morning, checked by reading the file at that
+commit. The others had been wrong for longer. Every one of them points at
+plausible code, which is what makes them expensive: a reader following the old
+line 870 of `storage.rs` lands on `let wanted = slash_path(path)` and has no
+reason to doubt it.
+
+Proved by putting two of them back and running the check:
+
+```
+[drifted-line] cli-surface.md:557 cites cli.rs:2012 for `no_short_flag_is_defined_twice`, which is at :2103
+[drifted-line] cli-surface.md:1178 cites schema_gen.rs:734 for `the_committed_schema_matches_what_the_program_writes`, which is at :1068
+```
+
+Then corrected again, and the check is silent.
+
+**What it cannot see**, so the next reader does not expect more of it than it
+gives: a citation with no symbol named beside it, a symbol the file uses more
+than once, a name shorter than ten characters or without an underscore, and a
+citation into `reference/`, which is checked for range only as before. It
+catches the drift that comes from editing this tree, which is the drift this
+repository produces.

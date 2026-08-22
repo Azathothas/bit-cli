@@ -267,6 +267,18 @@ pwsh -NoProfile -File scripts/gates.ps1
   links between `TODO/` files, and cited paths and line numbers that do not
   resolve, in this tree and in `reference/` when it is present.
 
+  **A citation written short is checked too, and so is what the line holds.**
+  Until 2026-08-22 only the long form, `crates/bit-cli/src/cli.rs:2103`, was
+  resolved at all, and only for the file's line count. Most of `TODO/` writes
+  `cli.rs:2103`, which matched nothing. Short names resolve through an index of
+  every `.rs` under `crates/`, skipping a name two files share. And where the
+  prose names a symbol beside the citation and that symbol occurs exactly once
+  in the file, the line has to be within a few lines of it, so a citation whose
+  target moved is reported with the line it moved to. It found seven stale
+  citations the day it was written, two of them made stale hours earlier by
+  this repository's own change and five older than that.
+  [T-193](cli-surface.md) is the entry and it says what the check cannot see.
+
 ```bash
 pwsh -NoProfile -File scripts/check-todo.ps1
 ```
