@@ -153,6 +153,16 @@ print what the session did, and `-Force` to override the one refusal that is a
 judgement rather than a rule. `-SkipGates` prints that it was used, so a
 transcript shows the push carried no proof.
 
+**A commit message that mentions a CI skip marker skips CI.** GitHub reads
+`[skip ci]` anywhere in the message and does not care whether the sentence
+around it meant it. The commit that introduced `-NoCi` explained the marker in
+a sentence and shipped without a run: sixteen jobs skipped, silently, on the one
+commit that changed the push tool. `git-sync` refuses a message carrying any of
+the five markers unless `-NoCi` was passed, the same way it refuses an
+attribution line, and for the same reason: rewriting a commit message on
+somebody's behalf is worse than refusing one. Write it as `skip-ci` in prose, or
+pass the flag.
+
 **`-NoCi` for a push CI could not have caught anything in.** A run is sixteen
 jobs and about five minutes, and the workflow's concurrency group cancels one
 in flight when the next push lands, so a documentation push both costs a run

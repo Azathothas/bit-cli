@@ -230,7 +230,23 @@ function Get-ForbiddenStaged {
 }
 
 # ---------------------------------------------------------------------------
-# Rule 4: -NoCi only where CI could not have caught anything
+# Rule 4: a CI skip is deliberate or it is not there
+# ---------------------------------------------------------------------------
+#
+# Every marker GitHub Actions honours in a commit message. They are matched
+# case-insensitively and anywhere in the message, which is exactly how GitHub
+# reads them, and why a sentence about one is one.
+
+$script:CiSkipPatterns = @(
+    '(?i)\[skip[ _-]?ci\]',
+    '(?i)\[ci[ _-]?skip\]',
+    '(?i)\[no[ _-]?ci\]',
+    '(?i)\[skip[ _-]?actions\]',
+    '(?i)\[actions[ _-]?skip\]'
+)
+
+# ---------------------------------------------------------------------------
+# Rule 5: -NoCi only where CI could not have caught anything
 # ---------------------------------------------------------------------------
 #
 # The safe set is named by what it is rather than by what it is not, so a new
@@ -529,6 +545,22 @@ if (-not $PushOnly) {
     Invoke-Gates
 
     $full = if ($Body) { "$Message`n`n$Body" } else { $Message }
+
+    # A commit that says `[skip ci]` skips CI, and GitHub does not care whether
+    # the message meant it. The commit that introduced -NoCi explained the
+    # marker in a sentence, and that push shipped without a run: sixteen jobs
+    # nobody asked to skip, silently, on the one commit that changed the push
+    # tool. Refused rather than rewritten, for the same reason an attribution
+    # line is: silently editing a commit message is worse than refusing one.
+    if (-not $NoCi) {
+        $skips = @($script:CiSkipPatterns | Where-Object { $full -match $_ })
+        if ($skips.Count -gt 0) {
+            Exit-With 1 ("the commit message carries a CI skip marker and -NoCi was not passed, so this push would " +
+                "silently start no run. Write the marker some other way, or pass -NoCi if you meant it. " +
+                "Matched: $($skips -join '; ')")
+        }
+    }
+
     if ($NoCi) {
         # GitHub Actions reads this out of the head commit's message and skips
         # the run. It goes on its own line at the end so the subject stays
