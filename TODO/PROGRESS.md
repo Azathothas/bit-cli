@@ -58,8 +58,8 @@ pwsh -NoProfile -File scripts/gates.ps1
 ```
 
 - **CI:** green, all sixteen jobs, at run **32573162888** against commit
-  `e1b96ef`. The one commit after it, `0efc17f`, carries `[skip ci]` because it
-  changes no source. Two runs before it went **red** and both are worth reading
+  `e1b96ef`. Every commit after it carries `[skip ci]`, because none of them
+  changes a byte cargo compiles. Two runs before it went **red** and both are worth reading
   about under "What went wrong and was fixed": `1b0117e` on four Windows jobs
   and `bb878ce` on the third party notices.
 - **Entries:** 152 items. 47 open, 6 partial, 2 blocked, 87 done, 10 deferred
