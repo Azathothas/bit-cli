@@ -208,7 +208,13 @@ the listener by handshaking with it, and it is a candidate for the linear
 slope [T-040](memory.md) is attributing.
 
 **What is carried here, second: `--listener-check <DUR>`.** Off by default,
-`seed` only. Every interval it dials this run's own listen port over loopback
+and on `seed` only. Not on `download`, and that is a decision rather than an
+omission: the probe watches one listener, and a `-j` run has one session behind
+several watch loops, so the flag would either probe once per torrent per
+interval or need somewhere above the loop to live. A `download --seed-time 7d`
+is the shape that would want it, and it can have it when the flag has a second
+caller asking. The reason is on the `listener: None` line in
+`crates/bit-cli/src/cmd/download.rs` as well, so it is not only here. Every interval it dials this run's own listen port over loopback
 and completes a real handshake for a torrent the run is serving. Three
 failures in a row stop the run with `"stopped": "listener_unhealthy"` and exit
 17.

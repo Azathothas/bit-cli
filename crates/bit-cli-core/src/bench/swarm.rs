@@ -703,7 +703,7 @@ fn finish_piece(
         Some(want) if *want == digest => {
             outcome.pieces_verified += 1;
             recorder.observe_hashing(1, bytes.len() as u64, elapsed);
-            held.keep(torrent, torrent_index, piece, bytes);
+            held.keep(torrent_index, piece, bytes);
         }
         // No hash to check against cannot be a pass. It is a torrent this run
         // does not fully know, which is a caller error rather than a target
@@ -877,11 +877,27 @@ struct Held {
     budget: u64,
     written: AtomicU64,
     dropped: AtomicU64,
+    /// Everything the budget depends on, behind one lock.
+    ///
+    /// Three questions have to be answered together for one piece: has it
+    /// already been kept, does it fit, and where does it go. Answered under
+    /// three separate locks they could interleave, and the offset a piece
+    /// went to was the offset it has in the torrent, which is what made a file
+    /// larger than the budget.
+    store: std::sync::Mutex<Store>,
+}
+
+/// Where the held pieces went.
+#[derive(Default)]
+struct Store {
     /// One file per torrent, opened on first use.
-    files: std::sync::Mutex<HashMap<usize, std::fs::File>>,
+    files: HashMap<usize, std::fs::File>,
     /// Pieces already on disk, so two peers holding the same piece write it
     /// once and the budget counts it once.
-    have: std::sync::Mutex<HashSet<(usize, u32)>>,
+    have: HashSet<(usize, u32)>,
+    /// Bytes used in each torrent's file so far, which is where the next piece
+    /// goes.
+    used: HashMap<usize, u64>,
 }
 
 impl Held {
@@ -891,64 +907,71 @@ impl Held {
             budget,
             written: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
-            files: std::sync::Mutex::new(HashMap::with_capacity(torrents)),
-            have: std::sync::Mutex::new(HashSet::new()),
+            store: std::sync::Mutex::new(Store {
+                files: HashMap::with_capacity(torrents),
+                ..Default::default()
+            }),
         }
     }
 
     /// Write a verified piece, unless the budget is full or another peer got
     /// there first.
     ///
-    /// The budget is claimed before the write and never released, so several
-    /// peers writing at once cannot between them cross it. A claim that would
-    /// cross is refused whole: half a piece on disk is worse than none.
-    fn keep(&self, torrent: &TorrentUnderTest, index: usize, piece: u32, bytes: &[u8]) {
+    /// **Pieces are packed rather than placed.** A piece goes at the next free
+    /// byte of its torrent's file, not at the offset it has in the torrent, so
+    /// the file on disk is exactly as long as the bytes kept. Written at its
+    /// torrent offset the file is as long as the *highest* piece kept, which
+    /// on a run that keeps a quarter of a payload out of order is several
+    /// times the budget: measured at 4,980,736 bytes against a 2,097,152 byte
+    /// budget before this changed. Nothing reads the held bytes back, so the
+    /// offset bought nothing; it was written that way because it is what a
+    /// real client does. See `TODO/bench.md`, T-092.
+    fn keep(&self, index: usize, piece: u32, bytes: &[u8]) {
         let Some(dir) = &self.dir else { return };
-        {
-            let mut have = self.have.lock().unwrap_or_else(|e| e.into_inner());
-            if !have.insert((index, piece)) {
-                return;
-            }
-        }
         let length = bytes.len() as u64;
-        let claimed = self
-            .written
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
-                (used + length <= self.budget).then_some(used + length)
-            });
-        if claimed.is_err() {
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+
+        if store.have.contains(&(index, piece)) {
+            return;
+        }
+        // Refused whole rather than trimmed: half a piece on disk is worse
+        // than none, and the budget is what this command promises.
+        if self.written.load(Ordering::SeqCst) + length > self.budget {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             return;
         }
 
-        let offset = u64::from(piece) * u64::from(torrent.piece_length);
-        let mut files = self.files.lock().unwrap_or_else(|e| e.into_inner());
-        let file = match files.entry(index) {
+        // Read before the file map is borrowed, because both live in `store`.
+        let offset = store.used.get(&index).copied().unwrap_or(0);
+        let file = match store.files.entry(index) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let path = dir.join(format!("torrent-{index}.hold"));
+                // Truncated, because the file is packed from zero and a
+                // leftover from an earlier run into the same `--dir` would be
+                // counted as this run's bytes on disk.
                 match std::fs::OpenOptions::new()
                     .create(true)
-                    .truncate(false)
+                    .truncate(true)
                     .write(true)
                     .open(&path)
                 {
                     Ok(file) => entry.insert(file),
                     Err(_) => {
-                        // The budget was already claimed and nothing was
-                        // written, so give it back rather than shrinking the
-                        // cap for the rest of the run.
-                        self.written.fetch_sub(length, Ordering::SeqCst);
                         self.dropped.fetch_add(1, Ordering::Relaxed);
                         return;
                     }
                 }
             }
         };
+
         if crate::storage::pwrite_all(file, offset, bytes).is_err() {
-            self.written.fetch_sub(length, Ordering::SeqCst);
             self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
         }
+        store.used.insert(index, offset + length);
+        store.have.insert((index, piece));
+        self.written.fetch_add(length, Ordering::SeqCst);
     }
 }
 
@@ -1436,17 +1459,59 @@ mod tests {
     #[test]
     fn the_budget_is_never_crossed() {
         let dir = tempfile::tempdir().unwrap();
-        let t = torrent(1024 * 10, 1024);
         let held = Held::new(Some(dir.path().to_path_buf()), 4096, 1);
         for piece in 0..10 {
-            held.keep(&t, 0, piece, &[9u8; 1024]);
+            held.keep(0, piece, &[9u8; 1024]);
         }
         assert_eq!(held.written.load(Ordering::Relaxed), 4096);
         assert_eq!(held.dropped.load(Ordering::Relaxed), 6);
         let on_disk = std::fs::metadata(dir.path().join("torrent-0.hold"))
             .unwrap()
             .len();
-        assert!(on_disk <= 4096, "{on_disk} bytes on disk");
+        assert_eq!(on_disk, 4096, "{on_disk} bytes on disk");
+    }
+
+    /// The regression T-092 recorded: the budget bounded the bytes written
+    /// and not the bytes on disk.
+    ///
+    /// Pieces arriving in order hid it, because the last one kept was also the
+    /// highest and the file ended where the budget did. Real peers do not
+    /// arrive in order, and `peers_do_not_all_start_at_the_same_piece` is this
+    /// tool making sure of it. Measured before the fix: a 2,097,152 byte
+    /// budget left a 4,980,736 byte file.
+    #[test]
+    fn pieces_kept_out_of_order_do_not_make_the_file_longer_than_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = Held::new(Some(dir.path().to_path_buf()), 4096, 1);
+        // Four pieces fit. Taking the highest ones is what a peer starting at
+        // a random offset does.
+        for piece in [60, 12, 47, 3, 55, 9] {
+            held.keep(0, piece, &[9u8; 1024]);
+        }
+        assert_eq!(held.written.load(Ordering::Relaxed), 4096);
+        assert_eq!(held.dropped.load(Ordering::Relaxed), 2);
+        let on_disk = std::fs::metadata(dir.path().join("torrent-0.hold"))
+            .unwrap()
+            .len();
+        assert_eq!(
+            on_disk, 4096,
+            "{on_disk} bytes on disk for 4096 bytes of budget"
+        );
+    }
+
+    #[test]
+    fn a_hold_directory_used_twice_does_not_carry_the_first_run_forward() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = Held::new(Some(dir.path().to_path_buf()), 8192, 1);
+        for piece in 0..8 {
+            first.keep(0, piece, &[1u8; 1024]);
+        }
+        let second = Held::new(Some(dir.path().to_path_buf()), 2048, 1);
+        second.keep(0, 30, &[2u8; 1024]);
+        let on_disk = std::fs::metadata(dir.path().join("torrent-0.hold"))
+            .unwrap()
+            .len();
+        assert_eq!(on_disk, 1024, "{on_disk} bytes, so the old file survived");
     }
 
     /// Two peers holding the same piece write it once, or the budget counts
@@ -1454,19 +1519,17 @@ mod tests {
     #[test]
     fn the_same_piece_is_held_once() {
         let dir = tempfile::tempdir().unwrap();
-        let t = torrent(1024 * 4, 1024);
         let held = Held::new(Some(dir.path().to_path_buf()), 1 << 20, 1);
-        held.keep(&t, 0, 0, &[1u8; 1024]);
-        held.keep(&t, 0, 0, &[1u8; 1024]);
+        held.keep(0, 0, &[1u8; 1024]);
+        held.keep(0, 0, &[1u8; 1024]);
         assert_eq!(held.written.load(Ordering::Relaxed), 1024);
         assert_eq!(held.dropped.load(Ordering::Relaxed), 0);
     }
 
     #[test]
     fn holding_nowhere_writes_nothing() {
-        let t = torrent(1024, 1024);
         let held = Held::new(None, 1 << 20, 1);
-        held.keep(&t, 0, 0, &[1u8; 1024]);
+        held.keep(0, 0, &[1u8; 1024]);
         assert_eq!(held.written.load(Ordering::Relaxed), 0);
     }
 

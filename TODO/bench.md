@@ -501,6 +501,7 @@ What is proven:
 | `leech_1` | 1 peer, 8 MiB, 32 pieces verified, 0 failed, **333.33 MiB/s** |
 | `leech_4` | 4 peers, 33.5 MiB received, held once at 8 MiB, **666.67 MiB/s** |
 | `leech_16` | 16 peers, 134.2 MiB received, held once at 8 MiB, **941.18 MiB/s** |
+| `budget` | 2,097,152 bytes held **and 2,097,152 on disk** against a 2,097,152 byte budget, 48 refused (2026-08-22) |
 | `no_target` | exit 2 |
 | `dead_target` | exit 6, four `connect_refused`, no rate reported |
 
@@ -521,6 +522,52 @@ The fix is to hold pieces packed rather than at their torrent offset, with a
 map from piece index to slot. `Held::keep` in `swarm.rs` is where it goes.
 Nothing reads the held bytes back today, so the offset buys nothing; it was
 written that way because it is what a real client does.
+
+**Fixed, 2026-08-22, and it took the shape above.** `Held::keep` writes each
+piece at the next free byte of its torrent's file and keeps a per-torrent used
+count, so the file is exactly as long as the bytes kept. The `budget` case is
+`on_disk_bytes` 2,097,152 against a 2,097,152 byte budget where it was
+4,980,736, and **`check-swarm.ps1` passes for the first time**:
+`bench/swarm-20260822T055731078Z.json`, `verdict: pass`, nine cases and no
+failures. The two committed records before it, from 2026-08-21 and from earlier
+today, both say `verdict: fail` with this and only this.
+
+That is worth naming on its own. An acceptance script that always fails cannot
+tell a new failure from the known one, and this repository's own rule is that a
+script measuring an open defect carries `judged: false` rather than failing the
+build. `listener_poisoned` follows that rule and `budget` did not, so for two
+sessions the script's exit code said nothing. Fixing the defect was the better
+of the two ways out.
+
+Two things came with it.
+
+**The unit test that should have caught this passed.** `the_budget_is_never_crossed`
+kept pieces 0 through 9 in order, so the last piece kept was also the highest
+and the file ended exactly where the budget did. Real peers do not arrive in
+order, and `peers_do_not_all_start_at_the_same_piece` in the same file is this
+tool making sure of it, so the test's own fixture was the one shape that could
+not fail. `pieces_kept_out_of_order_do_not_make_the_file_longer_than_the_budget`
+is the replacement, and the old test now asserts the length exactly rather than
+`<=`.
+
+**Three questions are answered under one lock now**, where they were under two
+and an atomic: has this piece been kept, does it fit, and where does it go. The
+budget claim used to happen before the write, and a write that then failed gave
+the bytes back but left the piece marked as kept, so it could never be retried.
+Answering all three together is also what makes packing correct, because the
+offset a piece gets and the bytes the budget counts have to be decided in the
+same breath.
+
+The hold file is now truncated on open. Packed from zero, a leftover from an
+earlier run into the same `--dir` would be counted as this run's bytes on disk.
+
+**`pieces_dropped_over_budget` reads 48 in the `budget` case where it read 24,
+and the new number is the right one.** A piece used to be marked as held before
+the budget was checked, so the second peer to verify a piece the budget had
+already refused hit the dedup and returned without being counted. It is counted
+now, because it was verified and it was not kept and the budget is why. The
+case is two peers over a 32 piece payload at a quarter of it: 64 verified, 8
+kept, 8 duplicates of the kept ones, and 48 refused.
 
 **Also not built: a synthetic peer does not serve.** The target model above
 says a peer keeps its verified pieces and serves them to the other synthetic
