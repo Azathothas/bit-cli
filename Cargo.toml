@@ -25,7 +25,7 @@ chrono = { version = "0.4.44", default-features = false, features = ["std", "clo
 clap = { version = "4.6.1", features = ["derive", "env", "wrap_help", "string"] }
 clap_complete = "4.6.1"
 clap_complete_nushell = "4.6.1"
-clap_mangen = "0.2.32"
+clap_mangen = "0.3.3"
 globset = "0.4.19"
 hdrhistogram = { version = "7.5.5", default-features = false }
 ignore = "0.4.24"
