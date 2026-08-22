@@ -1374,6 +1374,26 @@ pub struct SeedArgs {
     /// Exit after this long with no connected peers.
     #[arg(long, value_name = "DUR")]
     pub exit_when_idle: Option<String>,
+
+    /// Check this often that our own listener still answers. Off by default.
+    ///
+    /// A seeder that cannot be handshaked is down, and nothing a supervisor
+    /// normally watches says so: the process is alive, the port is open, and
+    /// the ratio still gets reported. `librqbit` 9.0.0's accept loop clears
+    /// one queued handshake check per connection it accepts, so a run of
+    /// peers that close before they handshake leaves a backlog and every peer
+    /// after it waits behind one. Twenty were enough to stop a seeder serving
+    /// anybody. See `TODO/peers.md`, T-020.
+    ///
+    /// Each check dials this run's own listen port over loopback and completes
+    /// a real handshake for a torrent it is serving. Three failures in a row
+    /// stop the run with `"stopped": "listener_unhealthy"` and exit 17, which
+    /// is a restart a supervisor can act on. A check that is answered clears
+    /// one entry off the backlog, so this also costs the session one peer row
+    /// per check, which is dropped from the reported peer list and never
+    /// counted as a swarm member.
+    #[arg(long, value_name = "DUR")]
+    pub listener_check: Option<String>,
 }
 
 /// How much to hash-check before seeding.

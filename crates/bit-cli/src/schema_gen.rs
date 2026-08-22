@@ -616,6 +616,15 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
                 "100ms",
                 "--stop-after",
                 "1s",
+                // The `listener` block, which is absent unless the check was
+                // asked for. Five seconds against a one second run so no
+                // probe can complete inside it: what is documented is the
+                // block's shape, and a probe that raced the deadline would
+                // make `last_rtt_ms` an integer on one machine and null on
+                // the next. Types here are what a run produced, and this run
+                // has to produce the same one every time.
+                "--listener-check",
+                "5s",
             ],
             dir.clone(),
         );

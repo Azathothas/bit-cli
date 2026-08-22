@@ -916,6 +916,43 @@ as seeding. Measured, 3000 connections that closed before handshaking did it in
 79 seconds. `bit-cli` removes the branch that carries it, and the same flood
 now finishes in 8.8 seconds with the listener alive.
 
+## When the port is open and nobody is answered
+
+The stranded sockets are the visible half. The other half is worse: the same
+accept loop clears **one** queued handshake check per connection it accepts, so
+a run of peers that close before they handshake leaves a backlog, and every
+peer that arrives afterwards waits behind it. Measured: 20 such connections
+were enough, and the seeder then answered nobody for as long as it was left
+alone. Thirteen more connections cleared it; time cleared nothing.
+
+Nothing a supervisor normally watches sees that. The process is alive, the port
+accepts, the log is silent, and the ratio in the report is history. So `seed`
+can watch its own listener from the outside of the socket:
+
+```bash
+bit-cli seed release.torrent --seed-time 7d --listener-check 60s
+```
+
+Each check dials this run's own listen port over loopback and completes a real
+handshake for a torrent it is serving. Three failures in a row stop the run
+with `"stopped": "listener_unhealthy"` and exit 17. Three is derived rather
+than picked: one failure means a backlog a real peer would have cleared by
+arriving, and three means the backlog outlived three connections, so the next
+three peers get nothing either.
+
+The check is off by default and it is not free. A completed handshake is a peer
+as far as the session is concerned, so each check leaves one peer row that
+`librqbit` keeps and never reclaims: 24 checks, 24 rows, measured. Those rows
+are dropped from `peer_detail` and from the report, by the loopback port the
+check dialled from, the same way a web seed bridge's connection is told from a
+swarm member. An unknown info hash would leave no row at all and is the wrong
+measurement: it resolves to an error inside the session, which **adds** an
+entry to the backlog it is measuring.
+
+```bash
+pwsh scripts/check-listener.ps1
+```
+
 ## Downloading through an outage
 
 A download whose peers all go away recovers when they come back, but not
@@ -1293,10 +1330,11 @@ parsing any text.
 | 14 | Threshold not met |
 | 15 | Would change the info hash |
 | 16 | A resource ceiling was crossed |
+| 17 | This run's own listener stopped answering |
 
-Codes 11 through 16 exist so a script can tell "your mirrors are
+Codes 11 through 17 exist so a script can tell "your mirrors are
 misconfigured" from "the network is down" from "your server is slow" from "the
-process is out of handles".
+process is out of handles" from "the port is open and answers nobody".
 
 ## Configuration
 

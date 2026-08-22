@@ -923,7 +923,10 @@ fn ms(elapsed: Duration) -> u64 {
 /// The classes are what a report groups by, so they have to separate the three
 /// answers that mean different things: nothing is listening, something is and
 /// it said no, and the route is gone.
-fn connect_class(error: &std::io::Error) -> &'static str {
+///
+/// [`crate::listener`] classifies its own dial with this, so the load
+/// generator and the health probe name the same failure the same way.
+pub(crate) fn connect_class(error: &std::io::Error) -> &'static str {
     match error.kind() {
         std::io::ErrorKind::ConnectionRefused => "connect_refused",
         std::io::ErrorKind::TimedOut => "connect_timeout",

@@ -4,10 +4,10 @@
 //! branch on it without parsing any text, so every code means exactly one
 //! thing and no code is ever reused for a second meaning.
 //!
-//! Codes 11 through 16 exist so a script can tell "your mirrors are
+//! Codes 11 through 17 exist so a script can tell "your mirrors are
 //! misconfigured" apart from "the network is down" apart from "your server is
-//! slow" apart from "the process is out of handles". That distinction is the
-//! point of the table.
+//! slow" apart from "the process is out of handles" apart from "the port is
+//! open and answers nobody". That distinction is the point of the table.
 //!
 //! On Windows the code is read from `$LASTEXITCODE` in PowerShell, not `$?`.
 
@@ -59,6 +59,11 @@ pub enum ExitCode {
     WouldChangeInfoHash = 15,
     /// A resource ceiling the caller set was crossed: `--max-handles`.
     ResourceCeiling = 16,
+    /// This run's own listener stopped answering: `--listener-check`. The
+    /// process is alive and the port is open, which is why this is not
+    /// `Generic`: a supervisor that restarts on it is restarting a seeder
+    /// that serves nobody. See `TODO/peers.md`, T-020.
+    ListenerUnhealthy = 17,
 }
 
 impl ExitCode {
@@ -88,6 +93,7 @@ impl ExitCode {
             Self::ThresholdNotMet => "threshold_not_met",
             Self::WouldChangeInfoHash => "would_change_infohash",
             Self::ResourceCeiling => "resource_ceiling",
+            Self::ListenerUnhealthy => "listener_unhealthy",
         }
     }
 
@@ -112,6 +118,7 @@ impl ExitCode {
             Self::ThresholdNotMet => "Threshold not met",
             Self::WouldChangeInfoHash => "Would change the info hash",
             Self::ResourceCeiling => "A resource ceiling was crossed",
+            Self::ListenerUnhealthy => "This run's own listener stopped answering",
         }
     }
 
@@ -135,6 +142,7 @@ impl ExitCode {
         Self::ThresholdNotMet,
         Self::WouldChangeInfoHash,
         Self::ResourceCeiling,
+        Self::ListenerUnhealthy,
     ];
 }
 
@@ -178,7 +186,7 @@ mod tests {
 
     #[test]
     fn the_documented_range_is_covered() {
-        assert_eq!(ExitCode::ALL.len(), 17);
-        assert_eq!(ExitCode::ResourceCeiling.code(), 16);
+        assert_eq!(ExitCode::ALL.len(), 18);
+        assert_eq!(ExitCode::ListenerUnhealthy.code(), 17);
     }
 }

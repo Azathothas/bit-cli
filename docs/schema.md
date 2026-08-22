@@ -393,6 +393,12 @@ From `bit-cli seed <TORRENT> --json`.
 | `info_hash` | string |
 | `kind` | string |
 | `listen_addr` | string |
+| `listener.consecutive_failures` | integer |
+| `listener.failed` | integer |
+| `listener.healthy` | bool |
+| `listener.last_failure` | null |
+| `listener.last_rtt_ms` | null |
+| `listener.probes` | integer |
 | `mean_upload_rate.bytes` | integer |
 | `mean_upload_rate.human` | string |
 | `mean_upload_rate_human` | string |
@@ -960,6 +966,12 @@ From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`.
 | `eta_ms` | null |
 | `from_web_seeds` | integer |
 | `info_hash` | string |
+| `listener.consecutive_failures` | integer |
+| `listener.failed` | integer |
+| `listener.healthy` | bool |
+| `listener.last_failure` | null |
+| `listener.last_rtt_ms` | null |
+| `listener.probes` | integer |
 | `peer_detail[]` | array |
 | `peers.connecting` | integer |
 | `peers.dead` | integer |

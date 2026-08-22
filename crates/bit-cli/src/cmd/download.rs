@@ -338,6 +338,11 @@ pub fn run(
         seed_time: swarm::optional_duration(&args.limits.seed_time, "seed-time")?,
         exit_when_idle: None,
         max_handles: args.limits.max_handles,
+        // `download` does not offer `--listener-check`. See `TODO/peers.md`,
+        // T-020: the probe watches one listener and a `-j` run has one
+        // session behind several of these loops, so the flag lives on `seed`,
+        // which is the long-lived shape the entry is about.
+        listener: None,
     };
 
     let setup = SessionSetup {

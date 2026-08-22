@@ -160,8 +160,8 @@ target accepts the TCP connection, answers no handshake, and never says so.
 That changes what this entry costs. A stranded socket is a resource; a
 listener that accepts and never answers is an outage that no health check
 looking at the process, the port, or the log will see. The `--max-handles`
-ceiling carried here is still the only mitigation, and it now has a second
-reason to exist.
+ceiling carried here was the only mitigation when this was written, and it now
+has a second reason to exist. The check below is the second mitigation.
 
 Reproduce:
 
@@ -172,6 +172,95 @@ pwsh -NoProfile -File scripts/check-swarm.ps1
 Case `listener_poisoned`, which carries `judged: false` because this entry is
 open and an acceptance script does not fail the build for a defect that is
 already recorded.
+
+**The mechanism, and the sentence above it is wrong, 2026-08-22.** The line
+"while the pending set is full the target cannot complete a handshake" names
+the wrong cause. The set is never full: `PENDING_HANDSHAKE_CHECKS` is
+`usize::MAX`, which is what removed defect one. The cap has nothing to do
+with it, and a reader who fixed the cap would have fixed nothing.
+
+What it is is the **drain rate**, which is one entry per accepted connection.
+`task_listener`'s second `select!` arm is
+`Some(Ok((live, checked))) = futs.next(), if !futs.is_empty()`
+(`session.rs:1005`, the same file as defect one). A check that resolves to
+`Err` fails that pattern, so `tokio::select!` disables the arm for the rest of
+that call and waits on `l.accept()`, which on an idle seeder is forever. The
+loop cannot come round again, and nothing in `futs` is polled until the next
+connection arrives. A check that resolves to `Ok` matches, so it ends an iteration
+without consuming an accept and the queued successes drain for free.
+
+Measured, and it is one for one. Twenty connections that handshaked for an
+info hash the seeder does not have, then single peers one at a time for a
+torrent it does: **the twentieth got a handshake and the nineteen before it
+got nothing.** `bench/listener-20260822T045550230Z.json`, case `recovery`,
+`connections_to_recover` 20 against `poison_connections` 20, with a peer
+served before the load to prove the seeder was working. An earlier run of the
+same shape recovered on the thirteenth, and the difference is the load's own
+duration: eight of that twenty ended in `closed_before_handshake`, which is
+the target having already got to them. Nothing recovers on a timer. What
+clears the queue is connections, one each.
+
+**A peer row is kept for every completed handshake, and never reclaimed.**
+Twenty-four handshake-and-close connections from loopback left twenty-four
+rows, `live 0` and `dead 0` at every sample, all in `not needed`. That is not
+a T-020 defect on its own, but it decides the shape of anything that watches
+the listener by handshaking with it, and it is a candidate for the linear
+slope [T-040](memory.md) is attributing.
+
+**What is carried here, second: `--listener-check <DUR>`.** Off by default,
+`seed` only. Every interval it dials this run's own listen port over loopback
+and completes a real handshake for a torrent the run is serving. Three
+failures in a row stop the run with `"stopped": "listener_unhealthy"` and exit
+17.
+
+From the acceptance's `poisoned` case, which is a seeder given
+`--listener-check 2s` and then the twenty connection load:
+
+```
+exit=17
+  "stopped": "listener_unhealthy",
+  "listener": { "probes": 6, "failed": 3, "consecutive_failures": 3,
+                "last_failure": "handshake_timeout" }
+```
+
+Three is derived from the drain rate above rather than picked. One failure
+means a backlog of at least one, which a real peer clears for itself by
+arriving; three means the backlog outlived three connections, so the next
+three peers get nothing either.
+
+The probe uses a real info hash rather than an unknown one, and that costs
+something. An unknown hash is rejected before the session records a peer, so
+it would leave no row. It is also the wrong measurement: it resolves to `Err`,
+so it **adds** an entry to the backlog it is measuring, and a backlog of one
+becomes a backlog of two while the probe reports an outage on a listener that
+a real peer would have got through. A completed handshake takes an entry off
+instead. What it costs is one peer row per probe, and those rows
+are dropped from `peer_detail` and from the report by the loopback port the
+probe dialled from, which is the mechanism the web seed bridge already uses.
+They come out of `peers.seen` and `peers.live` too, because `seed` exits 14
+when it stopped idle having seen no peer and `--exit-when-idle` measures how
+long it has had none live, and a probe a minute would answer both wrong.
+
+Acceptance, four cases, and `recovery` is the drain-rate measurement above:
+
+```powershell
+pwsh -NoProfile -File scripts/check-listener.ps1
+```
+
+```
+case      probes failed consecutive exit stopped             other
+healthy        3      0           0    -  -                  peer_rows 0, peers_seen 0, rtt 15 ms
+poisoned       6      3           3   17  listener_unhealthy last_failure handshake_timeout
+off            -      -           -    9  deadline           no listener key at all
+recovery       -      -           -    -  -                  20 connections cleared a 20 backlog
+```
+
+Status stays **open**, for the same reason as above and now for a second
+mitigation rather than one. Nothing here drains the queue for a peer that is
+not us, `scripts/check-close-wait.ps1 -Ceiling 100` still fails, and the fix is
+still the accept loop draining its pending set to empty. What has changed is
+that the outage is now loud: a supervisor gets exit 17 instead of a process
+that reports a ratio and serves nobody.
 
 ### T-021 A temporary network drop stops the download permanently
 

@@ -61,6 +61,13 @@ pub struct SeedReport {
     /// what a soak test reads. Sampling from outside means sampling a process
     /// that has already exited, which reports zero.
     pub process: bit_cli_core::sysinfo::Process,
+    /// What `--listener-check` found. Absent unless it was asked for.
+    ///
+    /// A seeder whose listener has stopped answering is down, and the rest of
+    /// this report cannot say so: the ratio, the uploaded total, and the peer
+    /// rows are all history. See `TODO/peers.md`, T-020.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listener: Option<swarm::ListenerReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -89,7 +96,8 @@ pub fn run(
     env: &mut Env,
 ) -> Result<ExitCode> {
     let report_interval = swarm::duration_flag(&args.report_interval, "report-interval")?;
-    let stop = StopConditions {
+    let listener_check = swarm::optional_duration(&args.listener_check, "listener-check")?;
+    let mut stop = StopConditions {
         timeout: swarm::optional_duration(&global.timeout, "timeout")?,
         stop_after: swarm::optional_duration(&global.stop_after, "stop-after")?,
         stall: None,
@@ -98,6 +106,9 @@ pub fn run(
         seed_time: swarm::optional_duration(&args.limits.seed_time, "seed-time")?,
         exit_when_idle: swarm::optional_duration(&args.exit_when_idle, "exit-when-idle")?,
         max_handles: args.limits.max_handles,
+        // Filled in once the session is live, because the probe needs the
+        // port it bound and the info hash it settled on.
+        listener: None,
     };
     if args.superseed {
         renderer.warn(
@@ -331,8 +342,35 @@ pub fn run(
                 tracker_list,
                 peers,
                 renames(&engine, &handle),
+                // Announce-only never serves, so there is no listener to
+                // have watched.
+                None,
             ));
         }
+
+        // The probe needs the port the session actually bound and an info
+        // hash it is actually serving, so this is the first point where both
+        // are known. Announce-only returns above it, because a run that never
+        // serves has no listener worth watching.
+        let listener = match (listener_check, engine.bridge_target()) {
+            (Some(interval), Some(target)) => {
+                let state =
+                    swarm::spawn_listener_probe(target, handle.info_hash().0, interval);
+                stop.listener = Some(swarm::ListenerCheck {
+                    state: std::sync::Arc::clone(&state),
+                    allowed: swarm::LISTENER_FAILURES_ALLOWED,
+                });
+                Some(state)
+            }
+            (Some(_), None) => {
+                renderer.warn(
+                    env,
+                    "--listener-check does nothing here: this run bound no listen port, so there is no listener to probe",
+                );
+                None
+            }
+            (None, _) => None,
+        };
 
         let lengths: Vec<u64> = layout.files.iter().map(|f| f.length).collect();
         let mut progress = Progress::new(layout.piece_count(), lengths);
@@ -347,14 +385,17 @@ pub fn run(
                 _ = ticker.tick() => {}
             }
 
-            let snapshot = engine.snapshot(&handle);
+            let mut snapshot = engine.snapshot(&handle);
+            let probe_ports = listener.as_ref().map(|s| s.ports()).unwrap_or_default();
+            let view =
+                swarm::without_probe_rows(engine.peers(&handle, &HashSet::new()), &probe_ports);
+            // Before `observe` and before the stop conditions, both of which
+            // read the peer counts. See `swarm::discount_probe_peers`.
+            swarm::discount_probe_peers(&mut snapshot, &view);
+            let peers = view.rows;
             progress.observe(&snapshot, None, &handle.stats().file_progress);
-            let peers = engine.peers(&handle, &HashSet::new());
 
-            renderer.event(
-                env,
-                "progress",
-                &json!({
+            let mut event = json!({
                     "info_hash": snapshot.info_hash,
                     "uploaded_bytes": snapshot.uploaded_bytes,
                     "upload_rate": snapshot.upload_rate,
@@ -366,8 +407,20 @@ pub fn run(
                     // the event stream rather than sampling the process from outside.
                     // See `TODO/memory.md`, T-040.
                     "process": bit_cli_core::sysinfo::Process::sample(),
-                }),
-            )?;
+            });
+            // The key is absent unless the check was asked for, so a consumer
+            // tells "watched and fine" from "not watched" without a flag of
+            // its own. Inserted rather than written into the literal above,
+            // because `json!` has no way to leave a key out.
+            if let Some(state) = &listener
+                && let Some(fields) = event.as_object_mut()
+            {
+                fields.insert(
+                    "listener".into(),
+                    serde_json::to_value(state.report()).unwrap_or_default(),
+                );
+            }
+            renderer.event(env, "progress", &event)?;
             if renderer.progress == crate::cli::ProgressMode::Plain {
                 let _ = env.note(format!(
                     "up {}  uploaded {}  ratio {:.3}  peers {}",
@@ -383,8 +436,11 @@ pub fn run(
             }
         };
 
-        let snapshot = engine.snapshot(&handle);
-        let peers = engine.peers(&handle, &HashSet::new());
+        let mut snapshot = engine.snapshot(&handle);
+        let probe_ports = listener.as_ref().map(|s| s.ports()).unwrap_or_default();
+        let view = swarm::without_probe_rows(engine.peers(&handle, &HashSet::new()), &probe_ports);
+        swarm::discount_probe_peers(&mut snapshot, &view);
+        let peers = view.rows;
         let report = build(
             &snapshot,
             stopped,
@@ -394,6 +450,7 @@ pub fn run(
             tracker_list,
             peers,
             renames(&engine, &handle),
+            listener.as_ref().map(|s| s.report()),
         );
         engine.stop().await;
         Ok::<_, Error>(report)
@@ -419,6 +476,7 @@ fn build(
     trackers: Vec<String>,
     peers: Vec<PeerSnapshot>,
     renamed: Vec<bit_cli_core::paths::Rename>,
+    listener: Option<swarm::ListenerReport>,
 ) -> SeedReport {
     let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
     let mean = match elapsed_ms {
@@ -447,6 +505,7 @@ fn build(
         peers,
         renamed,
         process: bit_cli_core::sysinfo::Process::sample(),
+        listener,
         error: snapshot.error.clone(),
     }
 }
@@ -546,6 +605,7 @@ mod tests {
             vec!["udp://t.example:451".into()],
             vec![peer(2000), peer(0)],
             Vec::new(),
+            None,
         );
         assert_eq!(
             report.peers_served, 1,
@@ -566,6 +626,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            None,
         );
         assert_eq!(report.ratio, "2.500");
     }
@@ -581,6 +642,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            None,
         );
         assert_eq!(report.mean_upload_rate.0, 1000);
         assert_eq!(report.elapsed_ms, 4000);
@@ -597,6 +659,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            None,
         );
         assert_eq!(report.mean_upload_rate.0, 0);
     }
@@ -612,6 +675,7 @@ mod tests {
             vec!["udp://t.example:451".into()],
             vec![peer(2000)],
             Vec::new(),
+            None,
         );
         let text = lines(&report).join("\n");
         assert!(text.contains("2.000"), "{text}");
@@ -892,6 +956,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            None,
         );
         assert!(report.process.peak_rss_bytes > 1024 * 1024);
         assert!(report.process.open_handles > 0);

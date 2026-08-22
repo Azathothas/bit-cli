@@ -22,6 +22,8 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 
 ## State
 
+- **This session:** started 2026-08-22T04:05:27Z, unattended. In progress.
+  Work order below, taken in order: T-020, then T-040, T-064, T-100.
 - **Last session:** 2026-08-22, 01:11Z to 03:55Z. Started unattended and the
   operator interjected partway through, so it is feature work followed by a
   round of tooling and a doc restructure they asked for.

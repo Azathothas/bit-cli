@@ -671,7 +671,7 @@ impl Engine {
                         / u64::from(counters.downloaded_and_checked_pieces)
                 });
                 PeerSnapshot {
-                    web_seed: is_bridge_addr(&addr, bridge_ports),
+                    web_seed: is_own_loopback_port(&addr, bridge_ports),
                     addr,
                     state: peer.state.to_string(),
                     client: peer.client_name,
@@ -1187,8 +1187,13 @@ pub fn loopback_target(listen: SocketAddr) -> SocketAddr {
     SocketAddr::new(ip, listen.port())
 }
 
-/// Whether a peer address is one of this run's own web seed bridges.
-fn is_bridge_addr(addr: &str, ports: &HashSet<u16>) -> bool {
+/// Whether a peer address is this process connected to itself over loopback
+/// on one of `ports`.
+///
+/// Two things dial this run's own listener: a web seed bridge, which is
+/// labelled as one rather than counted as a swarm member, and the listener
+/// health probe, whose rows are dropped outright. Both ask this.
+pub fn is_own_loopback_port(addr: &str, ports: &HashSet<u16>) -> bool {
     if ports.is_empty() {
         return false;
     }
@@ -1307,18 +1312,18 @@ mod tests {
     #[test]
     fn only_loopback_addresses_on_a_known_bridge_port_count_as_web_seeds() {
         let ports: HashSet<u16> = [40001].into_iter().collect();
-        assert!(is_bridge_addr("127.0.0.1:40001", &ports));
-        assert!(is_bridge_addr("[::1]:40001", &ports));
+        assert!(is_own_loopback_port("127.0.0.1:40001", &ports));
+        assert!(is_own_loopback_port("[::1]:40001", &ports));
         assert!(
-            !is_bridge_addr("127.0.0.1:40002", &ports),
+            !is_own_loopback_port("127.0.0.1:40002", &ports),
             "a different port is a real peer"
         );
         assert!(
-            !is_bridge_addr("203.0.113.7:40001", &ports),
+            !is_own_loopback_port("203.0.113.7:40001", &ports),
             "a routable address is a real peer"
         );
-        assert!(!is_bridge_addr("127.0.0.1:40001", &HashSet::new()));
-        assert!(!is_bridge_addr("garbage", &ports));
+        assert!(!is_own_loopback_port("127.0.0.1:40001", &HashSet::new()));
+        assert!(!is_own_loopback_port("garbage", &ports));
     }
 
     #[test]

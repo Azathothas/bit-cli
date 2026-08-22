@@ -8,7 +8,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bit_cli_core::engine::{Engine, EngineOptions, Handle, PeerSnapshot, TorrentSnapshot};
@@ -999,6 +1000,233 @@ pub struct StopConditions {
     /// restart instead of a process that quietly runs the machine out of
     /// descriptors.
     pub max_handles: Option<u64>,
+    /// Stop when this run's own listener has stopped answering.
+    ///
+    /// The other half of T-020, and the half no ceiling catches. The same
+    /// backlog that strands sockets also holds up every incoming handshake,
+    /// so a seeder can accept connections, answer none of them, and go on
+    /// reporting a ratio. The state here is written by the probe task that
+    /// [`spawn_listener_probe`] starts and read on each tick.
+    pub listener: Option<ListenerCheck>,
+}
+
+/// Failed probes in a row before the run gives up.
+///
+/// Derived rather than picked. The session's accept loop clears one queued
+/// check per connection it accepts, so N queued checks need N connections to
+/// clear, and a probe is one connection. One failure therefore means a
+/// backlog of at least one, which a real peer would have cleared for itself.
+/// Three in a row means the backlog outlived three connections, so the next
+/// three peers to arrive get nothing either. That is an outage, and one
+/// failure is not.
+pub const LISTENER_FAILURES_ALLOWED: u32 = 3;
+
+/// How the run watches its own listener.
+#[derive(Debug, Clone)]
+pub struct ListenerCheck {
+    /// Written by the probe task, read by the watch loop.
+    pub state: Arc<ListenerState>,
+    /// Consecutive failures tolerated before [`Stopped::ListenerUnhealthy`].
+    pub allowed: u32,
+}
+
+/// What the listener probe has found so far.
+///
+/// Counters rather than a channel: the watch loop samples on its own tick, and
+/// a probe that came and went between two ticks is not an event anybody has to
+/// see. Only the consecutive count decides anything; the rest is reported.
+#[derive(Debug)]
+pub struct ListenerState {
+    probes: AtomicU64,
+    failed: AtomicU64,
+    consecutive: AtomicU32,
+    /// Round trip of the last answered probe, in milliseconds. `u64::MAX`
+    /// until one is answered.
+    last_rtt_ms: AtomicU64,
+    /// The last probe's failure class, or `None` when it was answered.
+    last_failure: Mutex<Option<&'static str>>,
+    /// Loopback ports the probe has connected from. Each one is a peer row
+    /// the session keeps and never reclaims, so the peer list drops them
+    /// rather than counting this process as its own swarm member.
+    ports: Mutex<HashSet<u16>>,
+}
+
+impl Default for ListenerState {
+    /// Written out rather than derived, because zero is a measurement here.
+    /// A derived `last_rtt_ms` of 0 reads as a probe answered instantly, and
+    /// that is what the first report said before this existed.
+    fn default() -> Self {
+        Self {
+            probes: AtomicU64::new(0),
+            failed: AtomicU64::new(0),
+            consecutive: AtomicU32::new(0),
+            last_rtt_ms: AtomicU64::new(u64::MAX),
+            last_failure: Mutex::new(None),
+            ports: Mutex::new(HashSet::new()),
+        }
+    }
+}
+
+impl ListenerState {
+    /// Fold one probe in.
+    pub fn record(&self, probe: &bit_cli_core::listener::Probe) {
+        self.probes.fetch_add(1, Ordering::Relaxed);
+        if let Some(port) = probe.local_port
+            && let Ok(mut ports) = self.ports.lock()
+        {
+            ports.insert(port);
+        }
+        if let Ok(mut last) = self.last_failure.lock() {
+            *last = probe.failure;
+        }
+        if probe.healthy {
+            self.consecutive.store(0, Ordering::Relaxed);
+            if let Some(ms) = probe.rtt_ms {
+                self.last_rtt_ms.store(ms, Ordering::Relaxed);
+            }
+        } else {
+            self.failed.fetch_add(1, Ordering::Relaxed);
+            self.consecutive.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Failed probes since the last answered one.
+    #[must_use]
+    pub fn consecutive_failures(&self) -> u32 {
+        self.consecutive.load(Ordering::Relaxed)
+    }
+
+    /// The loopback ports the probe has dialled from.
+    #[must_use]
+    pub fn ports(&self) -> HashSet<u16> {
+        self.ports.lock().map(|p| p.clone()).unwrap_or_default()
+    }
+
+    /// What the run reports about its own listener.
+    #[must_use]
+    pub fn report(&self) -> ListenerReport {
+        let rtt = self.last_rtt_ms.load(Ordering::Relaxed);
+        ListenerReport {
+            healthy: self.consecutive.load(Ordering::Relaxed) == 0,
+            probes: self.probes.load(Ordering::Relaxed),
+            failed: self.failed.load(Ordering::Relaxed),
+            consecutive_failures: self.consecutive.load(Ordering::Relaxed),
+            last_rtt_ms: (rtt != u64::MAX).then_some(rtt),
+            last_failure: self.last_failure.lock().ok().and_then(|f| *f),
+        }
+    }
+}
+
+/// The listener's health, as the report and the event stream carry it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListenerReport {
+    /// False once a probe has failed and no later one has been answered.
+    pub healthy: bool,
+    /// Probes made.
+    pub probes: u64,
+    /// Probes that were not answered.
+    pub failed: u64,
+    /// Failures since the last answered probe.
+    pub consecutive_failures: u32,
+    /// Round trip of the last answered probe. Null until one is answered.
+    ///
+    /// Present whatever it holds, unlike the block as a whole. Whether the
+    /// listener was watched at all is a question about the run, and a caller
+    /// answers it by the presence of `listener`. What the last probe found is
+    /// a question about the listener, and a key that comes and goes would
+    /// make a consumer write the same null check twice.
+    pub last_rtt_ms: Option<u64>,
+    /// The last probe's failure class, or null when it was answered.
+    pub last_failure: Option<&'static str>,
+}
+
+/// The peer list with this run's own listener probe taken out of it.
+#[derive(Debug, Default)]
+pub struct PeerView {
+    /// Everything that is not this process.
+    pub rows: Vec<PeerSnapshot>,
+    /// Probe rows dropped. One per probe the session answered, because a
+    /// probe that was answered became a peer.
+    pub dropped: u32,
+    /// Of those, the ones connected right now, which is at most the one probe
+    /// in flight.
+    pub dropped_live: u32,
+}
+
+/// Drop the peer rows this run's own listener probe left behind.
+///
+/// A probe completes a real handshake, so the session records it as a peer and
+/// keeps the row after the socket closes: measured at 24 probes, 24 rows, in a
+/// terminal state and never reclaimed. It is this process talking to itself.
+/// Not a swarm member, not a web seed, and not something a caller should have
+/// to filter out of `peer_detail` on every tick.
+///
+/// The counts come back with the rows because the aggregate the session keeps
+/// counts them too, and two decisions are made on that aggregate: `seed` exits
+/// 14 when it stopped idle having **seen** no peer, and `--exit-when-idle`
+/// measures how long it has had none **live**. A probe every minute would
+/// answer both questions wrong.
+#[must_use]
+pub fn without_probe_rows(rows: Vec<PeerSnapshot>, ports: &HashSet<u16>) -> PeerView {
+    if ports.is_empty() {
+        return PeerView {
+            rows,
+            ..Default::default()
+        };
+    }
+    let mut view = PeerView::default();
+    for row in rows {
+        if bit_cli_core::engine::is_own_loopback_port(&row.addr, ports) {
+            view.dropped += 1;
+            // `librqbit`'s own name for the state, which is one of "queued",
+            // "connecting", "live", "dead" and "not needed". A closed probe
+            // settles on "not needed", and none of the reported buckets
+            // counts that one.
+            if row.state == "live" {
+                view.dropped_live += 1;
+            }
+            continue;
+        }
+        view.rows.push(row);
+    }
+    view
+}
+
+/// Take this run's own probe out of a snapshot's peer counts.
+///
+/// The rows are dropped from the reported list by [`without_probe_rows`]; this
+/// is the same correction applied to the aggregate the stop conditions read.
+pub fn discount_probe_peers(snapshot: &mut TorrentSnapshot, view: &PeerView) {
+    snapshot.peers.seen = snapshot.peers.seen.saturating_sub(view.dropped);
+    snapshot.peers.live = snapshot.peers.live.saturating_sub(view.dropped_live);
+}
+
+/// Probe this run's own listener every `interval`, until the task is dropped.
+///
+/// `target` is the loopback address of this run's listener, which
+/// [`bit_cli_core::engine::Engine::bridge_target`] already works out, and
+/// `info_hash` must be one the run is serving. The first probe fires one
+/// interval in: a session that has just gone live has nothing wrong with it
+/// yet, and a probe during initialisation would measure the hash check.
+pub fn spawn_listener_probe(
+    target: std::net::SocketAddr,
+    info_hash: [u8; 20],
+    interval: Duration,
+) -> Arc<ListenerState> {
+    let state = Arc::new(ListenerState::default());
+    let writer = Arc::clone(&state);
+    let timeout = bit_cli_core::listener::timeout_for(interval);
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let probe = bit_cli_core::listener::probe(target, info_hash, timeout).await;
+            writer.record(&probe);
+        }
+    });
+    state
 }
 
 /// Why the watch loop stopped.
@@ -1025,6 +1253,8 @@ pub enum Stopped {
     Failed,
     /// `--max-handles` was exceeded.
     HandleCeiling,
+    /// `--listener-check` found this run's own listener no longer answering.
+    ListenerUnhealthy,
 }
 
 impl Stopped {
@@ -1041,6 +1271,7 @@ impl Stopped {
             Self::Interrupted => "interrupted",
             Self::Failed => "failed",
             Self::HandleCeiling => "handle_ceiling",
+            Self::ListenerUnhealthy => "listener_unhealthy",
         }
     }
 
@@ -1057,6 +1288,9 @@ impl Stopped {
             // timeout. The run hit a resource ceiling, which is the same
             // shape of failure as running out of them.
             Self::HandleCeiling => E::ResourceCeiling,
+            // Nothing about the process or the port says this, which is why
+            // it gets a code rather than folding into `Generic`.
+            Self::ListenerUnhealthy => E::ListenerUnhealthy,
         }
     }
 }
@@ -1200,6 +1434,14 @@ impl Progress {
             && bit_cli_core::sysinfo::Process::sample().open_handles > ceiling
         {
             return Some(Stopped::HandleCeiling);
+        }
+        // Read here rather than acted on by the probe task itself, so the run
+        // stops the same way every other stop condition stops it: on a tick,
+        // with a reason, through one report.
+        if let Some(check) = &stop.listener
+            && check.state.consecutive_failures() >= check.allowed
+        {
+            return Some(Stopped::ListenerUnhealthy);
         }
         if !seeding {
             return snapshot.finished.then_some(Stopped::Completed);
@@ -1875,5 +2117,194 @@ udp://cli.example:80
             progress.should_stop(&snap, &StopConditions::default(), false),
             None
         );
+    }
+
+    fn answered(port: u16) -> bit_cli_core::listener::Probe {
+        bit_cli_core::listener::Probe {
+            healthy: true,
+            rtt_ms: Some(1),
+            local_port: Some(port),
+            failure: None,
+        }
+    }
+
+    fn unanswered(port: u16) -> bit_cli_core::listener::Probe {
+        bit_cli_core::listener::Probe {
+            healthy: false,
+            rtt_ms: None,
+            local_port: Some(port),
+            failure: Some("handshake_timeout"),
+        }
+    }
+
+    fn listener_stop(state: &Arc<ListenerState>) -> StopConditions {
+        StopConditions {
+            listener: Some(ListenerCheck {
+                state: Arc::clone(state),
+                allowed: LISTENER_FAILURES_ALLOWED,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn one_unanswered_probe_does_not_stop_a_seeder() {
+        // A backlog of one is one a real peer clears for itself by arriving.
+        let state = Arc::new(ListenerState::default());
+        state.record(&unanswered(40001));
+        let progress = Progress::new(1, vec![10]);
+        assert_eq!(
+            progress.should_stop(&snapshot(0, 10), &listener_stop(&state), true),
+            None
+        );
+    }
+
+    #[test]
+    fn three_unanswered_probes_in_a_row_stop_the_run() {
+        let state = Arc::new(ListenerState::default());
+        for port in 40001..40004 {
+            state.record(&unanswered(port));
+        }
+        let progress = Progress::new(1, vec![10]);
+        assert_eq!(
+            progress.should_stop(&snapshot(0, 10), &listener_stop(&state), true),
+            Some(Stopped::ListenerUnhealthy)
+        );
+    }
+
+    #[test]
+    fn an_answered_probe_clears_the_run_of_failures_before_it() {
+        // Not a count of failures, a count since the last answer: a listener
+        // that answered a moment ago is one a peer can reach now.
+        let state = Arc::new(ListenerState::default());
+        state.record(&unanswered(40001));
+        state.record(&unanswered(40002));
+        state.record(&answered(40003));
+        state.record(&unanswered(40004));
+        assert_eq!(state.consecutive_failures(), 1);
+        let progress = Progress::new(1, vec![10]);
+        assert_eq!(
+            progress.should_stop(&snapshot(0, 10), &listener_stop(&state), true),
+            None
+        );
+        let report = state.report();
+        assert_eq!(report.probes, 4);
+        assert_eq!(report.failed, 3);
+        assert!(!report.healthy);
+        assert_eq!(report.last_rtt_ms, Some(1));
+        assert_eq!(report.last_failure, Some("handshake_timeout"));
+    }
+
+    #[test]
+    fn a_listener_nothing_has_probed_yet_reports_no_round_trip() {
+        // Zero is a measurement: a report that says the last probe came back
+        // in 0 ms when none has been made is worse than one that says none
+        // has. The derived `Default` said exactly that.
+        let report = ListenerState::default().report();
+        assert_eq!(report.probes, 0);
+        assert_eq!(report.last_rtt_ms, None);
+        assert_eq!(report.last_failure, None);
+        assert!(report.healthy, "nothing has failed yet");
+    }
+
+    #[test]
+    fn a_run_with_no_listener_check_is_never_stopped_for_one() {
+        let progress = Progress::new(1, vec![10]);
+        assert_eq!(
+            progress.should_stop(&snapshot(0, 10), &StopConditions::default(), true),
+            None
+        );
+    }
+
+    #[test]
+    fn the_probes_own_peer_rows_are_dropped_and_nothing_else_is() {
+        let state = Arc::new(ListenerState::default());
+        state.record(&answered(40001));
+        state.record(&unanswered(40002));
+        let closed = |addr: &str| {
+            let mut row = peer_row(addr);
+            row.state = "not needed".into();
+            row
+        };
+        let rows = vec![
+            closed("127.0.0.1:40001"),
+            closed("[::1]:40002"),
+            peer_row("127.0.0.1:40003"),
+            peer_row("203.0.113.7:40001"),
+        ];
+        let kept = without_probe_rows(rows, &state.ports());
+        let addrs: Vec<&str> = kept.rows.iter().map(|r| r.addr.as_str()).collect();
+        // The dial that failed still connected, so it left a row too, and a
+        // real peer that happens to share a port number with one of ours does
+        // not.
+        assert_eq!(addrs, vec!["127.0.0.1:40003", "203.0.113.7:40001"]);
+        assert_eq!(kept.dropped, 2);
+        assert_eq!(kept.dropped_live, 0, "both rows are closed");
+    }
+
+    #[test]
+    fn the_probes_own_peers_come_out_of_the_counts_the_run_decides_on() {
+        // `seed` exits 14 when it stopped idle having seen no peer, and
+        // `--exit-when-idle` measures how long it has had none live. A probe
+        // a minute would answer both wrong: it is seen, and for the moment it
+        // is connected it is live.
+        let state = Arc::new(ListenerState::default());
+        state.record(&answered(40001));
+        state.record(&answered(40002));
+        let mut closed = peer_row("127.0.0.1:40001");
+        closed.state = "not needed".into();
+        let mut in_flight = peer_row("127.0.0.1:40002");
+        in_flight.state = "live".into();
+        let view = without_probe_rows(vec![closed, in_flight], &state.ports());
+        assert_eq!((view.dropped, view.dropped_live), (2, 1));
+
+        let mut snap = snapshot(0, 10);
+        snap.peers.seen = 3;
+        snap.peers.live = 1;
+        discount_probe_peers(&mut snap, &view);
+        assert_eq!(snap.peers.seen, 1, "one real peer was seen, not three");
+        assert_eq!(snap.peers.live, 0, "the only live peer was ours");
+    }
+
+    #[test]
+    fn discounting_more_probes_than_the_session_counted_floors_at_zero() {
+        // The two numbers come from different places, so nothing guarantees
+        // the session's own count is the larger one on any given tick.
+        let view = PeerView {
+            rows: Vec::new(),
+            dropped: 9,
+            dropped_live: 9,
+        };
+        let mut snap = snapshot(0, 10);
+        snap.peers.seen = 1;
+        snap.peers.live = 1;
+        discount_probe_peers(&mut snap, &view);
+        assert_eq!((snap.peers.seen, snap.peers.live), (0, 0));
+    }
+
+    #[test]
+    fn no_probe_means_the_peer_list_is_returned_untouched() {
+        let rows = vec![peer_row("127.0.0.1:40001")];
+        let kept = without_probe_rows(rows, &HashSet::new());
+        assert_eq!(kept.rows.len(), 1);
+        assert_eq!(kept.dropped, 0);
+    }
+
+    fn peer_row(addr: &str) -> PeerSnapshot {
+        PeerSnapshot {
+            addr: addr.to_string(),
+            state: "live".into(),
+            client: None,
+            connection: None,
+            direction: "incoming",
+            downloaded_bytes: 0,
+            uploaded_bytes: 0,
+            verified_pieces: 0,
+            chunks: 0,
+            errors: 0,
+            connect_ms: 0,
+            mean_piece_ms: None,
+            web_seed: false,
+        }
     }
 }
