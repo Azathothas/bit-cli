@@ -327,6 +327,22 @@ rather than the key, and the three depth tests below.
 `README.md` states the position under "Reading a torrent somebody else wrote",
 which is the acceptance's last clause.
 
+**One byte of this made the whole file invisible, 2026-08-22.**
+`TOLERATED_TRAILING` was written with the five bytes themselves rather than
+with escapes, so `torrent/bencode.rs` carried a raw tab, a raw carriage return,
+a raw newline and a **raw NUL** inside a byte-string literal, and two more NULs
+in the test that exercises it. A file with a NUL in it is what `grep` calls
+binary and skips, so for two sessions no search over `crates/` could see any
+line of the largest metainfo file in the tree, and the constant itself rendered
+as `b" ` on one line and ` ";` on the next with nothing to read. It carries the
+five escapes now, a space and then t, r, n and 0 each behind a backslash, for
+the same five bytes. Spelled out rather than quoted, because quoting a string
+of escapes through a tool that interprets escapes is what put a NUL in this
+paragraph twice while it was being written.
+
+`scripts/gates.ps1` fails on a NUL in any tracked text file, so this cannot
+come back quietly. See [RULES.md](RULES.md) section 5.
+
 **One thing the measurement turned up that this entry does not cover.**
 Non-canonical integers are refused **everywhere**, `info` and out, and by the
 argument above the ones outside `info` could be read the same way key order now

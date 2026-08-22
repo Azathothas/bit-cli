@@ -222,7 +222,7 @@ exist.
   It prints the toolchain first and warns when the `stable` it is using is
   behind the one CI would install. **Green here is not green there when this
   machine's rustc is older**: CI pins `stable`, which moves, and clippy gains
-  lints with every release. `clippy::chunks_exact_with_const` arrived in 1.98
+  lints with every release. `clippy::chunks_exact_to_as_chunks` arrived in 1.98
   on 2026-08-18 and a push that passed every gate on 1.97.1 was red on that one
   job four days later. It warns rather than fails, because a toolchain nobody
   has updated is not a reason to stop working, and it warns only about the
@@ -363,6 +363,13 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   raw integers in JSON with any formatted string alongside rather than instead.
 - **Anything consuming `--jsonl` selects by `type` or `kind`, never by
   position.**
+- **A control byte goes in a source file as an escape, never as itself.** A raw
+  NUL makes the whole file binary to `grep`, which then skips it and says so in
+  a line nobody reads. Two got in and neither was noticed for a session:
+  `TOLERATED_TRAILING` in `torrent/bencode.rs` spelled its five bytes out
+  literally, and a `TODO/` entry quoting a tracker's NUL-terminated error
+  message had the escape interpreted on its way to the file. `gates.ps1` has a
+  `text` gate for it now, and it fails rather than warns.
 - **Headless parity is absolute:** nothing TTY-gated, nothing display-only, no
   prompting. stdout carries data only.
 

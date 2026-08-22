@@ -196,11 +196,23 @@ installed on this machine, so the divergence has a live counterparty to be
 measured against.
 
 It reports the blocker from the wire rather than from the source, which is the
-better evidence of the two. `bench/swarm-20260822T054652916Z.json`, every leech
-case: `peers_negotiated` 0 against `peers_handshaked` 1, 4 and 16. The synthetic
-peers offered the bit and `bit-cli seed` declined it every time. Leeching is
-unchanged by the offer: 8,388,608 bytes to one peer and 33,554,432 to four, the
-same as the run before this change.
+better evidence of the two. `bench/swarm-20260822T062909627Z.json`:
+
+| case | peers handshaked | `fast_negotiated` | `received` |
+| --- | --- | --- | --- |
+| `leech_1` | 1 | **0** | 8,388,608 |
+| `leech_4` | 4 | **0** | 33,554,432 |
+| `leech_16` | 16 | **0** | 134,217,728 |
+
+The synthetic peers offered the bit on every one of those connections and
+`bit-cli seed` declined it every time, which is `librqbit` saying it has no BEP
+6 rather than this entry reading that off its source. Leeching is unchanged by
+the offer: the same bytes as the run before the change, and `verdict: pass`.
+
+`check-swarm.ps1` records `fast_negotiated` for exactly this reason and does
+not judge it. Zero is what `librqbit` gives, so a script that failed on
+anything else would be asserting the blocker rather than measuring it, and the
+number that matters is the day it stops being zero.
 
 The leecher acts on what it now understands, which is the difference between
 reading the messages and honouring them. `have all` and `have none` stand in

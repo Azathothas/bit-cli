@@ -275,6 +275,7 @@ $cases += [pscustomobject][ordered]@{
     peers_handshaked = $run.report.swarm.peers_handshaked
     bytes_on_disk   = $acceptBytes
     failures        = $run.report.swarm.failures
+    fast_negotiated = $run.report.swarm.fast_extension.peers_negotiated
 }
 
 # The default directory is removed. Same command, no --dir, and the temp
@@ -337,8 +338,16 @@ foreach ($n in $LeechPeers) {
         exit_code = $run.exit_code
         peers     = $n
         sustained = $run.report.summary.sustained_rate.human
+        received  = $swarm.bytes_received.bytes
         verified  = $swarm.pieces_verified
         held      = $swarm.bytes_held.bytes
+        # Every synthetic peer offers the BEP 6 bit, so this is the target's
+        # answer rather than the peer's offer. `librqbit` 9.0.0 has no BEP 6,
+        # so zero is the expected reading and a non-zero one means the session
+        # gained it. Recorded rather than judged: what this script measures is
+        # the load generator, and the entry that owns the number is
+        # TODO/bep-coverage.md T-100.
+        fast_negotiated = $swarm.fast_extension.peers_negotiated
     }
 }
 
@@ -516,7 +525,8 @@ $reportPath = Join-Path $ReportDir "swarm-$stamp.json"
         "In connect mode the target does not have the generated torrents, so zero bytes served is the correct result and any byte would mean an info hash collided with something real.",
         "In leech mode every peer is an independent leecher, so the payload arrives once per peer, and it is held on disk once between them.",
         "Every case but no_target and dead_target starts its own seeder. The connect load leaves the target unable to complete a handshake for any info hash, so a case sharing a seeder with the one before it measures the previous case. That is T-020, and listener_poisoned is where it is measured rather than tripped over.",
-        "listener_poisoned carries judged: false. T-020 is open and recorded, and an acceptance script does not fail the build for a defect that already has an entry."
+        "listener_poisoned carries judged: false. T-020 is open and recorded, and an acceptance script does not fail the build for a defect that already has an entry.",
+        "fast_negotiated is the target's answer to a BEP 6 offer every synthetic peer makes. Recorded rather than judged: librqbit 9.0.0 has no BEP 6, so zero is expected, and the entry that owns the number is TODO/bep-coverage.md T-100."
     )
 } | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8NoBOM
 

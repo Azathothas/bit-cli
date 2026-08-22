@@ -265,7 +265,8 @@ extra round trip per announce, which is the trade this shape makes and the
 right one for a tool with no session to hang a cache off. A future change that
 caches an id inherits the whole problem the corpus note describes, including
 anacrolix's one-minute reissue rule and the tracker that answers
-`"Connection ID missmatch. "`, and must not be made without it.
+`"Connection ID missmatch."` with a trailing NUL byte, and must not be
+made without it.
 
 ### T-065 Scrape is only implemented for the BEP 48 URL convention
 

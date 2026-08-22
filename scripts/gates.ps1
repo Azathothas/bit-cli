@@ -27,6 +27,9 @@
 #   - Builds with `--bins --examples` when asked. `--examples` alone builds the
 #     examples and no binaries, which is how a script comes to run yesterday's
 #     `bit-cli.exe`. TODO/RULES.md section 5.
+#   - Fails on a NUL byte in any tracked text file. Two were in this tree and
+#     neither was noticed, because a file with one in it is what `grep` calls
+#     binary and skips.
 #   - Prints the toolchain and warns when the stable it is using is behind the
 #     one CI would install. Clippy gains lints with every release, so a green
 #     run here on an older rustc is not a green clippy job there. It warns
@@ -81,7 +84,7 @@ if ($stray.Count -gt 0) {
 #
 # CI pins `stable`, which moves. Clippy gains lints with every release, so a
 # local toolchain a release behind passes a clippy CI then fails. That has
-# happened: `clippy::chunks_exact_with_const` arrived in 1.98 and a push that
+# happened: `clippy::chunks_exact_to_as_chunks` arrived in 1.98 and a push that
 # was green here was red there, on nothing but the age of this machine's
 # rustc. This warns rather than fails, because a red gate for a toolchain
 # nobody has updated yet would stop work that is otherwise fine.
@@ -107,6 +110,37 @@ if (-not $Fast -and (Get-Command rustup -ErrorAction SilentlyContinue)) {
         }
     }
 }
+
+# ---------------------------------------------------------------------------
+# text
+# ---------------------------------------------------------------------------
+#
+# A NUL byte in a tracked text file makes every text tool treat the file as
+# binary. `grep` answers "Binary file X matches" instead of the line, a diff is
+# unreadable, and whatever is around it is invisible to a review.
+#
+# Two got in and neither was noticed. `crates/bit-cli-core/src/torrent/bencode.rs`
+# had three, in a byte-string literal written with the bytes themselves rather
+# than escapes, since 2026-08-21. `TODO/trackers.md` had one on 2026-08-22, from
+# a Python escape interpreted on the way to the file. Both are one line to
+# check, and the check is here rather than in `check-todo.ps1` because it is
+# the source tree that had the older one.
+#
+# Tracked files only, and only the ones meant to be text: `git ls-files` knows
+# what is tracked, and the extension list is what this tree actually holds.
+
+$binaryish = [System.Collections.ArrayList]::new()
+$tracked = & git ls-files -- "*.rs" "*.md" "*.ps1" "*.toml" "*.yml" "*.jq" 2>$null
+foreach ($relative in $tracked) {
+    if (-not $relative) { continue }
+    $path = Join-Path $repo $relative
+    if (-not (Test-Path $path)) { continue }
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    $at = [System.Array]::IndexOf($bytes, [byte]0)
+    if ($at -ge 0) { [void]$binaryish.Add("${relative}:$at") }
+}
+Record "text" ($binaryish.Count -eq 0) $(if ($binaryish.Count -eq 0) { "" }
+    else { "NUL byte in $($binaryish -join ', ')" })
 
 # ---------------------------------------------------------------------------
 # fmt

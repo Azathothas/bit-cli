@@ -942,9 +942,9 @@ now finishes in 8.8 seconds with the listener alive.
 The stranded sockets are the visible half. The other half is worse: the same
 accept loop clears **one** queued handshake check per connection it accepts, so
 a run of peers that close before they handshake leaves a backlog, and every
-peer that arrives afterwards waits behind it. Measured: 20 such connections
-were enough, and the seeder then answered nobody for as long as it was left
-alone. Thirteen more connections cleared it; time cleared nothing.
+peer that arrives afterwards waits behind it. Measured one for one: twenty such
+connections, then single peers one at a time, and **the twentieth was the first
+to be served**. Time cleared nothing; connections did, one each.
 
 Nothing a supervisor normally watches sees that. The process is alive, the port
 accepts, the log is silent, and the ratio in the report is history. So `seed`

@@ -19,6 +19,8 @@
 #   4. Every `T-NNN` referenced from any TODO file is an entry that exists.
 #   5. Every `TODO/<file>.md` and `(file.md)` link resolves.
 #   6. Every `crates/...:NNN` citation resolves to a file with that many lines.
+#   7. No file has a NUL byte in it. One got in on 2026-08-22 and `grep`
+#      answered "Binary file TODO/trackers.md matches" instead of the line.
 #
 # What it does not check: whether a claim is true. That is the review this does
 # not replace, and the point of doing the mechanical half in one second is to
@@ -47,6 +49,25 @@ function Problem([string]$kind, [string]$text) {
 }
 
 $files = @(Get-ChildItem -Path $todo -Filter *.md -File)
+
+# ---------------------------------------------------------------------------
+# 0. Bytes, before anything reads these as text
+# ---------------------------------------------------------------------------
+#
+# A NUL byte in a tracked Markdown file makes `grep` call it binary and skip
+# it, makes a diff unreadable, and hides whatever is around it from every text
+# tool including this one. It got in on 2026-08-22 by way of a backslash-x-0-0 escape written
+# into a Python string that then interpreted the escape, in a sentence quoting
+# a tracker's error message. This is one line to check and it is checked
+# first, because everything below reads these files as text.
+
+foreach ($file in $files) {
+    $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+    $at = [System.Array]::IndexOf($bytes, [byte]0)
+    if ($at -ge 0) {
+        Problem "nul-byte" "$($file.Name) has a NUL byte at offset $at, so every text tool will treat it as binary"
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Read every entry

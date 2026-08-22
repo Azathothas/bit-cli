@@ -82,7 +82,8 @@ The four-item work order, in order, and then three things that came out of it.
   landed: `crates/bit-cli-core/src/fast_set.rs` **reproduces the conformance
   vector exactly**, with aria2's divergent mask implemented rather than
   described, and `bench swarm` now advertises the bit and reports what a target
-  did with it.
+  did with it. `check-swarm.ps1` carries the answer from the wire:
+  `fast_negotiated` 0 on every leech case, recorded and not judged.
 
 ### What the work found
 
@@ -99,7 +100,7 @@ The four-item work order, in order, and then three things that came out of it.
   `librqbit`, which never sends one.
 - **The toolchain, and it cost two red CI runs.** CI installs `stable` on every
   run and this machine did not: rustc here was 1.97.1 and CI installed 1.98.0,
-  released four days earlier, carrying `clippy::chunks_exact_with_const`. Every
+  released four days earlier, carrying `clippy::chunks_exact_to_as_chunks`. Every
   gate was green here and one job was red there. The local toolchain is
   updated, clippy 1.98 is clean across the workspace, and `gates.ps1` now
   prints the toolchain and warns when the `stable` it is using is behind.

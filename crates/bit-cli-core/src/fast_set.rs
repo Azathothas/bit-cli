@@ -129,7 +129,8 @@ pub fn allowed_fast(
         let digest = Sha1::digest(&seed);
         // Five big-endian u32s per round, which is the twenty byte digest.
         // Indexed rather than chunked: the length is fixed and known, and
-        // `chunks_exact` with a constant is a clippy lint from Rust 1.98.
+        // `chunks_exact` with a constant is `clippy::chunks_exact_to_as_chunks`
+        // from Rust 1.98.
         for word in 0..5 {
             if (out.len() as u32) >= set_size {
                 break;
