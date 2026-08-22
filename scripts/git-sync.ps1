@@ -404,10 +404,12 @@ function Invoke-Gates {
 # Sync the corpus to the references branch
 # ---------------------------------------------------------------------------
 #
-# An orphan branch holding reference/ and nothing else. It is force-pushed
-# every time, because it is a mirror of a working directory rather than a
+# An orphan branch holding reference/ and nothing else. When it is pushed it is
+# force-pushed, because it is a mirror of a working directory rather than a
 # history: the corpus has no commits worth bisecting and a growing history of
-# a 52 MB tree is a cost with no reader.
+# a 52 MB tree is a cost with no reader. It is pushed only when the tree hash
+# differs from what the remote already holds, which for a corpus that changes
+# about once a month is almost never.
 #
 # Built in a temporary index so the working tree's index is never touched, and
 # so a failure here cannot leave reference/ staged on main.

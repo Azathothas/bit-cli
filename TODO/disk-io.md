@@ -1200,7 +1200,7 @@ Approach:    The cause is upstream and the fix is local.
              is called with nothing to write.
 
              `SafeStorage::pwrite_all_vectored` in
-             `crates/bit-cli-core/src/storage.rs:793` takes `Intent::Write`
+             `crates/bit-cli-core/src/storage.rs:799` takes `Intent::Write`
              before it looks at the slices, and `Intent::Write` is what creates
              a file that is not there. The empty slices are skipped inside the
              closure, after the file exists. `pwrite_all` at :781 has the same

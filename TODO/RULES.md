@@ -3,8 +3,10 @@
 How this repository is worked on. `TODO/` is the authoritative record and this
 file is the part of it that does not change from session to session.
 
-Read [PROGRESS.md](PROGRESS.md) first for what the last session did.
-Read [INDEX.md](INDEX.md) for the work order.
+Read [PROGRESS.md](PROGRESS.md) first: what the last session did, the measured
+baseline, and the work order under "Start here next session".
+Read [INDEX.md](INDEX.md) for every entry, one line each, and for how an
+ordering is derived.
 
 ---
 
@@ -12,7 +14,10 @@ Read [INDEX.md](INDEX.md) for the work order.
 
 1. Read [PROGRESS.md](PROGRESS.md). It says what the last session did, what is
    in progress, and where to resume. It carries no history.
-2. Read [INDEX.md](INDEX.md), the "Start here" section. That is the work order.
+2. The work order is `PROGRESS.md`'s "Start here next session", not
+   [INDEX.md](INDEX.md)'s. INDEX carries the entry list and the argument that
+   produced the last ordering; read that when re-deriving one, and say in
+   `PROGRESS.md` that you did.
 3. Record the start instant on `PROGRESS.md`'s state line, in ISO 8601 UTC.
    Everything at the end that measures the session reads it from there.
 

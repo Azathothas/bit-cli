@@ -2007,7 +2007,11 @@ recording.** `Api::api_torrent_action_update_only_files` does exist and does
 narrow a live torrent, but narrowing **after** the add is too late for the
 thing this entry is about. `librqbit`'s initial check creates and opens every
 file it was not told to skip, so a selection applied afterwards has already
-created what it excludes. `Engine::resolve_with` reads the metadata first, with
+created what it excludes. Measured twice, from both sides:
+`--hash-check-only --select-file 1` against an empty directory creates the
+selected file at its full length and no other, and [T-186](#t-186-seed---data-and-verify---data-resolve-the-payload-differently)'s
+`seed` against an empty directory, which has no selection at all, creates the
+whole tree. `Engine::resolve_with` reads the metadata first, with
 the caller's own trackers and `--peer` addresses so it resolves against the
 swarm the add is about to use, and it hands back the `.torrent` bytes it built.
 The add then takes those bytes, so this is one metadata resolution and not two.
@@ -2147,8 +2151,8 @@ inside it at full length.
 **Closed 2026-08-22T03:00Z.** `crate::payload::resolve` is the shared rule, in a
 module of its own for the reason [`crate::selection`](#t-185---exclude-file-on-its-own-selects-nothing-and-downloads-everything)
 is: two commands need the same answer from the same flag, and a second copy is a
-second set of off-by-one bugs. `verify::resolve_root` is now four lines calling
-it.
+second set of off-by-one bugs. `verify::resolve_root` is now the `--data` fallback chain and
+one call to it.
 
 `seed` takes the resolved root as `AddOptions::output_folder` rather than as the
 session's download directory. That is what makes it right for a **renamed**

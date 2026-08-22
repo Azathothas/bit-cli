@@ -1,7 +1,10 @@
 # TODO
 
-Every item, one line each. Work through this file; each entry closes with the
-acceptance command from its own page, actually run, with the output recorded.
+Every item, one line each. Each entry closes with the acceptance command from
+its own page, actually run, with the output recorded. What to work on next is
+[PROGRESS.md](PROGRESS.md)'s "Start here next session"; this file holds the
+entries themselves and, under "How an ordering is derived", the argument that
+produced the last one.
 
 **Read [PROGRESS.md](PROGRESS.md) first** for what the last session did and
 where to resume, and [RULES.md](RULES.md) for how this repository is worked on,
@@ -494,11 +497,22 @@ parts shipped: `--block-peer` works, and the other two are blocked on
 `Session::blocklist` being immutable and on `TorrentStorage` carrying no peer
 identity. The entry names both, with the lines.
 
-## Start here
+## How an ordering is derived
 
-The work order, re-derived 2026-08-21T17:05Z after the four items the previous
-derivation put first were all closed. Four questions decide it, and they are
-asked in this order because a later answer never outranks an earlier one.
+**This is not the work order.** [PROGRESS.md](PROGRESS.md) carries that, under
+"Start here next session", and it is the only place that does: a work order
+written in two files is one file that goes stale, and on 2026-08-22 three items
+in this section had to have "done" notes bolted onto them within hours of being
+written. What is worth keeping here is the **argument** that produced an
+ordering, because the next derivation has to answer the same four questions and
+should not re-derive the reasoning from scratch.
+
+Everything below is the derivation of 2026-08-21T17:05Z, kept as written. Its
+first four items are closed; read it for how the questions are asked, not for
+what to do next.
+
+Four questions decide an ordering, and they are asked in this order because a
+later answer never outranks an earlier one.
 
 **What the previous ordering asked for is done.** T-179, T-184, T-004 and T-172
 all closed, and three of them ran differently from how they were written. T-179

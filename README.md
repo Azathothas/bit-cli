@@ -1482,11 +1482,12 @@ stderr. The last recorded run is in `TODO/create-seed.md` under T-084.
 
 `TODO/` is the authoritative record of what is done, what is not, and why.
 
-- [TODO/PROGRESS.md](TODO/PROGRESS.md) is the session state: what the last
-  session did and where to resume. It carries no history and is rewritten every
-  session.
-- [TODO/INDEX.md](TODO/INDEX.md) is every item on one line each, with the work
-  order under "Start here" and a counts table that is exact against the rows.
+- [TODO/PROGRESS.md](TODO/PROGRESS.md) is the session state: the measured
+  baseline, what the last session did, and the work order under "Start here
+  next session". It carries no history and is rewritten every session.
+- [TODO/INDEX.md](TODO/INDEX.md) is every item on one line each, a counts table
+  that is exact against the rows, and the argument that produced the last
+  ordering.
 - [TODO/RULES.md](TODO/RULES.md) is how the repository is worked on: the
   process rules, the testing rules, the settled decisions, and the git
   protocol.

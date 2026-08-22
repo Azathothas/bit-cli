@@ -104,6 +104,28 @@ before the gates rather than after them, because finding it out after a five
 minute test run is finding it out late. Run **32549428457** is the one that
 covers the two commits that went out without one.
 
+**The two deep reviews ran at the end, and found five things.** Review 1, every
+claim against the code or the path it cites: `storage.rs:793` in
+[T-188](disk-io.md) no longer pointed at `pwrite_all_vectored`, because adding
+the guard moved it to 799 and a citation written correctly went stale inside
+the same session; `file_ops.rs:322` names the body of the skip and the `if` is
+at 321; and "`verify::resolve_root` is now four lines" was eight. Every other
+citation resolved, checked one at a time against the pinned crate, and every
+symbol and test name named in an entry exists.
+
+Review 2, cold: **three documents each claimed to hold the work order.**
+Moving it into this file left `RULES.md` still saying "Read INDEX.md, the
+'Start here' section. That is the work order", `README.md` saying the same, and
+`INDEX.md` carrying an ordered list whose first three items had "done" notes
+bolted onto them hours after being written. `INDEX.md`'s section is now "How an
+ordering is derived", which is the part worth keeping and is not duplicated
+here, and one document says what to do next.
+
+That is what the reviews are for, and `scripts/check-todo.ps1` caught none of
+these five: a line number that resolves but points at the wrong line, and a doc
+that contradicts another doc in prose, are both review 1 and review 2's, which
+is why the script's own header says what it does not check.
+
 ## In progress
 
 Nothing is half-written. Every entry touched is complete, or explicitly open or

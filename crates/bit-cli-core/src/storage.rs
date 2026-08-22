@@ -805,7 +805,7 @@ impl TorrentStorage for SafeStorage {
         // Answered before anything is opened, because opening for a write is
         // what creates a file, and a write of no bytes changes none.
         //
-        // `librqbit` 9.0.0 asks for one. `file_ops.rs:322` walks the file list
+        // `librqbit` 9.0.0 asks for one. `file_ops.rs:321` walks the file list
         // to place a chunk and skips a file with `if absolute_offset >
         // file_len`, strictly greater, so a chunk that begins on exactly the
         // first byte of the next file leaves the file before it with
@@ -1407,7 +1407,7 @@ mod tests {
 
     /// A write of no bytes is not a write, so it creates nothing.
     ///
-    /// `librqbit` asks for one: `file_ops.rs:322` skips a file with
+    /// `librqbit` asks for one: `file_ops.rs:321` skips a file with
     /// `absolute_offset > file_len`, strictly greater, so a chunk that begins
     /// on exactly the first byte of the next file leaves the file before it
     /// with nothing to write and calls this anyway. Without the guard that is
