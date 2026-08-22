@@ -22,12 +22,21 @@ expose. Seven of them name it with a file and a line number:
 | [T-163](../TODO/peers.md) | MSE, which is a wire-level handshake |
 | [T-167](../TODO/bep-coverage.md) | BEP 54 `lt_donthave`, which has no inverse of `on_have` |
 
-None of the seven can move while the dependency is a published tarball. The
-other two are the record's two P0 items. [T-020](../TODO/peers.md), open: its
-second defect is a `tokio::select!` arm in upstream's accept loop that a failed
-handshake check disables, and no amount of configuration reaches it.
-[T-040](../TODO/memory.md), partial: nothing reclaims a peer row and nothing
-bounds the sets that hold them.
+None of the seven could move while the dependency was a published tarball. The
+other two were the record's two P0 items. [T-020](../TODO/peers.md): its second
+defect was a `tokio::select!` arm in upstream's accept loop that a failed
+handshake check disabled, and no amount of configuration reached it.
+[T-040](../TODO/memory.md): nothing reclaimed a peer row and nothing bounded
+the sets that hold them.
+
+**Five of that table are done and one is partial**, on 2026-08-22, and the
+table is kept as the argument it was rather than rewritten into a status
+board: [`patches/TASKS.md`](../patches/TASKS.md) is the status board and
+`scripts/check-todo.ps1` holds it to the entries. Two of the five were not on
+this list at all. [T-210](../TODO/peers.md) came out of building
+[T-132](../TODO/multi-source.md), and [T-195](../TODO/peers.md) out of building
+[T-194](../TODO/peers.md); neither could have been fixed any other way either.
+Nothing in the record is blocked now.
 
 The full table, and what to do about each, is
 [`patches/TASKS.md`](../patches/TASKS.md).

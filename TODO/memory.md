@@ -10,7 +10,7 @@ Source:      https://github.com/ikatson/rqbit/issues/525 (open)
 Category:    memory
 Priority:    P0
 Effort:      L
-Status:      partial
+Status:      **done**, 2026-08-22T22:50Z
 
 Problem:     A reporter running `librqbit` inside a long-lived server saw both
              RSS and open descriptors climb until the process failed. It
@@ -43,9 +43,12 @@ written.
   2,000 rows at r squared 0.94, which at the soak's 228.5 completions an hour
   is 0.63 MiB an hour against the measured 0.804. See
   [the 2026-08-22 section](#session-of-2026-08-22-the-slope-is-peer-rows).
-- **Open, on bounding it.** Nothing in this tree can free a peer row. What is
-  carried here is `--max-rss`, the same shape of backstop as
-  [T-020](peers.md)'s `--max-handles`.
+- **Bounded, and the bound is measured over six hours.** `MAX_PEER_RECORDS`,
+  1,024 per torrent, in the vendored tree. The slope is **+0.909 MiB/h while
+  the records accumulate and flat once they stop**, and the break is at the
+  instant the map fills. See
+  [the six hour run](#the-six-hour-run-2026-08-22-and-the-bound-holds), which
+  is what closed this. `--max-rss` is still carried as a backstop.
 
 The evidence and the fits are in
 [the 2026-08-21 section](#session-of-2026-08-21-the-question-is-answered-and-the-answer-is-linear)
@@ -659,3 +662,72 @@ This entry's acceptance is `scripts/soak.ps1` over **six hours** with the slope
 of each series recorded. The rows are bounded and that is proved; the soak that
 would show the memory series flat over six hours has not been run since the
 change. That run is the whole of what is left.
+
+---
+
+## The six hour run, 2026-08-22, and the bound holds
+
+This entry's Acceptance is `scripts/soak.ps1` over six hours with the slope of
+each series recorded. It has been run, on the `steady` workload, and it closes
+this entry.
+
+`bench/soak-20260822T164952755Z.csv`, **687 samples over 6.00 hours**, 1,372
+completed leech cycles and none failed.
+
+| series | first | last | max | per hour | r squared |
+| --- | --- | --- | --- | --- | --- |
+| `rss_bytes` | 13.74 MiB | 18.72 MiB | 19.68 MiB | **+0.815 MiB** | 0.807 |
+| `peak_rss_bytes` | 13.86 MiB | 21.16 MiB | 21.16 MiB | +1.064 MiB | 0.713 |
+| `handles` | 210 | 213 | 345 | **-0.315** | 0.003 |
+| `threads` | 29 | 26 | 80 | -0.145 | 0.005 |
+| `tcp_total` | 2 | 1 | 3 | -0.075 | 0.065 |
+| `tcp_close_wait` | 0 | 0 | **0** | 0 | n/a |
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1
+```
+
+**Read the whole-run RSS slope and you would conclude the bound did nothing.**
+0.815 MiB an hour against the 0.804 measured before it. That number is an
+average of two regimes and it describes neither.
+
+**The bound engages part way through the run, and the slope breaks there.** It
+is 1,024 rows per torrent and this workload completes about 229 leech cycles an
+hour, so the map fills at **16,745 s, 4.65 hours in**, which was read live off
+the seeder's own `progress` events: 1,024 rows against 1,079 peers seen, and
+the row count never moved again. Fitting either side of that instant:
+
+| window | samples | slope | r squared |
+| --- | --- | --- | --- |
+| **before**, 0 to 4.65 h | 531 | **+0.909 MiB/h** | 0.799 |
+| **after**, 4.65 to 6.00 h | 156 | **-0.140 MiB/h** | 0.005 |
+
+13.74 MiB to 18.61 MiB in the first window and 18.68 MiB to 18.72 MiB in the
+second. A straight line for four and a half hours, then flat.
+
+That is what the bound was built to do, measured end to end: **memory grows
+while peer records accumulate and stops growing when they stop accumulating.**
+The attribution this entry rested on, that most of the byte is the peer row, is
+confirmed rather than merely inferred from a per-row size.
+
+**An interim read at 5.06 hours said the opposite and was wrong.** It had 55
+samples after the elbow and reported +1.45 MiB/h at r squared 0.107, which is
+noise fitted to a line. The lesson is the one this entry has been about
+throughout: a slope needs a window long enough to have a shape, and the window
+has to start where the thing being measured starts.
+
+**Descriptors: disproved for the third time, now over six hours.** Handles
+trend at -0.315 an hour at r squared 0.003, which is no trend, and the maximum
+of 345 against a mean of 216 is a burst that came back. This entry's report
+named descriptors as well as memory and nothing here has ever reproduced that
+half.
+
+**`CLOSE_WAIT` was zero at all 687 samples**, minimum zero and maximum zero.
+That is [T-020](peers.md)'s fix holding for six hours under load rather than
+for the length of an acceptance script.
+
+**What is not closed by this.** The `all` workload, which adds churn, was not
+run: churn strands sockets at about 30,000 handles an hour, which is T-020's
+shape and swamps every other series. And the bound is 1,024 rows for one
+torrent; a session holding many torrents has that many times the torrent count,
+which is bounded but not small. Nothing measures the multi-torrent case yet.

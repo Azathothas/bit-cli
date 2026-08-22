@@ -904,18 +904,30 @@ flight, and no extra CPU for the same bytes. The full write-up is in
 
 ## Seeding for days
 
-A `seed` run with `--seed-time 7d` is a long-lived process, and one thing in it
-is not bounded. A peer that connects and closes before it sends a handshake
-strands a socket in `CLOSE_WAIT` about half the time. Time does not release it
-and ordinary traffic does, so a busy seeder clears what a burst left and an
-idle one keeps it. Measured: 4000 such connections stranded 2053 sockets, and
-100 ordinary connections then took that to 96.
+A `seed` run with `--seed-time 7d` is a long-lived process, and two things in
+it used to grow without bound. Both are fixed in the vendored `librqbit`.
+
+**Sockets stranded in `CLOSE_WAIT`.** A peer that connected and closed before
+sending a handshake stranded one about half the time, and the cause was worse
+than the count: one failed handshake check disabled the arm of a `select!` that
+drained the queue, so the seeder went on accepting TCP and completing **no
+handshake for any info hash, including one it was serving**, while reporting
+itself as seeding. 4000 such connections stranded 2053 sockets. Now:
 
 ```bash
 pwsh scripts/check-close-wait.ps1
 ```
 
-That is upstream and not fixed here. What `bit-cli` carries is a backstop:
+**986 stranded sockets to 0**, and handles that went 188 to 1210 now go 188 to
+194. `TODO/peers.md` T-020 has the reproduction.
+
+**Peer records that were never reclaimed.** One row per completed handshake,
+kept for the life of the process. 2,000 connections left 2,000 rows at `live 0`
+and `dead 0`. They are bounded at 1,024 per torrent now, taking only rows that
+have no task or dial behind them; `TODO/memory.md` T-040 has the measurement.
+
+What `bit-cli` still carries, because a backstop for a process that runs for
+days is worth having whether or not a known leak is closed:
 
 ```bash
 bit-cli seed release.torrent --seed-time 7d --max-handles 4096
@@ -925,26 +937,42 @@ bit-cli seed release.torrent --seed-time 7d --max-handles 4096
 process. Over it, the run stops with `"stopped": "handle_ceiling"` and exit 16,
 which a supervisor restarts. It is off by default, because the right number
 depends on the deployment; read `cost` in a healthy run's report for a
-baseline. The numbers, the reproduction, and what closing it upstream would
-take are in `TODO/peers.md` under T-020.
+baseline.
 
-Memory has the same shape and the same backstop:
+Memory has the same backstop:
 
 ```bash
 bit-cli seed release.torrent --seed-time 7d --max-rss 512MiB
 ```
 
-A seeder under load grows about 0.8 MiB an hour, and most of that is one thing:
-`librqbit` records a peer for every completed handshake and never reclaims the
-row. Measured at **2,891 bytes a row over 2,000 rows**, retained after a minute
-of no traffic, which at the soak's completion rate is 0.63 MiB of the 0.804.
-Nothing here frees a row. `--max-rss` stops the run with
-`"stopped": "rss_ceiling"` and exit 16 instead. A seeder with nothing connected
-sits near 12 MiB, so pick a number from `cost` in a healthy report rather than
-from this paragraph.
+`--max-rss` stops the run with `"stopped": "rss_ceiling"` and exit 16. A seeder
+with nothing connected sits near 12 MiB, so pick a number from `cost` in a
+healthy report rather than from this paragraph. A seeder under load still grows,
+and `TODO/memory.md` T-040 carries what is measured and what is not: bounding
+the peer records did not flatten the slope, so something else in a loaded
+session accounts for most of it.
 
 ```bash
 pwsh scripts/check-peer-rows.ps1
+```
+
+**A seeder that restarts does not have to re-hash its payload.** Every add
+hash-checks the whole thing, at about 1.6 GiB/s here, so a 40 GiB payload
+spends about 25 seconds of disk read before it announces anything:
+
+```bash
+bit-cli seed release.torrent --seed-time 7d --fastresume
+```
+
+The verified bitfield is kept at `<data>/.bit-cli-resume/<info hash>.bitv`,
+beside a `.meta` sidecar naming every file's length and modification time.
+Change a byte of the payload and the cache is refused and deleted, and the run
+hash-checks as it always did. `--fastresume-dir` moves the cache; there is no
+equivalent on `download`, because a download writes its payload continuously
+and would find its own cache stale on every run.
+
+```bash
+pwsh scripts/check-fastresume.ps1
 ```
 
 The write-up is in `TODO/memory.md` under T-040.
@@ -995,31 +1023,44 @@ pwsh scripts/check-listener.ps1
 
 ## Capping one source and not the other
 
-Four rate flags, and they do not divide the way the names suggest.
+Five rate flags, and they do not divide the way the names suggest.
 
 | flag | what it bounds |
 | --- | --- |
 | `--max-overall-download-rate` | the whole session, **peers and HTTP together** |
 | `--max-download-rate` | one torrent, peers and HTTP together |
 | `--web-seed-speed-limit` | HTTP sources only, per source |
-| nothing | peers only |
+| `--max-peer-rate` | swarm peers only, not sources this run attached |
 
-The last row is the gap. An HTTP source reaches the session as a peer over
-loopback, so every cap that can reach a peer reaches the mirror as well.
-Measured on a 128 MiB payload with an 8 MiB/s cap:
+An HTTP source reaches the session as a peer over loopback, so every cap that
+can reach a peer reaches the mirror as well, and `--max-peer-rate` is the one
+that does not: it skips the bridge this process runs, by peer id prefix.
+Measured on a 128 MiB payload with an 8 MiB/s peer cap and a 24 MiB/s web seed
+cap:
 
 | what was capped | total | HTTP | peers |
 | --- | --- | --- | --- |
-| nothing, HTTP only | 195.42 MiB/s | 195.42 | 0 |
-| `--max-overall-download-rate` | 8.41 MiB/s | 8.41 | 0 |
-| `--web-seed-speed-limit` | 8.23 MiB/s | 8.23 | 0 |
-| nothing, peer and HTTP | 354.57 MiB/s | 138.50 | 216.07 |
-| `--web-seed-speed-limit`, peer and HTTP | **35.96 MiB/s** | 1.40 | 34.55 |
-| `--max-overall-download-rate`, peer and HTTP | 8.27 MiB/s | 4.14 | 4.14 |
+| nothing, HTTP only | 167.32 MiB/s | 167.32 | 0 |
+| `--max-overall-download-rate` | 8.39 MiB/s | 8.39 | 0 |
+| `--web-seed-speed-limit` | 8.21 MiB/s | 8.21 | 0 |
+| **`--max-peer-rate`, HTTP only** | **151.84 MiB/s** | **151.84** | 0 |
+| nothing, peer only | 259.11 MiB/s | 0 | 259.11 |
+| **`--max-peer-rate`, peer only** | **8.42 MiB/s** | 0 | **8.42** |
+| nothing, peer and HTTP | 228.16 MiB/s | 185.38 | 42.78 |
+| `--web-seed-speed-limit`, peer and HTTP | 301.89 MiB/s | 11.79 | 290.09 |
+| `--max-overall-download-rate`, peer and HTTP | 8.35 MiB/s | 3.91 | 4.43 |
+| **both caps, peer and HTTP** | 27.57 MiB/s | **18.31** | **9.26** |
 
-The fifth row is the one to read. Capping the mirror does not cap the run: the
-peer picked up the work and the whole thing went four times faster than the cap
-that was set. If a run has to stay under a number, cap the session.
+Two rows are worth reading. `--max-peer-rate` with HTTP only runs at 151.84
+MiB/s against an 8 MiB/s cap, which is the point: a swarm cap must not reach a
+source this run attached. And `--web-seed-speed-limit` with a peer in the swarm
+reaches 301.89 MiB/s against an 8 MiB/s cap, because nothing there was asked to
+bound the peer. If a run has to stay under one number, cap the session; if it
+has to stay under two, set both.
+
+There is no `--max-peer-upload-rate` and there does not need to be. A bridged
+source is a seed: it never asks for a piece, so nothing is ever uploaded to it,
+and the upload caps already reach peers alone.
 
 ```bash
 pwsh scripts/check-rate-scope.ps1
@@ -1576,11 +1617,11 @@ not there, and the entry that closes it is named.
 | 47 | Padding files | read only | parsed and skipped: `torrent/metainfo.rs:116`, `storage.rs:728`; `create` does not emit them ([T-081](TODO/create-seed.md)) |
 | 48 | Tracker scrape | yes | `tracker.rs:427`, `:499`; BEP 48 URL convention only ([T-065](TODO/trackers.md)) |
 | 53 | Magnet file selection, `so=` | yes | `torrent/magnet.rs:211` |
-| 6 | Fast extension | partial | the allowed-fast derivation is `fast_set.rs`, with BEP 6's mask and aria2's; `bench swarm` reads all five messages and reports which mask a target used. Nothing sends one: [T-100](TODO/bep-coverage.md), blocked, `librqbit` 9.0.0 has no BEP 6 |
+| 6 | Fast extension | partial | the allowed-fast derivation is `fast_set.rs`, with BEP 6's mask and aria2's; `bench swarm` reads all five messages and reports which mask a target used. Nothing sends one: [T-100](TODO/bep-coverage.md), and the vendored `librqbit` has no BEP 6 either |
 | 16 | Superseeding | no | [T-082](TODO/create-seed.md). `--superseed` is accepted and warns |
 | 29 | uTP | no | [T-101](TODO/bep-coverage.md). No flag enables it |
 | 52 | BitTorrent v2 | no | [T-081](TODO/create-seed.md), [T-134](TODO/multi-source.md) |
-| 54 | `lt_donthave` | no | [T-167](TODO/bep-coverage.md), blocked: `librqbit` 9.0.0 has no receive side |
+| 54 | `lt_donthave` | partial | received and honoured: the vendored `librqbit` clears the bit, `extended/mod.rs` `LtDontHave`. Nothing sends one: [T-167](TODO/bep-coverage.md) |
 | 55 | Holepunch | no | [T-102](TODO/bep-coverage.md) |
 | MSE/PE | Peer encryption | no | [T-163](TODO/peers.md) |
 

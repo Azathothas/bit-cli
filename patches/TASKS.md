@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**13 entries: 8 done, 3 partial, 0 blocked, 2 open.** Every one of them was
+**13 entries: 9 done, 2 partial, 0 blocked, 2 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
 record, and nothing in the record is blocked.**
 
@@ -25,7 +25,7 @@ record, and nothing in the record is blocked.**
 | --- | --- | --- | --- |
 | [T-194](../TODO/peers.md) | **P0** | **done** | a bitfield that does not fit one message buffer |
 | [T-020](../TODO/peers.md) | **P0** | **done** | a `tokio::select!` arm in upstream's accept loop |
-| [T-040](../TODO/memory.md) | **P0** | partial | **bounded.** Only the six hour soak is left |
+| [T-040](../TODO/memory.md) | **P0** | **done** | a peer row nothing ever reclaimed |
 | [T-022](../TODO/peers.md) | P1 | **done** | an HTTP tracker announce per address family |
 | [T-132](../TODO/multi-source.md) | P1 | **done** | a download limit that skips one peer |
 | [T-016](../TODO/disk-io.md) | P2 | **done** | a resume cache without session persistence |
@@ -37,11 +37,17 @@ record, and nothing in the record is blocked.**
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 | [T-025](../TODO/peers.md) | P3 | **done** | one `pub use`, and the filter had no name |
 
-Five are not done. [T-040](../TODO/memory.md) is not waiting on a seam at all,
-only on the six hour measurement its acceptance names.
-[T-167](../TODO/bep-coverage.md) is no longer waiting on `librqbit` either: the
-receive side is built and the send half is this repository's own bridge. The
-remaining three are sections 3 and 5.
+Four are not done, and one of those is not waiting on `librqbit` either:
+[T-167](../TODO/bep-coverage.md)'s receive side is built and the send half is
+this repository's own bridge. The remaining three are sections 3 and 5.
+
+**All three P0 items are closed.** [T-040](../TODO/memory.md) was the last, and
+it closed on a measurement rather than a change: six hours of `soak.ps1` on the
+`steady` workload, **+0.909 MiB/h while the peer records accumulate and flat
+once the 1,024 row bound engages**, with the break at the instant the map
+fills. `CLOSE_WAIT` was zero at all 687 samples, which is
+[T-020](../TODO/peers.md)'s fix holding under load rather than for the length
+of an acceptance script.
 
 **Two entries were added to this table by the work rather than found before
 it.** [T-210](../TODO/peers.md) came out of building
@@ -162,10 +168,13 @@ two files. Nothing was copied, so nothing is owed in `THIRD_PARTY.md`. The
 other three memory patches listed in section 4 are still unread and still worth
 reading before the next bound is written.
 
-**What is left is a measurement, not a change.** This entry's acceptance is
-`scripts/soak.ps1` over **six hours** with the slope of each series recorded,
-and it has not been run since the bound landed. Start it early in a session: it
-outlasts most of one.
+**The measurement is in.** Six hours of `scripts/soak.ps1` on `steady`:
+**+0.909 MiB/h while the records accumulate, flat afterwards**, the break at
+4.65 hours where the map fills, handles flat and `CLOSE_WAIT` zero at all 687
+samples. The entry has the fits either side of the break and why the whole-run
+slope of 0.815 MiB/h describes neither regime. Start a soak early in a session:
+it outlasts most of one, and it survives a `gates.ps1` run now because
+`gates.ps1` leaves a process under `.tmp/` alone.
 
 **Still to offer upstream.** It is
 [rqbit#525](https://github.com/ikatson/rqbit/issues/525), open, and reported as
@@ -221,10 +230,10 @@ checked against the vendored tree.
 | `0012-bound-peer-response-backlog` | 128 queued piece and metadata responses per peer | [T-040](../TODO/memory.md) |
 | `0014-bound-discovery-pressure` | bounds DHT and magnet-metadata queues and retained candidates | [T-040](../TODO/memory.md), [`TODO/dht.md`](../TODO/dht.md) |
 | `0016-limit-peer-metadata-before-allocation` | enforces a BEP 9 ceiling **before** allocating | [T-040](../TODO/memory.md), and it is a denial-of-service shape |
-| `0001-allow-persistence-without-auto-restore` | keeps persistence available while disabling implicit admission | [T-016](../TODO/disk-io.md), which is **blocked on exactly this** |
+| `0001-allow-persistence-without-auto-restore` | keeps persistence available while disabling implicit admission | [T-016](../TODO/disk-io.md), **done another way**. See below |
 | `0005-bound-tracker-requests` | 1 MiB decoded cap, 30 s completion, 60 s minimum announce | [`TODO/trackers.md`](../TODO/trackers.md) |
 | `0007-bound-session-peers` | 80 live peers per torrent, 400 per session | `--peer-limit` already exists here; read before adopting |
-| `0018-propagate-file-sizing-errors` | stops initialization on the first sizing failure | [`TODO/disk-io.md`](../TODO/disk-io.md) T-014 |
+| `0018-propagate-file-sizing-errors` | stops initialization on the first sizing failure | [`TODO/disk-io.md`](../TODO/disk-io.md) T-014, which is already done |
 
 **`0009` is the one to be careful with, and it is instructive.** It caps the
 pending handshake set, and T-020 measured that the cap is *not* the cause of
@@ -235,11 +244,25 @@ that is what removed the panic that was defect one. The entry says it outright:
 file, and different problems. Adopt the eight, read the ninth, and do not let
 its title decide anything.
 
-**`0001` is the highest value of the nine here**, because [T-016](../TODO/disk-io.md)
-is the only entry in the whole record that is blocked on a decision rather than
-on a defect: decision 7.4 puts session persistence in Phase C, and `librqbit`
-9.0.0 offers no way to have a resume cache without it. A seam that separates
-persistence from auto-restore removes the conflict without touching 7.4.
+**`0001` was called the highest value of the nine here, and the entry it was
+for closed without it.** The argument was that [T-016](../TODO/disk-io.md) was
+the only entry in the record blocked on a decision rather than on a defect:
+decision 7.4 puts session persistence in Phase C and `librqbit` 9.0.0 offered
+no resume cache without it, so a seam separating persistence from auto-restore
+would remove the conflict without touching 7.4.
+
+That was the right diagnosis and the wrong remedy. Separating auto-restore from
+persistence still leaves a session store on disk; what T-016 needed was no
+session store at all. `SessionOptions` takes a `BitVFactory` now, so the cache
+exists and nothing about the session is written down. **Read `0001` before
+adopting it for anything else**: it solves a problem this repository no longer
+has, and its value here was the reading rather than the patch.
+
+**Four of the nine remain worth reading and none of them is claimed yet**:
+`0012`, `0014` and `0016` are bounds on queues that [T-040](../TODO/memory.md)
+and [`TODO/dht.md`](../TODO/dht.md) would want, and `0005` is a bound on
+tracker responses. Nothing has read them. Section 2 says the same thing and it
+is still true.
 
 ## 5. The rest, in the order the entries already argue for
 

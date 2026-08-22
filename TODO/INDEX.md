@@ -123,7 +123,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
 | [T-036](performance.md) | P0 | paths | **done** | A multi-file torrent with one file lands without its directory |
 | [T-037](performance.md) | P1 | performance | **done** | A run stalls for minutes, roughly once in fifty |
-| [T-040](memory.md) | P0 | memory | partial | Memory and descriptors grow without bound over a long run |
+| [T-040](memory.md) | P0 | memory | done | Memory and descriptors grow without bound over a long run |
 | [T-157](memory.md) | P2 | memory | **done** | A killed soak destroys the summary it was rewriting |
 | [T-041](memory.md) | P2 | memory | open | Per-source window cache is bounded but not measured |
 | [T-042](memory.md) | P1 | memory | **done** | Peak RSS is not captured in any report |
@@ -238,7 +238,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 160 items: 150 to work through, and 10 deferred to Phase C.
-46 open, 5 partial, 0 blocked, 99 done.
+46 open, 4 partial, 0 blocked, 100 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -495,12 +495,12 @@ sessions earlier.
 
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
-| P0 | 0 | 1 | 0 | 11 | 12 |
+| P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 2 | 0 | 0 | 53 | 55 |
 | P2 | 23 | 4 | 0 | 32 | 59 |
 | P3 | 21 | 0 | 0 | 3 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **46** | **5** | **0** | **99** | **160** |
+| **All** | **46** | **4** | **0** | **100** | **160** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
