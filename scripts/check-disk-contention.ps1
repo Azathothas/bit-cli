@@ -37,6 +37,13 @@
 #   pwsh scripts/check-disk-contention.ps1
 #   pwsh scripts/check-disk-contention.ps1 -PayloadSize 2GiB -Iterations 5 -ThreadSweep "1,2,4,8,16"
 #   pwsh scripts/check-disk-contention.ps1 -BlockSizes "16KiB,1MiB"
+#   pwsh scripts/check-disk-contention.ps1 -RunLength 64
+#
+# -RunLength is how many blocks one thread writes before the next takes over,
+# under shared and handles. 1 strides block by block, which is what every
+# record before 2026-08-22 was taken at and is the most contended arrangement
+# there is. A receive path writes a whole fetched range at a time, so 64 at a
+# 16 KiB block is the shape a download has. See TODO/disk-io.md, T-018.
 #
 # Exits 0 when the run produced a verdict, 1 when a step read back a block it
 # did not write, and 2 when the check could not run. The record goes to
@@ -49,6 +56,7 @@ param(
     [string]$PayloadSize = "1GiB",
     [string]$BlockSize = "16KiB",
     [string]$ThreadSweep = "1,2,4,8",
+    [int]$RunLength = 1,
     [string]$BlockSizes = "16KiB,64KiB,256KiB,1MiB",
     [int]$Iterations = 3,
     [string]$FileAllocation = "sparse",
@@ -127,6 +135,7 @@ function Invoke-Bench([string]$layout, [string]$block, [string]$sweep) {
         "--payload-size", $PayloadSize,
         "--block-size", $block,
         "--concurrency-sweep", $sweep,
+        "--run-length", $RunLength,
         "--layout", $layout,
         "--file-allocation", $FileAllocation,
         "--format", "json"
@@ -154,6 +163,7 @@ function Add-Steps($report, [System.Collections.ArrayList]$into, [int]$iteration
             iteration            = $iteration
             layout               = $step.layout
             block_size           = $block
+            run_length           = $step.run_length
             threads              = $step.threads
             files                = $step.files
             bytes                = $step.bytes.bytes
@@ -163,6 +173,7 @@ function Add-Steps($report, [System.Collections.ArrayList]$into, [int]$iteration
             rate_human           = $step.rate.human
             total_write_time_ms  = $step.total_write_time.ms
             write_ops            = $step.write_ops
+            write_calls          = $step.write_calls
             mean_write_us        = $step.mean_write_us
             concurrency_achieved = $step.concurrency_achieved
             verified             = $step.verified

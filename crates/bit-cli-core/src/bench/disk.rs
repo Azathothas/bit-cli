@@ -86,6 +86,17 @@ pub struct Options {
     pub threads: usize,
     /// Steps of a thread-count sweep. Empty means one step at `threads`.
     pub sweep: Vec<usize>,
+    /// Consecutive blocks one thread writes before the next one takes over,
+    /// under `shared` and `handles`. `1` strides block by block, which is the
+    /// most contended arrangement there is and is what every measurement
+    /// recorded before 2026-08-22 was taken at.
+    ///
+    /// A receive path does not write that way. It fetches a range and answers
+    /// blocks out of it, so N paths are N sequential streams into one file,
+    /// each contiguous for the length of a range. `--run-length 64` at a
+    /// 16 KiB block is one 1 MiB range per turn, which is that shape. See
+    /// `TODO/disk-io.md`, T-018.
+    pub run_length: u64,
     pub layout: Layout,
     pub allocation: Allocation,
     /// How many payload files stay open. Zero is the storage default.
@@ -104,6 +115,7 @@ impl Default for Options {
             block_size: 16 * 1024,
             threads: 8,
             sweep: Vec::new(),
+            run_length: 1,
             layout: Layout::Shared,
             allocation: Allocation::Sparse,
             max_open_files: 0,
@@ -219,6 +231,7 @@ pub fn run(
         total_bytes += step.bytes.0;
         total_elapsed += Duration::from_millis(step.elapsed.0);
         total_disk.write_ops += step.write_ops;
+        total_disk.write_calls += step.write_calls;
         total_disk.write_bytes = Size(total_disk.write_bytes.0 + step.bytes.0);
         total_disk.write_time = Millis(total_disk.write_time.0 + step.total_write_time.0);
         if let Some(read) = &step.read_back {
@@ -233,7 +246,7 @@ pub fn run(
             bytes: step.bytes,
             elapsed: step.elapsed,
             rate: step.rate,
-            requests: step.write_ops,
+            requests: step.write_calls,
             errors: 0,
             latency: Default::default(),
         });
@@ -256,7 +269,7 @@ pub fn run(
         duration: Millis::from(total_elapsed),
         sustained_rate: Rate(rate_of(total_bytes, total_elapsed)),
         peak_rate: Rate(peak_rate),
-        requests: total_disk.write_ops,
+        requests: total_disk.write_calls,
         disk: Some(total_disk),
         best_concurrency: outcome
             .concurrency_curve
@@ -273,17 +286,21 @@ pub fn run(
 /// The two layouts differ only here:
 ///
 /// - `shared`: every thread interleaves into file 0, so the owner is the block
-///   index modulo the thread count.
+///   index divided by [`Options::run_length`], modulo the thread count. At the
+///   default run length of 1 that is the block index modulo the thread count,
+///   which is where this started and what every measurement before
+///   2026-08-22 was taken at.
 /// - `split`: thread `t` owns file `t` and writes it end to end.
 fn assignment(options: &Options, threads: usize, blocks: u64, block: u64) -> (usize, u64, usize) {
     match options.layout {
-        // `handles` interleaves exactly as `shared` does. The two differ only
-        // in how many handles the writes go through, which is what makes them
-        // a pair.
+        // `handles` interleaves exactly as `shared` does, run length included.
+        // The two differ only in how many handles the writes go through, which
+        // is what makes them a pair, and a pair measured at two different
+        // arrangements would answer nothing.
         Layout::Shared | Layout::Handles => (
             0,
             block * options.block_size.max(1),
-            (block % threads as u64) as usize,
+            ((block / options.run_length.max(1)) % threads as u64) as usize,
         ),
         Layout::Split => {
             let per_thread = blocks.div_ceil(threads as u64).max(1);
@@ -426,6 +443,7 @@ fn one_step(
     let sink = Arc::new(sink);
 
     let deadline = run_started + options.duration;
+    let before_writes = metrics.read();
     let done_blocks = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
     let phase_started = Instant::now();
@@ -588,6 +606,12 @@ fn one_step(
     let written: u64 = costs.iter().map(|c| c.bytes.0).sum();
     let ops: u64 = costs.iter().map(|c| c.blocks).sum();
     let total_write_time: u64 = costs.iter().map(|c| c.write_time.0).sum();
+    // What actually reached the device, taken after the flush so the buffer's
+    // last runs are in it. The threads counted their own calls, which is a
+    // different number now that a run of them can become one operation, and
+    // reporting the calls as `write_ops` would have made this instrument
+    // blind to the one change it exists to measure.
+    let device_write_ops = metrics.read().since(&before_writes).write_ops;
 
     let (verified, read_back) = match options.verify {
         false => (None, None),
@@ -626,12 +650,14 @@ fn one_step(
     Ok(Step {
         threads,
         layout: options.layout.as_str().to_string(),
+        run_length: options.run_length.max(1),
         files,
         bytes: Size(written),
         elapsed: Millis::from(elapsed),
         rate: Rate(rate_of(written, elapsed)),
         total_write_time: Millis(total_write_time),
-        write_ops: ops,
+        write_ops: device_write_ops,
+        write_calls: ops,
         mean_write_us: match ops {
             0 => 0,
             ops => total_write_time * 1_000 / ops,
@@ -694,7 +720,18 @@ mod tests {
         assert_eq!(outcome.summary.bytes.0, 1 << 20);
         let step = &outcome.steps[0];
         assert_eq!(step.files, 1);
-        assert_eq!(step.write_ops, 64);
+        // `write_calls` and not `write_ops`: the property here is that the
+        // step asked storage for one write per block, and how many of those
+        // the buffer combined is a scheduling outcome. It asserted `write_ops`
+        // while that field carried the calls, which is the mislabelling
+        // `TODO/disk-io.md` T-018 corrects.
+        assert_eq!(step.write_calls, 64);
+        assert!(
+            step.write_ops <= step.write_calls,
+            "the device cannot see more writes than were asked for: {} against {}",
+            step.write_ops,
+            step.write_calls
+        );
         assert_eq!(step.verified, Some(true));
         assert!(outcome.notes.is_empty(), "{:?}", outcome.notes);
     }
@@ -758,6 +795,100 @@ mod tests {
                 thread.index
             );
         }
+    }
+
+    /// `TODO/disk-io.md` T-018: the run length is what decides whether the
+    /// shared layout writes the shape a download writes.
+    ///
+    /// At 1 a thread's next block is `threads` blocks past its last and
+    /// nothing is ever contiguous, which is the arrangement every measurement
+    /// before 2026-08-22 was taken at and the reason the coalescer can combine
+    /// nothing there. At `n` a thread writes `n` blocks in a row, which is a
+    /// receive path answering blocks out of one fetched range.
+    #[test]
+    fn the_run_length_decides_how_far_a_thread_writes_before_the_next_one() {
+        let mut options = quick(Layout::Shared, 4, vec![], 1 << 20);
+        let owners = |options: &Options| -> Vec<usize> {
+            (0..8)
+                .map(|block| assignment(options, 4, 64, block).2)
+                .collect()
+        };
+
+        assert_eq!(
+            owners(&options),
+            vec![0, 1, 2, 3, 0, 1, 2, 3],
+            "the default strides block by block"
+        );
+
+        options.run_length = 2;
+        assert_eq!(
+            owners(&options),
+            vec![0, 0, 1, 1, 2, 2, 3, 3],
+            "a run length of two gives each thread two blocks in a row"
+        );
+
+        // Offsets are a pure function of the block index, so a run length
+        // changes who writes a block and never where it lands. That is what
+        // keeps the read-back check meaningful at any run length.
+        options.run_length = 1;
+        let offsets: Vec<u64> = (0..8)
+            .map(|block| assignment(&options, 4, 64, block).1)
+            .collect();
+        options.run_length = 4;
+        let strided: Vec<u64> = (0..8)
+            .map(|block| assignment(&options, 4, 64, block).1)
+            .collect();
+        assert_eq!(offsets, strided, "the run length must not move a block");
+    }
+
+    /// A run as long as the write buffer's region reaches the device as one
+    /// operation, and the report says so.
+    ///
+    /// This is the property the acceptance clause rests on and the one
+    /// `--layout shared` could not show before: the step now reports what
+    /// reached the device beside what the threads asked for, and at a 64 block
+    /// run the two differ by exactly the region size.
+    ///
+    /// The count is asserted only on this side. The strided side is not a
+    /// fixed number: the buffer belongs to the storage rather than to a
+    /// thread, so two threads writing adjacent blocks in order do extend one
+    /// run, and how often that happens is a scheduling outcome this test does
+    /// not control. Measured at 225 of 256 on one machine, and asserting it
+    /// would be asserting the scheduler.
+    #[test]
+    fn a_run_the_length_of_the_write_region_reaches_the_device_as_one_operation() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = 4 << 20;
+        let block_size = 16 * 1024;
+        let blocks = payload / block_size;
+        // 64 blocks of 16 KiB is the 1 MiB region the buffer flushes at, so
+        // each thread's turn is exactly one operation and no run is displaced:
+        // four threads against eight run slots.
+        let run_length = 64;
+
+        let mut options = quick(Layout::Shared, 4, vec![], payload);
+        options.run_length = run_length;
+        let outcome = run(dir.path(), &options, |_| {}).unwrap();
+        let step = &outcome.steps[0];
+
+        assert_eq!(
+            step.write_calls, blocks,
+            "the threads still ask for one write per block"
+        );
+        assert_eq!(
+            step.write_ops,
+            blocks / run_length,
+            "and every {run_length} of them reach the device as one"
+        );
+        assert_eq!(
+            step.verified,
+            Some(true),
+            "every block still reads back as itself"
+        );
+        assert_eq!(
+            step.run_length, run_length,
+            "the report says which run length"
+        );
     }
 
     #[test]

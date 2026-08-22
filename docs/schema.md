@@ -798,6 +798,7 @@ From `bit-cli bench disk --json`.
 | `disk_steps[].mean_write_us` | integer |
 | `disk_steps[].rate.bytes` | integer |
 | `disk_steps[].rate.human` | string |
+| `disk_steps[].run_length` | integer |
 | `disk_steps[].threads` | integer |
 | `disk_steps[].threads_detail[].blocks` | integer |
 | `disk_steps[].threads_detail[].bytes.bytes` | integer |
@@ -808,6 +809,7 @@ From `bit-cli bench disk --json`.
 | `disk_steps[].threads_detail[].write_time.ms` | integer |
 | `disk_steps[].total_write_time.human` | string |
 | `disk_steps[].total_write_time.ms` | integer |
+| `disk_steps[].write_calls` | integer |
 | `disk_steps[].write_ops` | integer |
 | `kind` | string |
 | `notes[]` | string |

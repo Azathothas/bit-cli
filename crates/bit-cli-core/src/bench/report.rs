@@ -365,12 +365,26 @@ pub struct DiskThread {
     pub mean_write_us: u64,
 }
 
+/// The run length a report written before the field existed was taken at.
+fn one_block() -> u64 {
+    1
+}
+
 /// One step of a `bench disk` sweep.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiskStep {
     pub threads: usize,
     /// `shared` or `split`.
     pub layout: String,
+    /// Consecutive blocks one thread wrote before the next took over, under
+    /// `shared` and `handles`. 1 strides block by block. `split` gives each
+    /// thread one contiguous range and does not use this.
+    ///
+    /// Defaulted to 1 rather than to zero so a report written before this
+    /// field existed reads back as the arrangement it was actually taken at,
+    /// which is what `--baseline` needs. See `TODO/disk-io.md`, T-018.
+    #[serde(default = "one_block")]
+    pub run_length: u64,
     pub files: usize,
     pub bytes: Size,
     /// Wall time of the write phase.
@@ -379,7 +393,20 @@ pub struct DiskStep {
     /// Every thread's write time added together. Against `elapsed` it says how
     /// many writes were really in flight.
     pub total_write_time: Millis,
+    /// Positioned writes that reached the device, from the storage counters.
+    ///
+    /// Not the same as [`Self::write_calls`] since the write buffer landed:
+    /// a run of blocks a thread wrote in order reaches the device as one
+    /// operation. A report written before 2026-08-22 carries the same number
+    /// under this name whichever meaning is read into it, because there was
+    /// nothing between the two. See `TODO/disk-io.md`, T-018.
     pub write_ops: u64,
+    /// Blocks the threads wrote, which is what the step asked storage for.
+    ///
+    /// Defaulted to zero, which is what a report from before this field reads
+    /// back as. Its `write_ops` is the number that belongs here.
+    #[serde(default)]
+    pub write_calls: u64,
     /// Mean time for one positioned write, across every thread.
     pub mean_write_us: u64,
     /// Writes actually overlapping, as `total_write_time / elapsed`. It is the

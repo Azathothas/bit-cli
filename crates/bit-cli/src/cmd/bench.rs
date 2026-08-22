@@ -507,11 +507,17 @@ pub fn disk(
         .with("block_size", args.block_size.clone())
         .with("payload_size", args.payload_size.clone()));
     }
+    if args.run_length == 0 {
+        return Err(Error::usage(
+            "--run-length cannot be zero: 1 strides block by block, which is the default",
+        ));
+    }
     let options = bench_disk::Options {
         payload_size,
         block_size,
         threads: args.concurrency.max(1),
         sweep: sweep(args.concurrency_sweep.as_deref())?,
+        run_length: args.run_length,
         layout: args.layout.into(),
         allocation: super::download::allocation_of(args.file_allocation),
         max_open_files: args.max_open_files,
@@ -2868,7 +2874,17 @@ mod tests {
             assert_eq!(step["layout"], "shared");
             assert_eq!(step["files"].as_u64().unwrap(), 1);
             assert_eq!(step["bytes"]["bytes"].as_u64().unwrap(), 2 * 1024 * 1024);
-            assert_eq!(step["write_ops"].as_u64().unwrap(), 32);
+            assert_eq!(step["run_length"].as_u64().unwrap(), 1, "the default");
+            // 2 MiB in 64 KiB blocks is 32 writes asked for. How many of them
+            // reach the device is what the write buffer decides, so the
+            // assertion that holds at any thread count is the ask. See
+            // `TODO/disk-io.md`, T-018.
+            assert_eq!(step["write_calls"].as_u64().unwrap(), 32);
+            let ops = step["write_ops"].as_u64().unwrap();
+            assert!(
+                (1..=32).contains(&ops),
+                "the device saw {ops} writes for 32 blocks"
+            );
             assert_eq!(step["verified"], true, "the read-back did not check out");
             assert_eq!(
                 step["threads_detail"].as_array().unwrap().len(),

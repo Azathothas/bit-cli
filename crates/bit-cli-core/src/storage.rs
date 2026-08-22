@@ -149,7 +149,15 @@ impl StorageMetrics {
     }
 
     /// Count a positioned write this storage did not perform itself.
+    ///
+    /// One call and one operation, because the caller is doing both: it holds
+    /// its own handle and writes straight through it, with nothing in between
+    /// that could combine two of them. Counting only the operation would leave
+    /// `write_calls` at zero for the one layout that has no coalescer, and
+    /// `write_ops / write_calls` reading as a divide by zero where it should
+    /// read as one. See `TODO/disk-io.md`, T-018.
     pub fn observe_write(&self, bytes: u64, elapsed: std::time::Duration) {
+        self.count_write_call();
         self.add_write(bytes, elapsed);
     }
 

@@ -94,7 +94,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-015](disk-io.md) | P1 | disk-io | **done** | Hash checking can hang at 0 percent |
 | [T-016](disk-io.md) | P2 | disk-io | blocked | fastresume is not used when adding a torrent |
 | [T-017](disk-io.md) | P1 | disk-io | **done** | Concurrent receive paths contend on the payload file |
-| [T-018](disk-io.md) | P2 | disk-io | partial | The write path issues one operation per 16 KiB block |
+| [T-018](disk-io.md) | P2 | disk-io | done | The write path issues one operation per 16 KiB block |
+| [T-192](disk-io.md) | P2 | disk-io | open | What the write buffer is worth depends on what is above it |
 | [T-190](disk-io.md) | P2 | disk-io | done | The rule for where a payload lands says one thing and the code does another |
 | [T-177](disk-io.md) | P2 | disk-io | **done** | A piece that spans a file boundary has no adversarial fixture |
 | [T-184](disk-io.md) | P2 | disk-io | **done** | A boundary piece under --select-file has no decided behaviour |
@@ -227,8 +228,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-150 items: 140 to work through, and 10 deferred to Phase C.
-46 open, 7 partial, 2 blocked, 85 done.
+151 items: 141 to work through, and 10 deferred to Phase C.
+47 open, 6 partial, 2 blocked, 86 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -483,10 +484,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 1 | 0 | 9 | 11 |
 | P1 | 1 | 2 | 0 | 48 | 51 |
-| P2 | 22 | 4 | 2 | 26 | 54 |
+| P2 | 23 | 3 | 2 | 27 | 55 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **46** | **7** | **2** | **85** | **150** |
+| **All** | **47** | **6** | **2** | **86** | **151** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

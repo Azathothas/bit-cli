@@ -1788,10 +1788,17 @@ pub struct BenchDiskArgs {
     pub concurrency_sweep: Option<String>,
 
     /// How the payload is spread over files. `shared` is one file with every
-    /// thread interleaving into it, which is what a download does. `split`
+    /// thread interleaving into it, which is where writes contend. `split`
     /// gives each thread its own file, which is the control.
     #[arg(long, value_name = "LAYOUT", default_value = "shared")]
     pub layout: DiskLayout,
+
+    /// Consecutive blocks one thread writes before the next takes over, under
+    /// `shared` and `handles`. 1 strides block by block, which contends most.
+    /// A receive path writes a whole fetched range at a time, so `64` at the
+    /// default block size is the shape a download has.
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    pub run_length: u64,
 
     /// How disk space is allocated for the payload.
     #[arg(long, value_name = "METHOD", default_value = "sparse")]

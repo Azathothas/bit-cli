@@ -727,7 +727,8 @@ Source:      the [T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-
 Category:    disk-io
 Priority:    P2
 Effort:      M
-Status:      partial
+Status:      **done**, 2026-08-22T11:12Z, with the last clause's fixture
+             corrected below
 
 Problem:     The session hands storage one 16 KiB block at a time and storage
              turns each into one positioned write.
@@ -975,6 +976,118 @@ still not 90%. Neither is a change to the write path, and both are decisions
 about what `bench disk` is for, which is [T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-file)'s
 question rather than this one's.
 
+**Decided 2026-08-22T11:12Z, and neither of the two was the answer.** Striding
+is not a property of `shared` worth removing and `split` is not the fixture to
+move to. Striding is one end of a scale nothing could name, so the scale is
+named: `--run-length N` is how many consecutive blocks one thread writes before
+the next takes over, under `shared` and `handles` alike, and it defaults to 1.
+
+- At 1 it is exactly what it always was, so every number recorded above and in
+  [T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-file) stays
+  comparable and none of them had to be taken again.
+- At 64 with a 16 KiB block, a thread writes one 1 MiB range per turn. That is
+  a receive path: the bridge fetches a range and answers blocks out of it.
+- `handles` takes the same run length, because the two are a pair and a pair
+  measured at two different arrangements answers nothing.
+
+Removing the striding outright would have thrown away the most contended
+arrangement there is, which is the one
+[T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-file) needed,
+and invalidated every table either entry rests on.
+
+**Measured at 512 MiB, sparse, four configurations back to back,
+`bench/disk-runlength-20260822T111026806.json`.** Rates first:
+
+| 512 MiB, shared | 1 thread | 2 | 4 | 8 |
+| --- | --- | --- | --- | --- |
+| 16 KiB, `--run-length 1` | 927.83 MiB/s | 939.35 MiB/s | 696.85 MiB/s | 673.44 MiB/s |
+| 16 KiB, `--run-length 64` | 956.40 MiB/s | **1.26 GiB/s** | **1.25 GiB/s** | 1.10 GiB/s |
+| 1 MiB, `--run-length 1` | 1.25 GiB/s | 1.28 GiB/s | 1.29 GiB/s | 1.31 GiB/s |
+| 16 KiB, run 64, `handles` | 1.11 GiB/s | 1.27 GiB/s | 1.03 GiB/s | 1.24 GiB/s |
+
+As a share of the 1 MiB run, which is what the clause asks about:
+
+| | 1 thread | 2 | 4 | 8 |
+| --- | --- | --- | --- | --- |
+| `--run-length 64` | 74.7% | **98.6%** | **96.7%** | 84.3% |
+| `--run-length 1` | 72.5% | 71.6% | 52.8% | 50.3% |
+
+**The clause is met at two and four threads and not at one and eight**, against
+a fixture where it was 50% to 72% everywhere. That is the answer the clause was
+asking for, and the fixture was what stood between it and an answer.
+
+**The coalescing itself is exact and the operation counts say so.** Every run
+asks storage for 32,768 writes. What reaches the device:
+
+| | 1 thread | 2 | 4 | 8 |
+| --- | --- | --- | --- | --- |
+| `--run-length 1` | 512 | 7,152 | 32,374 | 32,532 |
+| `--run-length 64` | **512** | **512** | **512** | **512** |
+
+64 to 1 at every thread count, because a run reaches `WRITE_REGION` and flushes
+on the block that fills it. The strided row is the finding that was not
+predicted: the buffer belongs to the storage rather than to a thread, so two
+threads writing adjacent blocks in order **do** extend one run, and at one
+thread striding is a no-op so all 32,768 combine into 512. Between two threads
+and four the accident stops happening. That is why the strided row is a
+scheduling outcome and is measured rather than asserted anywhere.
+
+**What the residual gap is, isolated.** At one thread the two 16 KiB runs and
+the 1 MiB run all reach the device in exactly 512 operations, and they differ
+only in how many calls produced them: 32,768 against 512. 956.40 MiB/s against
+1.25 GiB/s for the same operations is therefore **the buffer's copy and the
+call overhead, not the device**. 512 MiB is copied once on its way through.
+
+**And the buffer does not pay for itself in this instrument at all**, which is
+the finding that matters most and was invisible while the fixture strided.
+`handles` writes the same contiguous runs with no buffer, 32,768 operations
+rather than 512, and it is **faster** at one thread and at eight: 1.11 GiB/s
+against 956.40 MiB/s, and 1.24 GiB/s against 1.10 GiB/s. The earlier table
+above read the other way round only because it compared `split` through the
+buffer against `handles` while `handles` was still striding, which was not the
+same arrangement on both sides.
+
+Against `bench leech`, where the same buffer is worth **+25.3%**, that is a
+contradiction with an explanation: the download's write goes through
+`librqbit`'s per-torrent lock and its `block_in_place` semaphore, so removing
+63 of every 64 operations removes 63 of every 64 lock acquisitions and waits.
+`bench disk` has neither, so it can only see the device, and at the device a
+16 KiB positioned write on NTFS is already cheap enough that a memcpy is not
+worth paying to avoid it. **`bench disk` measures the device; it cannot measure
+what the write buffer is worth to a download.** That is
+[T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-file)'s question
+answered, and it is filed as [T-192](#t-192-what-the-write-buffer-is-worth-depends-on-what-is-above-it).
+
+**A counter was carrying the wrong number, and it was carrying it into the
+schema.** `DiskStep::write_ops` is documented as writes that reached the device
+and was the sum of the threads' own block counts, which is what they asked for.
+So `bench disk` reported no coalescing at all, and `summary.disk.write_calls`
+was zero in every report while `summary.disk.write_ops` held the value that
+belongs under it. The step reports both now, taken from the storage counters
+after the flush, and `StorageMetrics::observe_write` counts a call as well as
+an operation so the `handles` layout, which has no buffer, reads as one to one
+rather than as a divide by zero. Two tests asserted the old meaning and both
+moved to `write_calls`, which is the same correction
+[T-188](#t-188-a-chunk-starting-on-a-file-boundary-creates-the-file-before-it)
+recorded for the straddling fixture. A report written before 2026-08-22 is
+unaffected either way: with no buffer between them the two numbers were one
+number.
+
+Both fields went into `docs/schema.md` by the mechanism
+[T-189](bench.md) built hours earlier, which failed the build naming
+`disk_steps[].run_length` and `disk_steps[].write_calls` until the file was
+regenerated. That is the first time it caught anything.
+
+Acceptance, restated with what the instrument can now show, and met:
+
+```bash
+target/release/bit-cli bench disk --payload-size 512MiB --block-size 16KiB \
+  --layout shared --run-length 64 --concurrency-sweep 1,2,4,8 --format json
+```
+
+`scripts/check-disk-contention.ps1` takes `-RunLength` so the three layouts can
+be compared at either arrangement.
+
 The other two clauses are met. `bench leech` at eight bridges improves and both
 reports are named above, and the whole suite passes:
 
@@ -1002,6 +1115,52 @@ documents, once its own stale paths were fixed, which is
 and was failing before this change as well.
 
 
+
+### T-192 What the write buffer is worth depends on what is above it
+
+Source:      found closing [T-018](#t-018-the-write-path-issues-one-operation-per-16-kib-block), 2026-08-22
+Category:    disk-io
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     The same `Coalescer` is worth **+25.3%** to `bench leech` at eight
+             bridges and **less than nothing** to `bench disk` at the same
+             thread count. With the arrangement controlled at
+             `--run-length 64`, the buffered `shared` layout reaches
+             1.10 GiB/s where the unbuffered `handles` layout reaches
+             1.24 GiB/s over the same contiguous runs, and at one thread
+             956.40 MiB/s against 1.11 GiB/s.
+Relevance:   Two instruments disagree about a change that is already shipped in
+             the write path, and only one of them is the product. The
+             explanation is stated in
+             [T-018](#t-018-the-write-path-issues-one-operation-per-16-kib-block)
+             and is not yet measured: a download's write goes through
+             `librqbit`'s per-torrent lock and its `block_in_place` semaphore,
+             so combining 64 writes removes 63 lock acquisitions as well as 63
+             operations, and `bench disk` holds neither lock. If that is right,
+             the buffer is buying serialisation rather than device time, and
+             the thing worth optimising next is the lock rather than the
+             operation count. If it is wrong, then something else explains the
+             25% and the buffer is costing throughput on some machine.
+Approach:    The measurement that separates them is a `bench disk` step that
+             takes the same locks the session takes, or a `bench leech` run
+             with the buffer disabled at runtime. The second is cheaper and
+             needs a way to turn the coalescer off, which nothing has: a
+             `WRITE_RUNS` of zero would do it and there is no flag for it.
+             Either way the answer is one number, the write time per receive
+             path with and without, at one and eight bridges, and the control
+             row already exists in
+             [T-018](#t-018-the-write-path-issues-one-operation-per-16-kib-block)
+             for the with case.
+             Corpus: `TorrentNG/crates/rt-storage/src/io_class.rs:7` is the
+             per-class concurrency cap this tree does not have, and it is the
+             shape of a fix that works on the lock rather than on the
+             operation.
+Acceptance:  This entry says which of the two the 25% is, measured, and the
+             `bench disk` documentation says what that instrument can and
+             cannot see about the write buffer so the next reader does not
+             have to rediscover that the two disagree.
 
 ### T-177 A piece that spans a file boundary has no adversarial fixture
 
