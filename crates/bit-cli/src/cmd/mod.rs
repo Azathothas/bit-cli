@@ -21,6 +21,7 @@ pub mod magnet;
 pub mod man;
 pub mod peers;
 pub mod seed;
+pub mod spec;
 pub mod trackers;
 pub mod verify;
 pub mod version;

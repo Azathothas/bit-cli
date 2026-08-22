@@ -143,6 +143,40 @@ Record "text" ($binaryish.Count -eq 0) $(if ($binaryish.Count -eq 0) { "" }
     else { "NUL byte in $($binaryish -join ', ')" })
 
 # ---------------------------------------------------------------------------
+# man
+# ---------------------------------------------------------------------------
+#
+# `man/bit-cli.1`, `man/bit-cli.json` and `man/bit-cli.md` are generated from
+# the clap definition and committed, so a reader can open them without building
+# anything. A committed generated file is only worth having if something fails
+# when it goes stale.
+#
+# The check that binds is `cargo test -p bit-cli --test man_is_current`, inside
+# the `test` gate below: it renders from the crate being compiled, so it cannot
+# compare against a stale binary, and it runs wherever CI builds. This line is
+# here so a session that regenerates gets told what to run rather than reading
+# a test name out of a failure, and it is skipped when there is no binary yet
+# rather than failing on one that does not exist.
+#
+# -Fix regenerates them, the same as it formats.
+
+$manExe = Join-Path $repo "target/release/bit-cli.exe"
+if (-not (Test-Path $manExe)) { $manExe = Join-Path $repo "target/release/bit-cli" }
+if ($Fast) {
+    Write-Step "man skipped by -Fast"
+}
+elseif (-not (Test-Path $manExe)) {
+    Write-Step "man skipped: no release binary yet, the test gate covers it"
+}
+else {
+    $manArgs = @("-NoProfile", "-File", (Join-Path $PSScriptRoot "check-man.ps1"))
+    if ($Fix) { $manArgs += "-Fix" }
+    & pwsh @manArgs | Out-Null
+    Record "man" ($LASTEXITCODE -eq 0) $(if ($LASTEXITCODE -eq 0) { "" }
+        else { "run with -Fix, or: pwsh -NoProfile -File scripts/check-man.ps1 -Fix" })
+}
+
+# ---------------------------------------------------------------------------
 # fmt
 # ---------------------------------------------------------------------------
 

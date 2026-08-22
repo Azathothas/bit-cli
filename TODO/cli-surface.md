@@ -553,10 +553,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2332` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2103` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2139` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:1924` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2349` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2120` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2156` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:1941` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -1564,7 +1564,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2332` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2349` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -2202,9 +2202,9 @@ Effort:      S
 Status:      **done**, 2026-08-22T11:21Z
 
 Problem:     `scripts/check-todo.ps1` resolved a citation written long, as
-             `crates/bit-cli/src/cli.rs:2103`, and checked only that the file
+             `crates/bit-cli/src/cli.rs:2120`, and checked only that the file
              had that many lines. Most of `TODO/` does not write them long. A
-             citation written as `cli.rs:2103` matched nothing in the pattern,
+             citation written as `cli.rs:2120` matched nothing in the pattern,
              so it was never resolved, never range checked, and never read.
 Relevance:   `RULES.md` section 2 step 4 says the mechanical half of the two
              reviews answers "a cited path that does not resolve". For the
@@ -2354,3 +2354,135 @@ that generates the web UI, must not be able to poison the series.
 first sign of it was `vendor-diff.ps1` producing no output at all, which reads
 as a hang rather than as work. It was found by checking what the script was
 walking, not by waiting longer.
+
+### T-198 An agent that wants a flag name greps for it
+
+Source:      the operator, 2026-08-22, having watched it happen in that session
+Category:    cli-surface
+Priority:    P1
+Effort:      M
+Status:      **done**, 2026-08-22T16:00Z
+
+Problem:     Nothing in this repository stated the command surface in a shape a
+             program could read. A caller that needed a flag name had three
+             options: grep the source, page `--help` one subcommand at a time,
+             or guess. The last one costs a run that exits 2, or worse one that
+             succeeds having done something else.
+Relevance:   Most of the work on this repository is done by an agent, and the
+             cost is paid on every session. It was paid in the session this
+             entry was filed in.
+Approach:    Generate the surface, commit it, and fail the build when it drifts.
+             Three shapes, because the readers are different: troff for a
+             terminal, Markdown for prose, and a CLIspec 0.3 document for a
+             program.
+Acceptance:  A flag renamed without regenerating fails `cargo test -p bit-cli`,
+             naming the file and the line.
+
+**What is in `man/`**, all generated from the clap definition, all committed:
+
+| file | bytes | for |
+| --- | --- | --- |
+| `bit-cli.1` | 51,394 | a person at a terminal |
+| `bit-cli.md` | 69,860 | prose, one table per command |
+| `bit-cli.json` | 137,020 | a program: [CLIspec](https://github.com/rvben/clispec) 0.3 |
+
+28 commands, 20 global options, and all 17 non-zero exit codes with a
+`retryable` flag on each. [`docs/man.md`](../docs/man.md) says what each field
+carries and why.
+
+**It cannot go stale.** `cargo test -p bit-cli --test man_is_current` renders
+all three from the crate being compiled and compares. That is in
+`cargo test --workspace`, so it is in the gates and in CI on every platform.
+`scripts/check-man.ps1 -Fix` regenerates, and `gates.ps1` runs the script as a
+named `man` gate so a session is told what to run rather than reading a test
+name out of a failure. The test is what binds: the script compares against
+`target/release/bit-cli`, which can be older than the source in front of it.
+
+**Two bugs it caught in its own first output**, both of the kind a reader would
+have believed:
+
+- **`--web-seed` was typed `boolean`** while carrying `value_name: URL`.
+  `clap::Arg::get_num_args` is empty until the command is built, so every flag
+  that takes a value was reported as one that does not. Read from the action
+  now, and the command is built before it is walked.
+- **`create --version` disappeared.** Filtering clap's generated `--version` by
+  argument id also deleted the metainfo version flag, which takes `v1`, `v2` or
+  `hybrid`. Filtered by action now.
+
+Both are in a generated file that nothing was checking, which is the argument
+for the test rather than for the generator.
+
+**The one thing not generated** is `effects`, CLIspec's word for whether a
+command is `read_only`, `idempotent` or `non_idempotent`, because nothing in a
+clap definition says whether a command writes. It is a table in
+`crates/bit-cli/src/cmd/spec.rs` and a subcommand missing from it fails
+`every_subcommand_is_classified`, rather than shipping an empty `effects` that
+a reader would take to mean "no side effects". Eleven nested subcommands were
+caught by exactly that on the first run.
+
+The Markdown is rendered from the CLIspec document rather than from clap a
+second time, so those two cannot disagree about a flag.
+
+[RULES.md](RULES.md) section 4a carries the rule this exists to serve: read
+`man/bit-cli.json` before typing a flag.
+
+### T-199 The CI supply chain was unwatched and one action was abandoned
+
+Source:      the operator, 2026-08-22
+Category:    cli-surface
+Priority:    P2
+Effort:      S
+Status:      **done**, 2026-08-22T16:00Z
+
+Problem:     Nothing watched dependency or action versions, and
+             `ilammy/setup-nasm@v1.5.2` had gone unmaintained: it is that
+             project's newest release, it still runs on node20, and GitHub
+             warns about the deprecation on every job. It was used in five
+             places across two workflows.
+Relevance:   A node20 action stops working when GitHub retires the runtime, and
+             the first sign would be every Windows job failing at once. The
+             warning had been there long enough to be pinned with a comment
+             saying to revisit it.
+Approach:    Replace the action with a script in this repository, and add
+             `dependabot.yml` so the next one is noticed by a bot rather than
+             by a person reading a warning.
+Acceptance:  The script installs NASM and refuses an archive whose checksum
+             does not match.
+
+**`scripts/setup-nasm.ps1`** does what the action did, in about thirty lines,
+and does one thing the action never did: it verifies the download against a
+pinned SHA-256. Both halves were run rather than reasoned about:
+
+```
+$ pwsh -NoProfile -File scripts/setup-nasm.ps1 -Force
+setup-nasm: sha256 ok
+setup-nasm: NASM version 2.16.03 compiled on Apr 17 2024
+
+$ pwsh -NoProfile -File scripts/setup-nasm.ps1 -Force -Sha256 0000...
+setup-nasm: checksum mismatch for nasm-2.16.03-win64.zip
+  expected 0000000000000000000000000000000000000000000000000000000000000000
+  got      3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6
+exit=2
+```
+
+It is a no-op when `nasm` is already on PATH, and on a runner it appends to
+`GITHUB_PATH` so later steps see it. NASM is needed because `aws-lc-sys`
+assembles its own primitives, and `cargo tree -i aws-lc-rs` says it arrives
+under **two** parents: `rustls`, and `librqbit-sha1-wrapper`, which is the
+SHA-1 backend every piece hash goes through. Dropping the TLS one would not
+remove the need.
+
+**`.github/dependabot.yml`** covers cargo and github-actions, weekly, grouped.
+Grouped because a pull request per crate is sixteen CI runs a week for a
+lockfile bump nobody reads, and the workflow's concurrency group cancels runs
+in flight, so the noise costs real coverage. Two things are deliberately
+excluded and the file says why: **`vendor/` is not watched**, because a bot
+rewriting a vendored manifest without moving the recorded base is the one state
+`patches/README.md` says must never happen, and `scripts/upstream-scan.ps1` is
+how those trees are watched instead; and **`librqbit*` is ignored**, because
+`[patch.crates-io]` means a registry bump for it cannot reach the build.
+
+**One consequence worth knowing.** `scripts/setup-nasm.ps1` is now invoked by
+the workflows, so `git-sync -NoCi` refuses to treat a commit touching it as
+documentation-only. That is derived rather than listed: the script reads
+`.github/workflows/` to work out which scripts CI depends on.

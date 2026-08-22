@@ -604,3 +604,58 @@ test result: ok. 14 passed; 0 failed
 The Linux path is written and compiles under `#[cfg(unix)]` but has not been
 run here: this machine is Windows. See the same note under
 [T-091](bench.md).
+
+## Session of 2026-08-22, second: the rows are bounded
+
+The slope was attributed and could not be fixed from here, which is what kept
+this partial. The trees are vendored now, so it is fixed there.
+
+`PeerStates::states` only ever grew: `drop_peer` was called on two paths, a bug
+branch and backoff exhaustion, and a peer that hands over cleanly ends in
+`NotNeeded` and stays. There is a bound now, `MAX_PEER_RECORDS` = 1,024 per
+torrent, reclaiming `NotNeeded` and `Dead` rows before an insert and never a
+`Live`, `Connecting` or `Queued` one. `patches/UPSTREAM.md` under "librqbit:
+nothing ever reclaimed a peer row" carries the diff and the reasoning.
+
+```powershell
+pwsh -NoProfile -File scripts/check-peer-rows.ps1
+```
+
+| connections | rows before | rows after |
+| --- | --- | --- |
+| 1,000 | 1,000 | 1,000 |
+| 1,200 | 1,200 | **1,024** |
+| 2,000 | 2,000 | **1,024** |
+
+Exactly 1,024 and flat. `bench/peer-rows-20260822T152743150Z.json`.
+
+**One row per handshake below the bound is still asserted**, and separately,
+because a bound that reclaimed a live peer would also make the count flat. The
+fit that measures the row cost now runs over the steps below the bound only:
+above it the row count is constant, so those points measure the intercept again
+and flatten the slope toward nothing. 4,280.9 bytes a row over the six points
+below 1,024, r squared 0.938, against the 3,689.5 this entry's soak implies.
+The spread across fitted ranges was already known and is recorded above: 2,327
+to 3,250 depending on where it is read.
+
+**RSS at 2,000 connections did not move, and that is the expected result rather
+than a disappointment.** Freeing a row returns it to the allocator, not to the
+operating system. 976 reclaimed rows are inside the run-to-run variation at
+this scale: the two runs of the bounded binary gave **17.75 MiB and 17.55
+MiB** at 2,000 connections, and the unbounded record for the same step is
+18.11 MiB, a spread the runs themselves cover. What the bound changes is that demand stops growing, which is what a
+process that fails at 3am needs. A ten thousand connection run would show it
+and was started and abandoned when the session was redirected.
+
+**What this cost elsewhere, and it was nearly a self-inflicted bug.** A `Dead`
+row can be in the dial queue when it is reclaimed, and
+`task_manage_outgoing_peer` answered a missing row with
+`Error::BugPeerNotFound`. A bound that logs "bug" for its own correct behaviour
+is worse than no bound, so that path returns quietly now. Found by reading the
+callers before running anything, not by the measurement.
+
+**Status stays partial, and the reason is a measurement rather than a defect.**
+This entry's acceptance is `scripts/soak.ps1` over **six hours** with the slope
+of each series recorded. The rows are bounded and that is proved; the soak that
+would show the memory series flat over six hours has not been run since the
+change. That run is the whole of what is left.

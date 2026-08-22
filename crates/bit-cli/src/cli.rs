@@ -1877,6 +1877,23 @@ pub struct ManArgs {
     /// Write the man page here instead of to stdout.
     #[arg(short = 'o', long, value_name = "PATH")]
     pub output: Option<PathBuf>,
+
+    /// What to render. `roff` is the man page; `json` is the same surface as a
+    /// CLIspec document, for a reader that cannot parse roff.
+    #[arg(long, value_name = "FMT", default_value = "roff")]
+    pub format: ManFormat,
+}
+
+/// What `bit-cli man` renders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum ManFormat {
+    /// A troff man page, the committed `man/bit-cli.1`.
+    #[default]
+    Roff,
+    /// A CLIspec 0.3 document, the committed `man/bit-cli.json`.
+    Json,
+    /// The same manual as Markdown, the committed `man/bit-cli.md`.
+    Markdown,
 }
 
 #[cfg(test)]

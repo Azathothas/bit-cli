@@ -1,0 +1,4449 @@
+{
+  "clispec": "0.3",
+  "commands": [
+    {
+      "args": [
+        {
+          "description": "Sources to download when no subcommand is given",
+          "name": "sources",
+          "positional": true,
+          "type": "array",
+          "value_name": "SOURCE"
+        }
+      ],
+      "description": "Fetch, create, verify, and seed torrents, with first-class web seed control.",
+      "effects": "idempotent",
+      "name": "bit-cli",
+      "subcommands": [
+        "bit-cli download",
+        "bit-cli info",
+        "bit-cli files",
+        "bit-cli peers",
+        "bit-cli trackers",
+        "bit-cli webseed",
+        "bit-cli verify",
+        "bit-cli create",
+        "bit-cli edit",
+        "bit-cli magnet",
+        "bit-cli seed",
+        "bit-cli bench",
+        "bit-cli config",
+        "bit-cli completions",
+        "bit-cli man",
+        "bit-cli version"
+      ]
+    },
+    {
+      "args": [
+        {
+          "description": "Sources to fetch",
+          "name": "sources",
+          "positional": true,
+          "required": true,
+          "type": "array",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Source for the whole torrent, under the current composition mode",
+          "name": "--web-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Shorthand for a source with composition=exact",
+          "name": "--web-seed-exact",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Bind a scope selector to a source, as SELECTOR=URL",
+          "name": "--web-seed-for",
+          "type": "array",
+          "value_name": "SEL=URL"
+        },
+        {
+          "default": "auto",
+          "description": "Composition mode for CLI-supplied sources",
+          "enum": [
+            "auto",
+            "exact",
+            "prefix",
+            "template"
+          ],
+          "name": "--web-seed-mode",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Template used when the mode is `template`",
+          "name": "--web-seed-template",
+          "type": "string",
+          "value_name": "TMPL"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to these piece indices",
+          "name": "--web-seed-pieces",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to this byte range of the payload",
+          "name": "--web-seed-bytes",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "One URL per line. Blank lines and # comments are ignored",
+          "name": "--web-seed-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a newline-separated URL list over HTTP",
+          "name": "--web-seed-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "TOML or JSON binding table. Full control",
+          "name": "--web-seed-config",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "auto",
+          "description": "BEP 19 or BEP 17 wire style",
+          "enum": [
+            "auto",
+            "getright",
+            "hoffman"
+          ],
+          "name": "--web-seed-style",
+          "type": "string",
+          "value_name": "STYLE"
+        },
+        {
+          "default": "false",
+          "description": "Disable peers, DHT, PEX, LSD, and trackers. HTTP sources only",
+          "name": "--web-seed-only",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore all web seeds, including the torrent's own url-list",
+          "name": "--no-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore the torrent's url-list but keep CLI-supplied sources",
+          "name": "--no-torrent-web-seed",
+          "type": "boolean"
+        },
+        {
+          "description": "Concurrent ranged requests per source",
+          "name": "--web-seed-concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections each source is presented over. Default: 1",
+          "name": "--web-seed-connections",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Concurrent ranged requests across all sources",
+          "name": "--web-seed-max-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Bytes per ranged request. Independent of the torrent's piece length",
+          "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Per-request timeout",
+          "name": "--web-seed-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Connect timeout for web seed requests",
+          "name": "--web-seed-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Consecutive failed requests before a source is retired",
+          "name": "--web-seed-max-errors",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Give a source that spent its error budget another chance after this long. Zero, the default, means it does not come back",
+          "name": "--web-seed-cooldown",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Per-request retries before counting an error",
+          "name": "--web-seed-retries",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Statuses to retry that would otherwise retire the source",
+          "name": "--web-seed-retry-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "Statuses that retire the source, which would otherwise be retried",
+          "name": "--web-seed-fatal-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "User-Agent for web seed requests",
+          "name": "--web-seed-user-agent",
+          "type": "string",
+          "value_name": "UA"
+        },
+        {
+          "description": "Extra header on web seed requests, as `Name: value`",
+          "name": "--web-seed-header",
+          "type": "array",
+          "value_name": "K: V"
+        },
+        {
+          "description": "Credentials: basic:user:pass, bearer:TOKEN, netrc, or none",
+          "name": "--web-seed-auth",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "description": "Rate cap per source",
+          "name": "--web-seed-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "piece",
+          "description": "When to hash-check HTTP-sourced data",
+          "enum": [
+            "piece",
+            "file",
+            "none"
+          ],
+          "name": "--web-seed-verify",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Bias among sources. Higher wins when several can serve a piece",
+          "name": "--web-seed-priority",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "false",
+          "description": "Bias the picker toward HTTP when both a peer and a source have a piece",
+          "name": "--prefer-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Fail the run if a declared source turns out to be unusable",
+          "name": "--web-seed-require",
+          "type": "boolean"
+        },
+        {
+          "description": "Add a tracker at runtime. The .torrent is never rewritten",
+          "name": "--tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "One tracker per line. A blank line separates BEP 12 tiers",
+          "name": "--tracker-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a tracker list over HTTP",
+          "name": "--tracker-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Remove trackers. `*` removes all",
+          "name": "--exclude-tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "default": "false",
+          "description": "Replace the torrent's tracker list instead of adding to it",
+          "name": "--replace-trackers",
+          "type": "boolean"
+        },
+        {
+          "description": "Tracker request timeout",
+          "name": "--tracker-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Tracker connect timeout",
+          "name": "--tracker-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Override the announce interval",
+          "name": "--tracker-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Disable tracker announces entirely",
+          "name": "--no-tracker",
+          "type": "boolean"
+        },
+        {
+          "description": "Download rate cap, per torrent",
+          "name": "--max-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap, per torrent",
+          "name": "--max-upload-rate",
+          "short": "-u",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Download rate cap across the whole run",
+          "name": "--max-overall-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap across the whole run",
+          "name": "--max-overall-upload-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Peer connections per torrent",
+          "name": "--max-peers",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections across the run",
+          "name": "--max-peers-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Refuse this peer for the whole run. Repeatable",
+          "name": "--block-peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "128",
+          "description": "Payload files kept open at once",
+          "name": "--max-open-files",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this many handles. Off by default",
+          "name": "--max-handles",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this much resident memory. Off by default",
+          "name": "--max-rss",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Stop seeding at this ratio. 0 means do not seed",
+          "name": "--seed-ratio",
+          "type": "string",
+          "value_name": "RATIO"
+        },
+        {
+          "description": "Stop seeding after this long",
+          "name": "--seed-time",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Give up if there is no progress for this long",
+          "name": "--stop-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "10m",
+          "description": "Give up if the hash check has not finished in this long",
+          "name": "--init-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Abort if the rate drops below this",
+          "name": "--lowest-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Run this command on success. Arguments arrive through the environment",
+          "name": "--on-complete",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command on failure",
+          "name": "--on-error",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command after every verified piece. High frequency",
+          "name": "--on-piece-verified",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Download only these files. Accepts ranges: 1-5,8,10-",
+          "name": "--select-file",
+          "type": "array",
+          "value_name": "INDEX"
+        },
+        {
+          "description": "Skip these files",
+          "name": "--exclude-file",
+          "type": "array",
+          "value_name": "INDEX"
+        },
+        {
+          "description": "Rename a file by index, as INDEX=PATH",
+          "name": "--index-out",
+          "short": "-O",
+          "type": "array",
+          "value_name": "INDEX=PATH"
+        },
+        {
+          "description": "Write the payload here instead of using the torrent's name",
+          "name": "--out",
+          "short": "-o",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "sparse",
+          "description": "How disk space is allocated",
+          "enum": [
+            "none",
+            "prealloc",
+            "sparse",
+            "falloc"
+          ],
+          "name": "--file-allocation",
+          "type": "string",
+          "value_name": "METHOD"
+        },
+        {
+          "default": "default",
+          "description": "Which piece to ask for next. `sequential` and `in-order` are the same thing under two names, and both make a download readable front to back",
+          "enum": [
+            "default",
+            "sequential",
+            "in-order"
+          ],
+          "name": "--piece-selector",
+          "type": "string",
+          "value_name": "STRATEGY"
+        },
+        {
+          "description": "Listen port, or a range as START-END. `0` asks the OS for a free one",
+          "name": "--port",
+          "type": "array",
+          "value_name": "PORT"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "description": "Drop every peer connection and dial again after this long with no progress. Off by default",
+          "name": "--redial-after",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "10",
+          "description": "How many times `--redial-after` may fire in one run",
+          "name": "--max-redials",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "1",
+          "description": "Sources fetched in parallel within this one invocation",
+          "name": "--max-concurrent-downloads",
+          "short": "-j",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "false",
+          "description": "Do not read a file from another torrent in this run that is proven to hold it",
+          "name": "--no-share-files",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Hash-check before starting",
+          "name": "--check-integrity",
+          "short": "-V",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Hash-check and exit",
+          "name": "--hash-check-only",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Resume a partial download. On by default",
+          "name": "--continue",
+          "short": "-c",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Refuse to write into a file that is already there",
+          "name": "--no-continue",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Overwrite existing files",
+          "name": "--allow-overwrite",
+          "type": "boolean"
+        },
+        {
+          "default": "1s",
+          "description": "Emit a progress event this often",
+          "name": "--report-interval",
+          "type": "string",
+          "value_name": "DUR"
+        }
+      ],
+      "description": "Fetch to completion in the foreground, then exit",
+      "effects": "idempotent",
+      "name": "bit-cli download"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        }
+      ],
+      "description": "Parse a torrent, magnet, or metalink and print its metadata",
+      "effects": "read_only",
+      "name": "bit-cli info"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "default": "index",
+          "description": "Sort key, as KEY or KEY:ORDER. Keys: index, path, size",
+          "name": "--sort",
+          "type": "string",
+          "value_name": "KEY"
+        },
+        {
+          "description": "Also report which files another torrent holds identically. Repeatable",
+          "name": "--against",
+          "type": "array",
+          "value_name": "TORRENT"
+        }
+      ],
+      "description": "List files with index, path, size, and priority",
+      "effects": "read_only",
+      "name": "bit-cli files"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "default": "15s",
+          "description": "How long to sample the swarm",
+          "name": "--duration",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Stop once this many distinct peers have been seen",
+          "name": "--count",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "addr",
+          "description": "Sort key, as KEY or KEY:ORDER. Keys: addr, client, speed, pieces",
+          "name": "--sort",
+          "type": "string",
+          "value_name": "KEY"
+        },
+        {
+          "description": "Listen port, or a range as START-END. `0` asks the OS for a free one",
+          "name": "--port",
+          "type": "array",
+          "value_name": "PORT"
+        },
+        {
+          "description": "Add a tracker at runtime. The .torrent is never rewritten",
+          "name": "--tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "One tracker per line. A blank line separates BEP 12 tiers",
+          "name": "--tracker-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a tracker list over HTTP",
+          "name": "--tracker-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Remove trackers. `*` removes all",
+          "name": "--exclude-tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "default": "false",
+          "description": "Replace the torrent's tracker list instead of adding to it",
+          "name": "--replace-trackers",
+          "type": "boolean"
+        },
+        {
+          "description": "Tracker request timeout",
+          "name": "--tracker-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Tracker connect timeout",
+          "name": "--tracker-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Override the announce interval",
+          "name": "--tracker-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Disable tracker announces entirely",
+          "name": "--no-tracker",
+          "type": "boolean"
+        },
+        {
+          "description": "Download rate cap, per torrent",
+          "name": "--max-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap, per torrent",
+          "name": "--max-upload-rate",
+          "short": "-u",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Download rate cap across the whole run",
+          "name": "--max-overall-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap across the whole run",
+          "name": "--max-overall-upload-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Peer connections per torrent",
+          "name": "--max-peers",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections across the run",
+          "name": "--max-peers-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Refuse this peer for the whole run. Repeatable",
+          "name": "--block-peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "128",
+          "description": "Payload files kept open at once",
+          "name": "--max-open-files",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this many handles. Off by default",
+          "name": "--max-handles",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this much resident memory. Off by default",
+          "name": "--max-rss",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Stop seeding at this ratio. 0 means do not seed",
+          "name": "--seed-ratio",
+          "type": "string",
+          "value_name": "RATIO"
+        },
+        {
+          "description": "Stop seeding after this long",
+          "name": "--seed-time",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Give up if there is no progress for this long",
+          "name": "--stop-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "10m",
+          "description": "Give up if the hash check has not finished in this long",
+          "name": "--init-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Abort if the rate drops below this",
+          "name": "--lowest-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Run this command on success. Arguments arrive through the environment",
+          "name": "--on-complete",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command on failure",
+          "name": "--on-error",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command after every verified piece. High frequency",
+          "name": "--on-piece-verified",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery",
+          "name": "--no-lsd",
+          "type": "boolean"
+        }
+      ],
+      "description": "Connect, sample the swarm, report peers, then exit",
+      "effects": "read_only",
+      "name": "bit-cli peers"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Add a tracker at runtime. The .torrent is never rewritten",
+          "name": "--tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "One tracker per line. A blank line separates BEP 12 tiers",
+          "name": "--tracker-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a tracker list over HTTP",
+          "name": "--tracker-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Remove trackers. `*` removes all",
+          "name": "--exclude-tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "default": "false",
+          "description": "Replace the torrent's tracker list instead of adding to it",
+          "name": "--replace-trackers",
+          "type": "boolean"
+        },
+        {
+          "description": "Tracker request timeout",
+          "name": "--tracker-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Tracker connect timeout",
+          "name": "--tracker-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Override the announce interval",
+          "name": "--tracker-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Disable tracker announces entirely",
+          "name": "--no-tracker",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Scrape instead of announcing",
+          "name": "--scrape",
+          "type": "boolean"
+        },
+        {
+          "description": "Port to announce, or a range as START-END. `0` asks the OS for a free one",
+          "name": "--port",
+          "type": "array",
+          "value_name": "PORT"
+        },
+        {
+          "default": "false",
+          "description": "Announce and leave the peer record behind",
+          "name": "--no-withdraw",
+          "type": "boolean"
+        },
+        {
+          "default": "auto",
+          "description": "Which address family to announce over",
+          "enum": [
+            "auto",
+            "v4",
+            "v6"
+          ],
+          "name": "--family",
+          "type": "string",
+          "value_name": "FAMILY"
+        }
+      ],
+      "description": "Announce or scrape, report the result, then exit",
+      "effects": "read_only",
+      "name": "bit-cli trackers"
+    },
+    {
+      "args": [],
+      "description": "Inspect, validate, and read from HTTP sources",
+      "effects": "read_only",
+      "name": "bit-cli webseed",
+      "subcommands": [
+        "bit-cli webseed list",
+        "bit-cli webseed test",
+        "bit-cli webseed probe",
+        "bit-cli webseed fetch"
+      ]
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Source for the whole torrent, under the current composition mode",
+          "name": "--web-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Shorthand for a source with composition=exact",
+          "name": "--web-seed-exact",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Bind a scope selector to a source, as SELECTOR=URL",
+          "name": "--web-seed-for",
+          "type": "array",
+          "value_name": "SEL=URL"
+        },
+        {
+          "default": "auto",
+          "description": "Composition mode for CLI-supplied sources",
+          "enum": [
+            "auto",
+            "exact",
+            "prefix",
+            "template"
+          ],
+          "name": "--web-seed-mode",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Template used when the mode is `template`",
+          "name": "--web-seed-template",
+          "type": "string",
+          "value_name": "TMPL"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to these piece indices",
+          "name": "--web-seed-pieces",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to this byte range of the payload",
+          "name": "--web-seed-bytes",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "One URL per line. Blank lines and # comments are ignored",
+          "name": "--web-seed-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a newline-separated URL list over HTTP",
+          "name": "--web-seed-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "TOML or JSON binding table. Full control",
+          "name": "--web-seed-config",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "auto",
+          "description": "BEP 19 or BEP 17 wire style",
+          "enum": [
+            "auto",
+            "getright",
+            "hoffman"
+          ],
+          "name": "--web-seed-style",
+          "type": "string",
+          "value_name": "STYLE"
+        },
+        {
+          "default": "false",
+          "description": "Disable peers, DHT, PEX, LSD, and trackers. HTTP sources only",
+          "name": "--web-seed-only",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore all web seeds, including the torrent's own url-list",
+          "name": "--no-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore the torrent's url-list but keep CLI-supplied sources",
+          "name": "--no-torrent-web-seed",
+          "type": "boolean"
+        },
+        {
+          "description": "Concurrent ranged requests per source",
+          "name": "--web-seed-concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections each source is presented over. Default: 1",
+          "name": "--web-seed-connections",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Concurrent ranged requests across all sources",
+          "name": "--web-seed-max-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Bytes per ranged request. Independent of the torrent's piece length",
+          "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Per-request timeout",
+          "name": "--web-seed-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Connect timeout for web seed requests",
+          "name": "--web-seed-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Consecutive failed requests before a source is retired",
+          "name": "--web-seed-max-errors",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Give a source that spent its error budget another chance after this long. Zero, the default, means it does not come back",
+          "name": "--web-seed-cooldown",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Per-request retries before counting an error",
+          "name": "--web-seed-retries",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Statuses to retry that would otherwise retire the source",
+          "name": "--web-seed-retry-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "Statuses that retire the source, which would otherwise be retried",
+          "name": "--web-seed-fatal-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "User-Agent for web seed requests",
+          "name": "--web-seed-user-agent",
+          "type": "string",
+          "value_name": "UA"
+        },
+        {
+          "description": "Extra header on web seed requests, as `Name: value`",
+          "name": "--web-seed-header",
+          "type": "array",
+          "value_name": "K: V"
+        },
+        {
+          "description": "Credentials: basic:user:pass, bearer:TOKEN, netrc, or none",
+          "name": "--web-seed-auth",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "description": "Rate cap per source",
+          "name": "--web-seed-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "piece",
+          "description": "When to hash-check HTTP-sourced data",
+          "enum": [
+            "piece",
+            "file",
+            "none"
+          ],
+          "name": "--web-seed-verify",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Bias among sources. Higher wins when several can serve a piece",
+          "name": "--web-seed-priority",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "false",
+          "description": "Bias the picker toward HTTP when both a peer and a source have a piece",
+          "name": "--prefer-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Fail the run if a declared source turns out to be unusable",
+          "name": "--web-seed-require",
+          "type": "boolean"
+        }
+      ],
+      "description": "Resolve every binding and print the exact URL each file maps to. No network",
+      "effects": "read_only",
+      "name": "bit-cli webseed list"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Source for the whole torrent, under the current composition mode",
+          "name": "--web-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Shorthand for a source with composition=exact",
+          "name": "--web-seed-exact",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Bind a scope selector to a source, as SELECTOR=URL",
+          "name": "--web-seed-for",
+          "type": "array",
+          "value_name": "SEL=URL"
+        },
+        {
+          "default": "auto",
+          "description": "Composition mode for CLI-supplied sources",
+          "enum": [
+            "auto",
+            "exact",
+            "prefix",
+            "template"
+          ],
+          "name": "--web-seed-mode",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Template used when the mode is `template`",
+          "name": "--web-seed-template",
+          "type": "string",
+          "value_name": "TMPL"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to these piece indices",
+          "name": "--web-seed-pieces",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to this byte range of the payload",
+          "name": "--web-seed-bytes",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "One URL per line. Blank lines and # comments are ignored",
+          "name": "--web-seed-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a newline-separated URL list over HTTP",
+          "name": "--web-seed-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "TOML or JSON binding table. Full control",
+          "name": "--web-seed-config",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "auto",
+          "description": "BEP 19 or BEP 17 wire style",
+          "enum": [
+            "auto",
+            "getright",
+            "hoffman"
+          ],
+          "name": "--web-seed-style",
+          "type": "string",
+          "value_name": "STYLE"
+        },
+        {
+          "default": "false",
+          "description": "Disable peers, DHT, PEX, LSD, and trackers. HTTP sources only",
+          "name": "--web-seed-only",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore all web seeds, including the torrent's own url-list",
+          "name": "--no-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore the torrent's url-list but keep CLI-supplied sources",
+          "name": "--no-torrent-web-seed",
+          "type": "boolean"
+        },
+        {
+          "description": "Concurrent ranged requests per source",
+          "name": "--web-seed-concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections each source is presented over. Default: 1",
+          "name": "--web-seed-connections",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Concurrent ranged requests across all sources",
+          "name": "--web-seed-max-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Bytes per ranged request. Independent of the torrent's piece length",
+          "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Per-request timeout",
+          "name": "--web-seed-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Connect timeout for web seed requests",
+          "name": "--web-seed-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Consecutive failed requests before a source is retired",
+          "name": "--web-seed-max-errors",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Give a source that spent its error budget another chance after this long. Zero, the default, means it does not come back",
+          "name": "--web-seed-cooldown",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Per-request retries before counting an error",
+          "name": "--web-seed-retries",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Statuses to retry that would otherwise retire the source",
+          "name": "--web-seed-retry-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "Statuses that retire the source, which would otherwise be retried",
+          "name": "--web-seed-fatal-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "User-Agent for web seed requests",
+          "name": "--web-seed-user-agent",
+          "type": "string",
+          "value_name": "UA"
+        },
+        {
+          "description": "Extra header on web seed requests, as `Name: value`",
+          "name": "--web-seed-header",
+          "type": "array",
+          "value_name": "K: V"
+        },
+        {
+          "description": "Credentials: basic:user:pass, bearer:TOKEN, netrc, or none",
+          "name": "--web-seed-auth",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "description": "Rate cap per source",
+          "name": "--web-seed-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "piece",
+          "description": "When to hash-check HTTP-sourced data",
+          "enum": [
+            "piece",
+            "file",
+            "none"
+          ],
+          "name": "--web-seed-verify",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Bias among sources. Higher wins when several can serve a piece",
+          "name": "--web-seed-priority",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "false",
+          "description": "Bias the picker toward HTTP when both a peer and a source have a piece",
+          "name": "--prefer-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Fail the run if a declared source turns out to be unusable",
+          "name": "--web-seed-require",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Use HEAD rather than a one-byte ranged GET",
+          "name": "--head",
+          "type": "boolean"
+        },
+        {
+          "default": "16",
+          "description": "Sources probed at once",
+          "name": "--concurrency",
+          "type": "string",
+          "value_name": "N"
+        }
+      ],
+      "description": "Probe each source: range support, size, redirects, TLS, latency",
+      "effects": "read_only",
+      "name": "bit-cli webseed test"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Source for the whole torrent, under the current composition mode",
+          "name": "--web-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Shorthand for a source with composition=exact",
+          "name": "--web-seed-exact",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Bind a scope selector to a source, as SELECTOR=URL",
+          "name": "--web-seed-for",
+          "type": "array",
+          "value_name": "SEL=URL"
+        },
+        {
+          "default": "auto",
+          "description": "Composition mode for CLI-supplied sources",
+          "enum": [
+            "auto",
+            "exact",
+            "prefix",
+            "template"
+          ],
+          "name": "--web-seed-mode",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Template used when the mode is `template`",
+          "name": "--web-seed-template",
+          "type": "string",
+          "value_name": "TMPL"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to these piece indices",
+          "name": "--web-seed-pieces",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to this byte range of the payload",
+          "name": "--web-seed-bytes",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "One URL per line. Blank lines and # comments are ignored",
+          "name": "--web-seed-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a newline-separated URL list over HTTP",
+          "name": "--web-seed-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "TOML or JSON binding table. Full control",
+          "name": "--web-seed-config",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "auto",
+          "description": "BEP 19 or BEP 17 wire style",
+          "enum": [
+            "auto",
+            "getright",
+            "hoffman"
+          ],
+          "name": "--web-seed-style",
+          "type": "string",
+          "value_name": "STYLE"
+        },
+        {
+          "default": "false",
+          "description": "Disable peers, DHT, PEX, LSD, and trackers. HTTP sources only",
+          "name": "--web-seed-only",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore all web seeds, including the torrent's own url-list",
+          "name": "--no-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore the torrent's url-list but keep CLI-supplied sources",
+          "name": "--no-torrent-web-seed",
+          "type": "boolean"
+        },
+        {
+          "description": "Concurrent ranged requests per source",
+          "name": "--web-seed-concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections each source is presented over. Default: 1",
+          "name": "--web-seed-connections",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Concurrent ranged requests across all sources",
+          "name": "--web-seed-max-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Bytes per ranged request. Independent of the torrent's piece length",
+          "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Per-request timeout",
+          "name": "--web-seed-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Connect timeout for web seed requests",
+          "name": "--web-seed-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Consecutive failed requests before a source is retired",
+          "name": "--web-seed-max-errors",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Give a source that spent its error budget another chance after this long. Zero, the default, means it does not come back",
+          "name": "--web-seed-cooldown",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Per-request retries before counting an error",
+          "name": "--web-seed-retries",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Statuses to retry that would otherwise retire the source",
+          "name": "--web-seed-retry-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "Statuses that retire the source, which would otherwise be retried",
+          "name": "--web-seed-fatal-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "User-Agent for web seed requests",
+          "name": "--web-seed-user-agent",
+          "type": "string",
+          "value_name": "UA"
+        },
+        {
+          "description": "Extra header on web seed requests, as `Name: value`",
+          "name": "--web-seed-header",
+          "type": "array",
+          "value_name": "K: V"
+        },
+        {
+          "description": "Credentials: basic:user:pass, bearer:TOKEN, netrc, or none",
+          "name": "--web-seed-auth",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "description": "Rate cap per source",
+          "name": "--web-seed-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "piece",
+          "description": "When to hash-check HTTP-sourced data",
+          "enum": [
+            "piece",
+            "file",
+            "none"
+          ],
+          "name": "--web-seed-verify",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Bias among sources. Higher wins when several can serve a piece",
+          "name": "--web-seed-priority",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "false",
+          "description": "Bias the picker toward HTTP when both a peer and a source have a piece",
+          "name": "--prefer-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Fail the run if a declared source turns out to be unusable",
+          "name": "--web-seed-require",
+          "type": "boolean"
+        },
+        {
+          "default": "10s",
+          "description": "How long to run",
+          "name": "--duration",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "1,2,4,8,16",
+          "description": "Step concurrency and report the curve",
+          "name": "--concurrency-sweep",
+          "type": "string",
+          "value_name": "SPEC"
+        }
+      ],
+      "description": "Measure ranged-GET latency and throughput as concurrency scales",
+      "effects": "read_only",
+      "name": "bit-cli webseed probe"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Source for the whole torrent, under the current composition mode",
+          "name": "--web-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Shorthand for a source with composition=exact",
+          "name": "--web-seed-exact",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Bind a scope selector to a source, as SELECTOR=URL",
+          "name": "--web-seed-for",
+          "type": "array",
+          "value_name": "SEL=URL"
+        },
+        {
+          "default": "auto",
+          "description": "Composition mode for CLI-supplied sources",
+          "enum": [
+            "auto",
+            "exact",
+            "prefix",
+            "template"
+          ],
+          "name": "--web-seed-mode",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Template used when the mode is `template`",
+          "name": "--web-seed-template",
+          "type": "string",
+          "value_name": "TMPL"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to these piece indices",
+          "name": "--web-seed-pieces",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to this byte range of the payload",
+          "name": "--web-seed-bytes",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "One URL per line. Blank lines and # comments are ignored",
+          "name": "--web-seed-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a newline-separated URL list over HTTP",
+          "name": "--web-seed-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "TOML or JSON binding table. Full control",
+          "name": "--web-seed-config",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "auto",
+          "description": "BEP 19 or BEP 17 wire style",
+          "enum": [
+            "auto",
+            "getright",
+            "hoffman"
+          ],
+          "name": "--web-seed-style",
+          "type": "string",
+          "value_name": "STYLE"
+        },
+        {
+          "default": "false",
+          "description": "Disable peers, DHT, PEX, LSD, and trackers. HTTP sources only",
+          "name": "--web-seed-only",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore all web seeds, including the torrent's own url-list",
+          "name": "--no-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore the torrent's url-list but keep CLI-supplied sources",
+          "name": "--no-torrent-web-seed",
+          "type": "boolean"
+        },
+        {
+          "description": "Concurrent ranged requests per source",
+          "name": "--web-seed-concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections each source is presented over. Default: 1",
+          "name": "--web-seed-connections",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Concurrent ranged requests across all sources",
+          "name": "--web-seed-max-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Bytes per ranged request. Independent of the torrent's piece length",
+          "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Per-request timeout",
+          "name": "--web-seed-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Connect timeout for web seed requests",
+          "name": "--web-seed-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Consecutive failed requests before a source is retired",
+          "name": "--web-seed-max-errors",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Give a source that spent its error budget another chance after this long. Zero, the default, means it does not come back",
+          "name": "--web-seed-cooldown",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Per-request retries before counting an error",
+          "name": "--web-seed-retries",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Statuses to retry that would otherwise retire the source",
+          "name": "--web-seed-retry-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "Statuses that retire the source, which would otherwise be retried",
+          "name": "--web-seed-fatal-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "User-Agent for web seed requests",
+          "name": "--web-seed-user-agent",
+          "type": "string",
+          "value_name": "UA"
+        },
+        {
+          "description": "Extra header on web seed requests, as `Name: value`",
+          "name": "--web-seed-header",
+          "type": "array",
+          "value_name": "K: V"
+        },
+        {
+          "description": "Credentials: basic:user:pass, bearer:TOKEN, netrc, or none",
+          "name": "--web-seed-auth",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "description": "Rate cap per source",
+          "name": "--web-seed-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "piece",
+          "description": "When to hash-check HTTP-sourced data",
+          "enum": [
+            "piece",
+            "file",
+            "none"
+          ],
+          "name": "--web-seed-verify",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Bias among sources. Higher wins when several can serve a piece",
+          "name": "--web-seed-priority",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "false",
+          "description": "Bias the picker toward HTTP when both a peer and a source have a piece",
+          "name": "--prefer-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Fail the run if a declared source turns out to be unusable",
+          "name": "--web-seed-require",
+          "type": "boolean"
+        },
+        {
+          "description": "Fetch from exactly this URL",
+          "name": "--url",
+          "type": "string",
+          "value_name": "URL"
+        },
+        {
+          "description": "Fetch one piece",
+          "name": "--piece",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Fetch a piece range",
+          "name": "--pieces",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "Fetch a whole file by index",
+          "name": "--file",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Fetch a byte range",
+          "name": "--bytes",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "Write the bytes here, or `-` for stdout. Writes nothing without this",
+          "name": "--output",
+          "type": "string",
+          "value_name": "PATH"
+        },
+        {
+          "default": "true",
+          "description": "Verify against the torrent's piece hashes",
+          "name": "--verify",
+          "type": "boolean"
+        }
+      ],
+      "description": "Fetch one range from one source and verify it against the torrent",
+      "effects": "idempotent",
+      "name": "bit-cli webseed fetch"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Where the payload lives. Defaults to --dir",
+          "name": "--data",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "false",
+          "description": "Report the result of every piece, not just the failures",
+          "name": "--per-piece",
+          "type": "boolean"
+        },
+        {
+          "description": "Verify only the files a `--select-file` download asked for. Accepts ranges: 1-5,8",
+          "name": "--select-file",
+          "type": "array",
+          "value_name": "INDEX"
+        },
+        {
+          "description": "Skip these files, as `--select-file`'s complement",
+          "name": "--exclude-file",
+          "type": "array",
+          "value_name": "INDEX"
+        }
+      ],
+      "description": "Hash-check existing data against the torrent",
+      "effects": "read_only",
+      "name": "bit-cli verify"
+    },
+    {
+      "args": [
+        {
+          "description": "File or directory to build a torrent from",
+          "name": "path",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Write here, or `-` for stdout. Defaults to alongside the input",
+          "name": "--output",
+          "short": "-o",
+          "type": "string",
+          "value_name": "TARGET"
+        },
+        {
+          "description": "Torrent name. Defaults to the input filename",
+          "name": "--name",
+          "type": "string",
+          "value_name": "TEXT"
+        },
+        {
+          "description": "Piece length. Accepts binary units. Chosen by heuristic when absent",
+          "name": "--piece-length",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "default": "v1",
+          "description": "Metainfo version",
+          "enum": [
+            "v1",
+            "v2",
+            "hybrid"
+          ],
+          "name": "--version",
+          "type": "string",
+          "value_name": "V"
+        },
+        {
+          "description": "Primary tracker",
+          "name": "--announce",
+          "type": "string",
+          "value_name": "URL"
+        },
+        {
+          "description": "Add a BEP 12 tier. Repeatable. Comma-separates within a tier",
+          "name": "--announce-tier",
+          "type": "array",
+          "value_name": "URLS"
+        },
+        {
+          "description": "Web seed written into `url-list` (BEP 19)",
+          "name": "--web-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "HTTP seed written into `httpseeds` (BEP 17)",
+          "name": "--http-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "DHT bootstrap node written into the torrent",
+          "name": "--node",
+          "type": "array",
+          "value_name": "HOST:PORT"
+        },
+        {
+          "description": "Free-text comment",
+          "name": "--comment",
+          "type": "string",
+          "value_name": "TEXT"
+        },
+        {
+          "description": "The `source` key in the info dict. Changes the info hash",
+          "name": "--source",
+          "type": "string",
+          "value_name": "TEXT"
+        },
+        {
+          "description": "BEP 39 feed URL",
+          "name": "--update-url",
+          "type": "string",
+          "value_name": "URL"
+        },
+        {
+          "default": "false",
+          "description": "Set the private flag (BEP 27)",
+          "name": "--private",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Write per-file MD5 checksums. MD5 is not collision resistant",
+          "name": "--md5",
+          "type": "boolean"
+        },
+        {
+          "description": "Include or, with a leading `!`, exclude paths",
+          "name": "--glob",
+          "type": "array",
+          "value_name": "GLOB"
+        },
+        {
+          "default": "false",
+          "description": "Respect .gitignore, .ignore, and .git/info/exclude",
+          "name": "--ignore",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Include hidden files",
+          "name": "--include-hidden",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Include junk files such as .DS_Store and Thumbs.db",
+          "name": "--include-junk",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Follow symlinks",
+          "name": "--follow-symlinks",
+          "type": "boolean"
+        },
+        {
+          "default": "path:asc",
+          "description": "Deterministic file ordering, as KEY:ORDER",
+          "name": "--sort-by",
+          "type": "string",
+          "value_name": "KEY:ORDER"
+        },
+        {
+          "default": "false",
+          "description": "Omit the `created by` field",
+          "name": "--no-created-by",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Omit the creation date. Required for byte-reproducible output",
+          "name": "--no-creation-date",
+          "type": "boolean"
+        },
+        {
+          "description": "Permit a lint that would otherwise refuse the build. Repeatable",
+          "name": "--allow",
+          "type": "array",
+          "value_name": "LINT"
+        },
+        {
+          "default": "false",
+          "description": "Overwrite an existing output file",
+          "name": "--force",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Print the magnet URI to stdout",
+          "name": "--link",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Print a summary of what was created",
+          "name": "--show",
+          "type": "boolean"
+        }
+      ],
+      "description": "Create a .torrent",
+      "effects": "non_idempotent",
+      "name": "bit-cli create"
+    },
+    {
+      "args": [
+        {
+          "description": "The torrent to read",
+          "name": "torrent",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "TORRENT"
+        },
+        {
+          "description": "Write here, or `-` for stdout. Never edits in place",
+          "name": "--output",
+          "short": "-o",
+          "type": "string",
+          "value_name": "TARGET"
+        },
+        {
+          "description": "Replace the primary tracker",
+          "name": "--announce",
+          "type": "string",
+          "value_name": "URL"
+        },
+        {
+          "description": "Add a BEP 12 tier. Repeatable",
+          "name": "--announce-tier",
+          "type": "array",
+          "value_name": "URLS"
+        },
+        {
+          "default": "false",
+          "description": "Drop every tracker",
+          "name": "--no-announce",
+          "type": "boolean"
+        },
+        {
+          "description": "Add a web seed to `url-list`",
+          "name": "--web-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "default": "false",
+          "description": "Replace `url-list` rather than adding to it",
+          "name": "--replace-web-seeds",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Drop every web seed",
+          "name": "--no-web-seed",
+          "type": "boolean"
+        },
+        {
+          "description": "Add an HTTP seed to `httpseeds`",
+          "name": "--http-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Replace the comment",
+          "name": "--comment",
+          "type": "string",
+          "value_name": "TEXT"
+        },
+        {
+          "default": "false",
+          "description": "Drop the comment",
+          "name": "--no-comment",
+          "type": "boolean"
+        },
+        {
+          "description": "Replace the `created by` field",
+          "name": "--created-by",
+          "type": "string",
+          "value_name": "TEXT"
+        },
+        {
+          "default": "false",
+          "description": "Drop the creation date",
+          "name": "--no-creation-date",
+          "type": "boolean"
+        },
+        {
+          "description": "Add a DHT bootstrap node",
+          "name": "--node",
+          "type": "array",
+          "value_name": "HOST:PORT"
+        },
+        {
+          "description": "Replace the BEP 39 feed URL",
+          "name": "--update-url",
+          "type": "string",
+          "value_name": "URL"
+        },
+        {
+          "default": "false",
+          "description": "Permit an edit that changes the info hash",
+          "name": "--allow-new-infohash",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Overwrite an existing output file",
+          "name": "--force",
+          "type": "boolean"
+        }
+      ],
+      "description": "Rewrite metainfo fields on an existing .torrent, writing a new file",
+      "effects": "non_idempotent",
+      "name": "bit-cli edit"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        }
+      ],
+      "description": "Convert a torrent to a magnet URI, or resolve a magnet to metadata",
+      "effects": "read_only",
+      "name": "bit-cli magnet"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Add a tracker at runtime. The .torrent is never rewritten",
+          "name": "--tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "One tracker per line. A blank line separates BEP 12 tiers",
+          "name": "--tracker-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a tracker list over HTTP",
+          "name": "--tracker-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Remove trackers. `*` removes all",
+          "name": "--exclude-tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "default": "false",
+          "description": "Replace the torrent's tracker list instead of adding to it",
+          "name": "--replace-trackers",
+          "type": "boolean"
+        },
+        {
+          "description": "Tracker request timeout",
+          "name": "--tracker-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Tracker connect timeout",
+          "name": "--tracker-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Override the announce interval",
+          "name": "--tracker-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Disable tracker announces entirely",
+          "name": "--no-tracker",
+          "type": "boolean"
+        },
+        {
+          "description": "Download rate cap, per torrent",
+          "name": "--max-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap, per torrent",
+          "name": "--max-upload-rate",
+          "short": "-u",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Download rate cap across the whole run",
+          "name": "--max-overall-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap across the whole run",
+          "name": "--max-overall-upload-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Peer connections per torrent",
+          "name": "--max-peers",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections across the run",
+          "name": "--max-peers-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Refuse this peer for the whole run. Repeatable",
+          "name": "--block-peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "128",
+          "description": "Payload files kept open at once",
+          "name": "--max-open-files",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this many handles. Off by default",
+          "name": "--max-handles",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this much resident memory. Off by default",
+          "name": "--max-rss",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Stop seeding at this ratio. 0 means do not seed",
+          "name": "--seed-ratio",
+          "type": "string",
+          "value_name": "RATIO"
+        },
+        {
+          "description": "Stop seeding after this long",
+          "name": "--seed-time",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Give up if there is no progress for this long",
+          "name": "--stop-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "10m",
+          "description": "Give up if the hash check has not finished in this long",
+          "name": "--init-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Abort if the rate drops below this",
+          "name": "--lowest-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Run this command on success. Arguments arrive through the environment",
+          "name": "--on-complete",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command on failure",
+          "name": "--on-error",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command after every verified piece. High frequency",
+          "name": "--on-piece-verified",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Where the payload already lives. Defaults to --dir",
+          "name": "--data",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "full",
+          "description": "Hash-check before announcing",
+          "enum": [
+            "full",
+            "quick",
+            "none"
+          ],
+          "name": "--verify",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "default": "false",
+          "description": "BEP 16 superseeding for initial distribution",
+          "name": "--superseed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Announce, report the tracker response, do not serve",
+          "name": "--announce-only",
+          "type": "boolean"
+        },
+        {
+          "description": "Listen port, or a range as START-END",
+          "name": "--port",
+          "type": "array",
+          "value_name": "PORT"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable peer exchange",
+          "name": "--no-pex",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "5s",
+          "description": "Emit a progress event this often",
+          "name": "--report-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Exit after this long with no connected peers",
+          "name": "--exit-when-idle",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Check this often that our own listener still answers. Off by default",
+          "name": "--listener-check",
+          "type": "string",
+          "value_name": "DUR"
+        }
+      ],
+      "description": "Seed existing data in the foreground",
+      "effects": "read_only",
+      "name": "bit-cli seed"
+    },
+    {
+      "args": [],
+      "description": "Measure a target",
+      "effects": "non_idempotent",
+      "name": "bit-cli bench",
+      "subcommands": [
+        "bit-cli bench leech",
+        "bit-cli bench seed",
+        "bit-cli bench webseed",
+        "bit-cli bench disk",
+        "bit-cli bench swarm",
+        "bit-cli bench probe"
+      ]
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Source for the whole torrent, under the current composition mode",
+          "name": "--web-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Shorthand for a source with composition=exact",
+          "name": "--web-seed-exact",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Bind a scope selector to a source, as SELECTOR=URL",
+          "name": "--web-seed-for",
+          "type": "array",
+          "value_name": "SEL=URL"
+        },
+        {
+          "default": "auto",
+          "description": "Composition mode for CLI-supplied sources",
+          "enum": [
+            "auto",
+            "exact",
+            "prefix",
+            "template"
+          ],
+          "name": "--web-seed-mode",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Template used when the mode is `template`",
+          "name": "--web-seed-template",
+          "type": "string",
+          "value_name": "TMPL"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to these piece indices",
+          "name": "--web-seed-pieces",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to this byte range of the payload",
+          "name": "--web-seed-bytes",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "One URL per line. Blank lines and # comments are ignored",
+          "name": "--web-seed-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a newline-separated URL list over HTTP",
+          "name": "--web-seed-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "TOML or JSON binding table. Full control",
+          "name": "--web-seed-config",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "auto",
+          "description": "BEP 19 or BEP 17 wire style",
+          "enum": [
+            "auto",
+            "getright",
+            "hoffman"
+          ],
+          "name": "--web-seed-style",
+          "type": "string",
+          "value_name": "STYLE"
+        },
+        {
+          "default": "false",
+          "description": "Disable peers, DHT, PEX, LSD, and trackers. HTTP sources only",
+          "name": "--web-seed-only",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore all web seeds, including the torrent's own url-list",
+          "name": "--no-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore the torrent's url-list but keep CLI-supplied sources",
+          "name": "--no-torrent-web-seed",
+          "type": "boolean"
+        },
+        {
+          "description": "Concurrent ranged requests per source",
+          "name": "--web-seed-concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections each source is presented over. Default: 1",
+          "name": "--web-seed-connections",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Concurrent ranged requests across all sources",
+          "name": "--web-seed-max-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Bytes per ranged request. Independent of the torrent's piece length",
+          "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Per-request timeout",
+          "name": "--web-seed-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Connect timeout for web seed requests",
+          "name": "--web-seed-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Consecutive failed requests before a source is retired",
+          "name": "--web-seed-max-errors",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Give a source that spent its error budget another chance after this long. Zero, the default, means it does not come back",
+          "name": "--web-seed-cooldown",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Per-request retries before counting an error",
+          "name": "--web-seed-retries",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Statuses to retry that would otherwise retire the source",
+          "name": "--web-seed-retry-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "Statuses that retire the source, which would otherwise be retried",
+          "name": "--web-seed-fatal-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "User-Agent for web seed requests",
+          "name": "--web-seed-user-agent",
+          "type": "string",
+          "value_name": "UA"
+        },
+        {
+          "description": "Extra header on web seed requests, as `Name: value`",
+          "name": "--web-seed-header",
+          "type": "array",
+          "value_name": "K: V"
+        },
+        {
+          "description": "Credentials: basic:user:pass, bearer:TOKEN, netrc, or none",
+          "name": "--web-seed-auth",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "description": "Rate cap per source",
+          "name": "--web-seed-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "piece",
+          "description": "When to hash-check HTTP-sourced data",
+          "enum": [
+            "piece",
+            "file",
+            "none"
+          ],
+          "name": "--web-seed-verify",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Bias among sources. Higher wins when several can serve a piece",
+          "name": "--web-seed-priority",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "false",
+          "description": "Bias the picker toward HTTP when both a peer and a source have a piece",
+          "name": "--prefer-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Fail the run if a declared source turns out to be unusable",
+          "name": "--web-seed-require",
+          "type": "boolean"
+        },
+        {
+          "description": "Add a tracker at runtime. The .torrent is never rewritten",
+          "name": "--tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "One tracker per line. A blank line separates BEP 12 tiers",
+          "name": "--tracker-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a tracker list over HTTP",
+          "name": "--tracker-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Remove trackers. `*` removes all",
+          "name": "--exclude-tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "default": "false",
+          "description": "Replace the torrent's tracker list instead of adding to it",
+          "name": "--replace-trackers",
+          "type": "boolean"
+        },
+        {
+          "description": "Tracker request timeout",
+          "name": "--tracker-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Tracker connect timeout",
+          "name": "--tracker-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Override the announce interval",
+          "name": "--tracker-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Disable tracker announces entirely",
+          "name": "--no-tracker",
+          "type": "boolean"
+        },
+        {
+          "description": "Download rate cap, per torrent",
+          "name": "--max-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap, per torrent",
+          "name": "--max-upload-rate",
+          "short": "-u",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Download rate cap across the whole run",
+          "name": "--max-overall-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap across the whole run",
+          "name": "--max-overall-upload-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Peer connections per torrent",
+          "name": "--max-peers",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections across the run",
+          "name": "--max-peers-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Refuse this peer for the whole run. Repeatable",
+          "name": "--block-peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "128",
+          "description": "Payload files kept open at once",
+          "name": "--max-open-files",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this many handles. Off by default",
+          "name": "--max-handles",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this much resident memory. Off by default",
+          "name": "--max-rss",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Stop seeding at this ratio. 0 means do not seed",
+          "name": "--seed-ratio",
+          "type": "string",
+          "value_name": "RATIO"
+        },
+        {
+          "description": "Stop seeding after this long",
+          "name": "--seed-time",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Give up if there is no progress for this long",
+          "name": "--stop-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "10m",
+          "description": "Give up if the hash check has not finished in this long",
+          "name": "--init-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Abort if the rate drops below this",
+          "name": "--lowest-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Run this command on success. Arguments arrive through the environment",
+          "name": "--on-complete",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command on failure",
+          "name": "--on-error",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command after every verified piece. High frequency",
+          "name": "--on-piece-verified",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "default": "30s",
+          "description": "How long to run",
+          "name": "--duration",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "3s",
+          "description": "Discard measurements from this initial window",
+          "name": "--warmup",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "1s",
+          "description": "Time series resolution",
+          "name": "--metrics-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Drive toward this rate rather than running flat out",
+          "name": "--target-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "8",
+          "description": "Fixed concurrency",
+          "name": "--concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Step concurrency and report the curve",
+          "name": "--concurrency-sweep",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "default": "8GiB",
+          "description": "Cap generated payload on disk",
+          "name": "--disk-budget",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Bytes per request. Defaults to the source's own chunk size",
+          "name": "--request-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "A rate to report the result as a share of, such as what curl reached against the same URL",
+          "name": "--ceiling",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Write the full report here, or `-` for stdout. Default: stdout",
+          "name": "--report",
+          "type": "string",
+          "value_name": "PATH"
+        },
+        {
+          "default": "json",
+          "description": "Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not",
+          "enum": [
+            "json",
+            "ndjson",
+            "csv",
+            "text"
+          ],
+          "name": "--format",
+          "type": "string",
+          "value_name": "FMT"
+        },
+        {
+          "description": "Compare against a previous report and print the delta",
+          "name": "--baseline",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Exit 14 if sustained throughput falls below this",
+          "name": "--fail-under",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Listen port, or a range as START-END. `0` asks the OS for a free one",
+          "name": "--port",
+          "type": "array",
+          "value_name": "PORT"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "sparse",
+          "description": "How disk space is allocated for the payload",
+          "enum": [
+            "none",
+            "prealloc",
+            "sparse",
+            "falloc"
+          ],
+          "name": "--file-allocation",
+          "type": "string",
+          "value_name": "METHOD"
+        },
+        {
+          "default": "true",
+          "description": "Overwrite whatever is already in the output directory",
+          "name": "--allow-overwrite",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Keep what is already in the output directory and resume onto it",
+          "name": "--keep-existing",
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Stop once the torrent completes, rather than running out `--duration`. On by default",
+          "name": "--stop-on-complete",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Keep running until `--duration` elapses even after the payload is in",
+          "name": "--run-full-duration",
+          "type": "boolean"
+        }
+      ],
+      "description": "Download from a target and measure",
+      "effects": "non_idempotent",
+      "name": "bit-cli bench leech"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Add a tracker at runtime. The .torrent is never rewritten",
+          "name": "--tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "One tracker per line. A blank line separates BEP 12 tiers",
+          "name": "--tracker-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a tracker list over HTTP",
+          "name": "--tracker-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Remove trackers. `*` removes all",
+          "name": "--exclude-tracker",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "default": "false",
+          "description": "Replace the torrent's tracker list instead of adding to it",
+          "name": "--replace-trackers",
+          "type": "boolean"
+        },
+        {
+          "description": "Tracker request timeout",
+          "name": "--tracker-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Tracker connect timeout",
+          "name": "--tracker-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Override the announce interval",
+          "name": "--tracker-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Disable tracker announces entirely",
+          "name": "--no-tracker",
+          "type": "boolean"
+        },
+        {
+          "description": "Download rate cap, per torrent",
+          "name": "--max-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap, per torrent",
+          "name": "--max-upload-rate",
+          "short": "-u",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Download rate cap across the whole run",
+          "name": "--max-overall-download-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Upload rate cap across the whole run",
+          "name": "--max-overall-upload-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Peer connections per torrent",
+          "name": "--max-peers",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections across the run",
+          "name": "--max-peers-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Refuse this peer for the whole run. Repeatable",
+          "name": "--block-peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "128",
+          "description": "Payload files kept open at once",
+          "name": "--max-open-files",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this many handles. Off by default",
+          "name": "--max-handles",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Stop when the process holds more than this much resident memory. Off by default",
+          "name": "--max-rss",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Stop seeding at this ratio. 0 means do not seed",
+          "name": "--seed-ratio",
+          "type": "string",
+          "value_name": "RATIO"
+        },
+        {
+          "description": "Stop seeding after this long",
+          "name": "--seed-time",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Give up if there is no progress for this long",
+          "name": "--stop-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "10m",
+          "description": "Give up if the hash check has not finished in this long",
+          "name": "--init-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Abort if the rate drops below this",
+          "name": "--lowest-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Run this command on success. Arguments arrive through the environment",
+          "name": "--on-complete",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command on failure",
+          "name": "--on-error",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "description": "Run this command after every verified piece. High frequency",
+          "name": "--on-piece-verified",
+          "type": "string",
+          "value_name": "COMMAND"
+        },
+        {
+          "default": "30s",
+          "description": "How long to run",
+          "name": "--duration",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "3s",
+          "description": "Discard measurements from this initial window",
+          "name": "--warmup",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "1s",
+          "description": "Time series resolution",
+          "name": "--metrics-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Drive toward this rate rather than running flat out",
+          "name": "--target-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "8",
+          "description": "Fixed concurrency",
+          "name": "--concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Step concurrency and report the curve",
+          "name": "--concurrency-sweep",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "default": "8GiB",
+          "description": "Cap generated payload on disk",
+          "name": "--disk-budget",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Bytes per request. Defaults to the source's own chunk size",
+          "name": "--request-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "A rate to report the result as a share of, such as what curl reached against the same URL",
+          "name": "--ceiling",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Write the full report here, or `-` for stdout. Default: stdout",
+          "name": "--report",
+          "type": "string",
+          "value_name": "PATH"
+        },
+        {
+          "default": "json",
+          "description": "Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not",
+          "enum": [
+            "json",
+            "ndjson",
+            "csv",
+            "text"
+          ],
+          "name": "--format",
+          "type": "string",
+          "value_name": "FMT"
+        },
+        {
+          "description": "Compare against a previous report and print the delta",
+          "name": "--baseline",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Exit 14 if sustained throughput falls below this",
+          "name": "--fail-under",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Where the payload already lives, when that is not `--dir`",
+          "name": "--data",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "DIR"
+        },
+        {
+          "description": "Listen port, or a range as START-END. `0` asks the OS for a free one",
+          "name": "--port",
+          "type": "array",
+          "value_name": "PORT"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "description": "Stop once no peer has been connected for this long",
+          "name": "--exit-when-idle",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Measure the payload's hash check on add as well",
+          "name": "--include-hash-check",
+          "type": "boolean"
+        }
+      ],
+      "description": "Seed and measure what the swarm pulls",
+      "effects": "non_idempotent",
+      "name": "bit-cli bench seed"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Source for the whole torrent, under the current composition mode",
+          "name": "--web-seed",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Shorthand for a source with composition=exact",
+          "name": "--web-seed-exact",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "Bind a scope selector to a source, as SELECTOR=URL",
+          "name": "--web-seed-for",
+          "type": "array",
+          "value_name": "SEL=URL"
+        },
+        {
+          "default": "auto",
+          "description": "Composition mode for CLI-supplied sources",
+          "enum": [
+            "auto",
+            "exact",
+            "prefix",
+            "template"
+          ],
+          "name": "--web-seed-mode",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Template used when the mode is `template`",
+          "name": "--web-seed-template",
+          "type": "string",
+          "value_name": "TMPL"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to these piece indices",
+          "name": "--web-seed-pieces",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "Restrict CLI-supplied sources to this byte range of the payload",
+          "name": "--web-seed-bytes",
+          "type": "string",
+          "value_name": "RANGE"
+        },
+        {
+          "description": "One URL per line. Blank lines and # comments are ignored",
+          "name": "--web-seed-file",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Fetch a newline-separated URL list over HTTP",
+          "name": "--web-seed-list-url",
+          "type": "array",
+          "value_name": "URL"
+        },
+        {
+          "description": "TOML or JSON binding table. Full control",
+          "name": "--web-seed-config",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "auto",
+          "description": "BEP 19 or BEP 17 wire style",
+          "enum": [
+            "auto",
+            "getright",
+            "hoffman"
+          ],
+          "name": "--web-seed-style",
+          "type": "string",
+          "value_name": "STYLE"
+        },
+        {
+          "default": "false",
+          "description": "Disable peers, DHT, PEX, LSD, and trackers. HTTP sources only",
+          "name": "--web-seed-only",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore all web seeds, including the torrent's own url-list",
+          "name": "--no-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Ignore the torrent's url-list but keep CLI-supplied sources",
+          "name": "--no-torrent-web-seed",
+          "type": "boolean"
+        },
+        {
+          "description": "Concurrent ranged requests per source",
+          "name": "--web-seed-concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Peer connections each source is presented over. Default: 1",
+          "name": "--web-seed-connections",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Concurrent ranged requests across all sources",
+          "name": "--web-seed-max-total",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Bytes per ranged request. Independent of the torrent's piece length",
+          "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Per-request timeout",
+          "name": "--web-seed-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Connect timeout for web seed requests",
+          "name": "--web-seed-connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Consecutive failed requests before a source is retired",
+          "name": "--web-seed-max-errors",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Give a source that spent its error budget another chance after this long. Zero, the default, means it does not come back",
+          "name": "--web-seed-cooldown",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Per-request retries before counting an error",
+          "name": "--web-seed-retries",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Statuses to retry that would otherwise retire the source",
+          "name": "--web-seed-retry-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "Statuses that retire the source, which would otherwise be retried",
+          "name": "--web-seed-fatal-status",
+          "type": "string",
+          "value_name": "CODES"
+        },
+        {
+          "description": "User-Agent for web seed requests",
+          "name": "--web-seed-user-agent",
+          "type": "string",
+          "value_name": "UA"
+        },
+        {
+          "description": "Extra header on web seed requests, as `Name: value`",
+          "name": "--web-seed-header",
+          "type": "array",
+          "value_name": "K: V"
+        },
+        {
+          "description": "Credentials: basic:user:pass, bearer:TOKEN, netrc, or none",
+          "name": "--web-seed-auth",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "description": "Rate cap per source",
+          "name": "--web-seed-speed-limit",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "piece",
+          "description": "When to hash-check HTTP-sourced data",
+          "enum": [
+            "piece",
+            "file",
+            "none"
+          ],
+          "name": "--web-seed-verify",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "description": "Bias among sources. Higher wins when several can serve a piece",
+          "name": "--web-seed-priority",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "false",
+          "description": "Bias the picker toward HTTP when both a peer and a source have a piece",
+          "name": "--prefer-web-seed",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Fail the run if a declared source turns out to be unusable",
+          "name": "--web-seed-require",
+          "type": "boolean"
+        },
+        {
+          "default": "30s",
+          "description": "How long to run",
+          "name": "--duration",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "3s",
+          "description": "Discard measurements from this initial window",
+          "name": "--warmup",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "1s",
+          "description": "Time series resolution",
+          "name": "--metrics-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Drive toward this rate rather than running flat out",
+          "name": "--target-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "8",
+          "description": "Fixed concurrency",
+          "name": "--concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Step concurrency and report the curve",
+          "name": "--concurrency-sweep",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "default": "8GiB",
+          "description": "Cap generated payload on disk",
+          "name": "--disk-budget",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Bytes per request. Defaults to the source's own chunk size",
+          "name": "--request-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "A rate to report the result as a share of, such as what curl reached against the same URL",
+          "name": "--ceiling",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Write the full report here, or `-` for stdout. Default: stdout",
+          "name": "--report",
+          "type": "string",
+          "value_name": "PATH"
+        },
+        {
+          "default": "json",
+          "description": "Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not",
+          "enum": [
+            "json",
+            "ndjson",
+            "csv",
+            "text"
+          ],
+          "name": "--format",
+          "type": "string",
+          "value_name": "FMT"
+        },
+        {
+          "description": "Compare against a previous report and print the delta",
+          "name": "--baseline",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Exit 14 if sustained throughput falls below this",
+          "name": "--fail-under",
+          "type": "string",
+          "value_name": "RATE"
+        }
+      ],
+      "description": "Measure HTTP sources: latency percentiles, concurrency scaling, ranges",
+      "effects": "non_idempotent",
+      "name": "bit-cli bench webseed"
+    },
+    {
+      "args": [
+        {
+          "description": "Write the full report here, or `-` for stdout. Default: stdout",
+          "name": "--report",
+          "type": "string",
+          "value_name": "PATH"
+        },
+        {
+          "default": "json",
+          "description": "Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not",
+          "enum": [
+            "json",
+            "ndjson",
+            "csv",
+            "text"
+          ],
+          "name": "--format",
+          "type": "string",
+          "value_name": "FMT"
+        },
+        {
+          "description": "Compare against a previous report and print the delta",
+          "name": "--baseline",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Exit 14 if sustained throughput falls below this",
+          "name": "--fail-under",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Where the payload is written. Defaults to a directory this run makes under the system temporary directory and removes afterwards",
+          "name": "--dir",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "DIR"
+        },
+        {
+          "default": "1GiB",
+          "description": "Total bytes written per step",
+          "name": "--payload-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "default": "16KiB",
+          "description": "Bytes per positioned write. The peer protocol's block is 16 KiB",
+          "name": "--block-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "default": "8",
+          "description": "How many threads write at once",
+          "name": "--concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Step the thread count and report the curve, for example `1,2,4,8`",
+          "name": "--concurrency-sweep",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "default": "shared",
+          "description": "How the payload is spread over files. `shared` is one file with every thread interleaving into it, which is where writes contend. `split` gives each thread its own file, which is the control",
+          "enum": [
+            "shared",
+            "split",
+            "handles"
+          ],
+          "name": "--layout",
+          "type": "string",
+          "value_name": "LAYOUT"
+        },
+        {
+          "default": "1",
+          "description": "Consecutive blocks one thread writes before the next takes over, under `shared` and `handles`. 1 strides block by block, which contends most. A receive path writes a whole fetched range at a time, so `64` at the default block size is the shape a download has",
+          "name": "--run-length",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "sparse",
+          "description": "How disk space is allocated for the payload",
+          "enum": [
+            "none",
+            "prealloc",
+            "sparse",
+            "falloc"
+          ],
+          "name": "--file-allocation",
+          "type": "string",
+          "value_name": "METHOD"
+        },
+        {
+          "default": "0",
+          "description": "How many payload files stay open at once. 0 uses the storage default",
+          "name": "--max-open-files",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "1s",
+          "description": "Time series resolution",
+          "name": "--metrics-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "300s",
+          "description": "Stop a step once this much wall time has passed",
+          "name": "--duration",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Skip the read-back that checks every block landed where it was sent",
+          "name": "--no-verify",
+          "type": "boolean"
+        }
+      ],
+      "description": "Measure the payload file under several writers, with no session",
+      "effects": "non_idempotent",
+      "name": "bit-cli bench disk"
+    },
+    {
+      "args": [
+        {
+          "description": "`HOST:PORT` of the peer to load. The only address this ever connects to: it announces to no tracker, uses no DHT, and reads no peer list",
+          "name": "target",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "TARGET"
+        },
+        {
+          "description": "A torrent the target already serves, as a `.torrent` path. Repeatable",
+          "name": "--for",
+          "type": "array",
+          "value_hint": "path",
+          "value_name": "TORRENT"
+        },
+        {
+          "default": "30s",
+          "description": "How long to run",
+          "name": "--duration",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "3s",
+          "description": "Discard measurements from this initial window",
+          "name": "--warmup",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "1s",
+          "description": "Time series resolution",
+          "name": "--metrics-interval",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Drive toward this rate rather than running flat out",
+          "name": "--target-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "8",
+          "description": "Fixed concurrency",
+          "name": "--concurrency",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "Step concurrency and report the curve",
+          "name": "--concurrency-sweep",
+          "type": "string",
+          "value_name": "SPEC"
+        },
+        {
+          "default": "8GiB",
+          "description": "Cap generated payload on disk",
+          "name": "--disk-budget",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Bytes per request. Defaults to the source's own chunk size",
+          "name": "--request-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "A rate to report the result as a share of, such as what curl reached against the same URL",
+          "name": "--ceiling",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Write the full report here, or `-` for stdout. Default: stdout",
+          "name": "--report",
+          "type": "string",
+          "value_name": "PATH"
+        },
+        {
+          "default": "json",
+          "description": "Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not",
+          "enum": [
+            "json",
+            "ndjson",
+            "csv",
+            "text"
+          ],
+          "name": "--format",
+          "type": "string",
+          "value_name": "FMT"
+        },
+        {
+          "description": "Compare against a previous report and print the delta",
+          "name": "--baseline",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Exit 14 if sustained throughput falls below this",
+          "name": "--fail-under",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "default": "8",
+          "description": "Synthetic peer count",
+          "name": "--peers",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "1",
+          "description": "How many torrents to generate. Ignored when `--for` is given",
+          "name": "--torrents",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "256MiB",
+          "description": "The length a generated torrent declares. No payload is written for it: the target does not have the torrent, so nothing will ever be fetched or checked against it",
+          "name": "--payload-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "default": "1MiB",
+          "description": "The piece length a generated torrent declares",
+          "name": "--piece-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Where verified pieces and generated torrents are written. A directory this run makes and removes when not given",
+          "name": "--dir",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "DIR"
+        },
+        {
+          "default": "10s",
+          "description": "How long one connect attempt gets before the peer gives up on it",
+          "name": "--connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Keep the scratch directory instead of removing it",
+          "name": "--keep",
+          "type": "boolean"
+        }
+      ],
+      "description": "Synthetic peer load against a target",
+      "effects": "non_idempotent",
+      "name": "bit-cli bench swarm"
+    },
+    {
+      "args": [
+        {
+          "description": "`HOST:PORT` for a peer, or an `http(s)://` URL for a mirror",
+          "name": "target",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "TARGET"
+        },
+        {
+          "description": "The torrent to ask a peer about, as a `.torrent`, a magnet, or an info hash",
+          "name": "--for",
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "default": "10s",
+          "description": "How long to wait for each step, and how long to listen after the handshake",
+          "name": "--timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "description": "Write the full report here, or `-` for stdout. Default: stdout",
+          "name": "--report",
+          "type": "string",
+          "value_name": "PATH"
+        },
+        {
+          "default": "json",
+          "description": "Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not",
+          "enum": [
+            "json",
+            "ndjson",
+            "csv",
+            "text"
+          ],
+          "name": "--format",
+          "type": "string",
+          "value_name": "FMT"
+        },
+        {
+          "description": "Compare against a previous report and print the delta",
+          "name": "--baseline",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Exit 14 if sustained throughput falls below this",
+          "name": "--fail-under",
+          "type": "string",
+          "value_name": "RATE"
+        }
+      ],
+      "description": "One-shot capability and reachability probe",
+      "effects": "read_only",
+      "name": "bit-cli bench probe"
+    },
+    {
+      "args": [],
+      "description": "Configuration",
+      "effects": "read_only",
+      "name": "bit-cli config",
+      "subcommands": [
+        "bit-cli config show"
+      ]
+    },
+    {
+      "args": [],
+      "description": "Print the fully resolved configuration with the origin of every value",
+      "effects": "read_only",
+      "name": "bit-cli config show"
+    },
+    {
+      "args": [
+        {
+          "description": "Which shell to generate for",
+          "enum": [
+            "bash",
+            "zsh",
+            "fish",
+            "powershell",
+            "elvish",
+            "nushell"
+          ],
+          "name": "shell",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SHELL"
+        }
+      ],
+      "description": "Generate shell completions",
+      "effects": "read_only",
+      "name": "bit-cli completions"
+    },
+    {
+      "args": [
+        {
+          "description": "Write the man page here instead of to stdout",
+          "name": "--output",
+          "short": "-o",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "default": "roff",
+          "description": "What to render. `roff` is the man page; `json` is the same surface as a CLIspec document, for a reader that cannot parse roff",
+          "enum": [
+            "roff",
+            "json",
+            "markdown"
+          ],
+          "name": "--format",
+          "type": "string",
+          "value_name": "FMT"
+        }
+      ],
+      "description": "Generate a man page",
+      "effects": "read_only",
+      "name": "bit-cli man"
+    },
+    {
+      "args": [],
+      "description": "Version, build metadata, enabled features, and protocol support",
+      "effects": "read_only",
+      "name": "bit-cli version"
+    }
+  ],
+  "description": "Fetch, create, verify, and seed torrents, with first-class web seed control.",
+  "errors": [
+    {
+      "description": "Generic failure",
+      "exit_code": 1,
+      "kind": "generic",
+      "retryable": true
+    },
+    {
+      "description": "Usage or argument error",
+      "exit_code": 2,
+      "kind": "usage",
+      "retryable": false
+    },
+    {
+      "description": "Configuration error",
+      "exit_code": 3,
+      "kind": "config",
+      "retryable": false
+    },
+    {
+      "description": "Source resolution failed",
+      "exit_code": 4,
+      "kind": "source_resolution",
+      "retryable": false
+    },
+    {
+      "description": "Network failure",
+      "exit_code": 5,
+      "kind": "network",
+      "retryable": true
+    },
+    {
+      "description": "No usable sources",
+      "exit_code": 6,
+      "kind": "no_usable_sources",
+      "retryable": true
+    },
+    {
+      "description": "Hash verification failed",
+      "exit_code": 7,
+      "kind": "hash_mismatch",
+      "retryable": false
+    },
+    {
+      "description": "Disk error",
+      "exit_code": 8,
+      "kind": "disk",
+      "retryable": false
+    },
+    {
+      "description": "Timeout or deadline exceeded",
+      "exit_code": 9,
+      "kind": "timeout",
+      "retryable": true
+    },
+    {
+      "description": "Interrupted by the user, partial state saved",
+      "exit_code": 10,
+      "kind": "interrupted",
+      "retryable": false
+    },
+    {
+      "description": "Coverage gap: some pieces have no source",
+      "exit_code": 11,
+      "kind": "coverage_gap",
+      "retryable": false
+    },
+    {
+      "description": "Binding error: a scope selector or composition mode is invalid",
+      "exit_code": 12,
+      "kind": "binding",
+      "retryable": false
+    },
+    {
+      "description": "Lint refused a torrent at creation",
+      "exit_code": 13,
+      "kind": "lint_refused",
+      "retryable": false
+    },
+    {
+      "description": "Threshold not met",
+      "exit_code": 14,
+      "kind": "threshold_not_met",
+      "retryable": false
+    },
+    {
+      "description": "Would change the info hash",
+      "exit_code": 15,
+      "kind": "would_change_infohash",
+      "retryable": false
+    },
+    {
+      "description": "A resource ceiling was crossed",
+      "exit_code": 16,
+      "kind": "resource_ceiling",
+      "retryable": true
+    },
+    {
+      "description": "This run's own listener stopped answering",
+      "exit_code": 17,
+      "kind": "listener_unhealthy",
+      "retryable": true
+    }
+  ],
+  "global_args": [
+    {
+      "default": "false",
+      "description": "Emit machine-readable JSON on stdout. Implies --progress=none",
+      "name": "--json",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "description": "Emit newline-delimited JSON events on stdout as they happen",
+      "name": "--jsonl",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "description": "Print the output schema version and exit",
+      "name": "--schema-version",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "description": "Suppress all non-error output",
+      "name": "--quiet",
+      "short": "-q",
+      "type": "boolean"
+    },
+    {
+      "default": "0",
+      "description": "Increase verbosity. Repeatable: -v, -vv, -vvv",
+      "name": "--verbose",
+      "short": "-v",
+      "type": "integer"
+    },
+    {
+      "default": "warn",
+      "description": "Log level",
+      "enum": [
+        "off",
+        "error",
+        "warn",
+        "info",
+        "debug",
+        "trace"
+      ],
+      "name": "--log-level",
+      "type": "string",
+      "value_name": "LEVEL"
+    },
+    {
+      "default": "text",
+      "description": "Log format",
+      "enum": [
+        "text",
+        "json"
+      ],
+      "name": "--log-format",
+      "type": "string",
+      "value_name": "FMT"
+    },
+    {
+      "description": "Append logs to a file. Rotates by size and count",
+      "name": "--log-file",
+      "short": "-l",
+      "type": "string",
+      "value_hint": "path",
+      "value_name": "PATH"
+    },
+    {
+      "default": "16MiB",
+      "description": "Rotate the log at this size. `0` never rotates",
+      "name": "--log-max-size",
+      "type": "string",
+      "value_name": "SIZE"
+    },
+    {
+      "default": "5",
+      "description": "Keep this many logs in total, the live one included",
+      "name": "--log-max-files",
+      "type": "string",
+      "value_name": "N"
+    },
+    {
+      "description": "Enable detailed tracing for one subsystem without raising the global level",
+      "name": "--trace",
+      "type": "array",
+      "value_name": "SUBSYSTEM"
+    },
+    {
+      "default": "false",
+      "description": "Show credentials in trace output instead of redacting them",
+      "name": "--no-redact",
+      "type": "boolean"
+    },
+    {
+      "default": "auto",
+      "description": "When to use colour. Honours NO_COLOR",
+      "enum": [
+        "auto",
+        "always",
+        "never"
+      ],
+      "name": "--color",
+      "type": "string",
+      "value_name": "WHEN"
+    },
+    {
+      "default": "auto",
+      "description": "Progress rendering. Defaults to none when stdout is not a terminal",
+      "enum": [
+        "auto",
+        "none",
+        "plain",
+        "json"
+      ],
+      "name": "--progress",
+      "type": "string",
+      "value_name": "MODE"
+    },
+    {
+      "description": "Config file path",
+      "name": "--config",
+      "type": "string",
+      "value_hint": "path",
+      "value_name": "PATH"
+    },
+    {
+      "default": "false",
+      "description": "Ignore all config files",
+      "name": "--no-config",
+      "type": "boolean"
+    },
+    {
+      "description": "Output directory",
+      "name": "--dir",
+      "short": "-d",
+      "type": "string",
+      "value_hint": "path",
+      "value_name": "DIR"
+    },
+    {
+      "default": "false",
+      "description": "Resolve, validate, and report. Write nothing",
+      "name": "--dry-run",
+      "type": "boolean"
+    },
+    {
+      "description": "Overall operation deadline",
+      "name": "--timeout",
+      "type": "string",
+      "value_name": "DUR"
+    },
+    {
+      "description": "Stop after this long regardless of state",
+      "name": "--stop-after",
+      "type": "string",
+      "value_name": "DUR"
+    }
+  ],
+  "name": "bit-cli",
+  "output": {
+    "piped": "text",
+    "structured": "pass --json for a single document or --jsonl for events, on any command that produces output",
+    "tty": "text"
+  },
+  "version": "0.2.0"
+}

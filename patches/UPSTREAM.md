@@ -105,7 +105,7 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              patches/rqbit/0003-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0004-crates-librqbit-src-peer_info_reader-mod.rs.patch
              patches/rqbit/0006-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0007-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0008-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0008-package-lock.json.patch
+             patches/rqbit/0009-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -307,3 +307,77 @@ and is judged now.
 
 **Offer it upstream.** It is [rqbit#311](https://github.com/ikatson/rqbit/issues/311),
 open since before this repository existed, and the change is one match arm.
+
+---
+
+## librqbit: nothing ever reclaimed a peer row
+
+```
+Unblocks:    T-040, TODO/memory.md, the record's other P0
+Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
+             patches/rqbit/0006-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+Upstream:    not offered yet, and it should be
+Added:       2026-08-22T15:30Z
+```
+
+`PeerStates::states` is a `DashMap<SocketAddr, Peer>` that only ever grew. A
+peer that hands over cleanly ends in `PeerState::NotNeeded` and stays there;
+`drop_peer` was called on exactly two paths, a bug branch and backoff
+exhaustion. T-040 measured it: **one row per completed handshake, exactly**,
+2,000 connections leaving 2,000 rows, `live` and `dead` both zero, and a minute
+of silence returning none of the memory. A row is 2,891 to 4,281 bytes
+depending on the range fitted, which is most of a long seeder's memory slope.
+
+The change is a bound:
+
+- `MAX_PEER_RECORDS`, 1,024 per torrent, well above any real swarm's live peer
+  count, so a working torrent never reaches it and this only reclaims history.
+  Zero disables it, which is the previous behaviour.
+- `PeerStates::reclaim_records` takes rows in `NotNeeded` or `Dead` and never
+  `Live`, `Connecting` or `Queued`, because those have a task or a dial behind
+  them. It counts what it may take rather than evicting by age.
+- Called **before** an insert on both paths that add a row, and never while an
+  `Entry` on the same map is held: `DashMap` locks per shard and a second guard
+  on the same shard deadlocks.
+- Reclaimed rows go through `Peer::destroy`, which decrements both the
+  per-torrent and the session counters and clears `live_outgoing_peers`, rather
+  than through `drop_peer`, which does not do the last of those.
+
+**The second half, and it is the part that would have looked like a bug.** A
+`Dead` row can be sitting in the dial queue when it is reclaimed, and
+`task_manage_outgoing_peer` answered a missing row with `Error::BugPeerNotFound`.
+A bound that logs "bug" for its own correct behaviour is worse than no bound,
+so that path now returns quietly: a queued handle outliving its row is ordinary
+once the map is bounded.
+
+**Why it has to be here.** `PeerStates` is `pub(crate)` inside `librqbit`, the
+map is private, and no option, builder or trait reaches it. `bit-cli` carries
+`--max-rss` as a backstop precisely because nothing in this tree could free a
+row, and that flag stops the run rather than fixing anything.
+
+**How it was measured.** `scripts/check-peer-rows.ps1`, 2,000 connections in
+steps of 200 against one seeder, reading the row count out of the seeder's own
+`progress` events:
+
+| connections | rows before | rows after |
+| --- | --- | --- |
+| 1,000 | 1,000 | 1,000 |
+| 1,200 | 1,200 | **1,024** |
+| 2,000 | 2,000 | **1,024** |
+
+Exactly 1,024 and flat, and one row per handshake below the bound, which is the
+attribution T-040 rests on and is asserted separately: a bound that reclaimed a
+live peer would also make the count flat.
+
+**RSS at 2,000 connections is unchanged, and that is expected rather than a
+disappointment.** Freeing a row returns it to the allocator, not to the
+operating system, so the saving does not show as resident memory at this scale;
+976 reclaimed rows are inside the run-to-run variation. What the bound changes
+is that demand stops growing, which is what a process that fails at 3am needs.
+The six hour soak that would show it as a flat line is `TODO/memory.md` T-040's
+own acceptance and has not been run since the change.
+
+**Offer it upstream.** It is [rqbit#525](https://github.com/ikatson/rqbit/issues/525),
+open, and reported as exactly this: RSS climbing in a long-lived server.

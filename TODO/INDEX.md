@@ -205,6 +205,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-193](cli-surface.md) | P2 | cli | done | A citation written short was never checked at all |
 | [T-196](cli-surface.md) | P2 | cli | open | A magnet that never resolves hangs download with no diagnostic |
 | [T-197](cli-surface.md) | P1 | cli | **done** | Running upstream's tests filled the patch series with 14,964 patches |
+| [T-198](cli-surface.md) | P1 | cli | **done** | An agent that wants a flag name greps for it |
+| [T-199](cli-surface.md) | P2 | cli | **done** | The CI supply chain was unwatched and one action was abandoned |
 | [T-182](cli-surface.md) | P1 | ci | **done** | A macOS test asserted an invariant across two kernel subsystems |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
@@ -233,8 +235,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-156 items: 146 to work through, and 10 deferred to Phase C.
-48 open, 6 partial, 2 blocked, 90 done.
+158 items: 148 to work through, and 10 deferred to Phase C.
+48 open, 6 partial, 2 blocked, 92 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -488,11 +490,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 1 | 0 | 11 | 12 |
-| P1 | 1 | 2 | 0 | 49 | 52 |
-| P2 | 25 | 3 | 2 | 28 | 58 |
+| P1 | 1 | 2 | 0 | 50 | 53 |
+| P2 | 25 | 3 | 2 | 29 | 59 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **48** | **6** | **2** | **90** | **156** |
+| **All** | **48** | **6** | **2** | **92** | **158** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

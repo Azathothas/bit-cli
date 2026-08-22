@@ -35,6 +35,27 @@ use crate::cli::{Cli, Command};
 use crate::env::Env;
 use crate::output::Renderer;
 
+/// The troff man page, as `man/bit-cli.1` holds it.
+///
+/// Exposed so `tests/man_is_current.rs` renders from this crate rather than
+/// from `target/release/bit-cli`, which can be older than the source in front
+/// of it. See `docs/man.md`.
+pub fn man_roff() -> String {
+    String::from_utf8(cmd::man::render_roff().expect("the man page renders"))
+        .expect("clap_mangen writes utf-8")
+}
+
+/// The CLIspec document, as `man/bit-cli.json` holds it.
+pub fn man_json() -> String {
+    String::from_utf8(cmd::man::render_json().expect("the CLIspec document renders"))
+        .expect("serde_json writes utf-8")
+}
+
+/// The Markdown manual, as `man/bit-cli.md` holds it.
+pub fn man_markdown() -> String {
+    cmd::man::render_markdown()
+}
+
 /// Run the program and return the exit code.
 ///
 /// This never panics on a user error and never writes anything to a stream the

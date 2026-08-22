@@ -45,6 +45,13 @@ param(
     [int]$Steps = 10,
     [int]$Concurrency = 16,
     [int]$PayloadMiB = 2,
+    # MAX_PEER_RECORDS in
+    # vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs. Kept as
+    # a parameter rather than read from the source, because this script has to
+    # be able to say the tree disagrees with it rather than agree by
+    # construction. -Step * -Steps has to go past it or the bound is not
+    # exercised and this says so.
+    [int]$PeerRecordBound = 1024,
     [string]$Root = ".tmp/peerrows",
     [string]$ReportDir = "bench",
     [switch]$Keep
@@ -252,11 +259,38 @@ if ($under.exit_code -ne 9) { $ceilingFailures += "--max-rss 4GiB exited $($unde
 if ($under.stopped -ne "deadline") { $ceilingFailures += "--max-rss 4GiB stopped=$($under.stopped), expected deadline" }
 foreach ($failure in $ceilingFailures) { [Console]::Error.WriteLine("check-peer-rows: $failure") }
 
-# Least squares of rss against peer rows. The slope is what one peer costs and
-# the intercept is the seeder without any.
-$n = $rows.Count
+# The bound, and it is what makes the fit below need a subset.
+#
+# Until 2026-08-22 the session kept a row for every peer it had ever accepted
+# and never gave one back, which is what this script was written to measure and
+# is T-040. The vendored tree reclaims a `NotNeeded` or `Dead` row now, so the
+# row count tracks connections up to MAX_PEER_RECORDS and is flat above it. Both
+# halves are asserted: one row per handshake below the bound is still the
+# attribution this script exists for, and flat above it is the fix.
+$bounded = @($rows | Where-Object { $_.peer_rows -lt $PeerRecordBound })
+$aboveBound = @($rows | Where-Object { $_.connections -gt $PeerRecordBound })
+$boundFailures = @()
+foreach ($row in $bounded) {
+    if ($row.peer_rows -ne $row.connections) {
+        $boundFailures += "at $($row.connections) connections the session held $($row.peer_rows) rows, and below the bound it is one per handshake"
+    }
+}
+foreach ($row in $aboveBound) {
+    if ($row.peer_rows -gt $PeerRecordBound) {
+        $boundFailures += "at $($row.connections) connections the session held $($row.peer_rows) rows, past the bound of $PeerRecordBound"
+    }
+}
+if ($aboveBound.Count -lt 2) {
+    $boundFailures += "only $($aboveBound.Count) step(s) went past $PeerRecordBound connections, so the bound was not exercised"
+}
+foreach ($failure in $boundFailures) { [Console]::Error.WriteLine("check-peer-rows: $failure") }
+
+# Least squares of rss against peer rows, over the steps below the bound only.
+# Above it the row count is constant, so those points measure the intercept
+# several times and flatten the slope toward nothing.
+$n = $bounded.Count
 $sumX = 0.0; $sumY = 0.0; $sumXX = 0.0; $sumXY = 0.0
-foreach ($row in $rows) {
+foreach ($row in $bounded) {
     $x = [double]$row.peer_rows
     $y = [double]$row.rss_bytes
     $sumX += $x; $sumY += $y; $sumXX += $x * $x; $sumXY += $x * $y
@@ -266,7 +300,7 @@ $slope = if ($denominator -ne 0) { (($n * $sumXY) - ($sumX * $sumY)) / $denomina
 $intercept = ($sumY - ($slope * $sumX)) / $n
 $meanY = $sumY / $n
 $ssTot = 0.0; $ssRes = 0.0
-foreach ($row in $rows) {
+foreach ($row in $bounded) {
     $predicted = $intercept + ($slope * [double]$row.peer_rows)
     $ssTot += [math]::Pow([double]$row.rss_bytes - $meanY, 2)
     $ssRes += [math]::Pow([double]$row.rss_bytes - $predicted, 2)
@@ -283,11 +317,11 @@ $rowsHeld = ($rows | Select-Object -Last 1).peer_rows
 $verdict = if ($ceilingFailures.Count -gt 0) {
     "rejected: --max-rss did not behave"
 }
-elseif ($rowsHeld -lt ($Step * $Steps * 0.9)) {
-    "rejected: the session did not keep a row per handshake"
+elseif ($boundFailures.Count -gt 0) {
+    "rejected: peer rows are not bounded the way T-040 says"
 }
 elseif ($slope -le 0) {
-    "rejected: rss does not rise with the peer count"
+    "rejected: rss does not rise with the peer count below the bound"
 }
 else { "measured" }
 
@@ -323,6 +357,13 @@ $reportPath = Join-Path $ReportDir "peer-rows-$stamp.json"
         bytes_per_peer_row = [math]::Round($slope, 1)
         intercept_bytes    = [math]::Round($intercept, 0)
         r_squared          = [math]::Round($r2, 4)
+        fitted_over_steps  = $n
+    }
+    bound          = [ordered]@{
+        max_peer_records = $PeerRecordBound
+        rows_at_end      = $rowsHeld
+        steps_past_bound = $aboveBound.Count
+        failures         = @($boundFailures)
     }
     against_t040   = [ordered]@{
         slope_bytes_per_hour       = [math]::Round($soakSlopeBytesPerHour, 0)
@@ -334,7 +375,9 @@ $reportPath = Join-Path $ReportDir "peer-rows-$stamp.json"
         "loopback-churn --handshake leaves a peer row and nothing else: no payload moves, no tracker announces, and the handshake is for the info hash the seeder holds.",
         "RSS and the row count are the seeder's own, read out of its progress events. A sampler outside the process measures a different thing and cannot read the row count at all.",
         "The comparison against T-040 is arithmetic on that entry's recorded numbers, not a second soak. What it answers is whether a peer row is the right size to be the slope.",
-        "The settled sample is a minute of no traffic at the end. RSS that falls back was the reporting rather than the rows."
+        "The settled sample is a minute of no traffic at the end. RSS that falls back was the reporting rather than the rows.",
+        "The fit is over the steps below max_peer_records only. Above the bound the row count is constant, so those points measure the intercept again and flatten the slope toward nothing.",
+        "Rows being flat above the bound is T-040 fixed, and one row per handshake below it is the attribution this script was written for. Both are asserted, because a bound that reclaimed a live peer would also make the count flat."
     )
 } | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8NoBOM
 

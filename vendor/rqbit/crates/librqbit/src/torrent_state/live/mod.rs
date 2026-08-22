@@ -265,6 +265,7 @@ impl TorrentStateLive {
                 stats: Default::default(),
                 states: Default::default(),
                 live_outgoing_peers: Default::default(),
+                max_records: peers::MAX_PEER_RECORDS,
             },
             _locked: RwLock::new(TorrentStateLocked {
                 pieces: Some(PieceTracker::new(paused.chunk_tracker)),
@@ -376,6 +377,8 @@ impl TorrentStateLive {
             }
         };
 
+        // Before the entry, not inside it: this takes a shard guard.
+        self.peers.reclaim_records();
         let counters = match self.peers.states.entry(checked_peer.addr) {
             Entry::Occupied(mut occ) => {
                 let peer = occ.get_mut();
@@ -529,7 +532,17 @@ impl TorrentStateLive {
         permit: OwnedSemaphorePermit,
     ) -> crate::Result<()> {
         let state = self;
-        let (rx, tx) = state.peers.mark_peer_connecting(addr)?;
+        let (rx, tx) = match state.peers.mark_peer_connecting(addr) {
+            Ok(pair) => pair,
+            // The row was reclaimed while this handle sat in the dial queue.
+            // Since PeerStates bounds what it retains, a queued handle can
+            // outlive its row, and that is ordinary rather than a bug: there
+            // is nothing to dial and nothing to report. Without this the bound
+            // would log "bug: peer not found" for its own correct behaviour.
+            // See TODO/memory.md, T-040.
+            Err(Error::BugPeerNotFound) => return Ok(()),
+            Err(e) => return Err(e),
+        };
         let counters = state
             .peers
             .with_peer(addr, |p| p.stats.counters.clone())

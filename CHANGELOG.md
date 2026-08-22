@@ -8,6 +8,25 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### The command surface is generated and committed
+
+`man/bit-cli.1`, `man/bit-cli.md` and `man/bit-cli.json` hold every command,
+flag and exit code, generated from the command definition. The JSON is a
+CLIspec 0.3 document, for a caller that is a program. `cargo test -p bit-cli`
+fails when any of the three stops describing the binary. See `docs/man.md`.
+
+### Fixed in the vendored trees
+
+- A torrent past 131,960 pieces could not be served or fetched at all: its
+  bitfield did not fit the fixed per-connection message buffer.
+- One handshake check that failed stopped the accept loop draining, so a peer
+  that closed without handshaking cost the next real peer its handshake, and a
+  seeder went on reporting itself as seeding while serving nobody.
+- Nothing reclaimed a peer row, so a long-lived session grew one per completed
+  handshake forever. Bounded at 1,024 per torrent.
+
+`patches/UPSTREAM.md` carries each with its measurement.
+
 ### Vendored upstreams
 
 The binary is built from these trees, not from crates.io. See

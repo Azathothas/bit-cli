@@ -61,11 +61,13 @@ jobs:
 
       # The TLS and SHA-1 backends assemble their own primitives, and NASM is
       # not on the Windows runner by default.
-      # Pinned: v1.5.2 is the newest release and still runs on node20, so the
-      # runner warns about it. Revisit when upstream ships a node24 build.
+      # Ours, not ilammy/setup-nasm: that action is unmaintained, still runs
+      # on node20 so the runner warns on every job, and verifies nothing about
+      # what it downloads. scripts/setup-nasm.ps1 pins the version and checks
+      # the archive against a SHA-256.
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/setup-nasm@v1.5.2
+        run: pwsh -NoProfile -File scripts/setup-nasm.ps1
 
       - uses: dtolnay/rust-toolchain@v1
         with:

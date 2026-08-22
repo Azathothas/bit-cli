@@ -476,11 +476,21 @@ bit-cli seed <SOURCE>           Seed existing data in the foreground
 bit-cli bench <SUBCOMMAND>      leech | seed | webseed | disk | swarm | probe. Measure and report
 bit-cli config show             Print the resolved configuration with the origin of every value
 bit-cli completions <SHELL>     bash | zsh | fish | powershell | elvish | nushell
-bit-cli man                     Generate a man page
+bit-cli man                     Generate a man page, Markdown, or a CLIspec document
 bit-cli version                 Version, build metadata, features, protocol support
 ```
 
 `bit-cli <SOURCE>` with no subcommand is `bit-cli download <SOURCE>`.
+
+**The whole surface is committed under [`man/`](man/)**, generated from the
+command definition and held current by the test suite: [`bit-cli.1`](man/bit-cli.1)
+for a terminal, [`bit-cli.md`](man/bit-cli.md) for reading, and
+[`bit-cli.json`](man/bit-cli.json) for a program, as a
+[CLIspec](https://github.com/rvben/clispec) document carrying every flag, the
+values it accepts, its default, and every exit code with whether a retry could
+succeed. If you are scripting this tool, or you are an agent driving it, read
+that file rather than guessing a flag. [`docs/man.md`](docs/man.md) says how it
+is kept honest.
 
 Sources accepted: a path to a `.torrent`, an HTTP(S) URL to one, a magnet URI,
 a bare info hash, a local Metalink (`.meta4` or `.metalink`), and `-` for

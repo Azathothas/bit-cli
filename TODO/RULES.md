@@ -377,6 +377,27 @@ pwsh -NoProfile -File scripts/vendor-status.ps1
 
 ### The rest
 
+### The manuals, and not guessing a flag
+
+**Before typing a `bit-cli` flag, read `man/bit-cli.json`.** Three generated
+manuals live in `man/`, all committed, all held current by
+`cargo test -p bit-cli --test man_is_current`: `bit-cli.1` for a terminal,
+`bit-cli.md` for prose, and `bit-cli.json`, a CLIspec 0.3 document, for a
+program. [`docs/man.md`](../docs/man.md) says what each carries.
+
+This rule exists because it was watched costing time. An agent that wants a
+flag name greps the source, or reads `--help` one subcommand at a time, or
+guesses; a guess costs a run that exits 2, or one that succeeds having done
+something else. The JSON answers "what is the flag", "what values does it
+take", "what does exit code 16 mean" and "is this safe to run twice" in one
+read, and it cannot be out of date.
+
+```bash
+pwsh -NoProfile -File scripts/check-man.ps1 -Fix
+```
+
+That regenerates all three after a CLI change. The gates fail until it is run.
+
 - **`codegraph`.** This repository has a `.codegraph/` index. Reach for it
   **before** `grep`, `find`, or opening a file, when the question is "how does
   X work", "where is X", or "what am I about to change". One call returns the
@@ -416,11 +437,24 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
 
 ### Process
 
-- **No deferral.** Nothing closes as "won't fix", "upstream problem", or "out
-  of scope". Upstream has no interest in this work, so there is nowhere to
-  defer to. A blocked item stays open in `TODO/` with the blocker named and
-  what would unblock it. [T-016](disk-io.md), [T-020](peers.md) and
-  [T-102](bep-coverage.md) are the worked examples.
+- **No deferral, and the bar is higher than it reads.** Nothing closes as
+  "won't fix", "upstream problem", or "out of scope". Upstream has no interest
+  in this work, so there is nowhere to defer to. A blocked item stays open in
+  `TODO/` with the blocker named and what would unblock it.
+
+  **"It is in somebody else's code" is not a reason, it is the reason the
+  trees are vendored.** `librqbit` is vendored so that anything in it can be
+  fixed here, and the goal is that `bit-cli` is the most complete BitTorrent
+  client it can be. The only thing standing between this repository and its own
+  implementation is the size of `TODO/`, so a defect that is reachable is one
+  to fix rather than one to describe. [T-020](peers.md) and [T-194](peers.md)
+  are the worked examples: both were upstream's, both were closed here, and
+  both took one afternoon once somebody stopped calling them upstream's
+  problem.
+
+  Leaving a residual bound is allowed **only** when it is measured, named with
+  a file and a line, and carried as its own open entry. [T-195](peers.md) is
+  that shape and nothing weaker is.
 - **Claims need evidence.** A comparative claim without a committed benchmark
   does not ship. A flag that does not move a number does not ship.
 - **An entry whose premise the measurement disproves gets the correction

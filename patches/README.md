@@ -123,6 +123,34 @@ one side only is taken from that side. A file changed on both is merged by
 `git merge-file`, the same three-way merge git itself runs, and a conflict is
 left in place with markers.
 
+### Upstream is not automatically right
+
+**Reconcile by reading, never by preferring.** A new release is a proposal, not
+an authority. Before taking any hunk that touches something this repository has
+already changed, answer three questions and write the answer into
+`patches/UPSTREAM.md`:
+
+1. **Does upstream's version actually fix the thing?** A change that moves a
+   defect somewhere else, or that fixes one shape of it, is not a fix. Check it
+   against the entry's own acceptance, which is a command that already exists.
+2. **Is it complete, and does it regress anything?** A feature that lands half
+   done is worse than a seam we already patched around, because the next
+   reconciliation has to carry both.
+3. **Have we already done it better?** If our version is more correct, faster,
+   or bounded where theirs is not, **keep ours** and record why in the
+   patch's section. The patch does not go away because upstream touched the
+   same lines.
+
+Take upstream's when it properly fixes something or completes a feature with no
+regression. Otherwise keep ours, and say which in the section, so the next
+reconciliation does not re-litigate it from scratch. A merge that took
+upstream's hunk because it was upstream's is the failure this paragraph exists
+to prevent.
+
+The one case that is not a judgement: a patch upstream **accepted** should be
+deleted here at the release that carries it, because then it is the same change
+arriving from the other direction rather than a competing one.
+
 **The base is not advanced while anything conflicts.** Resolve the markers, run
 the gates, then run the same command again to record the new base. That is
 deliberate: a recorded base that does not describe the tree makes the next
