@@ -1001,10 +1001,17 @@ impl From<crate::webseed::fetch::ReadFailure> for BlockFailure {
 
 impl From<FetchError> for BlockFailure {
     fn from(err: FetchError) -> Self {
-        let recoverable = err.is_retryable();
+        // A stall is recoverable here even though it is not retryable inside
+        // the request. The two questions are different: the retry ladder asks
+        // whether asking this mirror again in half a second could work, and
+        // this asks whether the source is finished. A stall goes down the
+        // `Stalled` path so the bridge consults the error budget, which the
+        // fetcher has already tripped. See `TODO/webseed.md`, T-007.
+        let recoverable = err.is_retryable() || err.is_stall();
         let reason = match err {
             FetchError::Transient { reason, .. }
             | FetchError::Permanent { reason, .. }
+            | FetchError::Stalled { reason, .. }
             | FetchError::HashMismatch { reason } => reason,
         };
         Self {

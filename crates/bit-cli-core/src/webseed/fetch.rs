@@ -69,11 +69,20 @@ impl Verify {
 /// Why a fetch failed, and whether it is worth trying again.
 #[derive(Debug, Clone)]
 pub enum FetchError {
-    /// Worth retrying: timeouts, connection errors, 5xx, short bodies.
+    /// Worth retrying: connection errors, 5xx, short bodies.
     Transient { reason: String, status: Option<u16> },
     /// Not worth retrying: the URL is wrong, the credentials are wrong, or the
     /// server does not do ranges.
     Permanent { reason: String, status: Option<u16> },
+    /// The request ran out of time with the mirror still holding the
+    /// connection: a connect timeout, or a body that stopped arriving.
+    ///
+    /// Separate from [`Self::Transient`] because a mirror that answered
+    /// **wrongly** and one that did not answer **at all** want opposite
+    /// handling. A 503 is worth another request; a hung backend will hang the
+    /// retry too, and every attempt spent on it is `--web-seed-timeout` the
+    /// other sources were not asked. See `TODO/webseed.md`, T-007.
+    Stalled { reason: String, status: Option<u16> },
     /// The bytes arrived but did not match the torrent's piece hash.
     HashMismatch { reason: String },
 }
@@ -96,14 +105,27 @@ impl FetchError {
     /// The HTTP status that produced this, when there was one.
     pub fn status(&self) -> Option<u16> {
         match self {
-            Self::Transient { status, .. } | Self::Permanent { status, .. } => *status,
+            Self::Transient { status, .. }
+            | Self::Permanent { status, .. }
+            | Self::Stalled { status, .. } => *status,
             Self::HashMismatch { .. } => None,
         }
     }
 
     /// Whether a retry could succeed.
+    ///
+    /// A stall is not retryable **within the request**: the mirror is holding
+    /// the connection and will hold the next one, so the retry ladder buys
+    /// another `--web-seed-timeout` of nothing. It is still recoverable from
+    /// the bridge's point of view, which is a separate question and is
+    /// [`Self::is_stall`]'s.
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::Transient { .. })
+    }
+
+    /// Whether the mirror ran out of time rather than answering wrongly.
+    pub fn is_stall(&self) -> bool {
+        matches!(self, Self::Stalled { .. })
     }
 
     /// A stable name for the failure class, for the error counters a `bench`
@@ -129,6 +151,10 @@ impl FetchError {
                 status: Some(_), ..
             } => "server_error",
             Self::Transient { .. } => "transport",
+            // One class, whether it was the connect or the body that ran out
+            // of time. What a reader does about either is the same: raise
+            // `--web-seed-timeout` or stop using the mirror.
+            Self::Stalled { .. } => "stalled",
         }
     }
 }
@@ -159,6 +185,7 @@ impl std::fmt::Display for FetchError {
         match self {
             Self::Transient { reason, .. }
             | Self::Permanent { reason, .. }
+            | Self::Stalled { reason, .. }
             | Self::HashMismatch { reason } => f.write_str(reason),
         }
     }
@@ -169,7 +196,9 @@ impl From<FetchError> for Error {
         let code = match &err {
             FetchError::HashMismatch { .. } => crate::exit::ExitCode::HashMismatch,
             FetchError::Permanent { .. } => crate::exit::ExitCode::NoUsableSources,
-            FetchError::Transient { .. } => crate::exit::ExitCode::Network,
+            FetchError::Transient { .. } | FetchError::Stalled { .. } => {
+                crate::exit::ExitCode::Network
+            }
         };
         let mut error = Error::new(code, err.to_string()).with("class", err.class());
         if let Some(status) = err.status() {
@@ -802,6 +831,21 @@ impl Fetcher {
                     self.stats.record_success(data.len() as u64);
                     return Ok(data);
                 }
+                // A stall spends the whole budget at once and stops the
+                // ladder. The mirror is holding the connection: the retry
+                // will be held the same way, and so will the request after
+                // it, so the four more attempts and the four reconnect
+                // backoffs between them are `--web-seed-timeout` each of
+                // waiting for a source that has already answered the
+                // question. Measured at the defaults, that is the difference
+                // between 133 seconds and ten. `--web-seed-cooldown` still
+                // decides whether it may come back, because tripping the
+                // budget is what a cooldown hangs off. See `TODO/webseed.md`,
+                // T-007.
+                Err(err) if err.is_stall() => {
+                    self.stats.record_error(1, limits.cooldown());
+                    return Err(err);
+                }
                 Err(err) if err.is_retryable() => last = Some(err),
                 // A permanent failure does not spend the error budget.
                 //
@@ -880,10 +924,7 @@ impl Fetcher {
         let body = match response.bytes().await {
             Ok(body) => body,
             Err(e) => {
-                let err = FetchError::Transient {
-                    reason: format!("{url}: body was cut short: {e}"),
-                    status: Some(status.as_u16()),
-                };
+                let err = body_failure(url, status.as_u16(), &e);
                 self.record(
                     started_at,
                     url,
@@ -1127,6 +1168,21 @@ impl Fetcher {
                     self.stats.record_success(data.len() as u64);
                     return Ok(data);
                 }
+                // A stall spends the whole budget at once and stops the
+                // ladder. The mirror is holding the connection: the retry
+                // will be held the same way, and so will the request after
+                // it, so the four more attempts and the four reconnect
+                // backoffs between them are `--web-seed-timeout` each of
+                // waiting for a source that has already answered the
+                // question. Measured at the defaults, that is the difference
+                // between 133 seconds and ten. `--web-seed-cooldown` still
+                // decides whether it may come back, because tripping the
+                // budget is what a cooldown hangs off. See `TODO/webseed.md`,
+                // T-007.
+                Err(err) if err.is_stall() => {
+                    self.stats.record_error(1, limits.cooldown());
+                    return Err(err);
+                }
                 Err(err) if err.is_retryable() => last = Some(err),
                 // A permanent failure does not spend the error budget.
                 //
@@ -1241,10 +1297,7 @@ impl Fetcher {
         let body = match response.bytes().await {
             Ok(body) => body,
             Err(e) => {
-                let err = FetchError::Transient {
-                    reason: format!("{url}: body was cut short: {e}"),
-                    status: Some(status.as_u16()),
-                };
+                let err = body_failure(url, status.as_u16(), &e);
                 self.record(
                     started_at,
                     url,
@@ -1538,15 +1591,44 @@ pub(crate) fn transport_reason(url: &str, err: &reqwest::Error) -> String {
 
 /// Turn a transport failure into a classified error.
 ///
-/// Two shapes are permanent and the rest are worth another attempt. A redirect
-/// loop and a request this client could not build will not come out
-/// differently on a retry; a timeout, a refused connection, and a reset one
-/// all might.
+/// Three shapes. A redirect loop and a request this client could not build
+/// will not come out differently on a retry, so they are permanent. A request
+/// that ran out of time is a **stall**: the mirror is holding the connection
+/// and the retry will be held the same way, so retrying it buys another
+/// `--web-seed-timeout` of nothing. Everything else, a refused connection or a
+/// reset one, is worth another attempt.
 fn classify_transport(url: &str, err: &reqwest::Error) -> FetchError {
     let reason = transport_reason(url, err);
-    match err.is_redirect() || err.is_builder() {
-        true => FetchError::permanent(reason),
+    if err.is_redirect() || err.is_builder() {
+        return FetchError::permanent(reason);
+    }
+    match err.is_timeout() {
+        true => FetchError::Stalled {
+            reason,
+            status: None,
+        },
         false => FetchError::transient(reason),
+    }
+}
+
+/// Whether a body that stopped arriving stopped because time ran out.
+///
+/// `reqwest` reports a request timeout that fires part way through a body as a
+/// decode error on the body stream, so the class alone cannot tell a mirror
+/// that stalled from one that sent a short body and closed. `is_timeout` on
+/// the error is what separates them, and it is the whole basis of T-007's
+/// stall detection.
+fn body_failure(url: &str, status: u16, err: &reqwest::Error) -> FetchError {
+    let reason = format!("{url}: body was cut short: {err}");
+    match err.is_timeout() {
+        true => FetchError::Stalled {
+            reason: format!("{url}: the body stopped arriving, raise --web-seed-timeout"),
+            status: Some(status),
+        },
+        false => FetchError::Transient {
+            reason,
+            status: Some(status),
+        },
     }
 }
 
@@ -1936,8 +2018,21 @@ mod tests {
             !reason.contains("connect timed out"),
             "a request timeout must not be reported as a connect timeout: {reason}"
         );
-        // Transient: the same request might work on the next attempt.
-        assert!(classify_transport(&url, &err).is_retryable(), "{reason}");
+        // A stall, not a transient failure, and the distinction is T-007's.
+        // This used to assert `is_retryable`, on the reading that the same
+        // request might work on the next attempt. It will not: the mirror has
+        // the connection open and is not writing to it, and it will hold the
+        // retry the same way. Every attempt spent here is one
+        // `--web-seed-timeout` the other sources were not asked, and at the
+        // defaults the ladder and the reconnect backoff above it turned one
+        // hung mirror into 133 seconds.
+        let classified = classify_transport(&url, &err);
+        assert!(classified.is_stall(), "{reason}");
+        assert!(
+            !classified.is_retryable(),
+            "a stall must not spend the retry ladder: {reason}"
+        );
+        assert_eq!(classified.class(), "stalled");
         held.abort();
 
         // A port nothing listens on is refused rather than timed out, and the
@@ -2210,8 +2305,109 @@ mod tests {
         match err {
             FetchError::Transient { reason, .. }
             | FetchError::Permanent { reason, .. }
+            | FetchError::Stalled { reason, .. }
             | FetchError::HashMismatch { reason } => reason.clone(),
         }
+    }
+
+    /// Headers promising a kilobyte, and less than a kilobyte behind them.
+    ///
+    /// The line endings are escapes rather than a multi-line literal, because
+    /// a control byte written as itself is invisible in a diff and makes the
+    /// file harder to search. RULES.md section 5 has what that has already
+    /// cost twice.
+    const SHORT_RESPONSE: &[u8] =
+        b"HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\nnot the whole body";
+
+    /// A body that stops arriving is a stall, and it looks exactly like a
+    /// short body until `is_timeout` is asked.
+    ///
+    /// This is the case the whole of T-007 turns on. `reqwest` reports a
+    /// request timeout that fires part way through a body as a decode error on
+    /// the body stream, so the failure class is the same one a mirror that
+    /// closed early produces: `Transient`, status 200, "body was cut short".
+    /// Told apart by the class alone, a hung backend spends the retry ladder
+    /// and the error budget and the reconnect backoff between them, which
+    /// measured 133 seconds at the defaults.
+    #[tokio::test]
+    async fn a_body_that_stops_arriving_is_a_stall_and_not_a_short_body() {
+        use std::time::Duration;
+        use tokio::io::AsyncWriteExt;
+
+        // Headers, a little body, and then silence with the connection held.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = tokio::spawn(async move {
+            let mut sockets = Vec::new();
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let _ = socket.write_all(SHORT_RESPONSE).await;
+                let _ = socket.flush().await;
+                sockets.push(socket);
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(300))
+            .build()
+            .unwrap();
+        let url = format!("http://127.0.0.1:{port}/x");
+        let response = client.get(&url).send().await.expect("headers arrive");
+        let status = response.status().as_u16();
+        let err = response.bytes().await.expect_err("the body never finishes");
+        held.abort();
+
+        assert!(err.is_timeout(), "the body read ran out of time: {err}");
+        let classified = body_failure(&url, status, &err);
+        assert!(classified.is_stall(), "{classified}");
+        assert!(!classified.is_retryable(), "{classified}");
+        assert_eq!(classified.class(), "stalled");
+        assert_eq!(classified.status(), Some(200));
+        assert!(
+            classified.to_string().contains("--web-seed-timeout"),
+            "the message names the flag that bounds it: {classified}"
+        );
+    }
+
+    /// A mirror that closed early is still worth another request.
+    ///
+    /// The other half of the pair above: same class, same status, and the
+    /// opposite handling, because this one answered wrongly rather than not
+    /// answering.
+    #[tokio::test]
+    async fn a_body_that_ends_early_is_still_transient() {
+        use std::time::Duration;
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // The write half is closed so the client sees the body end early, and
+        // the socket is **kept** so the read half stays open. Dropping it here
+        // resets the connection before the client has read the headers, and
+        // then the failure is an aborted request rather than the short body
+        // this is about.
+        let held = tokio::spawn(async move {
+            let mut sockets = Vec::new();
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let _ = socket.write_all(SHORT_RESPONSE).await;
+                let _ = socket.shutdown().await;
+                sockets.push(socket);
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        let url = format!("http://127.0.0.1:{port}/x");
+        let response = client.get(&url).send().await.expect("headers arrive");
+        let status = response.status().as_u16();
+        let err = response.bytes().await.expect_err("the body is short");
+        held.abort();
+
+        assert!(!err.is_timeout(), "it closed rather than hanging: {err}");
+        let classified = body_failure(&url, status, &err);
+        assert!(!classified.is_stall(), "{classified}");
+        assert!(classified.is_retryable(), "{classified}");
     }
 
     #[test]

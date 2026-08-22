@@ -301,7 +301,7 @@ Source:      the [T-001](#t-001-measure-the-loopback-bridge-against-a-raw-curl-c
 Category:    webseed
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**
 
 Problem:     A source that sends part of a response and then stops without
              closing takes 24,247 ms to fail the run, with
@@ -472,6 +472,98 @@ Reproduce, and it needs no script beyond the one command:
 target/release/examples/loopback-fileserver.exe --root <dir> --stall-after 65536
 bit-cli download <torrent> --web-seed <url> --web-seed-only --web-seed-timeout 5s --json
 ```
+
+**Built 2026-08-22, and both halves were needed exactly as predicted above.**
+
+A stall is now its own failure class. `FetchError::Stalled` is what a request
+that ran out of time produces, separate from `Transient`, and the two are told
+apart by `reqwest::Error::is_timeout` rather than by anything in the text or
+the status. That distinction is the whole fix, because a stalled body arrives
+as `Transient { status: Some(200) }` reading `body was cut short`, which is
+byte for byte what a mirror that closed early produces.
+
+Three things follow from the class, and none of them needed a new flag.
+
+- **A stall does not spend the retry ladder.** `is_retryable` is false for it.
+  The mirror is holding the connection open and will hold the retry the same
+  way, so each attempt was one `--web-seed-timeout` of nothing.
+- **A stall spends the whole error budget at once.** `fetch_with_retry` calls
+  `record_error(1, cooldown)` on it, so the source is retired on the first
+  request that ran out of time instead of the fifth. That is what removes the
+  reconnect backoff entirely: there is no second request for the bridge to
+  back off before.
+- **`--web-seed-cooldown` still decides whether it comes back.** Tripping the
+  budget is what a cooldown hangs off, so a caller who set one still gets it.
+  A stall is not made permanent, which would have been the smaller change and
+  the wrong one.
+
+**Measured, in the acceptance's own venue.** The `stall` case in
+`scripts/bench-webseed.ps1` is the one the Problem's 24,247 ms came from, and
+it is the same case in the same file:
+
+| record | stall case |
+| --- | --- |
+| `bench/webseed-20260820T001828470Z.json` | 24,247 ms |
+| `bench/webseed-20260822T090342595Z.json` | **6,108 ms** |
+
+The Acceptance is "under three times `--web-seed-timeout`", the case runs at
+`--web-seed-timeout 5s`, and 6,108 ms is under 15,000. It exits 1 either way,
+which is right: the source was unusable and `--web-seed-only` left nothing else
+to ask.
+
+**And in the harsher reproduction, which is the one the model above was fitted
+to.** `--stall-after 65536` with no `--fail-after`, so every request stalls
+including the style probe:
+
+| | before | after |
+| --- | --- | --- |
+| wall clock at the defaults | 133.28 s | **10.11 s** |
+| requests to the mirror | 21 | **2** |
+
+Ten seconds is the floor this shape can reach without touching the probe:
+`min(--web-seed-timeout, 5s)` for the style probe plus one `--web-seed-timeout`
+for the request that stalls. The two remaining requests are the probe and that
+request.
+
+**The trade-off, stated rather than left to be discovered.** One request that
+runs out of time now retires a source, where five did before. That is
+deliberate and it is what the entry asked for, but it is a real change in
+behaviour for a mirror that is merely slow. Three things bound it.
+`--web-seed-timeout` is the caller's own statement of how long a request may
+take, so a request that exceeds it is not slow, it is not answering, and
+raising the flag is the answer for a mirror that needs longer.
+`--web-seed-cooldown` brings a retired source back. And a run with more than
+one source is the case this entry exists for: retiring the stalled one in ten
+seconds rather than in 133 is 123 seconds the others are asked sooner, which is
+the Relevance line word for word.
+
+**What is not built, and it is deliberate.** The corpus rule above is
+activity-based: no traffic in either direction for fifteen seconds **while
+requests are in flight**, with only ingested blocks refreshing the clock. This
+is timeout-based, which is coarser: a mirror dribbling bytes slowly enough to
+never finish a block but fast enough to keep the connection from timing out is
+still seen as slow rather than stalled. `--web-seed-timeout` catches it in the
+end, because a request that never completes eventually exceeds it, so the
+failure mode is bounded rather than open. An activity clock would catch it
+sooner and is worth having if a real mirror ever behaves that way; nothing
+here has.
+
+Acceptance, run 2026-08-22:
+
+```powershell
+pwsh -NoProfile -File scripts/bench-webseed.ps1 -PayloadSize 16MiB -Runs 1
+```
+
+```
+failure case stall: ended after 6108 ms with exit 1
+failure case 416: ended after 1067 ms with exit 1
+```
+
+Two unit tests hold the distinction the fix rests on, and they are a pair:
+`a_body_that_stops_arriving_is_a_stall_and_not_a_short_body` and
+`a_body_that_ends_early_is_still_transient` stand up the same headers and the
+same truncated body over a socket, and differ only in whether the server keeps
+the connection or closes it. Same class, same status, opposite handling.
 
 ### T-008 A duplicate block request is fetched twice
 

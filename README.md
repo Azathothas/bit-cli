@@ -374,6 +374,15 @@ mid-download is not lost. At the defaults that is four attempts per request and
 five requests: measured against a mirror answering 503 forever, the source is
 retired and the run exits 1 after 33.4 seconds.
 
+**A mirror that stops answering is not a mirror answering badly, and the two
+are handled differently.** A request that runs out of time is a stall: the
+mirror is holding the connection open and will hold the retry the same way, so
+a stall spends neither the retry ladder nor four more requests. It retires the
+source at once. Against a backend that sends 64 KiB and then hangs, that is
+**10.1 seconds and two requests** where spending the whole budget was 133
+seconds and 21. `--web-seed-timeout` is what says how long is too long, and
+`--web-seed-cooldown` still brings the source back.
+
 ### Giving a mirror another chance
 
 A source that spends that budget is out for the rest of the run.

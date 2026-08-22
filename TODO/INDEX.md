@@ -80,7 +80,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-004](webseed.md) | P2 | webseed | **done** | BEP 17 style is not auto-detected, only declared |
 | [T-005](webseed.md) | P2 | webseed | **done** | A source restricted mid-run cannot be re-scoped |
 | [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
-| [T-007](webseed.md) | P2 | webseed | open | A stalling source takes 24 seconds to give up |
+| [T-007](webseed.md) | P2 | webseed | done | A stalling source takes 24 seconds to give up |
 | [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
 | [T-179](webseed.md) | P2 | webseed | **done** | A bad piece cannot be attributed to the source that filled it |
 | [T-009](webseed.md) | P1 | webseed | **done** | A source cannot be attached over more than one connection |
@@ -225,7 +225,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 147 items: 137 to work through, and 10 deferred to Phase C.
-47 open, 6 partial, 2 blocked, 82 done.
+46 open, 6 partial, 2 blocked, 83 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -480,10 +480,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 1 | 0 | 9 | 11 |
 | P1 | 1 | 2 | 0 | 48 | 51 |
-| P2 | 23 | 3 | 2 | 23 | 51 |
+| P2 | 22 | 3 | 2 | 24 | 51 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **47** | **6** | **2** | **82** | **147** |
+| **All** | **46** | **6** | **2** | **83** | **147** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4
