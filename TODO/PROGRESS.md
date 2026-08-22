@@ -22,8 +22,9 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 
 ## State
 
-- **Last session:** 2026-08-22, started 01:11Z, unattended. Feature work plus
-  a round of tooling the operator asked for mid-session.
+- **Last session:** 2026-08-22, 01:11Z to 03:55Z. Started unattended and the
+  operator interjected partway through, so it is feature work followed by a
+  round of tooling and a doc restructure they asked for.
 - **Tests:** 1,052 passing, 0 failing. The baseline at the start was 1,028.
 - **Gates:** clean. One command now:
 
