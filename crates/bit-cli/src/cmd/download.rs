@@ -108,6 +108,14 @@ pub struct TorrentReport {
     pub code: ExitCode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Which phase gave up, when the error named one.
+    ///
+    /// The error carries a context map and this report carried none of it, so
+    /// a run that stopped resolving a magnet and a run that stopped fetching
+    /// its pieces both said `timeout` and nothing else. A reader then has to
+    /// guess which flag to reach for. See `TODO/cli-surface.md`, T-196.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
 }
 
 /// What a Metalink said, and whether the bytes on disk agreed with it.
@@ -1122,6 +1130,11 @@ async fn one(
                 attribution: None,
                 code: error.code(),
                 error: Some(error.to_string()),
+                phase: error
+                    .context()
+                    .get("phase")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
             }
         }
     }
@@ -1185,13 +1198,38 @@ async fn one_inner(
         }
     }
     let only_files = add.only_files.clone();
-    let handle = match torrent_bytes {
-        // A Metalink's torrent was fetched while the plans were being built,
-        // so the session gets those exact bytes rather than the URL again. A
-        // magnet's were built when its metadata resolved, for the same reason.
-        Some(bytes) => engine.add_bytes(&plan.source, bytes, &add).await?,
-        None => engine.add(&plan.source, &add).await?,
-    };
+    // Bounded by `--init-timeout`, the same budget and the same error as the
+    // selection branch fifty lines above. `engine.add` resolves a magnet's
+    // metadata itself and does it with no bound, and an ordinary invocation
+    // with no file selection takes this branch, so this was the one that
+    // hung: a magnet against a peer that could not serve it ran for ten
+    // minutes and was killed by the harness rather than by `bit-cli`. The
+    // `wait_until_initialized_within` below would have applied the bound and
+    // is never reached. See `TODO/cli-surface.md`, T-196.
+    let added = tokio::time::timeout(options.init_timeout, async {
+        match torrent_bytes {
+            // A Metalink's torrent was fetched while the plans were being
+            // built, so the session gets those exact bytes rather than the URL
+            // again. A magnet's were built when its metadata resolved, for the
+            // same reason.
+            Some(bytes) => engine.add_bytes(&plan.source, bytes, &add).await,
+            None => engine.add(&plan.source, &add).await,
+        }
+    })
+    .await
+    .map_err(|_| {
+        Error::timeout(format!(
+            "{}: the metadata did not resolve in {}ms",
+            plan.source,
+            options.init_timeout.as_millis()
+        ))
+        .with("phase", "resolving_metadata")
+        .with(
+            "waited_ms",
+            options.init_timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+        )
+    })?;
+    let handle = added?;
     let snapshot = engine.snapshot(&handle);
     let _ = tx
         .send(Msg::Event(
@@ -2218,6 +2256,9 @@ fn finish(
         metalink: None,
         attribution: None,
         code: stopped.code(),
+        // A run that reached here got past resolving and past initialising,
+        // so there is no phase to name: the code and `stopped` say it.
+        phase: None,
         error: snapshot.error.clone(),
     }
 }

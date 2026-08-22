@@ -346,6 +346,7 @@ From `bit-cli download <TORRENT> --web-seed <URL> --json`.
 | `torrents[].partial[].on_disk.human` | string |
 | `torrents[].partial[].path` | string |
 | `torrents[].peers_seen` | integer |
+| `torrents[].phase` | string |
 | `torrents[].shared[].bytes_proven.bytes` | integer |
 | `torrents[].shared[].bytes_proven.human` | string |
 | `torrents[].shared[].from_index` | integer |

@@ -2271,7 +2271,7 @@ Source:      cost a measurement while proving [T-194](peers.md), 2026-08-22
 Category:    cli-surface
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-22T18:33Z
 
 Problem:     `bit-cli download <magnet>` bounds metadata resolution by
              `--init-timeout` only when a file selection forces it to resolve
@@ -2299,6 +2299,50 @@ no bound. The defect it was hiding was [T-194](peers.md), and the ten minutes
 bought nothing: the seeder had already logged the reason in the first second.
 
 Both halves of the inconsistency are in one function, about fifty lines apart.
+
+**Closed 2026-08-22.** The add is wrapped in the same `--init-timeout` and
+builds the same error, with `phase: resolving_metadata`, which is what the
+Approach said to do.
+
+**The per-torrent report carries the phase now, and it did not.** The error has
+a context map and `TorrentReport` copied none of it, so a run that gave up
+resolving a magnet and a run that gave up fetching its pieces both said
+`timeout` and nothing else. `torrents[].phase` is a new optional field in
+`docs/schema.md`; a run that got past initialising leaves it out.
+
+**Measured**, `scripts/check-init-timeout.ps1`, a magnet whose one peer
+completes the handshake and then says nothing, DHT, LSD and trackers off:
+
+| case | before | after |
+| --- | --- | --- |
+| `selection`, which was already bounded | 4.05 s, `timeout` | 4.05 s, `timeout`, `resolving_metadata` |
+| `no_selection`, an ordinary invocation | **10.04 s**, `source_resolution` | **4.04 s**, `timeout`, `resolving_metadata` |
+
+```bash
+pwsh -NoProfile -File scripts/check-init-timeout.ps1
+```
+
+`selection` is the control: it forces the branch that already had the bound, so
+a failure in the other one cannot be blamed on the fixture.
+
+**Where the ten seconds comes from, and why the fixture cannot show ten
+minutes.** Before the fix the branch was not unbounded in this fixture, it was
+bounded by somebody else's timeout: with one address and one peer, `librqbit`
+gives up with "input address stream exhausted" once that peer's read/write
+timeout expires. Three fixtures were tried and the first two are worth
+recording, because each looks like it measures this and does not:
+
+- **A closed port.** Two seconds, same exhaustion. The connection fails at once.
+- **Accept and never write.** Ten seconds, same exhaustion.
+- **Handshake and then silence**, with BEP 10's reserved bit set. Ten seconds,
+  same exhaustion. Keep-alives on top of it moved the number by nothing.
+
+What made the original run last ten minutes was a tracker and a DHT still
+handing out addresses, so nothing ever exhausted. A fixture cannot reach that
+without the network. What it does show is the thing the Acceptance asks for: a
+4 second `--init-timeout` was ignored and is now the bound, and the phase is
+named. `-Slack` defaults to 5 so a run that falls back to the ten second path
+fails on the clock as well as on the code.
 
 ### T-197 Running upstream's tests filled the patch series with 14,964 patches
 

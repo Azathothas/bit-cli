@@ -204,7 +204,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-185](cli-surface.md) | P1 | cli | **done** | --exclude-file on its own selects nothing and downloads everything |
 | [T-186](cli-surface.md) | P3 | cli | **done** | seed --data and verify --data resolve the payload differently |
 | [T-193](cli-surface.md) | P2 | cli | done | A citation written short was never checked at all |
-| [T-196](cli-surface.md) | P2 | cli | open | A magnet that never resolves hangs download with no diagnostic |
+| [T-196](cli-surface.md) | P2 | cli | done | A magnet that never resolves hangs download with no diagnostic |
 | [T-197](cli-surface.md) | P1 | cli | **done** | Running upstream's tests filled the patch series with 14,964 patches |
 | [T-198](cli-surface.md) | P1 | cli | **done** | An agent that wants a flag name greps for it |
 | [T-199](cli-surface.md) | P2 | cli | **done** | The CI supply chain was unwatched and one action was abandoned |
@@ -237,7 +237,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 159 items: 149 to work through, and 10 deferred to Phase C.
-48 open, 4 partial, 2 blocked, 95 done.
+47 open, 4 partial, 2 blocked, 96 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -492,10 +492,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 1 | 0 | 11 | 12 |
 | P1 | 1 | 0 | 0 | 53 | 54 |
-| P2 | 25 | 3 | 2 | 29 | 59 |
+| P2 | 24 | 3 | 2 | 30 | 59 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **48** | **4** | **2** | **95** | **159** |
+| **All** | **47** | **4** | **2** | **96** | **159** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

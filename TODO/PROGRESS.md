@@ -67,8 +67,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
   action, so the replacement is proved on a real runner rather than only here.
   GitHub picked up `.github/dependabot.yml` on the same push and started a
   Dependabot run against it.
-- **Entries:** 159 items. 48 open, 4 partial, 2 blocked, 95 done, 10 deferred to
-  Phase C. 95 of 149 workable done, 54 left.
+- **Entries:** 159 items. 47 open, 4 partial, 2 blocked, 96 done, 10 deferred to
+  Phase C. 96 of 149 workable done, 53 left.
 - **Tree:** 86 Rust files, 50,406 lines of code, 11,741 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **12 patches**
