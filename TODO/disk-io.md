@@ -779,14 +779,14 @@ three above and worth understanding before overriding it: a write-combining
 buffer reorders nothing, but it does defer, and constraint 1 above is exactly
 the reason that tree kept writes un-coalesced.
 
-`crates/rt-storage/src/handle_cache.rs` in the same tree is a path-and-access
+`TorrentNG/crates/rt-storage/src/handle_cache.rs` is a path-and-access
 keyed LRU of open descriptors bounded by a fraction of `RLIMIT_NOFILE`, which
 is what [T-011](#t-011-no-file-handle-pool-so-long-runs-exhaust-descriptors)
 built here as `--max-open-files`. Its doc names the property that makes a
 shared descriptor safe and that this entry depends on: **no per-operation
 `seek`, so concurrent readers and writers do not race a file cursor.**
 
-`crates/rt-storage/src/io_class.rs:7` is the piece this entry does not have and
+`TorrentNG/crates/rt-storage/src/io_class.rs:7` is the piece this entry does not have and
 probably wants: an `IoClass` ordering of
 `Metadata < Recheck < MoveCopy < PeerWrite < PeerRead < Foreground` with
 **per-class concurrency caps that differ for spinning disks and SSDs** (`:24`
@@ -1173,7 +1173,7 @@ Source:      found while measuring [T-185](cli-surface.md), 2026-08-22
 Category:    disk-io
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-22T03:20Z
 
 Problem:     A file the selection did not choose lands on disk as a zero byte
              file when the selection starts after it and no piece straddles the
@@ -1246,3 +1246,33 @@ The hash check is not the cause. `--hash-check-only --select-file 1` against an
 empty directory creates `shared.bin` at 4096 and does **not** create
 `extra-a.txt`, so the file appears when the first chunk is written and not
 before.
+
+**Closed 2026-08-22T03:20Z**, and it is the two lines the approach named.
+`SafeStorage::pwrite_all_vectored` and `pwrite_all` answer a write of no bytes
+before they open anything. That is correct independently of the upstream
+off-by-one, which is why it goes here rather than being carried until upstream
+moves: a write of no bytes changes no file, so opening one for it is work with
+no result and, in this storage, a side effect.
+
+Same command, after:
+
+```
+$ bit-cli --json download donor.torrent --dir out --web-seed-only     --web-seed http://127.0.0.1:52346/ --web-seed-mode prefix     --no-torrent-web-seed --no-tracker --no-dht --no-lsd --port 0     --select-file 1 --stop-after 20s
+stopped= completed downloaded= 4096 partial= None
+files on disk: donor/shared.bin
+```
+
+`partial` is still `null`, which is what says this was never
+[T-184](#t-184-a-boundary-piece-under---select-file-has-no-decided-behaviour):
+nothing spilled, and the file was created by a write with nothing in it.
+
+Two tests. `storage::tests::a_write_of_no_bytes_creates_no_file` is the unit,
+and it checks the plain and the vectored form and then that a write with bytes
+in it still creates and still lands.
+`a_selection_that_starts_after_file_zero_leaves_it_off_the_disk` is the
+end-to-end one and was run against the old behaviour first, where it fails with
+`["donor/extra-a.txt", "donor/shared.bin"]`.
+
+[T-013](#t-013-selecting-a-subset-of-files-still-creates-all-of-them)'s closing
+claim is true again, and its correction note stays where it is: a doc that was
+wrong for a session is part of the record.

@@ -779,6 +779,12 @@ impl TorrentStorage for SafeStorage {
     }
 
     fn pwrite_all(&self, file_id: usize, offset: u64, buf: &[u8]) -> anyhow::Result<()> {
+        // A write of no bytes is not a write, and `Intent::Write` is what
+        // creates a file that is not there. See [`Self::pwrite_all_vectored`]
+        // and `TODO/disk-io.md`, T-188.
+        if buf.is_empty() {
+            return Ok(());
+        }
         end_read_run();
         let started = Instant::now();
         let outcome = self.with(file_id, Intent::Write, "write to", |file| {
@@ -796,6 +802,21 @@ impl TorrentStorage for SafeStorage {
         offset: u64,
         bufs: [IoSlice<'_>; 2],
     ) -> anyhow::Result<usize> {
+        // Answered before anything is opened, because opening for a write is
+        // what creates a file, and a write of no bytes changes none.
+        //
+        // `librqbit` 9.0.0 asks for one. `file_ops.rs:322` walks the file list
+        // to place a chunk and skips a file with `if absolute_offset >
+        // file_len`, strictly greater, so a chunk that begins on exactly the
+        // first byte of the next file leaves the file before it with
+        // `remaining_len` of zero and calls this with nothing to write. That
+        // is how an unselected file landed on disk at zero bytes when the
+        // selection started after it, which
+        // [`crate::storage`]'s own rule says cannot happen: a write creates a
+        // file and a read does not. See `TODO/disk-io.md`, T-188 and T-013.
+        if bufs.iter().all(|slice| slice.is_empty()) {
+            return Ok(0);
+        }
         end_read_run();
         let started = Instant::now();
         let outcome = self.with(file_id, Intent::Write, "write to", |file| {
@@ -1381,6 +1402,43 @@ mod tests {
             !dir.path().join("b.bin").exists(),
             "a file nothing touched is a file nothing creates"
         );
+        assert_eq!(std::fs::read(dir.path().join("a.bin")).unwrap(), b"hello");
+    }
+
+    /// A write of no bytes is not a write, so it creates nothing.
+    ///
+    /// `librqbit` asks for one: `file_ops.rs:322` skips a file with
+    /// `absolute_offset > file_len`, strictly greater, so a chunk that begins
+    /// on exactly the first byte of the next file leaves the file before it
+    /// with nothing to write and calls this anyway. Without the guard that is
+    /// an unselected file on disk at zero bytes, which is
+    /// `TODO/disk-io.md` T-013's rule broken by T-188.
+    #[test]
+    fn a_write_of_no_bytes_creates_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["a.bin", "b.bin"], 8);
+
+        storage.pwrite_all(0, 0, b"").unwrap();
+        assert!(
+            !dir.path().join("a.bin").exists(),
+            "an empty write opened a file for writing"
+        );
+        assert_eq!(
+            storage
+                .pwrite_all_vectored(0, 0, [IoSlice::new(b""), IoSlice::new(b"")])
+                .unwrap(),
+            0
+        );
+        assert!(
+            !dir.path().join("a.bin").exists(),
+            "an empty vectored write opened a file for writing"
+        );
+
+        // And a write with bytes in it still creates and still lands, however
+        // the second slice is spelled.
+        storage
+            .pwrite_all_vectored(0, 0, [IoSlice::new(b"he"), IoSlice::new(b"llo")])
+            .unwrap();
         assert_eq!(std::fs::read(dir.path().join("a.bin")).unwrap(), b"hello");
     }
 

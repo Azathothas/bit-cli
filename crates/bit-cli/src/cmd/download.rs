@@ -3201,6 +3201,67 @@ mod tests {
         );
     }
 
+    /// `TODO/disk-io.md` T-188's acceptance.
+    ///
+    /// A selection that starts after file 0, on a torrent whose file 0 ends
+    /// exactly on a piece boundary, left file 0 on disk at zero bytes.
+    /// `librqbit` issues a zero length write to the file before a chunk that
+    /// begins on a boundary, and a write is what creates a file. Nothing
+    /// spilled, so [T-184](disk-io.md)'s `partial` array is empty and this is
+    /// not that: it is a file with no bytes in it and no bytes owed to it.
+    ///
+    /// The donor fixture is `extra-a.txt` at 1,024 bytes and `shared.bin` at
+    /// 4,096, at a 1,024 byte piece length, so file 0 is exactly piece 0 and
+    /// piece 1 starts on the boundary.
+    #[test]
+    fn a_selection_that_starts_after_file_zero_leaves_it_off_the_disk() {
+        let (fixture, _receiver) = TorrentFixture::sharing_pair();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let source = format!("{}payload/", server.base);
+        let out = fixture.dir().join("out");
+        let report = crate::test_support::run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--select-file",
+                "1",
+                "--stop-after",
+                "30s",
+            ],
+            fixture.dir(),
+        );
+        let torrent = &report["torrents"][0];
+        assert_eq!(torrent["stopped"], "completed", "{torrent}");
+        assert_eq!(torrent["downloaded"]["bytes"].as_u64().unwrap(), 4096);
+        assert!(
+            torrent.get("partial").is_none(),
+            "nothing spilled, so this is not T-184: {torrent}"
+        );
+
+        let base = out.join("donor");
+        assert_eq!(
+            std::fs::read(base.join("shared.bin")).unwrap(),
+            vec![0x5Au8; 4096],
+            "the selected file is whole"
+        );
+        assert!(
+            !base.join("extra-a.txt").exists(),
+            "the unselected file before the selection was created anyway: {:?}",
+            walk(&out)
+        );
+    }
+
     /// The same run without a selection reports nothing, so the field is not
     /// noise on every download.
     #[test]
