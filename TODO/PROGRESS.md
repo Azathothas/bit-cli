@@ -22,7 +22,8 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 
 ## State
 
-- **Last session:** started 2026-08-22T04:05:27Z, unattended throughout. The
+- **Last session:** 2026-08-22T04:05:27Z to 07:10Z, 3h 4m, unattended
+  throughout. The
   whole four-item work order, then three things the work found, two more
   entries, and the two reviews.
 - **Tests:** 1,091 passing, 0 failing. The baseline at the start was 1,052.
@@ -128,6 +129,13 @@ Five things, and two were older than this session.
   instead of as escapes, so for two sessions no search over `crates/` could see
   a line of the largest metainfo file in the tree: `grep` calls such a file
   binary and skips it. Recorded under [T-172](metainfo.md).
+
+One more, found while printing the session's own numbers: **`session-report.ps1`
+reported an hour too many.** `[int]` on a double rounds in PowerShell, so
+`[int](2.65)` is 3 and a 2h 39m session printed "3h 39m", the hour coming from
+the minutes and then printed again beside them. Every session past the half
+hour was wrong and the number goes into this file's state line. `[math]::Floor`
+now, and the same cast was doing the same to `soak.ps1`'s minute count.
 
 Two guards, because finding these by reading is how they were missed.
 `gates.ps1` gains a **`text` gate** over every tracked `.rs`, `.md`, `.ps1`,

@@ -174,8 +174,13 @@ if ($Since) {
     }
     catch { }
 }
+# `[math]::Floor`, not `[int]`. PowerShell's `[int]` on a double rounds to
+# nearest, so `[int](2.65)` is 3 and a session of 2h 39m reported itself as
+# "3h 39m": the hour came from the minutes and was then printed again beside
+# them. Every session past the half hour was an hour too long, and the number
+# goes into PROGRESS.md's state line.
 $elapsedText = if ($elapsed) {
-    "{0}h {1}m" -f [int]$elapsed.TotalHours, $elapsed.Minutes
+    "{0}h {1}m" -f [math]::Floor($elapsed.TotalHours), $elapsed.Minutes
 }
 else { "unknown, pass -Since" }
 

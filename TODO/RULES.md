@@ -247,11 +247,21 @@ pwsh -NoProfile -File scripts/gates.ps1
 pwsh -NoProfile -File scripts/check-todo.ps1
 ```
 
-- **`scripts/session-report.ps1`.** What the session did, measured: elapsed
-  time from the start instant on `PROGRESS.md`'s state line, commits, files
-  changed, lines added and removed, `scc` over `crates/`, entries done out of
-  workable, and which entries closed, advanced or were filed. `git-sync
-  -Summary -Since <ISO>` runs it after the push.
+- **`scripts/session-report.ps1`.** What the session did, measured, and the
+  answer to "how long, how much, how far": **elapsed** from the start instant
+  on `PROGRESS.md`'s state line, **commits**, **files changed with lines added
+  and removed**, which is this session's LOC, **`scc` over `crates/`**, which
+  is the tree's total, **entries done out of workable**, and which entries
+  closed, advanced or were filed. `git-sync -Summary -Since <ISO>` runs it
+  after the push, and section 2 step 5 requires that on the last push of the
+  session so the numbers in `PROGRESS.md` are measured rather than counted.
+
+  It reported an hour too many until 2026-08-22. `[int]` on a double **rounds**
+  in PowerShell, so `[int](2.65)` is 3 and a 2h 39m session printed "3h 39m",
+  the hour coming from the minutes and then printed again beside them. Any
+  session past the half hour was wrong, and the number goes straight into
+  `PROGRESS.md`. `[math]::Floor` is the fix, and the same cast was doing the
+  same thing to `soak.ps1`'s minute count.
 
 ```bash
 pwsh -NoProfile -File scripts/session-report.ps1 -Since 2026-08-22T01:11:24Z

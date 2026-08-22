@@ -624,7 +624,9 @@ while ((Get-Date) -lt $endAt) {
 }
 
 $clock.Stop()
-Write-Step "sampling finished after $([int]$clock.Elapsed.TotalMinutes) minutes, $($samples.Count) samples"
+# Floor rather than `[int]`, which rounds: 59.6 minutes printed as 60 and read
+# as a run that reached its hour. See scripts/session-report.ps1.
+Write-Step "sampling finished after $([math]::Floor($clock.Elapsed.TotalMinutes)) minutes, $($samples.Count) samples"
 
 if (-not $seed.HasExited) { Stop-Process -Id $seed.Id -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Milliseconds 500
