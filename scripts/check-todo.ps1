@@ -56,10 +56,15 @@ $files = @(Get-ChildItem -Path $todo -Filter *.md -File)
 #
 # A NUL byte in a tracked Markdown file makes `grep` call it binary and skip
 # it, makes a diff unreadable, and hides whatever is around it from every text
-# tool including this one. It got in on 2026-08-22 by way of a backslash-x-0-0 escape written
-# into a Python string that then interpreted the escape, in a sentence quoting
-# a tracker's error message. This is one line to check and it is checked
-# first, because everything below reads these files as text.
+# tool including this one. It got in on 2026-08-22 by way of a backslash-x-0-0
+# escape written into a Python string that then interpreted the escape, in a
+# sentence quoting a tracker's error message. This is one line to check and it
+# is checked first, because everything below reads these files as text.
+#
+# `gates.ps1` has a `text` gate over the whole tracked tree, so these files are
+# covered twice. Deliberately: this script is the mechanical half of the two
+# reviews and gets run on its own, and a review that reads a file `grep` would
+# have skipped is the review this is meant to catch.
 
 foreach ($file in $files) {
     $bytes = [System.IO.File]::ReadAllBytes($file.FullName)

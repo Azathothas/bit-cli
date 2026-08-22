@@ -23,7 +23,8 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 ## State
 
 - **Last session:** started 2026-08-22T04:05:27Z, unattended throughout. The
-  whole four-item work order, then three things the work found.
+  whole four-item work order, then three things the work found, one more entry,
+  and the two reviews.
 - **Tests:** 1,091 passing, 0 failing. The baseline at the start was 1,052.
 - **Gates:** clean. One command:
 
@@ -31,16 +32,16 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** green at run **32556256557**, against commit `081d943`. The two runs
-  before it, **32555391850** (`519742a`) and **32555846984** (`88676cb`), were
-  **red on Clippy and nothing else**, for the reason under "the toolchain"
-  below; `081d943` is the fix and every other job in both was green. The last
-  commit of the session, `2f202d2`, carries `[skip ci]` because it changes no
-  source, so it has no run of its own and `081d943`'s is the one that covers
-  the tree.
+- **CI:** green on all sixteen jobs at run **32557742549**, against commit
+  `6c47829`. Two runs earlier in the session were **red on Clippy and nothing
+  else**, **32555391850** (`519742a`) and **32555846984** (`88676cb`), for the
+  reason under "the toolchain" below; **32556256557** against `081d943` is
+  where that was fixed and every other job in both red runs was green. Two
+  commits carry `[skip ci]` because they change no source, `2f202d2` and
+  `c77e462`, so they have no run of their own.
 - **Entries:** 147 items. 48 open, 7 partial, 2 blocked, 80 done, 10 deferred
   to Phase C. 80 of 137 workable done, 57 left.
-- **Tree:** 84 Rust files, 48,354 lines of code, 10,809 of comment, measured
+- **Tree:** 84 Rust files, 48,351 lines of code, 10,816 of comment, measured
   with `scc --no-cocomo crates/`.
 
 ## What the last session did
@@ -104,6 +105,35 @@ The four-item work order, in order, and then three things that came out of it.
   gate was green here and one job was red there. The local toolchain is
   updated, clippy 1.98 is clean across the workspace, and `gates.ps1` now
   prints the toolchain and warns when the `stable` it is using is behind.
+
+### What the two reviews found
+
+Five things, and two were older than this session.
+
+- **A citation that pointed at a record which did not carry the number.**
+  T-100 cited a swarm run for `peers_negotiated`, which lives in the per-run
+  `bench swarm` report that `check-swarm.ps1` deletes. `check-swarm.ps1`
+  records `fast_negotiated` and `received` on every leech case now, and the
+  entry cites the run that has them.
+- **A number that two documents disagreed on.** `README.md` said thirteen
+  connections cleared the listener backlog and the committed acceptance says
+  twenty. Thirteen was a scratchpad run whose load had already drained eight of
+  its own connections.
+- **A lint named wrong in three places.** It is
+  `clippy::chunks_exact_to_as_chunks`, checked by making clippy emit it.
+- **A NUL byte in `TODO/trackers.md`**, from an escape interpreted on its way
+  to the file while quoting a tracker's NUL-terminated error message.
+- **Three more in `crates/bit-cli-core/src/torrent/bencode.rs`, since
+  2026-08-21.** `TOLERATED_TRAILING` spelled its five bytes out literally
+  instead of as escapes, so for two sessions no search over `crates/` could see
+  a line of the largest metainfo file in the tree: `grep` calls such a file
+  binary and skips it. Recorded under [T-172](metainfo.md).
+
+Two guards, because finding these by reading is how they were missed.
+`gates.ps1` gains a **`text` gate** over every tracked `.rs`, `.md`, `.ps1`,
+`.toml`, `.yml` and `.jq`, which fails and names the file and the offset, and
+`check-todo.ps1` checks the same over `TODO/` before it reads anything as text.
+Both were checked by injecting a NUL.
 
 ### One more entry, taken after the work order
 
