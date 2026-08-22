@@ -1,0 +1,444 @@
+# mkbrr
+
+> **Note on this copy.** Trimmed for BitTorrent research: the Wails desktop
+> GUI (`gui/`), `docs/benchmarks/` (plot images and a matplotlib script),
+> `.claude/`, `CLAUDE.md` and `Makefile` were removed, along with the
+> badges, installation, GUI and table-of-contents sections of this file.
+> Retained: `torrent/`, `cmd/`, `internal/`, `utils/`, `schema/`,
+> `examples/`, `scripts/`.
+
+> **Manifest sweep.** All `Cargo.toml` / `Cargo.lock` / `go.mod` / `go.sum` /
+> `package.json` / lock files and JS build config were removed corpus-wide, so
+> this tree is for reading, not building. Passages below that reference them,
+> or that give build or install instructions, are upstream prose left as
+> written.
+
+## Overview
+
+[Website](https://mkbrr.com) | [Releases](https://github.com/autobrr/mkbrr/releases)
+
+**mkbrr** (pronounced "make-burr") is a simple yet powerful tool for:
+- Creating torrent files
+- Inspecting torrent files
+- Modifying torrent metadata
+- Supporting tracker-specific requirements automatically
+
+**Key Features:**
+- **Fast**: Blazingly fast hashing beating the competition
+- **Simple**: Easy to use CLI and GUI
+- **Portable**: Single binary with no dependencies
+- **Smart**: Detects possible missing files when creating torrents for season packs
+
+For detailed documentation and guides, visit [mkbrr.com](https://mkbrr.com).
+
+## Quick Start
+
+### Install
+
+For detailed installation instructions, please refer to the [Installation](#installation) section.
+
+### Creating a Torrent
+
+```bash
+# torrents are private by default
+mkbrr create path/to/file -t https://example-tracker.com/announce
+
+# public torrent
+mkbrr create path/to/file -t https://example-tracker.com/announce --private=false
+
+# Create with randomized info hash
+mkbrr create path/to/file -t https://example-tracker.com/announce -e
+```
+
+## Usage
+
+### Creating Torrents
+
+The basic command structure for creating torrents is:
+
+```bash
+mkbrr create [path] [flags]
+```
+
+For help:
+
+```bash
+mkbrr create --help
+```
+
+#### Basic Examples
+
+```bash
+# Create a private torrent (default)
+mkbrr create path/to/file -t https://example-tracker.com/announce
+
+# Create a public torrent
+mkbrr create path/to/file -t https://example-tracker.com/announce --private=false
+
+# Create with a comment
+mkbrr create path/to/file -t https://example-tracker.com/announce -c "My awesome content"
+
+# Create with a custom output path
+mkbrr create path/to/file -t https://example-tracker.com/announce -o custom-name.torrent
+
+# Create with randomized info hash
+mkbrr create path/to/file -t https://example-tracker.com/announce -e
+
+# Create a torrent excluding specific file patterns (comma-separated)
+mkbrr create path/to/file -t https://example-tracker.com/announce --exclude "*.nfo,*.jpg"
+
+# Create a torrent including only specific file patterns (comma-separated)
+mkbrr create path/to/video-folder -t https://example-tracker.com/announce --include "*.mkv,*.mp4"
+
+# Create using a specific number of worker threads for hashing (e.g., 8)
+# Experimenting with different values might yield better performance than the default automatic setting.
+mkbrr create path/to/large-file -t https://example-tracker.com/announce --workers 8
+
+# Fail if a potentially incomplete season pack is detected
+mkbrr create path/to/season-pack -t https://example-tracker.com/announce --fail-on-season-warning
+
+# Create using a name property for the torrent
+mkbrr create path/to/file -t https://example-tracker.com/announce --name "Your torrent name"
+```
+
+> [!NOTE]
+> The exclude and include patterns feature supports standard glob pattern matching (like `*` for any number of characters, `?` for a single character) and is case-insensitive.
+> **Precedence:** Inclusion patterns (`--include`) take precedence.
+> - If `--include` is used:
+>   - A file matching an `--include` pattern is **always kept**, even if it also matches an `--exclude` pattern.
+>   - A file *not* matching any `--include` pattern is **always ignored**.
+> - If `--include` is *not* used, then only `--exclude` patterns are considered, and matching files are ignored.
+>
+> The `--workers` flag controls the number of concurrent threads used for hashing.
+> - `--workers 0` (or omitting the flag) uses automatic logic to determine the optimal number based on your system.
+> - `--workers N` (where N > 0) uses exactly N threads. While the automatic setting is generally good, you might achieve slightly better performance by manually testing different values for N on your specific hardware and workload.
+>
+> The `--fail-on-season-warning` flag makes mkbrr exit with an error if it detects a potentially incomplete season pack instead of just showing a warning.
+
+### Inspecting Torrents
+
+View detailed information about a torrent:
+
+```bash
+mkbrr inspect my-torrent.torrent
+```
+
+### Checking Torrents (Verifying Data)
+
+Verify the integrity of local data against a torrent file:
+
+```bash
+mkbrr check my-torrent.torrent /path/to/downloaded/content
+
+# Verify using a specific number of worker threads (e.g., 4)
+mkbrr check my-torrent.torrent /path/to/downloaded/content --workers 4
+```
+
+This shows:
+- Name and size
+- Piece information and hash
+- Tracker URLs
+- Creation date
+- Magnet link
+- File list (for multi-file torrents)
+
+### Updating Torrents
+
+Structurally sync a v1 torrent after files are added, removed, resized, or renamed without rehashing files assumed to be unchanged:
+
+```bash
+# Write release.updated.torrent and leave release.torrent untouched
+mkbrr update-torrent release.torrent /path/to/release
+
+# Explicitly replace the input torrent
+mkbrr update-torrent release.torrent /path/to/release --in-place
+
+# Choose a different output file
+mkbrr update-torrent release.torrent /path/to/release --output updated.torrent
+
+# Reuse the same folder and filters from the original create command
+mkbrr update-torrent /home/ubuntu/manga-no-images.torrent /home/ubuntu/manga \
+  --exclude "*.jpg,*.jpeg,*.png,*.pdf,*.gif,*.webp,*.bmp"
+
+# Reuse hashes for a known file rename
+mkbrr update-torrent release.torrent /path/to/release \
+  --rename old-name.mkv=new-name.mkv
+```
+
+**Important:** This is a structural sync, not content-change detection. Files with matching paths and sizes are assumed to have identical bytes and are not rehashed. If an existing file may have been edited or replaced without changing its size, run `create` again to perform a full rehash. You can run `check` after updating to validate the torrent against the files on disk.
+
+Removed files disappear from the torrent, while new files and resized files are hashed. An unmapped rename is treated safely as a deletion plus an addition and is rehashed; use repeatable `--rename old=new` mappings only when you know a renamed file is unchanged and want to reuse its hashes. Pieces containing new data or changed boundaries are rehashed, while structurally matching old piece ranges reuse their existing hashes.
+
+The default output adds `.updated` before the input extension and leaves the original torrent untouched; it refuses to overwrite an existing default output. Use `--output` to choose a different destination or `--in-place` to replace the input atomically. Output may not replace a content file or be written inside the content directory; therefore, the input torrent used with `--in-place` must also live outside that directory. As a wrong content path can otherwise look like a complete replacement, a multi-piece update that reuses no hashes is rejected; after verifying the content path, pass `--force` to allow that full rehash.
+
+The update command uses the same `--exclude` and `--include` syntax as `create`. Repeat those filters because glob patterns are not stored in a torrent file. Tracker URLs, creation date, creator, private/source fields, per-file custom fields, unknown root keys, and piece length are preserved from the existing torrent, so they do not need to be supplied again. Running `create` again would perform a full rehash.
+
+### Modifying Torrents
+
+Update metadata in existing torrent files without access to the original content:
+
+```bash
+# Basic usage
+mkbrr modify original.torrent --tracker https://new-tracker.com
+
+# Modify multiple torrents
+mkbrr modify *.torrent --private=false
+
+# See what would be changed without making actual changes
+mkbrr modify original.torrent --tracker https://new-tracker.com --dry-run
+
+# Modifying the torrent to contain multiple trackers
+mkbrr modify original.torrent -t https://first.com -t https://second.com -t https://third.com
+
+# Randomize info hash
+mkbrr modify original.torrent -e
+
+# Change the torrent's name property
+mkbrr modify original.torrent --name "My new torrent name"
+```
+
+## Advanced Usage
+
+### Preset Mode
+
+Presets save you time by storing commonly used settings. Great for users who create torrents for the same trackers regularly.
+
+See [presets example](examples/presets.yaml) here.
+
+```bash
+# Uses the ptp-preset (defined in your presets.yaml file)
+mkbrr create -P ptp path/to/file
+
+# Override some preset values
+mkbrr create -P ptp --source "MySource" path/to/file
+
+# Override workers count
+mkbrr create -P ptp --workers 4 path/to/file
+```
+
+> [!TIP]
+> The preset file can be placed in the current directory, `~/.config/mkbrr/`, or `~/.mkbrr/`. You can also specify a custom location with `--preset-file`. Presets support both `exclude_patterns` and `include_patterns` fields, allowing you to define default or preset-specific file filtering.
+
+### Batch Mode
+
+Create multiple torrents at once using a YAML configuration file:
+
+```bash
+mkbrr create -b batch.yaml
+```
+
+See [batch example](examples/batch.yaml) here.
+
+> [!TIP]
+> Batch mode processes jobs in parallel (up to 4 at once) and shows a summary when complete. Batch mode also supports both `exclude_patterns` and `include_patterns` fields.
+
+## Tracker-Specific Features
+
+mkbrr automatically enforces some requirements for various private trackers so you don't have to:
+
+#### Piece Length Limits
+
+Different trackers have different requirements:
+- HDB, BHD, SuperBits: Max 16 MiB pieces
+- Emp, MTV: Max 8 MiB pieces
+- GazelleGames: Max 64 MiB pieces
+
+#### Torrent Size Limits
+
+Some trackers limit the size of the .torrent file itself:
+- Anthelion: 250 KiB
+- GazelleGames: 1 MB
+
+> [!INFO]
+> When creating torrents for these trackers, mkbrr automatically adjusts piece sizes to meet requirements, so you don't have to.
+
+A full overview over tracker-specific limits can be seen in the [documentation](https://mkbrr.com/features/tracker-rules).
+
+## Incomplete Season Pack Detection
+
+If the input is a folder with a name that indicates that its a pack, it will find the highest number and do a count to look for missing files.
+
+```
+mkbrr create ~/Kyles.Original.Sins.S01.1080p.SRC.WEB-DL.DDP5.1.H.264 -t https://tracker.com/announce/1234567
+
+Files being hashed:
+  ├─ Kyles.Original.Sins.S01E01.Business.and.Pleasure.1080p.SRC.WEB-DL.DDP5.1.H.264.mkv (3.3 GiB)
+  ├─ Kyles.Original.Sins.S01E02.Putting.It.Back.In.1080p.SRC.WEB-DL.DDP5.1.H.264.mkv (3.4 GiB)
+  └─ Kyles.Original.Sins.S01E04.Cursor.For.Life.1080p.SRC.WEB-DL.DDP5.1.H.264.mkv (3.3 GiB)
+
+
+Warning: Possible incomplete season pack detected
+  Season number: 1
+  Highest episode number found: 4
+  Video files: 3
+
+This may be an incomplete season pack. Check files before uploading.
+
+Hashing pieces... [3220.23 MB/s] 100% [========================================]
+
+Wrote title.torrent (elapsed 3.22s)
+```
+
+### Strict Season Pack Validation
+
+By default, mkbrr will show a warning but continue creating the torrent when it detects a potentially incomplete season pack. If you want to fail the operation instead, use the `--fail-on-season-warning` flag:
+
+```bash
+# This will exit with an error if missing episodes are detected
+mkbrr create ~/Suspicious.Show.S01.1080p.WEB-DL -t https://tracker.com/announce --fail-on-season-warning
+```
+
+> [!TIP]
+> The `--fail-on-season-warning` flag can also be configured in presets and batch files using the `fail_on_season_warning` field.
+
+
+## Performance
+
+mkbrr is optimized for speed and consistently outperforms other popular torrent creation tools in our benchmarks.
+
+### Benchmark Methodology
+
+All tests were performed using [hyperfine](https://github.com/sharkdp/hyperfine) with 5 runs per tool after a warm-up run. Cache was cleared between runs on the servers, but not on the Macbook.
+
+### Benchmark Results
+
+| Hardware | Test Size | mkbrr | mktorrent | torrenttools | torf |
+|----------|---------------|-------|-----------|--------------|------|
+| **Leaseweb Server (SSD)** | 21 GiB | **7.24s** | 45.41s | 9.07s | 8.85s |
+| **Hetzner Server (HDD)** | 14 GiB | **41.02s** | 68.17s | 47.97s | 58.19s |
+| **Macbook Pro M4 (NVME)** | 30 GiB | **9.71s** | 10.90s | - | 9.78s |
+
+
+### Speed Comparison
+
+| Hardware | vs mktorrent | vs torrenttools | vs torf |
+|----------|-------------|----------------|---------|
+| **Leaseweb Server (SSD)** | 6.3× faster | 1.3× faster | 1.2× faster |
+| **Hetzner Server (HDD)** | 1.7× faster | 1.2× faster | 1.4× faster |
+| **Macbook Pro M4 (NVME)** | 1.1× faster | - | Similar |
+
+
+### Consistency
+
+Besides raw speed, mkbrr shows more consistent performance between runs, with standard deviation percentages between 0.25-3.7% across platforms compared to much higher variances for other tools (up to 39%). This predictable performance is particularly noticeable on mechanical storage where other tools showed wider fluctuations.
+
+
+### Hardware Specifications
+
+#### Leaseweb Dedicated Server (SSD)
+- CPU: Intel Xeon E-2274G @ 4.00GHz
+- RAM: 32GB
+- Storage: 1 × SAMSUNG MZQL21T9HCJR-00A07 1.92TB SSD
+
+#### Hetzner Dedicated Server (HDD)
+- CPU: AMD Ryzen 5 3600 (12) @ 4.71GHz
+- RAM: 64GB
+- Storage: 4 × TOSHIBA MG08ACA16TEY in RAID0
+
+#### Macbook Pro M4
+- CPU: Apple M4
+- RAM: 16GB
+- Storage: 512GB NVME
+
+### Full results
+
+<details>
+<summary>View Full Benchmark Commands & Results</summary>
+
+#### Leaseweb Server (21 GiB 1080p season pack)
+
+```bash
+hyperfine --warmup 1 --runs 5 \
+  --setup 'sudo sync && sudo sh -c "echo 3 > /proc/sys/vm/drop_caches"' \
+  --prepare 'sudo sync && sudo sh -c "echo 3 > /proc/sys/vm/drop_caches" && rm -f /home/user/Show.S01.DL.1080p.WEB.H264-GROUP.torrent' \
+  'mkbrr create /home/user/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP' \
+  'mktorrent /home/user/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP' \
+  'torrenttools create --threads 8 ~/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP' \
+  'torf --threads 8 /home/user/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP'
+
+Benchmark 1: mkbrr create /home/user/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP
+  Time (mean ± σ):      7.244 s ±  0.018 s    [User: 31.245 s, System: 7.554 s]
+  Range (min … max):    7.225 s …  7.270 s    5 runs
+
+Benchmark 2: mktorrent /home/user/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP
+  Time (mean ± σ):     45.407 s ±  0.163 s    [User: 36.495 s, System: 4.983 s]
+  Range (min … max):   45.135 s … 45.539 s    5 runs
+
+Benchmark 3: torrenttools create --threads 8 ~/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP
+  Time (mean ± σ):      9.074 s ±  0.093 s    [User: 29.248 s, System: 5.228 s]
+  Range (min … max):    8.908 s …  9.122 s    5 runs
+
+Benchmark 4: torf --threads 8 /home/user/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP
+  Time (mean ± σ):      8.854 s ±  0.077 s    [User: 25.829 s, System: 5.136 s]
+  Range (min … max):    8.771 s …  8.937 s    5 runs
+
+Summary
+  'mkbrr create /home/user/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP' ran
+    1.22 ± 0.01 times faster than 'torf --threads 8 /home/user/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP'
+    1.25 ± 0.01 times faster than 'torrenttools create --threads 8 ~/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP'
+    6.27 ± 0.03 times faster than 'mktorrent /home/user/torrents/qbittorrent/Show.S01.DL.1080p.WEB.H264-GROUP'
+```
+
+#### Hetzner Server (14 GiB 1080p season pack)
+
+```bash
+hyperfine --warmup 1 --runs 5 \
+  --setup 'sudo sync && sudo sh -c "echo 3 > /proc/sys/vm/drop_caches"' \
+  --prepare 'sudo sync && sudo sh -c "echo 3 > /proc/sys/vm/drop_caches" && rm -f /home/user/mkbrr/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP.torrent' \
+  'mkbrr create ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP' \
+  'mktorrent ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP' \
+  'torrenttools create --threads 12 ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP' \
+  'torf --threads 12 ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP'
+
+Benchmark 1: mkbrr create ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+  Time (mean ± σ):     41.022 s ±  0.979 s    [User: 13.691 s, System: 6.747 s]
+  Range (min … max):   39.938 s … 42.467 s    5 runs
+
+Benchmark 2: mktorrent ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+  Time (mean ± σ):     68.168 s ± 26.654 s    [User: 17.934 s, System: 6.543 s]
+  Range (min … max):   39.268 s … 97.574 s    5 runs
+
+Benchmark 3: torrenttools create --threads 12 ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+  Time (mean ± σ):     47.968 s ± 10.552 s    [User: 7.052 s, System: 6.551 s]
+  Range (min … max):   39.460 s … 66.296 s    5 runs
+
+Benchmark 4: torf --threads 12 ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+  Time (mean ± σ):     58.187 s ±  5.787 s    [User: 7.185 s, System: 6.511 s]
+  Range (min … max):   50.125 s … 65.807 s    5 runs
+
+Summary
+  mkbrr create ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP ran
+    1.17 ± 0.26 times faster than torrenttools create --threads 12 ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+    1.42 ± 0.15 times faster than torf --threads 12 ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+    1.66 ± 0.65 times faster than mktorrent ~/torrents/qbittorrent/tv/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+```
+
+#### Macbook Pro M4 (30 GiB 1080p season pack)
+
+```bash
+hyperfine --warmup 1 --runs 5 \
+  --prepare 'rm -f Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP.torrent' \
+  'mkbrr create ~/Desktop/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP' \
+  'mktorrent ~/Desktop/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP' \
+  'torf --threads 10 ~/Desktop/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP'
+
+Benchmark 1: mkbrr create ~/Desktop/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+  Time (mean ± σ):      9.708 s ±  0.355 s    [User: 10.823 s, System: 4.297 s]
+  Range (min … max):    9.479 s … 10.323 s    5 runs
+
+Benchmark 2: mktorrent ~/Desktop/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+  Time (mean ± σ):     10.897 s ±  0.701 s    [User: 11.021 s, System: 3.038 s]
+  Range (min … max):    9.950 s … 11.620 s    5 runs
+
+Benchmark 3: torf --threads 10 ~/Desktop/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+  Time (mean ± σ):      9.779 s ±  0.749 s    [User: 10.776 s, System: 5.253 s]
+  Range (min … max):    9.383 s … 11.112 s    5 runs
+
+Summary
+  mkbrr create ~/Desktop/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP ran
+    1.01 ± 0.09 times faster than torf --threads 10 ~/Desktop/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+    1.12 ± 0.08 times faster than mktorrent ~/Desktop/Show.S01.1080p.SRC.WEB-DL.DDP5.1.H.264-GRP
+```
+</details>
+
+See [LICENSE](LICENSE) for the full license text.

@@ -1,0 +1,5356 @@
+use std::{
+    net::{SocketAddr, SocketAddrV4, TcpListener, TcpStream},
+    rc::Rc,
+    time::{Duration, Instant},
+};
+
+use bt_bencode::Deserializer;
+use bytes::Buf;
+use heapless::spsc::{Producer, Queue};
+use serde::Deserialize;
+
+use crate::{
+    connection_manager::{ConnectionId, ConnectionManager},
+    event_loop::{EventType, tick},
+    file_store::{DiskOp, DiskOpType},
+    io::{BackloggedSubmissionQueue, Io, SubmissionQueue},
+    peer_comm::{extended_protocol::MetadataMessage, peer_connection::DisconnectReason},
+    peer_protocol::PeerId,
+    piece_selector::{SUBPIECE_SIZE, Subpiece},
+    test_utils::{
+        generate_peer, setup_seeding_test, setup_test, setup_test_with_large_metadata,
+        setup_uninitialized_test, setup_uninitialized_test_with_metadata_size,
+    },
+    torrent::{self, InitializedState, TorrentEvent},
+};
+
+use super::{
+    peer_connection::PeerConnection,
+    peer_protocol::{HANDSHAKE_SIZE, PeerMessage},
+};
+
+// Mock SubmissionQueue for tests that need to call disconnect
+struct MockSubmissionQueue;
+
+impl SubmissionQueue for MockSubmissionQueue {
+    fn sync(&mut self) {}
+
+    fn capacity(&self) -> usize {
+        128
+    }
+
+    fn len(&self) -> usize {
+        0
+    }
+
+    fn is_full(&self) -> bool {
+        false
+    }
+
+    unsafe fn push(
+        &mut self,
+        _entry: &io_uring::squeue::Entry,
+    ) -> Result<(), io_uring::squeue::PushError> {
+        Ok(())
+    }
+}
+
+#[track_caller]
+fn sent_and_marked_interested(peer: &PeerConnection) {
+    assert!(peer.is_interesting);
+    assert!(peer.outgoing_msgs_buffer.contains(&PeerMessage::Interested));
+}
+
+#[track_caller]
+fn sent_and_marked_not_interested(peer: &PeerConnection) {
+    assert!(!peer.is_interesting);
+    assert!(
+        peer.outgoing_msgs_buffer
+            .contains(&PeerMessage::NotInterested)
+    );
+}
+
+#[track_caller]
+fn simulate_disk_write_completion(
+    torrent_state: &mut InitializedState,
+    pending_disk_operations: &mut Vec<DiskOp>,
+    connections: &mut ConnectionManager,
+    event_tx: &mut Producer<'_, TorrentEvent>,
+    expected_pieces: &[i32],
+) {
+    // Queue disk writes for downloaded pieces
+    torrent_state.queue_disk_write_for_downloaded_pieces(pending_disk_operations);
+
+    // Verify the correct pieces were queued
+    let mut queued_pieces: Vec<i32> = pending_disk_operations
+        .iter()
+        .map(|op| op.piece_idx)
+        .collect();
+    queued_pieces.sort_unstable();
+    let mut expected_sorted = expected_pieces.to_vec();
+    expected_sorted.sort_unstable();
+
+    assert_eq!(
+        queued_pieces, expected_sorted,
+        "Queued disk operations don't match expected pieces"
+    );
+
+    // Verify all operations are writes
+    for op in pending_disk_operations.iter() {
+        assert!(
+            matches!(op.op_type, DiskOpType::Write),
+            "Expected Write operation, got {:?}",
+            op.op_type
+        );
+    }
+
+    // Simulate disk write completion
+    for disk_op in pending_disk_operations.drain(..) {
+        let buffer =
+            Rc::try_unwrap(disk_op.buffer).expect("Buffer should have single owner in tests");
+
+        torrent_state.complete_piece(disk_op.piece_idx, connections, event_tx, buffer);
+    }
+}
+
+#[test]
+fn fast_ext_have_all() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        assert!(!connections[key_a].is_interesting);
+        connections[key_a].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        {
+            let torrent_state = state_ref.state().unwrap();
+            assert!(
+                torrent_state
+                    .piece_selector
+                    .bitfield_received(connections[key_a].conn_id)
+            );
+        }
+        sent_and_marked_interested(&connections[key_a]);
+        assert!(connections[key_a].pending_disconnect.is_none());
+        let num_pieces = state_ref.metadata().unwrap().pieces.len();
+        {
+            let torrent_state = state_ref.state().unwrap();
+            for piece_id in 0..num_pieces {
+                assert!(
+                    torrent_state
+                        .piece_selector
+                        .interesting_peer_pieces(connections[key_a].conn_id)
+                        .unwrap()[piece_id]
+                );
+            }
+        }
+
+        // Peers that do not state they support fast_ext are disconnected
+        let key_b = connections.insert_established_with_key(|k| generate_peer(false, k));
+        connections[key_b].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_b].pending_disconnect.is_some());
+
+        // Do not mark as interestead if we've already completed the torrent
+        let key_c = connections.insert_established_with_key(|k| generate_peer(true, k));
+        let torrent_state = state_ref.state().unwrap();
+        torrent_state.is_complete = true;
+        assert!(!connections[key_c].is_interesting);
+        connections[key_c].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state
+                .piece_selector
+                .bitfield_received(connections[key_c].conn_id)
+        );
+        assert!(!connections[key_c].is_interesting);
+    });
+}
+
+#[test]
+fn fast_ext_have_none() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].is_interesting = true;
+        connections[key_a].handle_message(
+            PeerMessage::HaveNone,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // we are not interestead in peers that have nothing
+        sent_and_marked_not_interested(&connections[key_a]);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state
+                .piece_selector
+                .bitfield_received(connections[key_a].conn_id)
+        );
+        assert!(connections[key_a].pending_disconnect.is_none());
+        assert!(
+            !torrent_state
+                .piece_selector
+                .interesting_peer_pieces(connections[key_a].conn_id)
+                .unwrap()
+                .any()
+        );
+        // Peers that do not state they support fast_ext are disconnected
+        let key_b = connections.insert_established_with_key(|k| generate_peer(false, k));
+        connections[key_b].handle_message(
+            PeerMessage::HaveNone,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_b].pending_disconnect.is_some());
+    });
+}
+
+#[test]
+fn have() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].handle_message(
+            PeerMessage::Have { index: 7 },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Interpret the Have as HaveNone, the bitfield might have been omitted
+        {
+            let torrent_state = state_ref.state().unwrap();
+            assert!(torrent_state.piece_selector.bitfield_received(key_a));
+        }
+        assert!(connections[key_a].pending_disconnect.is_none());
+        // We should be interestead now since we do not have the piece
+        sent_and_marked_interested(&connections[key_a]);
+        connections[key_a].outgoing_msgs_buffer.clear();
+        let num_pieces = state_ref.metadata().unwrap().pieces.len();
+        {
+            let torrent_state = state_ref.state().unwrap();
+            for piece_id in 0..num_pieces {
+                if piece_id == 7 {
+                    assert!(
+                        torrent_state
+                            .piece_selector
+                            .interesting_peer_pieces(key_a)
+                            .unwrap()[piece_id]
+                    );
+                } else {
+                    assert!(
+                        !torrent_state
+                            .piece_selector
+                            .interesting_peer_pieces(key_a)
+                            .unwrap()[piece_id]
+                    );
+                }
+            }
+        }
+        // Does not send interested again
+        connections[key_a].handle_message(
+            PeerMessage::Have { index: 7 },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_a].outgoing_msgs_buffer.is_empty());
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key_a, &mut connections[key_a].endgame)
+            .unwrap();
+        assert_eq!(index, 7);
+        let torrent_state = state_ref.state().unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key_a);
+        connections[key_a].append_and_fill(&mut subpieces);
+
+        let key_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+        assert!(!connections[key_b].is_interesting);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(torrent_state.piece_selector.is_allocated(index as usize));
+        connections[key_b].handle_message(
+            PeerMessage::Have { index },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Piece is still interesting since it's not completed
+        sent_and_marked_interested(&connections[key_b]);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state
+                .piece_selector
+                .interesting_peer_pieces(key_b)
+                .unwrap()[index as usize]
+        );
+
+        let key_c = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // Complete the piece
+        connections[key_a].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key_a].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_a].inflight.is_empty());
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.num_allocated(), 0);
+        // To ensure we do not miss the completion event
+        std::thread::sleep(Duration::from_millis(100));
+        let torrent_state = state_ref.state().unwrap();
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[index],
+        );
+
+        // C is not interesting
+        assert!(!connections[key_c].is_interesting);
+        connections[key_c].handle_message(
+            PeerMessage::Have { index },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Piece is NOT interesting since it's completed
+        assert!(!connections[key_c].is_interesting);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            !torrent_state
+                .piece_selector
+                .interesting_peer_pieces(key_c)
+                .unwrap()[index as usize]
+        );
+    });
+}
+
+#[test]
+fn have_invalid_indicies() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].handle_message(
+            PeerMessage::Have { index: -1 },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_a].pending_disconnect.is_some());
+        let key_b = connections.insert_established_with_key(|k| generate_peer(false, k));
+        let torrent_state = state_ref.state().unwrap();
+        connections[key_b].handle_message(
+            PeerMessage::Have {
+                index: torrent_state.num_pieces() as i32,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_b].pending_disconnect.is_some());
+    });
+}
+
+#[test]
+fn have_without_interest() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+
+        let torrent_state = state_ref.state().unwrap();
+        // Needed to avoid hitting asserts
+        torrent_state.piece_selector.mark_downloaded(7);
+        torrent_state.piece_selector.mark_complete(7);
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].handle_message(
+            PeerMessage::Have { index: 7 },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Interpret the Have as HaveNone, the bitfield might have been omitted
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state
+                .piece_selector
+                .bitfield_received(connections[key_a].conn_id)
+        );
+        assert!(connections[key_a].pending_disconnect.is_none());
+        // We should not be interestead now since we do already have the piece
+        assert!(!connections[key_a].is_interesting);
+        assert!(
+            !torrent_state
+                .piece_selector
+                .interesting_peer_pieces(connections[key_a].conn_id)
+                .unwrap()
+                .any()
+        );
+    });
+}
+
+#[test]
+fn slow_start() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+        assert!(connections[key].slow_start);
+        assert_eq!(connections[key].network_stats.prev_download_throughput, 0);
+        assert_eq!(connections[key].network_stats.download_throughput, 0);
+        assert!(connections[key].target_inflight > 1);
+        let old_desired_queue = connections[key].target_inflight;
+
+        connections[key].peer_choking = false;
+
+        // To control exactly how much is requested we set up
+        // Have messages just before next_piece calls, otherwise
+        // tick will allocate other pieces
+        connections[key].handle_message(
+            PeerMessage::Have { index: 1 },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        assert_eq!(index, 1);
+        let torrent_state = state_ref.state().unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        connections[key].append_and_fill(&mut subpieces);
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: 1,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: 1,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert_eq!(
+            connections[key].network_stats.download_throughput,
+            (SUBPIECE_SIZE * 2) as u64
+        );
+        assert!(connections[key].slow_start);
+        assert_eq!(connections[key].network_stats.prev_download_throughput, 0);
+        assert_eq!(connections[key].target_inflight, old_desired_queue + 2);
+
+        tick(
+            &Duration::from_millis(1500),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        assert_eq!(
+            connections[key].network_stats.prev_download_throughput,
+            21845
+        );
+        assert_eq!(connections[key].network_stats.download_throughput, 0);
+        assert!(connections[key].slow_start);
+        assert_eq!(connections[key].target_inflight, old_desired_queue + 2);
+
+        connections[key].handle_message(
+            PeerMessage::Have { index: 2 },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        assert_eq!(index, 2);
+        let torrent_state = state_ref.state().unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        connections[key].append_and_fill(&mut subpieces);
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: 2,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: 2,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        assert_eq!(
+            connections[key].network_stats.prev_download_throughput,
+            (SUBPIECE_SIZE * 2) as u64
+        );
+        assert!(connections[key].slow_start);
+        assert_eq!(connections[key].target_inflight, old_desired_queue + 4);
+
+        connections[key].handle_message(
+            PeerMessage::Have { index: 3 },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        assert_eq!(index, 3);
+        let torrent_state = state_ref.state().unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        connections[key].append_and_fill(&mut subpieces);
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: 3,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: 3,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        assert_eq!(
+            connections[key].network_stats.prev_download_throughput,
+            (SUBPIECE_SIZE * 2) as u64
+        );
+        // No longer slow start
+        assert!(!connections[key].slow_start);
+        assert_eq!(connections[key].target_inflight, old_desired_queue + 6);
+    });
+}
+
+#[test]
+fn desired_queue_size() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].peer_choking = false;
+        connections[key].slow_start = false;
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        let torrent_state = state_ref.state().unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        connections[key].append_and_fill(&mut subpieces);
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        // 2 subpieces * 3
+        assert_eq!(connections[key].target_inflight, 6);
+
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        // Never go below 1
+        assert_eq!(connections[key].target_inflight, 1);
+        // TODO: Test max
+    });
+}
+
+// Test that we deal with peers that support the fast extension correctly
+// when receving chokes
+#[test]
+fn peer_choke_recv_supports_fast() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // First, the peer needs to have pieces to be interesting
+        for index in 1..7 {
+            connections[key].handle_message(
+                PeerMessage::Have { index },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+        }
+
+        connections[key].slow_start = false;
+
+        assert!(connections[key].peer_choking);
+        connections[key].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(!connections[key].peer_choking);
+
+        // Now allocate additional pieces manually
+        let mut allocated_pieces = Vec::new();
+
+        // Get the first piece that was allocated during unchoke
+        let torrent_state = state_ref.state().unwrap();
+        if let Some(piece) = torrent_state.pieces.iter().position(|p| p.is_some()) {
+            allocated_pieces.push(piece as i32);
+        }
+
+        // Allocate 5 more pieces
+        for _ in 0..5 {
+            let torrent_state = state_ref.state().unwrap();
+            if let Some(index) = torrent_state
+                .piece_selector
+                .next_piece(key, &mut connections[key].endgame)
+            {
+                allocated_pieces.push(index);
+                let torrent_state = state_ref.state().unwrap();
+                let mut subpieces = torrent_state.allocate_piece(index, key);
+                connections[key].append_and_fill(&mut subpieces);
+            }
+        }
+
+        assert_eq!(allocated_pieces.len(), 6);
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.num_allocated(), 6);
+        assert_eq!(connections[key].target_inflight, 4);
+        assert_eq!(connections[key].queued.len(), 8);
+        assert_eq!(connections[key].inflight.len(), 4);
+
+        // Complete the first piece
+        let first_piece = allocated_pieces[0];
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: first_piece,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: first_piece,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        tick(
+            &Duration::from_millis(650),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        // Want an odd number here to test releasing in flight pieces
+        assert_eq!(connections[key].target_inflight, 9);
+        assert_eq!(connections[key].inflight.len(), 9);
+        assert_eq!(connections[key].queued.len(), 1);
+
+        for index in allocated_pieces.iter().skip(1) {
+            // The last allocated piece should still be allocated
+            let torrent_state = state_ref.state().unwrap();
+            assert!(torrent_state.piece_selector.is_allocated(*index as usize));
+        }
+        connections[key].handle_message(
+            PeerMessage::Choke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].peer_choking);
+        assert_eq!(connections[key].target_inflight, 9);
+        assert_eq!(connections[key].inflight.len(), 9);
+        assert!(connections[key].queued.is_empty());
+        // 1 piece completed (pending hashing), one was released
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.num_allocated(), 4);
+        assert!(
+            !torrent_state
+                .piece_selector
+                .is_allocated(*allocated_pieces.last().unwrap() as usize)
+        );
+    });
+}
+
+#[test]
+fn peer_choke_recv_does_not_support_fast() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(false, k));
+
+        // First, the peer needs to have pieces to be interesting
+        for index in 1..7 {
+            connections[key].handle_message(
+                PeerMessage::Have { index },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+        }
+
+        connections[key].slow_start = false;
+
+        assert!(connections[key].peer_choking);
+        connections[key].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(!connections[key].peer_choking);
+
+        // Now allocate additional pieces manually
+        let mut allocated_pieces = Vec::new();
+
+        // Get the first piece that was allocated during unchoke
+        let torrent_state = state_ref.state().unwrap();
+        if let Some(piece) = torrent_state.pieces.iter().position(|p| p.is_some()) {
+            allocated_pieces.push(piece as i32);
+        }
+
+        // Allocate 5 more pieces
+        for _ in 0..5 {
+            let torrent_state = state_ref.state().unwrap();
+            if let Some(index) = torrent_state
+                .piece_selector
+                .next_piece(key, &mut connections[key].endgame)
+            {
+                allocated_pieces.push(index);
+                let torrent_state = state_ref.state().unwrap();
+                let mut subpieces = torrent_state.allocate_piece(index, key);
+                connections[key].append_and_fill(&mut subpieces);
+            }
+        }
+
+        assert_eq!(allocated_pieces.len(), 6);
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.num_allocated(), 6);
+        assert_eq!(connections[key].target_inflight, 4);
+        assert_eq!(connections[key].queued.len(), 8);
+        assert_eq!(connections[key].inflight.len(), 4);
+
+        // Complete the first piece
+        let first_piece = allocated_pieces[0];
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: first_piece,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: first_piece,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        tick(
+            &Duration::from_millis(650),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        // Want an odd number here to test releasing in flight pieces
+        assert_eq!(connections[key].target_inflight, 9);
+        assert_eq!(connections[key].inflight.len(), 9);
+        assert_eq!(connections[key].queued.len(), 1);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state
+                .piece_selector
+                .is_allocated(*allocated_pieces.last().unwrap() as usize)
+        );
+
+        connections[key].handle_message(
+            PeerMessage::Choke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].peer_choking);
+        assert_eq!(connections[key].target_inflight, 9);
+        assert_eq!(connections[key].inflight.len(), 0);
+        assert_eq!(connections[key].queued.len(), 0);
+        // 1 piece completed (pending hashing), one was released
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.num_allocated(), 0);
+        // index = first_piece is not inflight over the network but pending hashing and thus is
+        // still marked inflight
+        for i in allocated_pieces.iter().skip(1) {
+            assert!(!torrent_state.piece_selector.is_allocated(*i as usize));
+        }
+    });
+}
+
+#[test]
+fn unchoke_recv() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(false, k));
+
+        assert!(connections[key].peer_choking);
+        connections[key].is_interesting = false;
+        connections[key].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(!connections[key].peer_choking);
+        // No intrest so nothing is downloaded
+        assert!(connections[key].queued.is_empty());
+        assert!(connections[key].inflight.is_empty());
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.num_allocated(), 0);
+
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].peer_choking);
+        assert!(connections[key].is_interesting);
+        connections[key].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(!connections[key].peer_choking);
+        // Peer is interesting so we start downloading
+        assert!(!(connections[key].queued.is_empty() && connections[key].inflight.is_empty()));
+        let torrent_state = state_ref.state().unwrap();
+        assert!(!torrent_state.pieces.is_empty());
+    });
+}
+
+// TODO: num_unchoked after disconnecting (tick maybe should return num disconnected? for easy testing)
+
+#[test]
+fn bitfield_recv() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        {
+            let key_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+            assert!(connections[key_b].pending_disconnect.is_none());
+            let torrent_state = state_ref.state().unwrap();
+            let invalid_field =
+                bitvec::bitvec!(u8, bitvec::order::Msb0; 1; torrent_state.num_pieces() - 1);
+            connections[key_b].handle_message(
+                PeerMessage::Bitfield(invalid_field),
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+            assert!(connections[key_b].pending_disconnect.is_some());
+        }
+
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        assert!(!connections[key_a].is_interesting);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            !torrent_state
+                .piece_selector
+                .bitfield_received(connections[key_a].conn_id)
+        );
+        let mut field = bitvec::bitvec!(u8, bitvec::order::Msb0; 1; torrent_state.num_pieces());
+        field.set(2, false);
+        field.set(4, false);
+        connections[key_a].handle_message(
+            PeerMessage::Bitfield(field),
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // We are interestead since we do not have the pieces
+        sent_and_marked_interested(&connections[key_a]);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state
+                .piece_selector
+                .bitfield_received(connections[key_a].conn_id)
+        );
+
+        for i in 0..torrent_state.num_pieces() {
+            if i == 2 || i == 4 {
+                assert!(
+                    !torrent_state
+                        .piece_selector
+                        .interesting_peer_pieces(connections[key_a].conn_id)
+                        .unwrap()[i]
+                );
+            } else {
+                assert!(
+                    torrent_state
+                        .piece_selector
+                        .interesting_peer_pieces(connections[key_a].conn_id)
+                        .unwrap()[i]
+                );
+                // MOCK that the pieces have been completed by a
+                torrent_state.piece_selector.mark_downloaded(i);
+                torrent_state.piece_selector.mark_complete(i);
+            }
+        }
+
+        let key_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+        assert!(!connections[key_b].is_interesting);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            !torrent_state
+                .piece_selector
+                .bitfield_received(connections[key_b].conn_id)
+        );
+        let num_pieces = torrent_state.num_pieces();
+        let mut field = bitvec::bitvec!(u8, bitvec::order::Msb0; 1; num_pieces);
+        field.set(2, false);
+        field.set(4, false);
+        connections[key_b].handle_message(
+            PeerMessage::Bitfield(field),
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Still not interestead since no new pieces can be downloaded received
+        assert!(!connections[key_b].is_interesting);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state
+                .piece_selector
+                .bitfield_received(connections[key_b].conn_id)
+        );
+
+        let key_c = connections.insert_established_with_key(|k| generate_peer(true, k));
+        assert!(!connections[key_c].is_interesting);
+        assert!(
+            !torrent_state
+                .piece_selector
+                .bitfield_received(connections[key_c].conn_id)
+        );
+        let num_pieces = torrent_state.num_pieces();
+        let mut field = bitvec::bitvec!(u8, bitvec::order::Msb0; 1; num_pieces);
+        field.set(2, false);
+        connections[key_c].handle_message(
+            PeerMessage::Bitfield(field),
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // New piece can be downloaded
+        sent_and_marked_interested(&connections[key_c]);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state
+                .piece_selector
+                .bitfield_received(connections[key_c].conn_id)
+        );
+    });
+}
+
+// TODO test we do not resend the not_interested message
+#[test]
+fn interest_is_updated_when_recv_piece() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        assert!(!connections[key].is_interesting);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            !torrent_state
+                .piece_selector
+                .bitfield_received(connections[key].conn_id)
+        );
+        let num_pieces = torrent_state.num_pieces();
+        let mut field = bitvec::bitvec!(u8, bitvec::order::Msb0; 0; num_pieces);
+        field.set(2, true);
+        field.set(4, true);
+        connections[key].handle_message(
+            PeerMessage::Bitfield(field),
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // We are interestead since we do not have the pieces
+        sent_and_marked_interested(&connections[key]);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state
+                .piece_selector
+                .bitfield_received(connections[key].conn_id)
+        );
+
+        let index_a = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index_a, key);
+        connections[key].append_and_fill(&mut subpieces);
+        let index_b = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index_b, key);
+        connections[key].append_and_fill(&mut subpieces);
+        assert_eq!(connections[key].inflight.len(), 4);
+        assert!(connections[key].queued.is_empty());
+
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: index_a,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: index_a,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // To ensure we do not miss the completion event
+        std::thread::sleep(Duration::from_millis(100));
+        let torrent_state = state_ref.state().unwrap();
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[index_a],
+        );
+        assert!(connections[key].is_interesting);
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: index_b,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: index_b,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // To ensure we do not miss the completion event
+        std::thread::sleep(Duration::from_millis(100));
+        let torrent_state = state_ref.state().unwrap();
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[index_b],
+        );
+        sent_and_marked_not_interested(&connections[key]);
+    });
+}
+
+#[test]
+fn send_have_to_peers_when_piece_completes() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        let key_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+        let _key_c = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        let torrent_state = state_ref.state().unwrap();
+        let num_pieces = torrent_state.num_pieces();
+        let mut field = bitvec::bitvec!(u8, bitvec::order::Msb0; 0; num_pieces);
+        field.set(2, true);
+        connections[key_a].handle_message(
+            PeerMessage::Bitfield(field),
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let mut field = bitvec::bitvec!(u8, bitvec::order::Msb0; 0; num_pieces);
+        field.set(4, true);
+        connections[key_b].handle_message(
+            PeerMessage::Bitfield(field),
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let torrent_state = state_ref.state().unwrap();
+        let index_a = torrent_state
+            .piece_selector
+            .next_piece(key_a, &mut connections[key_a].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index_a, key_a);
+        connections[key_a].append_and_fill(&mut subpieces);
+        let index_b = torrent_state
+            .piece_selector
+            .next_piece(key_b, &mut connections[key_b].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index_b, key_b);
+        connections[key_b].append_and_fill(&mut subpieces);
+
+        connections[key_a].handle_message(
+            PeerMessage::Piece {
+                index: index_a,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key_a].handle_message(
+            PeerMessage::Piece {
+                index: index_a,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // To ensure we do not miss the completion event
+        std::thread::sleep(Duration::from_millis(150));
+        let torrent_state = state_ref.state().unwrap();
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[index_a],
+        );
+        for (_, peer) in connections.iter_established_mut() {
+            assert!(
+                peer.outgoing_msgs_buffer
+                    .contains(&PeerMessage::Have { index: index_a })
+            );
+            // Clear for next check
+            peer.outgoing_msgs_buffer.clear();
+        }
+        connections[key_b].handle_message(
+            PeerMessage::Piece {
+                index: index_b,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key_b].handle_message(
+            PeerMessage::Piece {
+                index: index_b,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // To ensure we do not miss the completion event
+        std::thread::sleep(Duration::from_millis(100));
+        let torrent_state = state_ref.state().unwrap();
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[index_b],
+        );
+        for peer in connections.values() {
+            assert!(
+                peer.outgoing_msgs_buffer
+                    .contains(&PeerMessage::Have { index: index_b })
+            )
+        }
+    });
+}
+
+#[test]
+fn assume_intrest_when_request_recv() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(!connections[key_a].peer_interested);
+        connections[key_a].handle_message(
+            PeerMessage::Request {
+                index: 2,
+                begin: 0,
+                length: SUBPIECE_SIZE,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Assume the peer is interestead we recv a request from them
+        assert!(connections[key_a].peer_interested);
+    });
+}
+
+#[test]
+fn piece_recv() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        let prev_target_infligt = connections[key].target_inflight;
+        assert_eq!(torrent_state.num_allocated(), 1);
+        assert!(torrent_state.pieces[index as usize].is_some());
+        connections[key].append_and_fill(&mut subpieces);
+        assert_eq!(connections[key].inflight.len(), 2);
+        assert!(connections[key].queued.is_empty());
+        assert_eq!(torrent_state.piece_selector.total_allocated(), 1);
+        assert!(torrent_state.piece_selector.is_allocated(index as usize));
+        assert_eq!(torrent_state.piece_selector.total_completed(), 0);
+
+        let now = Instant::now();
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let torrent_state = state_ref.state().unwrap();
+        assert!(
+            torrent_state.pieces[index as usize]
+                .as_ref()
+                .unwrap()
+                .completed_subpieces[0]
+        );
+        assert_eq!(connections[key].inflight.len(), 1);
+        assert_eq!(connections[key].target_inflight, prev_target_infligt + 1);
+        assert!(now - connections[key].last_seen < Duration::from_millis(1));
+        assert!(now - connections[key].last_received_subpiece.unwrap() < Duration::from_millis(1));
+        assert!(
+            !torrent_state.pieces[index as usize]
+                .as_ref()
+                .unwrap()
+                .completed_subpieces
+                .all()
+        );
+
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].inflight.is_empty());
+        assert_eq!(connections[key].target_inflight, prev_target_infligt + 2);
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.num_allocated(), 0);
+        // To ensure we do not miss the completion event
+        std::thread::sleep(Duration::from_millis(100));
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[index],
+        );
+        assert_eq!(torrent_state.piece_selector.total_allocated(), 0);
+        assert!(!torrent_state.piece_selector.is_allocated(index as usize));
+        assert!(torrent_state.piece_selector.has_downloaded(index as usize));
+        assert_eq!(torrent_state.piece_selector.total_completed(), 1);
+    });
+}
+
+#[test]
+fn handles_duplicate_piece_recv() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let prev_target_infligt = connections[key].target_inflight;
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        connections[key].append_and_fill(&mut subpieces);
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert_eq!(connections[key].target_inflight, prev_target_infligt + 1);
+        assert_eq!(connections[key].inflight.len(), 1);
+        std::thread::sleep(Duration::from_millis(100));
+        // Same message again
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].last_seen.elapsed() < Duration::from_millis(1));
+        // Timestamps for last_received_subpiece are not updated
+        assert!(
+            connections[key].last_received_subpiece.unwrap().elapsed() > Duration::from_millis(100)
+        );
+        assert_eq!(connections[key].target_inflight, prev_target_infligt + 1);
+        assert_eq!(connections[key].inflight.len(), 1);
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].inflight.is_empty());
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.num_allocated(), 0);
+        // To ensure we do not miss the completion event
+        std::thread::sleep(Duration::from_millis(100));
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[index],
+        );
+        assert_eq!(torrent_state.piece_selector.total_allocated(), 0);
+        assert!(!torrent_state.piece_selector.is_allocated(index as usize));
+        assert!(torrent_state.piece_selector.has_downloaded(index as usize));
+        assert_eq!(torrent_state.piece_selector.total_completed(), 1);
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.piece_selector.total_allocated(), 0);
+        assert!(!torrent_state.piece_selector.is_allocated(index as usize));
+        assert!(torrent_state.piece_selector.has_downloaded(index as usize));
+        assert_eq!(torrent_state.piece_selector.total_completed(), 1);
+    });
+}
+
+#[test]
+fn invalid_piece() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let torrent_state = state_ref.state().unwrap();
+        let mut subpieces = torrent_state.allocate_piece(2, connections[key_a].conn_id);
+        connections[key_a].append_and_fill(&mut subpieces);
+        assert!(connections[key_a].pending_disconnect.is_none());
+        connections[key_a].handle_message(
+            PeerMessage::Piece {
+                index: -2,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_a].pending_disconnect.is_some());
+        let key_a2 = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a2].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let torrent_state = state_ref.state().unwrap();
+        let mut subpieces = torrent_state.allocate_piece(2, connections[key_a2].conn_id);
+        connections[key_a2].append_and_fill(&mut subpieces);
+        assert!(connections[key_a2].pending_disconnect.is_none());
+        connections[key_a2].handle_message(
+            PeerMessage::Piece {
+                index: 2,
+                begin: SUBPIECE_SIZE + 1,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_a2].pending_disconnect.is_some());
+
+        let key_a3 = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a3].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let torrent_state = state_ref.state().unwrap();
+        let mut subpieces = torrent_state.allocate_piece(2, connections[key_a3].conn_id);
+        connections[key_a3].append_and_fill(&mut subpieces);
+        assert!(connections[key_a3].pending_disconnect.is_none());
+        connections[key_a3].handle_message(
+            PeerMessage::Piece {
+                index: 2,
+                begin: 0,
+                data: vec![3; (SUBPIECE_SIZE + 1) as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_a3].pending_disconnect.is_some());
+    });
+}
+
+// TODO: ensure we request as many pieces as possible to actuall fill up all available queue spots
+// when starting up connections
+// #[test]
+// fn request_piece() {}
+
+// TODO timeout tests + Tests that ensure we handle redundant data
+#[test]
+fn snubbed_peer() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Hack to prevent this from requesting things
+        connections[key].is_interesting = false;
+        connections[key].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].is_interesting = true;
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        connections[key].append_and_fill(&mut subpieces);
+        assert_eq!(connections[key].inflight.len(), 2);
+        assert!(connections[key].queued.is_empty());
+        assert_eq!(torrent_state.num_allocated(), 1);
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: 0,
+                // TODO: THIS MIGHT BE INCORRECT
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].last_received_subpiece.is_some());
+        assert!(connections[key].slow_start);
+        assert!(!connections[key].snubbed);
+        // Simulate time passing
+        connections[key].last_received_subpiece = Some(Instant::now() - Duration::from_secs(3));
+        assert_eq!(connections[key].inflight.len(), 1);
+        assert!(!connections[key].inflight[0].timed_out);
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+        assert!(!connections[key].slow_start);
+        assert!(connections[key].snubbed);
+        assert!(connections[key].inflight[0].timed_out);
+        let torrent_state = state_ref.state().unwrap();
+        assert!(!torrent_state.piece_selector.is_allocated(index as usize));
+        assert_eq!(torrent_state.num_allocated(), 1);
+        assert_eq!(connections[key].target_inflight, 1);
+        assert_eq!(connections[key].inflight.len(), 2);
+        let inflight = connections[key].inflight[1];
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: inflight.index,
+                begin: inflight.offset,
+                data: vec![3; inflight.size as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Still snubbed since adaptive timeout needs more samples haven't recovered yet
+        assert!(connections[key].snubbed);
+
+        // simulate the first piece arriving
+        let second = connections[key].inflight[0];
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index: second.index,
+                begin: second.offset,
+                data: vec![3; second.size as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // snub is cleared since it's within adaptive timeout
+        assert!(!connections[key].snubbed);
+        assert_eq!(connections[key].inflight.len(), 0);
+
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+        // target is recalculated based off adaptive timeout
+        assert!(connections[key].target_inflight > 1);
+    });
+}
+
+// Regression test: a peer that chokes us must not be timed out / snubbed.
+// A non fast_ext Choke clears our outstanding requests (inflight) but leaves the
+// adaptive timeout counter (last_received_subpiece) stale. The tick must therefore guard
+// the adaptive timeout with `!inflight.is_empty()`, otherwise on_request_timeout
+// fires on a peer we have nothing outstanding with and spuriously snubs it.
+#[test]
+fn choked_peer_with_empty_inflight_is_not_snubbed() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(false, k));
+
+        let num_pieces = state_ref.state().unwrap().num_pieces();
+        let field = bitvec::bitvec!(u8, bitvec::order::Msb0; 1; num_pieces);
+        connections[key].handle_message(
+            PeerMessage::Bitfield(field),
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Hack to prevent the unchoke from auto-requesting so the inflight queue
+        // can be set up manually below.
+        connections[key].is_interesting = false;
+        connections[key].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].is_interesting = true;
+
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        connections[key].append_and_fill(&mut subpieces);
+        // Receive a subpiece so we have an rtt sample (request_timeout drops to
+        // its 2s floor) and a populated timeout anchor.
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(!connections[key].inflight.is_empty());
+        assert!(connections[key].last_received_subpiece.is_some());
+
+        // The peer chokes us. As a non fast_ext peer this clears inflight but
+        // does NOT reset the timeout anchor (last_received_subpiece).
+        connections[key].handle_message(
+            PeerMessage::Choke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].peer_choking);
+        assert!(connections[key].inflight.is_empty());
+        assert!(connections[key].last_received_subpiece.is_some());
+
+        // Let the timeout window elapse on the now-stale anchor.
+        connections[key].last_received_subpiece = Some(Instant::now() - Duration::from_secs(3));
+
+        // The peer is choking us and we have nothing in flight, so the adaptive
+        // timeout must NOT fire.
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+        assert!(!connections[key].snubbed);
+        assert!(connections[key].slow_start);
+    });
+}
+
+// Regression test, fast_ext variant of the above. Here the RejectRequests are needed
+// to reach an empty inflight queue
+#[test]
+fn fast_ext_peer_rejecting_while_choked_is_not_snubbed() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Hack to prevent the unchoke from auto-requesting so the inflight queue
+        // can be set up manually below.
+        connections[key].is_interesting = false;
+        connections[key].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].is_interesting = true;
+
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        connections[key].append_and_fill(&mut subpieces);
+        // Receive a subpiece so we have an rtt sample (request_timeout drops to
+        // its 2s floor) and a populated timeout anchor.
+        connections[key].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // The peer chokes us. Unlike a non fast_ext peer, inflight is kept.
+        connections[key].handle_message(
+            PeerMessage::Choke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].peer_choking);
+        assert!(!connections[key].inflight.is_empty());
+
+        // It then explicitly rejects every still-outstanding request. While
+        // choked these are removed from inflight without refilling.
+        while let Some(subpiece) = connections[key].inflight.front().copied() {
+            connections[key].handle_message(
+                PeerMessage::RejectRequest {
+                    index: subpiece.index,
+                    begin: subpiece.offset,
+                    length: subpiece.size,
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+        }
+        assert!(connections[key].pending_disconnect.is_none());
+        assert!(connections[key].inflight.is_empty());
+        assert!(connections[key].last_received_subpiece.is_some());
+
+        // Let the timeout window elapse on the now-stale anchor.
+        connections[key].last_received_subpiece = Some(Instant::now() - Duration::from_secs(3));
+
+        // Nothing is in flight, so the adaptive timeout must NOT fire even though
+        // the anchor is stale.
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+        assert!(!connections[key].snubbed);
+        assert!(connections[key].slow_start);
+    });
+}
+
+#[test]
+fn stalled_connection_is_snubbed() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Hack to prevent the unchoke from auto-requesting so the inflight queue
+        // can be set up manually below.
+        connections[key].is_interesting = false;
+        connections[key].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].is_interesting = true;
+
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key, &mut connections[key].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key);
+        connections[key].append_and_fill(&mut subpieces);
+        assert!(!connections[key].inflight.is_empty());
+        assert!(!connections[key].snubbed);
+        assert!(connections[key].slow_start);
+
+        // No subpiece is ever delivered, so there are no rtt samples and the
+        // adaptive timeout sits at its ceiling, far above the stall window - it
+        // must NOT be what triggers here.
+        assert!(connections[key].request_timeout() > Duration::from_secs(16));
+
+        // The peer goes silent: no request sent and no response received for
+        // longer than the stall window. Both anchors age together, but only the
+        // coarse last_req_resp timer has elapsed.
+        connections[key].last_req_resp = Instant::now() - Duration::from_secs(16);
+        connections[key].last_received_subpiece = Some(Instant::now() - Duration::from_secs(16));
+
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+        // The stall timeout fired and snubbed the peer (also dropping slow start).
+        assert!(connections[key].snubbed);
+        assert!(!connections[key].slow_start);
+    });
+}
+
+#[test]
+fn reject_request_requests_new() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Hack to prevent this from requesting things
+        connections[key_a].is_interesting = false;
+        connections[key_a].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key_a].is_interesting = true;
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(connections[key_a].conn_id, &mut connections[key_a].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, connections[key_a].conn_id);
+        connections[key_a].append_and_fill(&mut subpieces);
+        assert_eq!(connections[key_a].inflight.len(), 2);
+        assert!(connections[key_a].inflight.contains(&Subpiece {
+            index,
+            offset: 0,
+            size: SUBPIECE_SIZE,
+            timed_out: false,
+        }));
+        assert_eq!(torrent_state.num_allocated(), 1);
+        connections[key_a].handle_message(
+            PeerMessage::RejectRequest {
+                index,
+                begin: 0,
+                length: SUBPIECE_SIZE,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(!connections[key_a].inflight.contains(&Subpiece {
+            index,
+            offset: 0,
+            size: SUBPIECE_SIZE,
+            timed_out: false,
+        }));
+        // New piece started
+        let torrent_state = state_ref.state().unwrap();
+        assert_eq!(torrent_state.num_allocated(), 1);
+        assert!(!torrent_state.piece_selector.is_allocated(index as usize));
+        assert_eq!(connections[key_a].inflight.len(), 3);
+    });
+}
+
+#[test]
+fn invalid_reject_request() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_b = connections.insert_established_with_key(|k| generate_peer(false, k));
+        connections[key_b].handle_message(
+            PeerMessage::RejectRequest {
+                index: 2,
+                begin: 0,
+                length: SUBPIECE_SIZE,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(matches!(
+            connections[key_b].pending_disconnect,
+            Some(DisconnectReason::ProtocolError(_))
+        ));
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Hack to prevent this from requesting things
+        connections[key_a].is_interesting = false;
+        connections[key_a].handle_message(
+            PeerMessage::Unchoke,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key_a].is_interesting = true;
+        let torrent_state = state_ref.state().unwrap();
+        let mut subpieces = torrent_state.allocate_piece(2, connections[key_a].conn_id);
+        connections[key_a].append_and_fill(&mut subpieces);
+        assert!(connections[key_a].pending_disconnect.is_none());
+        connections[key_a].handle_message(
+            PeerMessage::RejectRequest {
+                index: -2,
+                begin: 0,
+                length: SUBPIECE_SIZE,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_a].pending_disconnect.is_some());
+        connections[key_a].pending_disconnect = None;
+        connections[key_a].handle_message(
+            PeerMessage::RejectRequest {
+                index: 2,
+                begin: SUBPIECE_SIZE + 1,
+                length: SUBPIECE_SIZE,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_a].pending_disconnect.is_some());
+        connections[key_a].pending_disconnect = None;
+        assert_eq!(connections[key_a].inflight.len(), 2);
+        connections[key_a].handle_message(
+            PeerMessage::RejectRequest {
+                index: 2,
+                begin: 0,
+                length: SUBPIECE_SIZE + 1,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert_eq!(connections[key_a].inflight.len(), 2);
+        assert!(connections[key_a].pending_disconnect.is_some());
+    });
+}
+
+#[test]
+fn endgame_mode() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        connections[key_a].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let key_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        connections[key_b].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let torrent_state = state_ref.state().unwrap();
+        // no need for this test
+        torrent_state.piece_buffer_pool.stop_tracking();
+
+        // Set up so that half of the pieces have been requested and that a part of those have been
+        // completed
+        let num_pieces_half = torrent_state.num_pieces() / 2;
+        for i in 0..num_pieces_half {
+            let torrent_state = state_ref.state().unwrap();
+            let index = torrent_state
+                .piece_selector
+                .next_piece(key_a, &mut connections[key_a].endgame)
+                .unwrap();
+            assert!(!connections[key_a].endgame);
+            let mut subpieces = torrent_state.allocate_piece(index, key_a);
+            connections[key_a].append_and_fill(&mut subpieces);
+            if i % 2 == 0 {
+                connections[key_a].handle_message(
+                    PeerMessage::Piece {
+                        index,
+                        begin: 0,
+                        data: vec![3; SUBPIECE_SIZE as usize].into(),
+                    },
+                    &mut state_ref,
+                    &mut pending_disk_operations,
+                    scope,
+                );
+                connections[key_a].handle_message(
+                    PeerMessage::Piece {
+                        index,
+                        begin: SUBPIECE_SIZE,
+                        data: vec![3; SUBPIECE_SIZE as usize].into(),
+                    },
+                    &mut state_ref,
+                    &mut pending_disk_operations,
+                    scope,
+                );
+            }
+        }
+        // To ensure we do not miss the completion event
+        std::thread::sleep(Duration::from_millis(100));
+        let torrent_state = state_ref.state().unwrap();
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[1, 4],
+        );
+        assert!(!connections[key_a].endgame);
+        assert!(!connections[key_b].endgame);
+        let torrent_state = state_ref.state().unwrap();
+        let remaining = torrent_state.num_pieces()
+            - torrent_state.piece_selector.total_allocated()
+            - torrent_state.piece_selector.total_completed();
+        // request the rest from the other peer so that everything has been allocated
+        for _ in 0..remaining {
+            let torrent_state = state_ref.state().unwrap();
+            let index = torrent_state
+                .piece_selector
+                .next_piece(key_b, &mut connections[key_b].endgame)
+                .unwrap();
+            assert!(!connections[key_b].endgame);
+            let torrent_state = state_ref.state().unwrap();
+            let mut subpieces = torrent_state.allocate_piece(index, key_b);
+            connections[key_b].append_and_fill(&mut subpieces);
+        }
+        for _ in 0..remaining {
+            let torrent_state = state_ref.state().unwrap();
+            let index = torrent_state
+                .piece_selector
+                .next_piece(key_a, &mut connections[key_a].endgame)
+                .unwrap();
+            assert!(connections[key_a].endgame);
+            // Never request something we are in the process of downloading
+            assert!(
+                !connections[key_a]
+                    .queued
+                    .iter()
+                    .any(|piece| piece.index == index)
+            );
+            assert!(
+                !connections[key_a]
+                    .inflight
+                    .iter()
+                    .any(|piece| piece.index == index)
+            );
+            let torrent_state = state_ref.state().unwrap();
+            let mut subpieces = torrent_state.allocate_piece(index, key_a);
+            connections[key_a].append_and_fill(&mut subpieces);
+        }
+    });
+}
+
+// BEP 10 and BEP 9 Tests
+
+#[test]
+fn extension_protocol_handshake() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        // Create peer with extension protocol support
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+        assert!(connections[key_a].extensions.is_empty());
+        let expected_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len();
+
+        // Simulate receiving extension handshake with ut_metadata support
+        let handshake_data = format!(
+            "d1:md11:ut_metadatai3ee13:metadata_sizei{expected_size}e1:v14:TestClient 1.0ee"
+        );
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Should have created metadata extension
+        assert!(!connections[key_a].extensions.is_empty());
+        assert!(connections[key_a].extensions.contains_key(&1)); // ut_metadata extension ID
+        assert_eq!(connections[key_a].max_queue_size, 200); // Default value since no reqq specified
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn extension_handshake_with_reqq() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        let expected_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len();
+
+        // Handshake with custom queue size
+        let handshake_data =
+            format!("d1:md11:ut_metadatai3ee13:metadata_sizei{expected_size}e4:reqqi100eee");
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert_eq!(connections[key_a].max_queue_size, 100);
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn extension_handshake_malformed() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        let invalid_data = b"invalid bencoded data";
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: invalid_data.to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(connections[key_a].pending_disconnect.is_some());
+    });
+}
+
+#[test]
+fn extension_handshake_missing_m_field() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        // Missing 'm' field
+        let handshake_data = br#"d1:v14:TestClient 1.0ee"#;
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(connections[key_a].pending_disconnect.is_some());
+        assert!(matches!(
+            connections[key_a].pending_disconnect,
+            Some(DisconnectReason::ProtocolError(_))
+        ));
+    });
+}
+
+#[test]
+fn metadata_extension_request_message() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        let expected_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len();
+        // First send handshake to set up extension
+        let handshake_data = format!("d1:md11:ut_metadatai3ee13:metadata_sizei{expected_size}eee");
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Clear any messages from handshake
+        connections[key_a].outgoing_msgs_buffer.clear();
+
+        // Send metadata request (message type 0, piece 0)
+        let request_data = br#"d8:msg_typei0e5:piecei0ee"#;
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1, // ut_metadata extension ID
+                data: request_data.to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        let metadata = state_ref.metadata().unwrap().construct_info().encode();
+
+        assert!(!connections[key_a].outgoing_msgs_buffer.is_empty());
+        let response = &connections[key_a].outgoing_msgs_buffer[0];
+        if let PeerMessage::Extended { id, data } = &response {
+            let mut de = Deserializer::from_slice(&data[..]);
+            let message: MetadataMessage = <MetadataMessage>::deserialize(&mut de).unwrap();
+            assert_eq!(
+                message,
+                MetadataMessage {
+                    msg_type: 1, // DATA
+                    piece: 0,
+                    total_size: Some(metadata.len() as i32)
+                }
+            );
+            let metadata_piece = &data[de.byte_offset()..];
+            assert_eq!(metadata_piece, &metadata);
+            assert_eq!(*id, 3); // The peer should use the ID we told it to use (3)
+        } else {
+            panic!("Expected Extended message");
+        }
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn metadata_extension_request_response_capped_to_piece_size() {
+    let mut download_state = setup_test_with_large_metadata();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        let metadata = state_ref.metadata().unwrap().construct_info().encode();
+        let expected_size = metadata.len();
+
+        // Metadata must span multiple pieces for this test to be meaningful
+        assert!(
+            expected_size > SUBPIECE_SIZE as usize,
+            "Metadata should be larger than {SUBPIECE_SIZE} bytes, got {expected_size}"
+        );
+
+        // Set up extension handshake
+        let handshake_data = format!("d1:md11:ut_metadatai3ee13:metadata_sizei{expected_size}eee");
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key_a].outgoing_msgs_buffer.clear();
+
+        // Request piece 0
+        let request_data = b"d8:msg_typei0e5:piecei0ee";
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1,
+                data: request_data.to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(!connections[key_a].outgoing_msgs_buffer.is_empty());
+        let response = &connections[key_a].outgoing_msgs_buffer[0];
+        if let PeerMessage::Extended { data, .. } = &response {
+            let mut de = Deserializer::from_slice(&data[..]);
+            let message: MetadataMessage = <MetadataMessage>::deserialize(&mut de).unwrap();
+            assert_eq!(message.msg_type, 1); // DATA
+            assert_eq!(message.piece, 0);
+            assert_eq!(message.total_size, Some(expected_size as i32));
+
+            let metadata_piece = &data[de.byte_offset()..];
+            // The piece MUST be exactly SUBPIECE_SIZE, not the entire remaining metadata
+            assert_eq!(
+                metadata_piece.len(),
+                SUBPIECE_SIZE as usize,
+                "Piece 0 should be exactly {SUBPIECE_SIZE} bytes, got {} bytes (full metadata is {expected_size} bytes)",
+                metadata_piece.len()
+            );
+            assert_eq!(metadata_piece, &metadata[..SUBPIECE_SIZE as usize]);
+        } else {
+            panic!("Expected Extended message");
+        }
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn metadata_extension_request_last_piece_smaller_than_subpiece() {
+    let mut download_state = setup_test_with_large_metadata();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        let metadata = state_ref.metadata().unwrap().construct_info().encode();
+        let expected_size = metadata.len();
+        let piece_size = SUBPIECE_SIZE as usize;
+        let num_pieces = expected_size.div_ceil(piece_size);
+        let last_piece_size = expected_size - (num_pieces - 1) * piece_size;
+
+        // The last piece must be smaller than a full piece for this test to be meaningful
+        assert!(
+            last_piece_size < piece_size,
+            "Metadata size ({expected_size}) happens to be a multiple of {piece_size}; \
+             last piece would be full-sized, so this test is not exercising the right path"
+        );
+
+        // Set up extension handshake
+        let handshake_data = format!("d1:md11:ut_metadatai3ee13:metadata_sizei{expected_size}eee");
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key_a].outgoing_msgs_buffer.clear();
+
+        // Request the last piece
+        let last_piece_idx = num_pieces - 1;
+        let request_data = format!("d8:msg_typei0e5:piecei{last_piece_idx}ee");
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1,
+                data: request_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(!connections[key_a].outgoing_msgs_buffer.is_empty());
+        let response = &connections[key_a].outgoing_msgs_buffer[0];
+        if let PeerMessage::Extended { data, .. } = &response {
+            let mut de = Deserializer::from_slice(&data[..]);
+            let message: MetadataMessage = <MetadataMessage>::deserialize(&mut de).unwrap();
+            assert_eq!(message.msg_type, 1); // DATA
+            assert_eq!(message.piece, last_piece_idx as i32);
+            assert_eq!(message.total_size, Some(expected_size as i32));
+
+            let metadata_piece = &data[de.byte_offset()..];
+            assert_eq!(
+                metadata_piece.len(),
+                last_piece_size,
+                "Last piece should be {last_piece_size} bytes, got {} bytes",
+                metadata_piece.len()
+            );
+            let start_offset = last_piece_idx * piece_size;
+            assert_eq!(metadata_piece, &metadata[start_offset..]);
+        } else {
+            panic!("Expected Extended message");
+        }
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn metadata_extension_data_message() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        let expected_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len();
+        let handshake_data = format!("d1:md11:ut_metadatai3ee13:metadata_sizei{expected_size}eee");
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let mut data_msg = format!("d8:msg_typei1e5:piecei0e10:total_sizei{expected_size}ee")
+            .as_bytes()
+            .to_vec();
+        // Append some dummy metadata
+        data_msg.extend_from_slice(&vec![0u8; expected_size]);
+
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1,
+                data: data_msg.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn metadata_extension_reject_message() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        let expected_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len();
+        // Set up extension
+        let handshake_data = format!("d1:md11:ut_metadatai3ee13:metadata_sizei{expected_size}eee");
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let reject_data = br#"d8:msg_typei2e5:piecei0ee"#;
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1,
+                data: reject_data.to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn metadata_extension_invalid_message_type() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        let expected_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len();
+        // Set up extension
+        let handshake_data = format!("d1:md11:ut_metadatai3ee13:metadata_sizei{expected_size}eee");
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Send invalid message type (message type 99)
+        let invalid_data = br#"d8:msg_typei99e5:piecei0ee"#;
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1,
+                data: invalid_data.to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Should not disconnect for unknown message types (as per BEP 9)
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn extension_message_unknown_id() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        // Send message with unknown extension ID (no handshake first)
+        let data = br#"d8:msg_typei0e5:piecei0ee"#;
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 99, // Unknown extension ID
+                data: data.to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Should not disconnect for unknown extension IDs
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn metadata_extension_piece_bounds_validation() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        let expected_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len();
+
+        // Set up extension with known metadata size
+        let handshake_data = format!("d1:md11:ut_metadatai3ee13:metadata_sizei{expected_size}eee");
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Send request for negative piece index
+        let invalid_request = br#"d8:msg_typei0e5:piecei-1ee"#;
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1,
+                data: invalid_request.to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Should handle gracefully (implementation specific)
+        // This test ensures the implementation doesn't panic
+
+        // Send request for very large piece index
+        let large_request = br#"d8:msg_typei0e5:piecei999999ee"#;
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1,
+                data: large_request.to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(connections[key_a].pending_disconnect.is_some());
+    });
+}
+
+#[test]
+fn extension_handshake_generates_correct_message() {
+    use crate::peer_comm::extended_protocol::extension_handshake_msg;
+    let mut download_state = setup_test();
+    download_state.listener_port = Some(1234);
+
+    let mut state_ref = download_state.as_ref();
+    let handshake = extension_handshake_msg(&mut state_ref, &torrent::Config::default());
+
+    if let PeerMessage::Extended { id, data } = handshake {
+        assert_eq!(id, 0); // Handshake uses ID 0
+
+        let expected_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len();
+        // Parse the bencoded data to verify structure
+        let parsed: bt_bencode::Value = bt_bencode::from_slice(&data).unwrap();
+        let dict = parsed.as_dict().unwrap();
+
+        // Should contain 'm' field with ut_metadata
+        assert!(dict.contains_key("m".as_bytes()));
+        let m = dict.get("m".as_bytes()).unwrap().as_dict().unwrap();
+        assert!(m.contains_key("ut_metadata".as_bytes()));
+
+        assert!(dict.contains_key("v".as_bytes()));
+        assert_eq!(dict.get("p".as_bytes()).unwrap().as_u64().unwrap(), 1234);
+        assert_eq!(
+            dict.get("reqq".as_bytes()).unwrap().as_u64().unwrap(),
+            state_ref.config.max_reported_outstanding_requests
+        );
+        assert_eq!(
+            dict.get("metadata_size".as_bytes())
+                .unwrap()
+                .as_u64()
+                .unwrap(),
+            expected_size as u64
+        );
+    } else {
+        panic!("Expected Extended message");
+    }
+}
+
+#[test]
+fn metadata_download_single_piece() {
+    let (mut download_state, torrent_info) = setup_uninitialized_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        // Verify state is not initialized
+        assert!(!state_ref.is_initialzied());
+        assert!(state_ref.state().is_none());
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        // Get the actual metadata that should be downloaded
+        let metadata_bytes = torrent_info.construct_info().encode();
+
+        // Set up extension handshake - peer tells us they have metadata of this size
+        let handshake_data = format!(
+            "d1:md11:ut_metadatai3ee13:metadata_sizei{}ee",
+            metadata_bytes.len()
+        );
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Should have created metadata extension and sent requests
+        assert!(!connections[key_a].extensions.is_empty());
+        assert!(connections[key_a].extensions.contains_key(&1)); // ut_metadata extension ID
+        assert!(!connections[key_a].outgoing_msgs_buffer.is_empty()); // Should have sent metadata requests
+
+        // Clear outgoing messages
+        connections[key_a].outgoing_msgs_buffer.clear();
+
+        // Since metadata is small (< 16KiB), it should be a single piece
+        let mut data_msg = format!(
+            "d8:msg_typei1e5:piecei0e10:total_sizei{}ee",
+            metadata_bytes.len()
+        )
+        .as_bytes()
+        .to_vec();
+        data_msg.extend_from_slice(&metadata_bytes);
+
+        // Send the metadata as a DATA message
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1, // ut_metadata extension ID from our side
+                data: data_msg.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Check if there was a hash mismatch or other error
+        if let Some(reason) = &connections[key_a].pending_disconnect {
+            panic!("Peer got disconnected: {reason:?}");
+        }
+
+        // State should now be initialized with the downloaded metadata
+        if !state_ref.is_initialzied() {
+            // Let's check what went wrong - maybe the metadata size doesn't match?
+            panic!(
+                "State was not initialized after receiving metadata. Metadata size: {}, Expected info hash: {:?}",
+                metadata_bytes.len(),
+                state_ref.info_hash()
+            );
+        }
+
+        // Verify the metadata matches what we sent
+        assert_eq!(
+            state_ref.metadata().unwrap().construct_info().encode(),
+            metadata_bytes
+        );
+        {
+            let torrent_state = state_ref.state().unwrap();
+            assert_eq!(torrent_state.num_pieces(), torrent_info.pieces.len());
+        }
+
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn metadata_download_multiple_pieces() {
+    // Use large metadata to test real multi-piece download
+    let (mut download_state, torrent_info) = setup_uninitialized_test_with_metadata_size(true);
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        // Verify state is not initialized
+        assert!(!state_ref.is_initialzied());
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key_a].extended_extension = true;
+
+        // Get the actual metadata - this should now be large enough to require multiple pieces
+        let metadata_bytes = torrent_info.construct_info().encode();
+        println!(
+            "Metadata size: {} bytes (should be > {} for multi-piece)",
+            metadata_bytes.len(),
+            SUBPIECE_SIZE
+        );
+
+        // Verify we have large enough metadata to test multi-piece download
+        assert!(
+            metadata_bytes.len() > SUBPIECE_SIZE as usize,
+            "Metadata should be larger than {SUBPIECE_SIZE} bytes to test multi-piece download"
+        );
+
+        // Set up extension handshake
+        let handshake_data = format!(
+            "d1:md11:ut_metadatai3ee13:metadata_sizei{}ee",
+            metadata_bytes.len()
+        );
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.as_bytes().to_vec().into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Should have requested multiple pieces
+        assert!(!connections[key_a].outgoing_msgs_buffer.is_empty());
+        connections[key_a].outgoing_msgs_buffer.clear();
+
+        // Calculate the number of pieces needed
+        let piece_size = SUBPIECE_SIZE as usize;
+        let num_pieces = metadata_bytes.len().div_ceil(piece_size);
+        println!(
+            "Will need {} pieces to download {} bytes of metadata",
+            num_pieces,
+            metadata_bytes.len()
+        );
+
+        // Send all pieces except the last one
+        for piece_idx in 0..(num_pieces - 1) {
+            let start_offset = piece_idx * piece_size;
+            let end_offset = start_offset + piece_size;
+
+            let mut data_msg = format!(
+                "d8:msg_typei1e5:piecei{}e10:total_sizei{}ee",
+                piece_idx,
+                metadata_bytes.len()
+            )
+            .as_bytes()
+            .to_vec();
+            data_msg.extend_from_slice(&metadata_bytes[start_offset..end_offset]);
+
+            connections[key_a].handle_message(
+                PeerMessage::Extended {
+                    id: 1,
+                    data: data_msg.into(),
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+
+            // Should still not be initialized, but may request next piece
+            assert!(!state_ref.is_initialzied());
+            connections[key_a].outgoing_msgs_buffer.clear();
+        }
+
+        // Send the final piece
+        let final_piece_idx = num_pieces - 1;
+        let start_offset = final_piece_idx * piece_size;
+
+        let mut data_msg = format!(
+            "d8:msg_typei1e5:piecei{}e10:total_sizei{}ee",
+            final_piece_idx,
+            metadata_bytes.len()
+        )
+        .as_bytes()
+        .to_vec();
+        data_msg.extend_from_slice(&metadata_bytes[start_offset..]);
+
+        connections[key_a].handle_message(
+            PeerMessage::Extended {
+                id: 1,
+                data: data_msg.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Now the state should be initialized with the complete metadata
+        if let Some(reason) = &connections[key_a].pending_disconnect {
+            panic!("Peer got disconnected: {reason:?}");
+        }
+
+        assert!(
+            state_ref.is_initialzied(),
+            "State should be initialized after receiving all metadata pieces"
+        );
+        // Verify the metadata matches what we sent
+        assert_eq!(
+            state_ref.metadata().unwrap().construct_info().encode(),
+            metadata_bytes
+        );
+        {
+            let torrent_state = state_ref.state().unwrap();
+            assert_eq!(torrent_state.num_pieces(), torrent_info.pieces.len());
+        }
+
+        assert!(connections[key_a].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn updates_upload_throughput() {
+    let mut download_state = setup_seeding_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // Unchoke the peer so upload stats are tracked properly
+        let torrent_state = state_ref.state().unwrap();
+        connections[key].unchoke(torrent_state);
+
+        assert_eq!(connections[key].network_stats.upload_throughput, 0);
+        assert_eq!(connections[key].network_stats.prev_upload_throughput, 0);
+
+        connections[key].on_network_write(SUBPIECE_SIZE as usize);
+
+        // After sending the piece, upload throughput should be tracked
+        assert_eq!(
+            connections[key].network_stats.upload_throughput,
+            SUBPIECE_SIZE as u64
+        );
+
+        connections[key].on_network_write(SUBPIECE_SIZE as usize);
+
+        // Upload throughput should accumulate
+        assert_eq!(
+            connections[key].network_stats.upload_throughput,
+            (SUBPIECE_SIZE * 2) as u64
+        );
+
+        // Simulate a tick to move current throughput to prev_throughput
+        let mut event_q = Queue::<TorrentEvent, 512>::new();
+        let (mut event_tx, _event_rx) = event_q.split();
+        tick(
+            &Duration::from_millis(1500),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        // After tick, current throughput is reset and moved to prev
+        assert_eq!(
+            connections[key].network_stats.prev_upload_throughput,
+            ((SUBPIECE_SIZE * 2) as f64 / 1.5) as u64
+        );
+        assert_eq!(connections[key].network_stats.upload_throughput, 0);
+    });
+}
+
+#[test]
+fn request_message_queues_disk_reads() {
+    let mut download_state = setup_seeding_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        state_ref.state().unwrap().piece_buffer_pool.stop_tracking();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // Setup: peer have no pieces and is interested in our data
+        connections[key].handle_message(
+            PeerMessage::HaveNone,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Interested,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Should have no pending disk operations yet
+        assert_eq!(pending_disk_operations.len(), 0);
+
+        // Send a Request message
+        connections[key].handle_message(
+            PeerMessage::Request {
+                index: 0,
+                begin: 0,
+                length: SUBPIECE_SIZE,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // After receiving the request, a disk read per file that overlaps the subpiece should be
+        // triggered. That's 3 for this test data setup
+        assert_eq!(pending_disk_operations.len(), 3);
+        for disk_op in pending_disk_operations.iter() {
+            assert_eq!(disk_op.piece_idx, 0);
+            assert!(matches!(
+                disk_op.op_type,
+                DiskOpType::Read {
+                    connection_idx,
+                    piece_offset
+                } if connection_idx == key && piece_offset == 0
+            ));
+        }
+
+        pending_disk_operations.clear();
+        // Request another subpiece
+        connections[key].handle_message(
+            PeerMessage::Request {
+                index: 0,
+                begin: SUBPIECE_SIZE,
+                length: SUBPIECE_SIZE,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert_eq!(pending_disk_operations.len(), 1);
+        for disk_op in pending_disk_operations.iter() {
+            assert_eq!(disk_op.piece_idx, 0);
+            assert!(matches!(
+                disk_op.op_type,
+                DiskOpType::Read {
+                    connection_idx,
+                    piece_offset
+                } if connection_idx == key && piece_offset == SUBPIECE_SIZE
+            ));
+        }
+
+        pending_disk_operations.clear();
+        // Request from a different piece
+        connections[key].handle_message(
+            PeerMessage::Request {
+                index: 1,
+                begin: 0,
+                length: SUBPIECE_SIZE,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Only one file overlaps with this piece and subpiece
+        assert_eq!(pending_disk_operations.len(), 1);
+        let disk_op = &pending_disk_operations[0];
+        assert_eq!(disk_op.piece_idx, 1);
+        assert!(matches!(
+            disk_op.op_type,
+            DiskOpType::Read {
+                connection_idx,
+                piece_offset: 0
+            } if connection_idx == key
+        ));
+    });
+}
+
+#[test]
+fn unchoke_selection_based_on_download_throughput() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        // Set max_unchoked to 10 so we have room for regular and optimistic unchokes
+        torrent_state.config.max_unchoked = 10;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create 12 interested peers with varying download throughputs
+        // All peers start choked
+        let peer_ids: Vec<_> = (0..12)
+            .map(|i| {
+                let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+                connections[key].peer_interested = true;
+                connections[key].is_choking = true;
+                // Simulate different download amounts in last round
+                connections[key].network_stats.downloaded_in_last_round = i * 1000;
+                key
+            })
+            .collect();
+
+        // Verify initial state
+        assert_eq!(torrent_state.num_unchoked, 0);
+
+        // Recalculate unchokes
+        torrent_state.recalculate_unchokes(&mut connections);
+
+        // With max_unchoked = 10, we expect:
+        // - 8 regular unchoke slots (10 - 10/5)
+        // - 2 optimistic unchoke slots reserved
+
+        // The top 8 peers by download throughput should be unchoked (indices 11 down to 4)
+        for i in 4..12 {
+            assert!(
+                !connections[peer_ids[i]].is_choking,
+                "Peer {} with throughput {} should be unchoked",
+                i,
+                connections[peer_ids[i]]
+                    .network_stats
+                    .downloaded_in_last_round
+            );
+            assert!(!connections[peer_ids[i]].optimistically_unchoked);
+        }
+
+        // The bottom 4 peers should still be choked
+        for i in 0..4 {
+            assert!(
+                connections[peer_ids[i]].is_choking,
+                "Peer {} with throughput {} should be choked",
+                i,
+                connections[peer_ids[i]]
+                    .network_stats
+                    .downloaded_in_last_round
+            );
+        }
+
+        // Verify num_unchoked matches actual unchoked count
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked, 8);
+    });
+}
+
+#[test]
+fn unchoke_chokes_non_interested_peers() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        torrent_state.config.max_unchoked = 5;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create 3 peers - 2 start unchoked, 1 starts choked
+        let interested_peer = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[interested_peer].peer_interested = true;
+        connections[interested_peer].is_choking = false; // Currently unchoked
+        connections[interested_peer]
+            .network_stats
+            .downloaded_in_last_round = 5000;
+        torrent_state.num_unchoked += 1; // Track unchoked peer
+
+        let not_interested_peer =
+            connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[not_interested_peer].peer_interested = false;
+        connections[not_interested_peer].is_choking = false; // Currently unchoked
+        connections[not_interested_peer]
+            .network_stats
+            .downloaded_in_last_round = 10000;
+        torrent_state.num_unchoked += 1; // Track unchoked peer
+
+        let new_interested_peer =
+            connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[new_interested_peer].peer_interested = true;
+        connections[new_interested_peer].is_choking = true;
+        connections[new_interested_peer]
+            .network_stats
+            .downloaded_in_last_round = 3000;
+
+        // Verify initial state: 2 unchoked
+        assert_eq!(torrent_state.num_unchoked, 2);
+
+        // Recalculate unchokes
+        torrent_state.recalculate_unchokes(&mut connections);
+
+        // Not interested peer should be choked even with high throughput
+        assert!(connections[not_interested_peer].is_choking);
+
+        // Interested peers should remain or become unchoked
+        assert!(!connections[interested_peer].is_choking);
+        assert!(!connections[new_interested_peer].is_choking);
+
+        // Verify num_unchoked matches actual unchoked count
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked, 2);
+    });
+}
+
+#[test]
+fn unchoke_chokes_pending_disconnect_peers() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        torrent_state.config.max_unchoked = 5;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        let pending_disconnect_peer =
+            connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[pending_disconnect_peer].peer_interested = true;
+        connections[pending_disconnect_peer].is_choking = false; // Currently unchoked
+        connections[pending_disconnect_peer].pending_disconnect = Some(DisconnectReason::Idle);
+        connections[pending_disconnect_peer]
+            .network_stats
+            .downloaded_in_last_round = 10000;
+        torrent_state.num_unchoked += 1; // Track unchoked peer
+
+        let healthy_peer = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[healthy_peer].peer_interested = true;
+        connections[healthy_peer].is_choking = true;
+        connections[healthy_peer]
+            .network_stats
+            .downloaded_in_last_round = 3000;
+
+        // Verify initial state: 1 unchoked
+        assert_eq!(torrent_state.num_unchoked, 1);
+
+        // Recalculate unchokes
+        torrent_state.recalculate_unchokes(&mut connections);
+
+        // Pending disconnect peer should be choked
+        assert!(connections[pending_disconnect_peer].is_choking);
+
+        // Healthy peer should be unchoked
+        assert!(!connections[healthy_peer].is_choking);
+
+        // Verify num_unchoked matches actual unchoked count
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked, 1);
+    });
+}
+
+#[test]
+fn unchoke_promotes_optimistic_unchoke_to_regular() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        torrent_state.config.max_unchoked = 5;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create a peer that was optimistically unchoked and has good throughput
+        let opt_unchoked_peer = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[opt_unchoked_peer].peer_interested = true;
+        connections[opt_unchoked_peer].is_choking = false;
+        connections[opt_unchoked_peer].optimistically_unchoked = true;
+        connections[opt_unchoked_peer]
+            .network_stats
+            .downloaded_in_last_round = 10000;
+        torrent_state.num_unchoked += 1; // Track unchoked peer
+
+        // Create some lower throughput peers
+        for i in 0..3 {
+            let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+            connections[key].peer_interested = true;
+            connections[key].is_choking = true;
+            connections[key].network_stats.downloaded_in_last_round = i * 1000;
+        }
+
+        // Verify initial state: 1 unchoked (optimistically)
+        assert_eq!(torrent_state.num_unchoked, 1);
+
+        // Recalculate unchokes
+        torrent_state.recalculate_unchokes(&mut connections);
+
+        // Optimistically unchoked peer should be promoted (no longer optimistically unchoked)
+        assert!(!connections[opt_unchoked_peer].is_choking);
+        assert!(!connections[opt_unchoked_peer].optimistically_unchoked);
+
+        // The optimistic unchoke time scaler should be reset
+        assert_eq!(torrent_state.ticks_to_recalc_optimistic_unchoke, 0);
+
+        // Verify num_unchoked matches actual unchoked count
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked, 4);
+    });
+}
+
+#[test]
+fn optimistic_unchoke_selection() {
+    use std::time::Instant;
+
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        torrent_state.config.max_unchoked = 10;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create choked interested peers with different last_optimistically_unchoked times
+        let old_peer = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[old_peer].peer_interested = true;
+        connections[old_peer].is_choking = true;
+        connections[old_peer].last_optimistically_unchoked =
+            Some(Instant::now() - std::time::Duration::from_secs(100));
+
+        let recent_peer = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[recent_peer].peer_interested = true;
+        connections[recent_peer].is_choking = true;
+        connections[recent_peer].last_optimistically_unchoked =
+            Some(Instant::now() - std::time::Duration::from_secs(10));
+
+        let never_unchoked_peer =
+            connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[never_unchoked_peer].peer_interested = true;
+        connections[never_unchoked_peer].is_choking = true;
+        connections[never_unchoked_peer].last_optimistically_unchoked = None;
+
+        // Verify initial state: all choked
+        assert_eq!(torrent_state.num_unchoked, 0);
+
+        // Recalculate optimistic unchokes
+        torrent_state.recalculate_optimistic_unchokes(&mut connections);
+
+        // With max_unchoked = 10, num_opt_unchoked = max(1, 10/5) = 2
+        // Both never_unchoked_peer and old_peer should be optimistically unchoked
+        // (they have the longest wait times: infinity and 100 seconds)
+        // Note: must be both optimistically_unchoked AND not choking (active)
+        let num_actively_opt_unchoked = connections
+            .values()
+            .filter(|p| p.optimistically_unchoked && !p.is_choking)
+            .count();
+
+        assert_eq!(num_actively_opt_unchoked, 2);
+
+        // The peers with longest wait should be selected and actually unchoked
+        assert!(
+            connections[old_peer].optimistically_unchoked && !connections[old_peer].is_choking,
+            "Old peer should be optimistically unchoked and not choking"
+        );
+        assert!(
+            connections[never_unchoked_peer].optimistically_unchoked
+                && !connections[never_unchoked_peer].is_choking,
+            "Never unchoked peer should be optimistically unchoked and not choking"
+        );
+
+        // Verify num_unchoked matches actual unchoked count
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked, 2);
+    });
+}
+
+#[test]
+fn optimistic_unchoke_rotates_out_previous() {
+    use std::time::Instant;
+
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        torrent_state.config.max_unchoked = 5;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create a peer that's currently optimistically unchoked
+        let current_opt = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[current_opt].peer_interested = true;
+        connections[current_opt].is_choking = false;
+        connections[current_opt].optimistically_unchoked = true;
+        connections[current_opt].last_optimistically_unchoked =
+            Some(Instant::now() - std::time::Duration::from_secs(5));
+        torrent_state.num_unchoked += 1; // Track unchoked peer
+
+        // Create a peer that has been waiting longer
+        let waiting_peer = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[waiting_peer].peer_interested = true;
+        connections[waiting_peer].is_choking = true;
+        connections[waiting_peer].last_optimistically_unchoked =
+            Some(Instant::now() - std::time::Duration::from_secs(100));
+
+        // Verify initial state: 1 unchoked (optimistically)
+        assert_eq!(torrent_state.num_unchoked, 1);
+
+        // Recalculate optimistic unchokes
+        torrent_state.recalculate_optimistic_unchokes(&mut connections);
+
+        // With max_unchoked = 5, num_opt_unchoked = max(1, 5/5) = 1
+        // The waiting peer should now be optimistically unchoked and not choking
+        assert!(
+            connections[waiting_peer].optimistically_unchoked
+                && !connections[waiting_peer].is_choking
+        );
+
+        // Only 1 peer should be actively (not choked) optimistically unchoked
+        let num_actively_opt_unchoked = connections
+            .values()
+            .filter(|p| p.optimistically_unchoked && !p.is_choking)
+            .count();
+
+        assert_eq!(num_actively_opt_unchoked, 1);
+
+        // The current_opt should have been choked (rotated out)
+        assert!(connections[current_opt].is_choking);
+
+        // Verify num_unchoked matches actual unchoked count
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked, 1);
+    });
+}
+
+#[test]
+fn optimistic_unchoke_ignores_non_interested_peers() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        torrent_state.config.max_unchoked = 5;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create a not-interested peer
+        let not_interested = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[not_interested].peer_interested = false;
+        connections[not_interested].is_choking = true;
+
+        // Create an interested peer
+        let interested = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[interested].peer_interested = true;
+        connections[interested].is_choking = true;
+
+        // Verify initial state: all choked
+        assert_eq!(torrent_state.num_unchoked, 0);
+
+        // Recalculate optimistic unchokes
+        torrent_state.recalculate_optimistic_unchokes(&mut connections);
+
+        // Only the interested peer should be optimistically unchoked
+        assert!(!connections[not_interested].optimistically_unchoked);
+        assert!(
+            connections[interested].optimistically_unchoked && !connections[interested].is_choking
+        );
+
+        // Verify num_unchoked matches actual unchoked count
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked, 1);
+    });
+}
+
+#[test]
+fn optimistic_unchoke_ignores_pending_disconnect_peers() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        torrent_state.config.max_unchoked = 5;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create a peer pending disconnect
+        let pending = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[pending].peer_interested = true;
+        connections[pending].is_choking = true;
+        connections[pending].pending_disconnect = Some(DisconnectReason::Idle);
+
+        // Create a healthy peer
+        let healthy = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[healthy].peer_interested = true;
+        connections[healthy].is_choking = true;
+
+        // Verify initial state: all choked
+        assert_eq!(torrent_state.num_unchoked, 0);
+
+        // Recalculate optimistic unchokes
+        torrent_state.recalculate_optimistic_unchokes(&mut connections);
+
+        // Only the healthy peer should be optimistically unchoked
+        assert!(!connections[pending].optimistically_unchoked);
+        assert!(connections[healthy].optimistically_unchoked);
+
+        // Verify num_unchoked matches actual unchoked count
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked, 1);
+    });
+}
+
+#[test]
+fn unchoke_reserves_slots_for_optimistic() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        torrent_state.config.max_unchoked = 10;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create 15 interested peers with varying throughput - all start choked
+        for i in 0..15 {
+            let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+            connections[key].peer_interested = true;
+            connections[key].is_choking = true;
+            connections[key].network_stats.downloaded_in_last_round = i * 1000;
+        }
+
+        // Verify initial state: all choked
+        assert_eq!(torrent_state.num_unchoked, 0);
+
+        // Recalculate unchokes
+        torrent_state.recalculate_unchokes(&mut connections);
+
+        // With max_unchoked = 10:
+        // - optimistic_slots = max(1, 10/5) = 2
+        // - regular_slots = 10 - 2 = 8
+
+        // Should have exactly 8 non-optimistically unchoked peers
+        let regular_unchoked = connections
+            .values()
+            .filter(|p| !p.is_choking && !p.optimistically_unchoked)
+            .count();
+
+        assert_eq!(regular_unchoked, 8);
+        assert_eq!(torrent_state.num_unchoked, 8);
+
+        // Verify num_unchoked matches actual unchoked count
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+    });
+}
+
+#[test]
+fn optimistically_unchoked_disconnect_resets_timer() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        {
+            let torrent_state = state_ref.state().unwrap();
+
+            torrent_state.config.max_unchoked = 5;
+
+            // A single peer that is optimistically unchoked
+            connections[key].peer_interested = true;
+            connections[key].is_choking = false;
+            connections[key].optimistically_unchoked = true;
+            torrent_state.num_unchoked += 1;
+            assert!(torrent_state.ticks_to_recalc_optimistic_unchoke > 0);
+        }
+
+        let mut io = Io::new(
+            BackloggedSubmissionQueue::new(MockSubmissionQueue),
+            &torrent::Config::default(),
+        );
+
+        connections.disconnect(key, &mut io, &mut state_ref);
+
+        {
+            let torrent_state = state_ref.state().unwrap();
+            assert_eq!(torrent_state.ticks_to_recalc_optimistic_unchoke, 0);
+            assert_eq!(torrent_state.num_unchoked, 0);
+        }
+    });
+}
+
+// The connection ids of all scheduled but not yet completed socket closes
+fn scheduled_closes(io: &Io<MockSubmissionQueue>) -> Vec<Option<ConnectionId>> {
+    io.events
+        .values()
+        .filter_map(|event| match event.typ {
+            EventType::Close {
+                maybe_connection_idx,
+            } => Some(maybe_connection_idx),
+            _ => None,
+        })
+        .collect()
+}
+
+// The connection ids of all scheduled but not yet completed connects
+fn scheduled_connects(io: &Io<MockSubmissionQueue>) -> Vec<ConnectionId> {
+    io.events
+        .values()
+        .filter_map(|event| match event.typ {
+            EventType::Connect { connection_idx, .. } => Some(connection_idx),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn established_connection_slot_is_kept_until_close_completes() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        let mut io = Io::new(
+            BackloggedSubmissionQueue::new(MockSubmissionQueue),
+            &torrent::Config::default(),
+        );
+
+        assert!(
+            connections
+                .disconnect(key, &mut io, &mut state_ref)
+                .is_some()
+        );
+        assert_eq!(scheduled_closes(&io), vec![Some(key)]);
+        // The slot is kept until the close completes so the socket can't be
+        // closed twice and the peer can't be reconnected to in the meantime
+        assert!(!connections.is_empty());
+
+        // The connection itself is gone though, so completions arriving after the
+        // disconnect can't end up operating on a peer whose socket is closing
+        assert!(connections.established_mut(key).is_none());
+        assert!(!connections.any_established());
+        assert_eq!(connections.num_established(), 0);
+        assert!(connections.fd(key).is_none());
+
+        // Disconnecting again is a no-op, only a single close is ever scheduled
+        assert!(
+            connections
+                .disconnect(key, &mut io, &mut state_ref)
+                .is_none()
+        );
+        assert_eq!(scheduled_closes(&io), vec![Some(key)]);
+
+        connections.remove_closed(key);
+        assert!(connections.is_empty());
+    });
+}
+
+#[test]
+fn only_peers_marked_for_disconnect_are_disconnected() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let marked = connections.insert_established_with_key(|k| generate_peer(true, k));
+        let kept = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[marked].pending_disconnect = Some(DisconnectReason::Idle);
+        let mut io = Io::new(
+            BackloggedSubmissionQueue::new(MockSubmissionQueue),
+            &torrent::Config::default(),
+        );
+
+        connections.execute_pending_disconnects(&mut io, &mut state_ref);
+
+        assert_eq!(scheduled_closes(&io), vec![Some(marked)]);
+        assert!(connections.established_mut(marked).is_none());
+        assert!(connections.established_mut(kept).is_some());
+        assert_eq!(connections.num_established(), 1);
+    });
+}
+
+#[test]
+fn pending_connection_slot_is_kept_until_close_completes() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let mut io = Io::new(
+            BackloggedSubmissionQueue::new(MockSubmissionQueue),
+            &torrent::Config::default(),
+        );
+
+        let peer_addr: SocketAddrV4 = "127.0.0.1:6881".parse().unwrap();
+        connections.maybe_connect_to_peer(peer_addr.into(), &mut io);
+        let [key] = scheduled_connects(&io)[..] else {
+            panic!("the peer should have a connect scheduled");
+        };
+
+        let addr = connections
+            .disconnect(key, &mut io, &mut state_ref)
+            .expect("connecting peer should be disconnected");
+        assert_eq!(addr, SocketAddr::V4(peer_addr));
+        assert_eq!(scheduled_closes(&io), vec![Some(key)]);
+        assert!(!connections.is_empty());
+        // The socket is gone so there is nothing left to rearm a handshake recv on
+        assert!(connections.fd(key).is_none());
+
+        // Reconnects are rejected until the socket has actually been closed
+        connections.maybe_connect_to_peer(peer_addr.into(), &mut io);
+        assert_eq!(scheduled_connects(&io), vec![key]);
+
+        assert!(
+            connections
+                .disconnect(key, &mut io, &mut state_ref)
+                .is_none()
+        );
+        connections.remove_closed(key);
+        assert!(connections.is_empty());
+
+        // ...and allowed again once the slot is freed
+        connections.maybe_connect_to_peer(peer_addr.into(), &mut io);
+        assert_eq!(scheduled_connects(&io).len(), 2);
+    });
+}
+
+#[test]
+fn completions_for_a_disconnected_pending_connection_are_ignored() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let info_hash = *state_ref.info_hash();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let mut io = Io::new(
+            BackloggedSubmissionQueue::new(MockSubmissionQueue),
+            &torrent::Config::default(),
+        );
+
+        let peer_addr: SocketAddrV4 = "127.0.0.1:6881".parse().unwrap();
+        connections.maybe_connect_to_peer(peer_addr.into(), &mut io);
+        let [key] = scheduled_connects(&io)[..] else {
+            panic!("the peer should have a connect scheduled");
+        };
+        // Pausing and shutting down tears pending connections down without
+        // waiting for their inflight operations to complete first
+        connections.disconnect_all(&mut io, &mut state_ref);
+
+        // So their completions may arrive afterwards and must be ignored
+        connections.on_connect(key, info_hash, &mut io);
+        connections.on_write(key, HANDSHAKE_SIZE, HANDSHAKE_SIZE, &mut io, &mut state_ref);
+        // Dummy bid that isn't read by anything
+        connections
+            .on_read(key, Some(0), HANDSHAKE_SIZE, &mut io, &mut state_ref, scope)
+            .unwrap();
+
+        // None of which scheduled any further io for the connection
+        assert_eq!(scheduled_closes(&io), vec![Some(key)]);
+        assert_eq!(scheduled_connects(&io), vec![key]);
+
+        connections.remove_closed(key);
+        assert!(connections.is_empty());
+    });
+}
+
+#[test]
+fn rejected_incoming_connection_is_closed_without_being_tracked() {
+    let download_state = setup_test();
+    let mut io = Io::new(
+        BackloggedSubmissionQueue::new(MockSubmissionQueue),
+        &torrent::Config::default(),
+    );
+    // A cap of zero rejects every incoming connection
+    let mut connections = ConnectionManager::new(PeerId::generate(), 0);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (accepted, _) = listener.accept().unwrap();
+
+    connections
+        .on_accepted(accepted.into(), download_state.info_hash, &mut io)
+        .unwrap();
+
+    // The connection never entered the manager so its close carries no id
+    assert!(connections.is_empty());
+    assert_eq!(scheduled_closes(&io), vec![None]);
+}
+
+// A handshake as it would arrive from a peer, advertising the fast extension
+// (BEP 6) or not. The extension protocol is deliberately left unadvertised so
+// that the only message queued up in response is the initial bitfield one.
+fn peer_handshake(info_hash: [u8; 20], fast_ext: bool) -> [u8; HANDSHAKE_SIZE] {
+    const PROTOCOL: &[u8] = b"BitTorrent protocol";
+    let mut handshake = [0_u8; HANDSHAKE_SIZE];
+    handshake[0] = PROTOCOL.len() as u8;
+    handshake[1..20].copy_from_slice(PROTOCOL);
+    if fast_ext {
+        // Reserved byte 7, bit 0x04
+        handshake[27] |= 0x04;
+    }
+    handshake[28..48].copy_from_slice(&info_hash);
+    handshake[48..].copy_from_slice(b"-VT0000-abcdefghijkl");
+    handshake
+}
+
+// Drives an incoming connection through a complete handshake and returns the
+// messages that were queued up for the peer as a result
+fn msgs_queued_after_handshake(
+    download_state: &mut torrent::State,
+    fast_ext: bool,
+) -> Vec<PeerMessage> {
+    msgs_queued_after_handshake_with_pipelined(download_state, fast_ext, &[])
+}
+
+// Same as above but with `pipelined` msgs arriving in the same recv as the
+// handshake, which is what peers writing their handshake and bitfield in one
+// go look like on the wire
+fn msgs_queued_after_handshake_with_pipelined(
+    download_state: &mut torrent::State,
+    fast_ext: bool,
+    pipelined: &[PeerMessage],
+) -> Vec<PeerMessage> {
+    let mut io = Io::new(
+        BackloggedSubmissionQueue::new(MockSubmissionQueue),
+        &torrent::Config::default(),
+    );
+    let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+    let info_hash = download_state.info_hash();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (accepted, _) = listener.accept().unwrap();
+    connections
+        .on_accepted(accepted.into(), info_hash, &mut io)
+        .unwrap();
+
+    let [(write_event_id, conn_id)] = io
+        .events
+        .iter()
+        .filter_map(|(event_id, event)| match event.typ {
+            EventType::Write { connection_idx, .. } => Some((event_id, connection_idx)),
+            _ => None,
+        })
+        .collect::<Vec<_>>()[..]
+    else {
+        panic!("the accepted peer should have a handshake write scheduled");
+    };
+    // The event loop removes the event and returns the write buffers to the pool
+    // when the completion is handled, so do the same here
+    let handshake_write = io.events.remove(write_event_id).unwrap();
+    for buffer in handshake_write.buffers.into_iter().flatten() {
+        io.write_pool.return_buffer(buffer);
+    }
+
+    let mut recv_data = peer_handshake(info_hash, fast_ext).to_vec();
+    for msg in pipelined {
+        msg.encode(&mut recv_data);
+    }
+
+    let mut state_ref = download_state.as_ref();
+    rayon::in_place_scope(|scope| {
+        connections.on_write(
+            conn_id,
+            HANDSHAKE_SIZE,
+            HANDSHAKE_SIZE,
+            &mut io,
+            &mut state_ref,
+        );
+        io.read_ring.fill(0, &recv_data);
+        connections
+            .on_read(
+                conn_id,
+                Some(0),
+                recv_data.len(),
+                &mut io,
+                &mut state_ref,
+                scope,
+            )
+            .unwrap();
+    });
+
+    assert_eq!(connections.num_established(), 1);
+    assert_eq!(connections[conn_id].fast_ext, fast_ext);
+    assert!(connections[conn_id].pending_disconnect.is_none());
+    connections[conn_id].outgoing_msgs_buffer.clone()
+}
+
+#[test]
+fn handshake_queues_bitfield_when_nothing_is_downloaded() {
+    let mut download_state = setup_test();
+    let num_pieces = download_state.as_ref().state().unwrap().num_pieces();
+
+    assert_eq!(
+        msgs_queued_after_handshake(&mut download_state, true),
+        vec![PeerMessage::HaveNone]
+    );
+    // HaveNone is a fast extension message, peers without it must be sent an
+    // ordinary (empty) bitfield instead
+    assert_eq!(
+        msgs_queued_after_handshake(&mut download_state, false),
+        vec![PeerMessage::Bitfield(
+            bitvec::bitvec!(u8, bitvec::order::Msb0; 0; num_pieces)
+        )]
+    );
+}
+
+#[test]
+fn handshake_queues_bitfield_when_partially_completed() {
+    let mut download_state = setup_test();
+    let num_pieces = download_state.as_ref().state().unwrap().num_pieces();
+    {
+        // Piece 2 downloaded and hash verified, piece 5 still awaiting its hash
+        // check so it must not be announced
+        let mut state_ref = download_state.as_ref();
+        let piece_selector = &mut state_ref.state().unwrap().piece_selector;
+        piece_selector.mark_downloaded(2);
+        piece_selector.mark_complete(2);
+        piece_selector.mark_downloaded(5);
+    }
+
+    let mut expected = bitvec::bitvec!(u8, bitvec::order::Msb0; 0; num_pieces);
+    expected.set(2, true);
+    // A partial bitfield is sent as is regardless of the fast extension
+    for fast_ext in [true, false] {
+        assert_eq!(
+            msgs_queued_after_handshake(&mut download_state, fast_ext),
+            vec![PeerMessage::Bitfield(expected.clone())]
+        );
+    }
+}
+
+#[test]
+fn handshake_queues_bitfield_when_seeding() {
+    let mut download_state = setup_seeding_test();
+    let num_pieces = download_state.as_ref().state().unwrap().num_pieces();
+
+    assert_eq!(
+        msgs_queued_after_handshake(&mut download_state, true),
+        vec![PeerMessage::HaveAll]
+    );
+    // HaveAll is a fast extension message, peers without it must be sent a
+    // full bitfield instead
+    assert_eq!(
+        msgs_queued_after_handshake(&mut download_state, false),
+        vec![PeerMessage::Bitfield(
+            bitvec::bitvec!(u8, bitvec::order::Msb0; 1; num_pieces)
+        )]
+    );
+}
+
+#[test]
+fn handshake_queues_no_bitfield_without_metadata() {
+    let (mut download_state, _metadata) = setup_uninitialized_test();
+
+    // Without metadata the piece count is unknown so no bitfield can be built,
+    // fast extension peers are told we have nothing and the rest are sent
+    // nothing at all
+    assert_eq!(
+        msgs_queued_after_handshake(&mut download_state, true),
+        vec![PeerMessage::HaveNone]
+    );
+    assert!(msgs_queued_after_handshake(&mut download_state, false).is_empty());
+}
+
+#[test]
+fn handshake_bitfield_is_queued_before_pipelined_msgs_are_handled() {
+    let mut download_state = setup_test();
+
+    // Peers commonly write their bitfield in the same segment as the handshake,
+    // and replying to it queues up messages of our own
+    let msgs = msgs_queued_after_handshake_with_pipelined(
+        &mut download_state,
+        true,
+        &[PeerMessage::HaveAll],
+    );
+
+    // Which must not jump ahead of the bitfield, it is only ever sent as the
+    // first message (BEP 3/6)
+    assert_eq!(msgs.first(), Some(&PeerMessage::HaveNone));
+    // The pipelined message is still handled
+    assert!(
+        msgs.contains(&PeerMessage::Interested),
+        "expected an interested reply to the pipelined HaveAll, got {msgs:?}"
+    );
+}
+
+#[test]
+fn upload_only_field_in_extended_handshake() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        let metadata_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len() as i64;
+
+        // Peer hasn't declared upload_only yet
+        assert!(!connections[key].is_upload_only);
+
+        // Simulate receiving extended handshake with upload_only field set to 1
+        let mut handshake = std::collections::BTreeMap::new();
+        let m: std::collections::BTreeMap<&str, u8> = [("ut_metadata", 1u8)].into_iter().collect();
+        handshake.insert("m", bt_bencode::to_value(&m).unwrap());
+        handshake.insert("upload_only", bt_bencode::to_value(&1i64).unwrap());
+        // Needed for ut_metadata
+        handshake.insert(
+            "metadata_size",
+            bt_bencode::to_value(dbg!(&metadata_size)).unwrap(),
+        );
+
+        let handshake_data = bt_bencode::to_vec(&handshake).unwrap();
+        connections[key].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Peer should now be marked as upload_only based on handshake field
+        assert!(connections[key].is_upload_only);
+
+        // Test with upload_only = 0
+        let key2 = connections.insert_established_with_key(|k| generate_peer(true, k));
+        let mut handshake2 = std::collections::BTreeMap::new();
+        let m2: std::collections::BTreeMap<&str, u8> = [("ut_metadata", 1u8)].into_iter().collect();
+        handshake2.insert("m", bt_bencode::to_value(&m2).unwrap());
+        handshake2.insert("upload_only", bt_bencode::to_value(&0i64).unwrap());
+        // Needed for ut_metadata
+        handshake2.insert(
+            "metadata_size",
+            bt_bencode::to_value(dbg!(&metadata_size)).unwrap(),
+        );
+
+        let handshake_data2 = bt_bencode::to_vec(&handshake2).unwrap();
+        connections[key2].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data2.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(!connections[key2].is_upload_only);
+    });
+}
+
+#[test]
+fn upload_only_extension_message_received() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // Peer hasn't declared upload_only yet
+        assert!(!connections[key].is_upload_only);
+
+        // Simulate receiving extended handshake with upload_only extension enabled
+        let mut handshake = std::collections::BTreeMap::new();
+        // 3 explicitly does not match our implementations extension id for it
+        let m: std::collections::BTreeMap<&str, u8> = [("upload_only", 3u8)].into_iter().collect();
+        handshake.insert("m", bt_bencode::to_value(&m).unwrap());
+
+        let handshake_data = bt_bencode::to_vec(&handshake).unwrap();
+        connections[key].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Test receiving upload_only extension message (value = 1)
+        let upload_only_msg = [1_u8].as_slice();
+        connections[key].handle_message(
+            PeerMessage::Extended {
+                id: 2, // ID for upload_only extension
+                data: upload_only_msg.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(connections[key].is_upload_only);
+
+        // Test receiving upload_only = 0 (peer is no longer upload only)
+        let upload_only_msg = [0_u8].as_slice();
+        connections[key].handle_message(
+            PeerMessage::Extended {
+                id: 2,
+                data: upload_only_msg.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(!connections[key].is_upload_only);
+    });
+}
+
+#[test]
+fn upload_only_extension_message_sent_on_torrent_complete() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        let other_peer = connections.insert_established_with_key(|k| generate_peer(true, k));
+        // Doesn't support the extension
+        let third_peer = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // Set up extension support
+        let mut handshake = std::collections::BTreeMap::new();
+        let m: std::collections::BTreeMap<&str, u8> = [("upload_only", 3u8)].into_iter().collect();
+        handshake.insert("m", bt_bencode::to_value(&m).unwrap());
+        let handshake_data = bt_bencode::to_vec(&handshake).unwrap();
+        connections[key].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let mut handshake = std::collections::BTreeMap::new();
+        let m: std::collections::BTreeMap<&str, u8> = [("upload_only", 3u8)].into_iter().collect();
+        handshake.insert("m", bt_bencode::to_value(&m).unwrap());
+        let handshake_data = bt_bencode::to_vec(&handshake).unwrap();
+        connections[other_peer].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        connections[key].outgoing_msgs_buffer.clear();
+
+        // Note that the peer is marked as upload only with this message
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let torrent_state = state_ref.state().unwrap();
+        let num_pieces = torrent_state.num_pieces();
+
+        // Download all pieces to complete the torrent
+        for _i in 0..num_pieces {
+            let torrent_state = state_ref.state().unwrap();
+            let index = torrent_state
+                .piece_selector
+                .next_piece(key, &mut connections[key].endgame)
+                .unwrap();
+            let mut subpieces = torrent_state.allocate_piece(index, key);
+            connections[key].append_and_fill(&mut subpieces);
+
+            // Complete the piece
+            connections[key].handle_message(
+                PeerMessage::Piece {
+                    index,
+                    begin: 0,
+                    data: vec![3; SUBPIECE_SIZE as usize].into(),
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+            connections[key].handle_message(
+                PeerMessage::Piece {
+                    index,
+                    begin: SUBPIECE_SIZE,
+                    data: vec![3; SUBPIECE_SIZE as usize].into(),
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+        }
+
+        let torrent_state = state_ref.state().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+        );
+        assert!(torrent_state.is_complete);
+
+        // Should have sent upload_only extension message with value 1
+        let has_upload_only_msg = connections[key].outgoing_msgs_buffer.iter_mut().any(|msg| {
+            if let PeerMessage::Extended { id: 3, data } = msg {
+                data.len() == 1 && data.get_u8() == 1
+            } else {
+                false
+            }
+        });
+        dbg!(&connections[key].outgoing_msgs_buffer);
+        assert!(
+            has_upload_only_msg,
+            "Should send upload_only extension message when torrent completes"
+        );
+        let has_upload_only_msg =
+            connections[other_peer]
+                .outgoing_msgs_buffer
+                .iter_mut()
+                .any(|msg| {
+                    if let PeerMessage::Extended { id: 3, data } = msg {
+                        data.len() == 1 && data.get_u8() == 1
+                    } else {
+                        false
+                    }
+                });
+        assert!(
+            has_upload_only_msg,
+            "Should send upload_only extension message when torrent completes"
+        );
+        let has_upload_only_msg =
+            connections[third_peer]
+                .outgoing_msgs_buffer
+                .iter_mut()
+                .any(|msg| {
+                    if let PeerMessage::Extended { id: 3, data } = msg {
+                        data.len() == 1 && data.get_u8() == 1
+                    } else {
+                        false
+                    }
+                });
+        assert!(
+            !has_upload_only_msg,
+            "Should not send upload_only extension message to peer that doesn't support it"
+        );
+    });
+}
+
+#[test]
+fn redundant_connection_disconnect_both_upload_only() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // HaveAll automatically marks peer as upload_only
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key].is_upload_only);
+
+        let torrent_state = state_ref.state().unwrap();
+        let num_pieces = torrent_state.num_pieces();
+
+        // Download all pieces to complete the torrent
+        for _i in 0..num_pieces {
+            let torrent_state = state_ref.state().unwrap();
+            let index = torrent_state
+                .piece_selector
+                .next_piece(key, &mut connections[key].endgame)
+                .unwrap();
+            let mut subpieces = torrent_state.allocate_piece(index, key);
+            connections[key].append_and_fill(&mut subpieces);
+
+            // Complete the piece
+            connections[key].handle_message(
+                PeerMessage::Piece {
+                    index,
+                    begin: 0,
+                    data: vec![3; SUBPIECE_SIZE as usize].into(),
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+            connections[key].handle_message(
+                PeerMessage::Piece {
+                    index,
+                    begin: SUBPIECE_SIZE,
+                    data: vec![3; SUBPIECE_SIZE as usize].into(),
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+        }
+
+        let torrent_state = state_ref.state().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+        );
+
+        // Both sides are upload only, should have pending disconnect
+        assert!(
+            connections[key].pending_disconnect.is_some(),
+            "Should disconnect when both sides are upload only"
+        );
+        assert!(
+            matches!(
+                connections[key].pending_disconnect,
+                Some(DisconnectReason::RedundantConnection)
+            ),
+            "Disconnect reason should be RedundantConnection"
+        );
+    });
+}
+
+#[test]
+fn no_disconnect_when_peer_not_upload_only() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        connections[key].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // simulate it's not upload_only
+        connections[key].is_upload_only = false;
+
+        let torrent_state = state_ref.state().unwrap();
+        let num_pieces = torrent_state.num_pieces();
+
+        // Download all pieces to complete the torrent
+        for _i in 0..num_pieces {
+            let torrent_state = state_ref.state().unwrap();
+            let index = torrent_state
+                .piece_selector
+                .next_piece(key, &mut connections[key].endgame)
+                .unwrap();
+            let mut subpieces = torrent_state.allocate_piece(index, key);
+            connections[key].append_and_fill(&mut subpieces);
+
+            // Complete the piece
+            connections[key].handle_message(
+                PeerMessage::Piece {
+                    index,
+                    begin: 0,
+                    data: vec![3; SUBPIECE_SIZE as usize].into(),
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+            connections[key].handle_message(
+                PeerMessage::Piece {
+                    index,
+                    begin: SUBPIECE_SIZE,
+                    data: vec![3; SUBPIECE_SIZE as usize].into(),
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+        }
+
+        let torrent_state = state_ref.state().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+        );
+
+        // Peer is not upload only, so we should NOT disconnect (they might want to download from us)
+        assert!(
+            connections[key].pending_disconnect.is_none(),
+            "Should NOT disconnect when peer is not upload only (they might download from us)"
+        );
+    });
+}
+
+#[test]
+fn disconnect_upload_only_peer_when_no_longer_interesting() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        let key_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // key_a is upload only (via HaveAll) and has all pieces
+        connections[key_a].handle_message(
+            PeerMessage::HaveAll,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(connections[key_a].is_upload_only);
+
+        // key_b has all pieces but sent bitfield (not all set initially)
+        let torrent_state = state_ref.state().unwrap();
+        let num_pieces = torrent_state.num_pieces();
+        let mut field = bitvec::bitvec!(u8, bitvec::order::Msb0; 1; num_pieces);
+        field.set(0, false);
+        connections[key_b].handle_message(
+            PeerMessage::Bitfield(field),
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(!connections[key_b].is_upload_only);
+
+        // Now send Have for piece 0 to key_b
+        connections[key_b].handle_message(
+            PeerMessage::Have { index: 0 },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Download a piece from key_b to make progress
+        let torrent_state = state_ref.state().unwrap();
+        let index = torrent_state
+            .piece_selector
+            .next_piece(key_b, &mut connections[key_b].endgame)
+            .unwrap();
+        let mut subpieces = torrent_state.allocate_piece(index, key_b);
+        connections[key_b].append_and_fill(&mut subpieces);
+
+        connections[key_b].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: 0,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key_b].handle_message(
+            PeerMessage::Piece {
+                index,
+                begin: SUBPIECE_SIZE,
+                data: vec![3; SUBPIECE_SIZE as usize].into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        let torrent_state = state_ref.state().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &[index],
+        );
+
+        // We're still interested in both peers, so no disconnect yet
+        assert!(connections[key_a].pending_disconnect.is_none());
+        assert!(connections[key_b].pending_disconnect.is_none());
+
+        // Now complete all remaining pieces
+        let torrent_state = state_ref.state().unwrap();
+        let num_pieces = torrent_state.num_pieces();
+        let mut expected_pieces = Vec::new();
+        for _i in 0..(num_pieces - 1) {
+            let torrent_state = state_ref.state().unwrap();
+            let index = torrent_state
+                .piece_selector
+                .next_piece(key_b, &mut connections[key_b].endgame);
+
+            if index.is_none() {
+                break;
+            }
+            let index = index.unwrap();
+            expected_pieces.push(index);
+            let mut subpieces = torrent_state.allocate_piece(index, key_b);
+            connections[key_b].append_and_fill(&mut subpieces);
+
+            connections[key_b].handle_message(
+                PeerMessage::Piece {
+                    index,
+                    begin: 0,
+                    data: vec![3; SUBPIECE_SIZE as usize].into(),
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+            connections[key_b].handle_message(
+                PeerMessage::Piece {
+                    index,
+                    begin: SUBPIECE_SIZE,
+                    data: vec![3; SUBPIECE_SIZE as usize].into(),
+                },
+                &mut state_ref,
+                &mut pending_disk_operations,
+                scope,
+            );
+        }
+
+        let torrent_state = state_ref.state().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        simulate_disk_write_completion(
+            torrent_state,
+            &mut pending_disk_operations,
+            &mut connections,
+            &mut event_tx,
+            &expected_pieces,
+        );
+        assert!(torrent_state.is_complete);
+        assert!(!connections[key_a].is_interesting);
+        // key_a is upload only and we're no longer interested
+        // but we're also upload only now, so it should disconnect
+        assert!(
+            connections[key_a].pending_disconnect.is_some(),
+            "Should disconnect upload_only peer when both sides are upload only"
+        );
+        assert!(
+            matches!(
+                connections[key_a].pending_disconnect,
+                Some(DisconnectReason::RedundantConnection)
+            ),
+            "Disconnect reason should be RedundantConnection"
+        );
+
+        assert!(!connections[key_b].is_interesting);
+        // key_b is not upload only, so we keep the connection (they might download from us)
+        assert!(
+            connections[key_b].pending_disconnect.is_none(),
+            "Should NOT disconnect non-upload_only peer"
+        );
+    });
+}
+
+#[test]
+fn seeding_round_robin_rotation_after_quota() {
+    let mut download_state = setup_seeding_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        // Verify we're in seeding mode
+        assert!(torrent_state.is_complete);
+
+        torrent_state.config.max_unchoked = 3;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create 3 interested peers
+        let peer_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_a].peer_interested = true;
+
+        let peer_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_b].peer_interested = true;
+
+        let peer_c = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_c].peer_interested = true;
+
+        // Unchoke peer A manually and set it up as having completed its quota
+        connections[peer_a].is_choking = false;
+        connections[peer_a].last_unchoked = Some(Instant::now() - Duration::from_secs(90)); // 1.5 minutes ago
+        torrent_state.num_unchoked = 1;
+
+        // Calculate quota: piece_length * SEEDING_PIECE_QUOTA
+        // piece_length = SUBPIECE_SIZE * 2 = 32768
+        // quota = 32768 * 20 = 655360 bytes
+        let piece_length = torrent_state.piece_selector.avg_piece_length();
+        let quota_bytes = (piece_length * 20) as u64; // SEEDING_PIECE_QUOTA = 20
+
+        // Set peer A as having uploaded more than quota
+        connections[peer_a].network_stats.upload_since_unchoked = quota_bytes + 100_000;
+        connections[peer_a].network_stats.uploaded_in_last_round = 50_000;
+
+        // Peers B and C have never been unchoked
+        assert!(connections[peer_b].is_choking);
+        assert!(connections[peer_c].is_choking);
+        assert_eq!(connections[peer_b].last_unchoked, None);
+        assert_eq!(connections[peer_c].last_unchoked, None);
+
+        // Recalculate unchokes
+        torrent_state.recalculate_unchokes(&mut connections);
+
+        // Peer A should now be choked (completed quota)
+        assert!(
+            connections[peer_a].is_choking,
+            "Peer A should be choked after completing quota"
+        );
+
+        // At least one of peers B or C should be unchoked
+        let b_unchoked = !connections[peer_b].is_choking;
+        let c_unchoked = !connections[peer_c].is_choking;
+        assert!(
+            b_unchoked && c_unchoked,
+            "Both of peers B or C should be unchoked"
+        );
+
+        // Verify num_unchoked is consistent
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked as usize, 2);
+    });
+}
+
+#[test]
+fn incoming_keepalive_updates_last_seen() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // Fake that this peer hasn't been seen in a while
+        connections[key].last_seen = Instant::now() - Duration::from_secs(60);
+        assert!(connections[key].last_seen.elapsed() >= Duration::from_secs(59));
+
+        connections[key].handle_message(
+            PeerMessage::KeepAlive,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // last_seen should have been refreshed
+        assert!(connections[key].last_seen.elapsed() < Duration::from_millis(50));
+        // No disconnect should be pending
+        assert!(connections[key].pending_disconnect.is_none());
+    });
+}
+
+#[test]
+fn keepalive_not_sent_before_100s_elapsed() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // Freshly created connection - last_keepalive_sent is now
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        assert!(
+            !connections[key]
+                .outgoing_msgs_buffer
+                .contains(&PeerMessage::KeepAlive),
+            "Should not send keepalive right after connecting"
+        );
+
+        // Simulate 50 seconds elapsed - still under the 100s threshold
+        connections[key].last_keepalive_sent = Instant::now() - Duration::from_secs(50);
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        assert!(
+            !connections[key]
+                .outgoing_msgs_buffer
+                .contains(&PeerMessage::KeepAlive),
+            "Should not send keepalive before 100s threshold"
+        );
+    });
+}
+
+#[test]
+fn keepalive_sent_after_100s_elapsed() {
+    let mut download_state = setup_test();
+    let mut event_q = Queue::<TorrentEvent, 512>::new();
+    let (mut event_tx, _event_rx) = event_q.split();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // Simulate 101 seconds since last keepalive
+        connections[key].last_keepalive_sent = Instant::now() - Duration::from_secs(101);
+
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+        assert!(connections[key].last_keepalive_sent.elapsed() < Duration::from_millis(50));
+        assert!(
+            connections[key]
+                .outgoing_msgs_buffer
+                .contains(&PeerMessage::KeepAlive),
+            "Should send keepalive after 100s of inactivity"
+        );
+
+        // last_keepalive_sent should have been refreshed, so a second tick won't spam another
+        connections[key].outgoing_msgs_buffer.clear();
+        tick(
+            &Duration::from_secs(1),
+            &mut connections,
+            &mut state_ref,
+            &mut event_tx,
+        );
+
+        assert!(
+            !connections[key]
+                .outgoing_msgs_buffer
+                .contains(&PeerMessage::KeepAlive),
+            "Should not send a second keepalive immediately after the first"
+        );
+    });
+}
+
+#[test]
+fn seeding_quota_not_met_keeps_unchoked() {
+    let mut download_state = setup_seeding_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        // Verify we're in seeding mode
+        assert!(torrent_state.is_complete);
+
+        torrent_state.config.max_unchoked = 3;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create 3 interested peers
+        let peer_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_a].peer_interested = true;
+
+        let peer_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_b].peer_interested = true;
+
+        let peer_c = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_c].peer_interested = true;
+
+        // Unchoke peer A manually
+        connections[peer_a].is_choking = false;
+        connections[peer_a].last_unchoked = Some(Instant::now() - Duration::from_secs(90)); // 1.5 minutes ago
+        torrent_state.num_unchoked = 1;
+
+        // Calculate quota
+        let piece_length = torrent_state.piece_selector.avg_piece_length();
+        let quota_bytes = (piece_length * 20) as u64; // SEEDING_PIECE_QUOTA = 20
+
+        // Set peer A as having uploaded LESS than quota (only half)
+        connections[peer_a].network_stats.upload_since_unchoked = quota_bytes / 2;
+        connections[peer_a].network_stats.uploaded_in_last_round = 50_000;
+
+        // Recalculate unchokes
+        torrent_state.recalculate_unchokes(&mut connections);
+
+        // Peer A should remain unchoked (quota not met)
+        assert!(
+            !connections[peer_a].is_choking,
+            "Peer A should remain unchoked since quota not met"
+        );
+
+        // Verify num_unchoked is consistent
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+    });
+}
+
+#[test]
+fn seeding_time_threshold_not_met_keeps_unchoked() {
+    let mut download_state = setup_seeding_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        // Verify we're in seeding mode
+        assert!(torrent_state.is_complete);
+
+        torrent_state.config.max_unchoked = 3;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Create 3 interested peers
+        let peer_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_a].peer_interested = true;
+
+        let peer_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_b].peer_interested = true;
+
+        let peer_c = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_c].peer_interested = true;
+
+        // Unchoke peer A manually but only 30 seconds ago (< 1 minute)
+        connections[peer_a].is_choking = false;
+        connections[peer_a].last_unchoked = Some(Instant::now() - Duration::from_secs(30));
+        torrent_state.num_unchoked = 1;
+
+        // Calculate quota
+        let piece_length = torrent_state.piece_selector.avg_piece_length();
+        let quota_bytes = (piece_length * 20) as u64; // SEEDING_PIECE_QUOTA = 20
+
+        // Set peer A as having uploaded MORE than quota, but not enough time has passed
+        connections[peer_a].network_stats.upload_since_unchoked = quota_bytes + 100_000;
+        connections[peer_a].network_stats.uploaded_in_last_round = 50_000;
+
+        // Recalculate unchokes
+        torrent_state.recalculate_unchokes(&mut connections);
+
+        // Peer A should remain unchoked (time threshold not met)
+        assert!(
+            !connections[peer_a].is_choking,
+            "Peer A should remain unchoked since time threshold (1 minute) not met"
+        );
+
+        // Verify num_unchoked is consistent
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+    });
+}
+
+#[test]
+fn extension_handshake_with_upload_only_and_ut_metadata() {
+    let mut download_state = setup_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[key].extended_extension = true;
+
+        let expected_size = state_ref
+            .metadata()
+            .unwrap()
+            .construct_info()
+            .encode()
+            .len();
+
+        // Simulate a libtorrent-based peer (e.g. qBittorrent)
+        // libtorrent currently assigns: upload_only=3, ut_metadata=2, ut_holepunch=4
+        // Bencode dicts are sorted alphabetically, so the order is:
+        //   upload_only (id=3) -> ut_holepunch (id=4) -> ut_metadata (id=2) -> ut_pex (id=1)
+        let mut handshake = std::collections::BTreeMap::new();
+        let m: std::collections::BTreeMap<&str, u8> = [
+            ("upload_only", 3u8),
+            ("ut_holepunch", 4u8),
+            ("ut_metadata", 2u8),
+            ("ut_pex", 1u8),
+        ]
+        .into_iter()
+        .collect();
+        handshake.insert("m", bt_bencode::to_value(&m).unwrap());
+        handshake.insert(
+            "metadata_size",
+            bt_bencode::to_value(&expected_size).unwrap(),
+        );
+
+        let handshake_data = bt_bencode::to_vec(&handshake).unwrap();
+        connections[key].handle_message(
+            PeerMessage::Extended {
+                id: 0,
+                data: handshake_data.into(),
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        assert!(
+            connections[key].pending_disconnect.is_none(),
+            "Should not disconnect"
+        );
+
+        // Both our extensions (ut_metadata = 1, upload_only = 2) should be initialized
+        assert!(
+            connections[key].extensions.contains_key(&2),
+            "upload_only extension (our ID=2) should be initialized"
+        );
+        assert!(
+            connections[key].extensions.contains_key(&1),
+            "ut_metadata extension (our ID=1) should be initialized, \
+             but gets skipped because the peer's ut_metadata ID (2) \
+             collides with our internal upload_only ID (2) in the extensions map"
+        );
+    });
+}
+
+#[test]
+fn seeding_quota_complete_peers_deprioritized() {
+    let mut download_state = setup_seeding_test();
+
+    rayon::in_place_scope(|_scope| {
+        let mut state_ref = download_state.as_ref();
+        let torrent_state = state_ref.state().unwrap();
+
+        // Verify we're in seeding mode
+        assert!(torrent_state.is_complete);
+
+        // Set max_unchoked to 2 so we have limited slots
+        torrent_state.config.max_unchoked = 3;
+
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+
+        // Calculate quota
+        let piece_length = torrent_state.piece_selector.avg_piece_length();
+        let quota_bytes = (piece_length * 20) as u64; // SEEDING_PIECE_QUOTA = 20
+
+        // Create peer A and B - both unchoked and have completed their quota
+        let peer_a = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_a].peer_interested = true;
+        connections[peer_a].is_choking = false;
+        connections[peer_a].last_unchoked = Some(Instant::now() - Duration::from_secs(90));
+        connections[peer_a].network_stats.upload_since_unchoked = quota_bytes + 100_000;
+        connections[peer_a].network_stats.uploaded_in_last_round = 50_000;
+
+        let peer_b = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_b].peer_interested = true;
+        connections[peer_b].is_choking = false;
+        connections[peer_b].last_unchoked = Some(Instant::now() - Duration::from_secs(120));
+        connections[peer_b].network_stats.upload_since_unchoked = quota_bytes + 80_000;
+        connections[peer_b].network_stats.uploaded_in_last_round = 30_000;
+
+        torrent_state.num_unchoked = 2;
+
+        // Create peer C and D - never been unchoked
+        let peer_c = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_c].peer_interested = true;
+
+        let peer_d = connections.insert_established_with_key(|k| generate_peer(true, k));
+        connections[peer_d].peer_interested = true;
+
+        // Verify initial state: 2 unchoked (A and B, both quota complete)
+        assert_eq!(torrent_state.num_unchoked, 2);
+
+        // Recalculate unchokes with max_unchoked = 3
+        // With optimistic unchoke slots (3/5 = 0, max(1, 0) = 1), we have 2 regular slots
+        torrent_state.recalculate_unchokes(&mut connections);
+
+        // Peers A and B (quota complete) should be choked
+        // Peers C and/or D (never unchoked) should be unchoked
+        let a_choked = connections[peer_a].is_choking;
+        let b_choked = connections[peer_b].is_choking;
+        let c_unchoked = !connections[peer_c].is_choking;
+        let d_unchoked = !connections[peer_d].is_choking;
+
+        // At least one of the quota-complete peers should be choked
+        assert!(
+            a_choked && b_choked,
+            "Both quota-complete peer (A and B) should be choked"
+        );
+
+        // At least one of the never-unchoked peers should be unchoked
+        assert!(
+            c_unchoked && d_unchoked,
+            "Both never-unchoked peer (C and D) should be unchoked"
+        );
+
+        // Verify num_unchoked is consistent
+        let actual_unchoked = connections.values().filter(|p| !p.is_choking).count();
+        assert_eq!(torrent_state.num_unchoked as usize, actual_unchoked);
+        assert_eq!(torrent_state.num_unchoked as usize, 2);
+    });
+}
+
+#[test]
+fn request_rejected_when_begin_plus_length_exceeds_piece_len() {
+    // piece_length = SUBPIECE_SIZE * 2 in the seeding test setup
+    let mut download_state = setup_seeding_test();
+
+    rayon::in_place_scope(|scope| {
+        let mut state_ref = download_state.as_ref();
+        state_ref.state().unwrap().piece_buffer_pool.stop_tracking();
+        let mut pending_disk_operations: Vec<DiskOp> = Vec::new();
+        let mut connections = ConnectionManager::new(PeerId::generate(), 128);
+        let key = connections.insert_established_with_key(|k| generate_peer(true, k));
+
+        // Setup: peer has no pieces and is interested
+        connections[key].handle_message(
+            PeerMessage::HaveNone,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        connections[key].handle_message(
+            PeerMessage::Interested,
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+
+        // Valid request: begin=0, length=SUBPIECE_SIZE within piece_len (SUBPIECE_SIZE * 2)
+        connections[key].handle_message(
+            PeerMessage::Request {
+                index: 0,
+                begin: 0,
+                length: SUBPIECE_SIZE,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Should trigger disk reads (valid request accepted)
+        assert!(
+            !pending_disk_operations.is_empty(),
+            "Valid request should queue disk operations"
+        );
+
+        pending_disk_operations.clear();
+        connections[key].outgoing_msgs_buffer.clear();
+
+        // Invalid request: length=SUBPIECE_SIZE+1 exceeds subpiece size
+        connections[key].handle_message(
+            PeerMessage::Request {
+                index: 0,
+                begin: 0,
+                length: SUBPIECE_SIZE + 1,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        // Should NOT trigger any disk reads (invalid request rejected)
+        assert!(
+            pending_disk_operations.is_empty(),
+            "Request exceeding piece boundary should be rejected"
+        );
+        // With fast_ext enabled, a RejectRequest should be queued
+        assert!(
+            connections[key]
+                .outgoing_msgs_buffer
+                .contains(&PeerMessage::RejectRequest {
+                    index: 0,
+                    begin: 0,
+                    length: SUBPIECE_SIZE + 1,
+                }),
+            "Should queue RejectRequest for invalid request when fast_ext is enabled"
+        );
+
+        connections[key].outgoing_msgs_buffer.clear();
+
+        // Invalid request: begin at the very end of the piece, any nonzero length overflows
+        connections[key].handle_message(
+            PeerMessage::Request {
+                index: 0,
+                begin: SUBPIECE_SIZE * 2,
+                length: 123,
+            },
+            &mut state_ref,
+            &mut pending_disk_operations,
+            scope,
+        );
+        assert!(
+            pending_disk_operations.is_empty(),
+            "Request at piece boundary should be rejected"
+        );
+        assert!(
+            connections[key]
+                .outgoing_msgs_buffer
+                .contains(&PeerMessage::RejectRequest {
+                    index: 0,
+                    begin: SUBPIECE_SIZE * 2,
+                    length: 123,
+                }),
+            "Should queue RejectRequest for request at piece boundary"
+        );
+    });
+}

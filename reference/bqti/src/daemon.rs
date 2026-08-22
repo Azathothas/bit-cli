@@ -1,0 +1,66 @@
+use std::sync::Arc;
+
+use anyhow::Context;
+
+use crate::{
+    Bqti, EndpointBuilder,
+    certs::{ActiveKeyIdentity, KeyIdentity},
+    i2p,
+    network::{ConnectionManager, ManagerOptions, Peer, QuicEndpointBuilder},
+    utils,
+};
+
+pub async fn handle_serve(addr: String, no_cert: bool, i2p: bool) -> anyhow::Result<()> {
+    let my_self = Peer::new("localhost", &addr)?;
+    utils::certs::ensure_directories().await?;
+
+    let ca_root: ActiveKeyIdentity = {
+        #[cfg(feature = "tee")]
+        {
+            use crate::certs::TeeKeyIdentity;
+            TeeKeyIdentity::new()?
+        }
+        #[cfg(not(feature = "tee"))]
+        {
+            use crate::utils;
+            utils::certs::make_ca_root().await?
+        }
+    };
+
+    let leaf_quic = ca_root.leaf("localhost", false)?;
+
+    let endpoint_config: EndpointBuilder = match i2p {
+        true => {
+            let endpoint_config = i2p::I2pEndpointBuilder::new(
+                vec![leaf_quic.cert_der(), ca_root.cert_der()],
+                leaf_quic.certified_key(),
+            );
+
+            EndpointBuilder::I2p(endpoint_config)
+        }
+        false => {
+            let endpoint_config = QuicEndpointBuilder::new(
+                my_self.address,
+                vec![leaf_quic.cert_der(), ca_root.cert_der()],
+                leaf_quic.certified_key(),
+            );
+
+            EndpointBuilder::Quic(endpoint_config)
+        }
+    };
+
+    // HACK: solve this (TLS)
+    let endpoint = match no_cert {
+        true => endpoint_config.dangerous_no_cert_verify().build(),
+        false => endpoint_config.dangerous_no_cert_verify().build(),
+    }
+    .await
+    .context("failed to build quic configuration")?;
+
+    let (manager, stream_rx) = ConnectionManager::new(endpoint, ManagerOptions::default())?;
+
+    let bit_torrent = Bqti::new(manager, Arc::new(ca_root))?;
+    bit_torrent.serve_forever(stream_rx).await?;
+
+    Ok(())
+}

@@ -1,0 +1,120 @@
+use mtorrent_dht as dht;
+use mtorrent_utils::{info_stopwatch, net, upnp, worker};
+use std::io;
+use std::path::PathBuf;
+use std::time::Duration;
+use tokio::{join, task};
+
+/// Startup configuration for the DHT system.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// Local UDP port to bind to.
+    pub local_port: u16,
+    /// Optional name of the network interface to use (e.g. "eth0" or "lo").
+    pub bind_interface: Option<String>,
+    /// Maximum number of concurrent outbound queries in flight. Unlimited if `None`.
+    pub max_concurrent_queries: Option<usize>,
+    /// Directory for storing data persistent across boots.
+    pub config_dir: PathBuf,
+    /// Create and maintain port mappings via UPnP.
+    pub use_upnp: bool,
+    /// Override default bootstrap nodes.
+    pub bootstrap_nodes_override: Option<Vec<String>>,
+    /// Timeout for outbound queries. Uses an internal default if `None`.
+    pub query_timeout: Option<Duration>,
+}
+
+/// Spawn a thread with a Tokio runtime running the DHT system, and return handle to it.
+pub fn launch_dht_node_runtime(cfg: Config) -> io::Result<(worker::rt::Handle, dht::CommandSink)> {
+    let (cmd_sender, cmd_server) = dht::setup_commands();
+
+    let worker_handle = worker::with_local_runtime(worker::rt::Config {
+        name: "dht".to_owned(),
+        io_enabled: true,
+        time_enabled: true,
+        ..Default::default()
+    })?;
+    worker_handle.runtime_handle().spawn(async move {
+        // spawn_local() must be called from the dht thread
+        task::spawn_local(dht_main(
+            cmd_server,
+            cfg.local_port,
+            cfg.bind_interface,
+            cfg.config_dir,
+            cfg.max_concurrent_queries,
+            cfg.use_upnp,
+            cfg.bootstrap_nodes_override,
+            cfg.query_timeout,
+        ));
+    });
+
+    Ok((worker_handle, cmd_sender))
+}
+
+async fn start_upnp(local_port: u16, interface: Option<&str>) -> io::Result<()> {
+    // try create a port mapping with the same port number
+    let mut port_opener = upnp::PortOpener::new(
+        upnp::PortMappingProtocol::UDP,
+        local_port,
+        Some(local_port),
+        interface,
+    )
+    .await
+    .map_err(io::Error::other)?;
+
+    log::info!("UPnP for DHT succeeded, public ip: {}", port_opener.external_addr());
+
+    // start periodic renewal of port mapping. It will stop and remove the mapping
+    // automatically once the DHT runtime shuts down
+    task::spawn_local(async move {
+        if let Err(e) = port_opener.run_continuous_renewal().await {
+            log::error!("UPnP port renewal for DHT failed: {e}");
+        }
+    });
+    Ok(())
+}
+
+#[expect(clippy::too_many_arguments)]
+async fn dht_main(
+    cmd_server: dht::CommandSource,
+    local_port: u16,
+    bind_interface: Option<String>,
+    config_dir: PathBuf,
+    max_concurrent_queries: Option<usize>,
+    use_upnp: bool,
+    bootstrap_nodes: Option<Vec<String>>,
+    query_timeout: Option<Duration>,
+) {
+    let _sw = info_stopwatch!("DHT");
+
+    let local_ipv4 = net::get_bind_addr_v4(bind_interface.as_deref());
+    let socket =
+        match net::bound_udp_socket((local_ipv4, local_port).into(), bind_interface.as_deref()) {
+            Err(e) => {
+                log::error!("Failed to create a UDP socket for DHT: {e}");
+                return;
+            }
+            Ok(socket) => socket,
+        };
+
+    if use_upnp && let Err(e) = start_upnp(local_port, bind_interface.as_deref()).await {
+        log::error!("UPnP for DHT failed: {e}");
+    }
+
+    let (outgoing_msgs_sink, incoming_msgs_source, udp_runner) = dht::setup_udp(socket);
+
+    let (client, server, queries_runner) = dht::setup_queries(
+        outgoing_msgs_sink,
+        incoming_msgs_source,
+        max_concurrent_queries,
+        query_timeout,
+    );
+
+    let mut processor = dht::Processor::new(config_dir, client);
+
+    if let Some(nodes) = bootstrap_nodes {
+        processor.set_bootstrap_nodes(nodes);
+    }
+
+    join!(udp_runner.run(), queries_runner.run(), processor.run(server, cmd_server));
+}

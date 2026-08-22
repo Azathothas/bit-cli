@@ -1,0 +1,323 @@
+# TorrentNG Project Gap Audit
+
+Status as of 2026-05-18 on `main`.
+
+This audit separates local implementation gaps from external evidence gates.
+It is based on the roadmap docs, compatibility matrices, certification status,
+and the local checks listed at the end.
+
+## Executive Summary
+
+The native engine, storage hot path, memory/resource governor, WebUI build, and
+local deterministic API compatibility gates are green. The remaining work is
+not concentrated in storage anymore. It is concentrated in release evidence and
+compatibility depth:
+
+- the local Docker universal-live interop leg has passing evidence, while
+  public-swarm and real-device storage legs remain opt-in external release
+  gates; universal compatibility reports surface skipped optional legs as
+  `PASS_WITH_SKIPS`;
+- the migration corpus gate now has checked-in generated fixtures for every
+  legacy client family and passes strict local validation; adding real exported
+  corpora remains optional release-depth evidence for undocumented variants;
+- facade compatibility now has native-backed qBit, Transmission, Deluge, and
+  rTorrent field projection for the local matrix; remaining compatibility depth
+  is live-client behavior and plugin effects that require external clients or a
+  deliberate TorrentNG-native workflow owner;
+- uTP is implemented at the application transport layer for outbound
+  peer-wire, incoming peer-wire when explicitly enabled, and magnet metadata
+  fetch; remaining uTP work is public/live interop evidence and operational
+  tuning rather than a hidden packet-codec-only implementation gap;
+- the security release checklist is intentionally unchecked until run against
+  the exact deployment config;
+- the 24h soak status row is explicitly `STALE/INCOMPLETE` when the latest
+  report lacks an `Overall status` line and no matching soak process is active,
+  even though short, transfer-churn, finalization, local release, and post-soak
+  gates are passing.
+
+## Certification Snapshot
+
+Current `scripts/certification_status.sh` highlights:
+
+| Area | Status |
+| --- | --- |
+| Native engine rewrite | PASS |
+| Local release gate | PASS_WITH_WARNINGS only while optional live/public/device/soak rows are skipped or stale |
+| Storage hardware matrix | PASS |
+| Storage io_uring capability/graduation | PASS |
+| Storage move/import | PASS |
+| Storage release certification | PASS |
+| Storage indexed evidence | PASS |
+| Security review and scan | PASS |
+| Pre-engine release gate | PASS |
+| Post-soak release gate | PASS_WITH_WARNINGS while skipped/gap/stale rows remain |
+| Certification burndown | PASS_WITH_ACTIONS while warning rows remain |
+| Release readiness | FAIL until every status row is clean PASS/INFO |
+| Certification bundle | Generates a hashed archive of latest evidence reports |
+| Release evidence suite | Fails until strict readiness passes, while refreshing bundle/burndown |
+| Certification JSON status | Machine-readable status export for CI/release automation |
+| Universal compatibility | PASS_WITH_SKIPS unless live/public/device legs are enabled |
+| Universal live compatibility | PASS_WITH_SKIPS while public/device legs are skipped; latest local Docker interop leg passed |
+| Migration corpus | PASS with generated checked-in corpus; strict local gate passes |
+| External evidence preflight | Host readiness for live/corpus/soak external evidence |
+| 24h soak | STALE/INCOMPLETE |
+
+## Roadmaps
+
+`docs/ROADMAP.md` and `docs/ENGINE_REWRITE_BURNDOWN.md` are mostly closed for
+native implementation. The remaining roadmap risk is that the high-level
+roadmap now mixes completed implementation claims with evidence boundaries from
+the compatibility matrix.
+
+Actionable gaps:
+
+- Keep `docs/CLIENT_COMPATIBILITY_MATRICES.md` as the live backlog for broad
+  ecosystem compatibility. It still has P1/P2 rows for live client matrices,
+  public transfer interop, storage resume scenarios, golden import corpora, and
+  plugin auxiliary APIs.
+- Keep `docs/INTEROP_MATRIX.md` as the live backlog for protocol and
+  client-to-client evidence. Its expansion backlog now separates implemented
+  default-gate rows from remaining Docker/live coverage.
+- Decide whether `24h soak` should be rerun to completion, superseded by
+  transfer-churn soak, or removed from release status if the stale report is no
+  longer a release target.
+
+## Storage
+
+Storage implementation is closed locally. The current live path includes
+bounded positioned I/O, fd pooling, preallocation, durability barriers,
+dedicated disk/hash workers, peer-read readahead, HDD elevator, topology
+detection, sparse recheck, move/import/delete planning, storage-plan jobs, and
+release certification wrappers. Native REST now also exposes
+`GET /api/v1/storage` directly from the engine storage-root registry with live
+capacity probes, so WebUI/native deployments no longer depend on sidecar-only
+storage status projection.
+
+Remaining storage work is evidence-bound:
+
+- HDD 5x wall-clock claims require a run on an HDD target with
+  `TNG_STORAGE_REQUIRE_HDD_5X=1`.
+- LVM/PV placement claims require an LVM target with extent probing enabled.
+- Making `io_uring` an automatic default requires target-hardware graduation
+  evidence proving selected `uring`, registered files, registered frame slots,
+  and throughput against the `pread` baseline.
+- Multi-TB move/import claims require operator-sized real-root fixture runs.
+
+## Memory
+
+Memory/resource-governor work is locally green:
+
+- queued-disk leases fail closed before enqueue;
+- storage frames, peer buffers, piece assembly, API snapshots, tracker peers,
+  DHT table, metadata, webseed bodies, and queued disk work are accounted;
+- 100k idle and 1k hot-seeding proxy rows pass through the local release report;
+- hash/recheck isolation and peer-read backpressure are covered by scale tests.
+
+Remaining memory work is evidence-bound:
+
+- production-scale soak evidence should be refreshed for the exact release
+  config;
+- the current 24h soak report is stale/incomplete in status output;
+- fleet-size claims still depend on live deployment measurements, not just
+  deterministic proxy tests.
+
+## WebUI
+
+The WebUI is implemented and builds:
+
+- virtualized torrent table, server-side filtering/sorting, WebSocket/delta
+  hooks, bulk edit dialogs, tracker health, ratio groups, storage planner,
+  saved views, mobile-safe controls, logs, RSS rules, workflows, appearance,
+  and engine/storage panels exist in `webui/src`.
+- The top bar and status bar consume `/health` runtime capabilities for uTP, so
+  operators can see whether peer-wire, metadata, or incoming uTP paths are
+  actually active rather than inferring from implementation support alone.
+- `npm run build` passes.
+- `npm run lint` passes.
+
+WebUI browser certification now has a local gate:
+
+```sh
+scripts/webui_certification.sh
+```
+
+This runs the production build, lint, and a mocked-API Playwright matrix across
+desktop and mobile viewports. The browser matrix checks first paint, table
+rendering, selection state, settings navigation, storage panel rendering,
+15k-row virtualized table behavior, core accessible control names, automated
+axe WCAG structural checks, deterministic visual-regression baselines for the
+main workspace and storage settings panel, and console/page-error cleanliness.
+`scripts/local_release_gate.sh` now runs the same WebUI certification as part
+of the local release path. It also runs the migration corpus gate against the
+checked-in generated corpus so strict local validation has artifact coverage
+for every supported source family.
+
+Remaining WebUI gaps are now product/certification depth:
+
+- visual-regression screenshot baselines are wired into the WebUI browser
+  matrix for the main workspace and storage settings panel;
+- axe-based accessibility certification is wired in for serious/critical WCAG
+  violations, including color contrast on the certified workspace/settings
+  surfaces;
+- the browser-driven 15k-row benchmark now verifies bounded DOM rendering,
+  load-more responsiveness, and a configurable first-visible threshold through
+  `TNG_WEBUI_FIRST_VISIBLE_MS` in `scripts/webui_certification.sh`;
+- some plugin panels intentionally show compatibility-state surfaces until
+  TorrentNG owns native plugin workflows such as blocklist, execute, extractor,
+  scheduler, or auto-add behavior.
+
+## API And Compatibility
+
+Local deterministic API compatibility is passing:
+
+- qBittorrent, Transmission, Deluge, and rTorrent facade certification passed
+  via `scripts/api_facade_certification.sh`.
+- `scripts/universal_compatibility_certification.sh` passed for local
+  deterministic coverage. When the Docker live, public torrent, or real-device
+  legs are not enabled, the report status is `PASS_WITH_SKIPS` instead of plain
+  PASS. The live mobile qBittorrent read matrix is now an explicit optional
+  universal gate through `UNIVERSAL_COMPAT_MOBILE=1`.
+
+Remaining compatibility depth:
+
+- Transmission: JSON-RPC 2.0 method errors, stateful notification subscription
+  probes, broad mutable session settings, group limit state roundtrips, and
+  aggregate native peer rates are covered in the facade matrix. ETA now projects
+  from native peer rates, and tracker stats project persisted engine announce
+  state, including timestamps, status messages, and scrape counts; true push
+  notification delivery and native group scheduling effects remain future
+  live-client parity work.
+- Deluge: extractor, scheduler, execute, blocklist, and autoadd plugin-specific
+  APIs now have structured compatibility surfaces with safe no-op mutations;
+  torrent peer/rate fields and tracker status fields project native snapshots
+  when available; remaining plugin work is native behavioral effects only where
+  TorrentNG explicitly chooses to own those workflows.
+- rTorrent: file/tracker/peer multicalls now project native metadata, persisted
+  tracker state, and peer snapshots when an engine is attached, with registry
+  fallback file rows for in-memory compatibility probes. Global throttle reads
+  use native limits where available; common view sizes are registry-backed; and
+  custom views round-trip through `view.add`/`view.set` with registry size
+  projection. Deeper per-view filter expressions remain compatibility depth.
+- qBittorrent: common automation flows are covered, and `torrents/info`,
+  `sync/maindata`, `transfer/info`, `torrents/files`, and
+  `torrents/trackers` now project native peer snapshots, per-file progress,
+  aggregate rates, and persisted tracker status/messages/counts where
+  available. Remaining depth is live-client presentation parity for
+  client-specific edge cases.
+- DHT-only magnets: DHT `get_peers` forwarding and trackerless BEP 9 metadata
+  completion from discovered peers are unit-covered in `rt-engine`; the Docker
+  matrix now also includes `rust-trackerless-magnet` for trackerless metadata
+  and payload transfer through an explicit peer bridge. Public DHT-only swarm
+  discovery remains external release evidence.
+- uTP: `rt-utp` provides the packet/state/UDP stream layer, and the native
+  engine has policy-gated outbound peer-wire, boolean-gated incoming peer-wire,
+  and metadata-fetch paths. `/health` reports the active `utp_transport_paths`
+  so operators can distinguish enabled runtime paths from crate capability.
+  Remaining depth is public-swarm interop, dashboards, and deployment tuning.
+- `scripts/migration_corpus_certification.sh` now separates synthetic
+  import/apply coverage from fixture artifact coverage. It runs `rt-migrate`
+  tests and scans `testdata/migration-corpus/{qbittorrent,transmission,deluge,
+  utorrent,biglybt,tixati,rtorrent,generic}`. The checked-in generated corpus
+  and manifest cover every source family and pass with
+  `TNG_REQUIRE_MIGRATION_CORPUS=1`.
+- Real exported golden fixture corpora can still be added for qBittorrent,
+  Transmission, Deluge, uTorrent/BitTorrent Classic, BiglyBT/Vuze, Tixati,
+  rTorrent, and generic bencoded/JSON edge cases when release evidence needs
+  undocumented client/version variants beyond generated fixtures.
+- `scripts/external_evidence_preflight.sh` uses the same artifact filename
+  patterns as `scripts/migration_corpus_certification.sh`, so placeholder
+  files such as `README.md` do not satisfy exported-corpus coverage.
+
+## Wire Interop
+
+The deterministic local compatibility certification passes. Skipped live legs
+are now explicit in the universal compatibility report and certification status.
+The post-soak release rollup now marks `PASS_WITH_GAPS`, `PASS_WITH_SKIPS`,
+`PASS_WITH_WARNINGS`, `SKIP`, and stale/running evidence rows as `WARN` instead
+of treating them as a clean evidence set.
+`scripts/certification_burndown.sh` turns those non-clean status rows into an
+action table with the exact commands or artifact drops needed to reach a clean
+release report.
+`scripts/start_24h_soak.sh` starts the long 24h soak with the correct
+`soak-24h-*` report naming, PID file, and log path so status can distinguish an
+active run from a stale partial report.
+`scripts/universal_live_certification.sh` is the single entry point for the
+external universal compatibility legs: Docker client interop by default, with
+opt-in public torrent and real-device storage runs.
+`scripts/release_readiness_gate.sh` is the strict final gate: it fails on any
+non-clean certification row and writes a paired burndown report.
+`scripts/certification_bundle.sh` packages the latest certification status and
+referenced reports into a hashed `certification/bundles/` tarball for release
+notes or handoff.
+`scripts/release_evidence_suite.sh` is the one-command strict evidence refresh:
+it updates status, burndown, readiness, and bundle reports, and fails while
+strict readiness still has blockers.
+`docs/RELEASE_EVIDENCE.md` is the runbook for clearing every current warning
+row and producing the final evidence bundle.
+The full Docker interop matrix still has release evidence to run:
+
+- local Docker client-to-client rows across qBittorrent, Transmission, Deluge,
+  rTorrent, and TorrentNG now have refreshed passing evidence through
+  `scripts/universal_live_certification.sh`;
+- public legal torrent matrix;
+- the Docker protocol matrix now includes `rust-trackerless-magnet`, which adds
+  TorrentNG from a trackerless magnet and completes via an explicit bridged
+  peer, covering trackerless BEP 9 metadata and payload transfer in the local
+  client stack. DHT-only public peer discovery remains a stricter public/live
+  evidence row because it depends on swarm reachability and deployment network
+  policy. `tracker-outage-after-peer-discovery`, `webseed-outage-fallback`,
+  `endgame-multi-peer`, `private-torrent-no-dht-pex`,
+  `rust-seeds-to-all-reference-clients`, `resume-after-partial-download`,
+  `force-recheck-corruption-repair`, and `missing-file-recovery` are now
+  implemented Docker protocol rows covering tracker outage after peer discovery,
+  webseed outage fallback, multi-peer completion, private torrent DHT/PEX
+  policy, TorrentNG as sole seeder to all reference clients, preseeded partial
+  restart/resume, corrupt payload repair, and deleted payload recreation with
+  final hash verification;
+- expansion backlog for DHT/PEX/LSD, multi-tracker tiers, file layout edge
+  cases, network adversity, stress, and seeding behavior.
+
+## Security
+
+Security scripts and reports exist and the current status shows PASS, but
+`docs/SECURITY_REVIEW.md` intentionally leaves the release checklist unchecked
+because it must be run against the exact release deployment config.
+
+Release-blocking checks before shipping:
+
+- run `scripts/security_review.sh` against the selected config;
+- confirm scripts are disabled or constrained to explicit non-world-writable
+  directories;
+- confirm API tokens are non-example values;
+- confirm trusted proxy header mode is only enabled behind a proxy that strips
+  spoofed inbound headers;
+- confirm `/metrics` exposure is internal-only or protected.
+
+## Packaging And Operations
+
+Native deployment docs and packaging artifacts exist for systemd, Docker,
+Compose, Kubernetes, Prometheus/Grafana, and Arch/AUR template coverage.
+
+Remaining operational evidence:
+
+- rerun the release suite against the exact release config and target hardware;
+- attach security, storage, compatibility, and soak reports to release notes;
+- resolve the stale/incomplete 24h soak row.
+
+## Validation Run During This Audit
+
+Commands run successfully:
+
+```sh
+scripts/certification_status.sh
+cd webui && npm run build
+cd webui && npm run lint
+scripts/webui_certification.sh
+scripts/api_facade_certification.sh
+scripts/migration_corpus_certification.sh
+scripts/universal_compatibility_certification.sh
+```
+
+The universal compatibility report passed but explicitly skipped the Docker
+client interop, public torrent interop, and real-device storage legs unless
+their enabling environment variables are set.

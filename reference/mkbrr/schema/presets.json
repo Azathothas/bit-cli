@@ -1,0 +1,150 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Presets Configuration",
+  "description": "Configuration file for torrent creation presets",
+  "type": "object",
+  "required": ["version", "presets"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Schema version",
+      "enum": [1]
+    },
+    "default": {
+      "type": "object",
+      "description": "Default settings that apply to all presets unless overridden",
+      "properties": {
+        "trackers": {
+          "type": "array",
+          "description": "List of tracker URLs",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "webseeds": {
+          "type": "array",
+          "description": "List of webseed URLs",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "private": {
+          "type": "boolean",
+          "description": "Whether the torrent is private"
+        },
+        "piece_length": {
+          "type": "integer",
+          "description": "Piece length as 2^n bytes (16-27)",
+          "minimum": 16,
+          "maximum": 27
+        },
+        "target_piece_count": {
+          "type": "integer",
+          "description": "Target approximate number of pieces (calculates optimal piece length). Mutually exclusive with piece_length.",
+          "minimum": 1
+        },
+        "comment": {
+          "type": "string",
+          "description": "Torrent comment"
+        },
+        "source": {
+          "type": "string",
+          "description": "Source tag"
+        },
+        "no_date": {
+          "type": "boolean",
+          "description": "Don't write creation date"
+        },
+        "exclude_patterns": {
+          "type": "array",
+          "description": "List of glob patterns to exclude files (e.g., \"*.nfo\", \"*sample*\")",
+          "items": {
+            "type": "string"
+          }
+        },
+        "include_patterns": {
+          "type": "array",
+          "description": "List of glob patterns to include files (e.g., \"*.mkv\", \"*video*\")",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "presets": {
+      "type": "object",
+      "description": "Map of preset names to their configurations",
+      "additionalProperties": {
+        "type": "object",
+        "description": "Preset configuration",
+        "properties": {
+          "trackers": {
+            "type": "array",
+            "description": "List of tracker URLs",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "webseeds": {
+            "type": "array",
+            "description": "List of webseed URLs",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "private": {
+            "type": "boolean",
+            "description": "Whether the torrent is private"
+          },
+          "piece_length": {
+            "type": "integer",
+            "description": "Piece length as 2^n bytes (16-27)",
+            "minimum": 16,
+            "maximum": 27
+          },
+          "target_piece_count": {
+            "type": "integer",
+            "description": "Target approximate number of pieces (calculates optimal piece length). Mutually exclusive with piece_length.",
+            "minimum": 1
+          },
+          "comment": {
+            "type": "string",
+            "description": "Torrent comment"
+          },
+          "source": {
+            "type": "string",
+            "description": "Source tag"
+          },
+          "no_date": {
+            "type": "boolean",
+            "description": "Don't write creation date"
+          },
+          "max_piece_length": {
+            "type": "integer",
+            "description": "Maximum piece length as 2^n bytes (16-27)",
+            "minimum": 16,
+            "maximum": 27
+          },
+          "exclude_patterns": {
+            "type": "array",
+            "description": "List of glob patterns to exclude files (e.g., \"*.nfo\", \"*sample*\")",
+            "items": {
+            "type": "string"
+          }
+        },
+        "include_patterns": {
+          "type": "array",
+          "description": "List of glob patterns to include files (e.g., \"*.mkv\", \"*video*\")",
+          "items": {
+            "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

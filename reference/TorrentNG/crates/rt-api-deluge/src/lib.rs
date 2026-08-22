@@ -1,0 +1,3279 @@
+#![recursion_limit = "256"]
+
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::Arc,
+};
+
+use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
+use base64::{engine::general_purpose, Engine as _};
+use rt_engine::{
+    EngineHandle, EnginePeerSnapshot, EngineTorrentLimits, EngineTorrentMetadata,
+    EngineTrackerSnapshot,
+};
+use rt_metainfo::{parse_magnet, parse_torrent};
+use rt_metrics::{MemoryClass, MemoryLease};
+use rt_session::SessionRegistry;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use tokio::sync::RwLock;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub registry: Arc<RwLock<SessionRegistry>>,
+    pub engine: Option<EngineHandle>,
+    pub torrent_options: Arc<RwLock<HashMap<String, EngineTorrentLimits>>>,
+    pub move_completed_options: Arc<RwLock<HashMap<String, DelugeMoveCompletedOptions>>>,
+    pub url_downloads: Arc<RwLock<HashMap<String, String>>>,
+    pub next_url_download_id: Arc<RwLock<u64>>,
+    pub enabled_plugins: Arc<RwLock<HashSet<String>>>,
+    pub plugin_configs: Arc<RwLock<HashMap<String, Value>>>,
+    pub execute_commands: Arc<RwLock<Vec<Value>>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DelugeMoveCompletedOptions {
+    pub enabled: bool,
+    pub path: String,
+}
+
+impl AppState {
+    pub fn new(registry: Arc<RwLock<SessionRegistry>>) -> Self {
+        Self {
+            registry,
+            engine: None,
+            torrent_options: Arc::new(RwLock::new(HashMap::new())),
+            move_completed_options: Arc::new(RwLock::new(HashMap::new())),
+            url_downloads: Arc::new(RwLock::new(HashMap::new())),
+            next_url_download_id: Arc::new(RwLock::new(1)),
+            enabled_plugins: Arc::new(RwLock::new(default_enabled_plugins())),
+            plugin_configs: Arc::new(RwLock::new(HashMap::new())),
+            execute_commands: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    pub fn with_engine(registry: Arc<RwLock<SessionRegistry>>, engine: EngineHandle) -> Self {
+        Self {
+            registry,
+            engine: Some(engine),
+            torrent_options: Arc::new(RwLock::new(HashMap::new())),
+            move_completed_options: Arc::new(RwLock::new(HashMap::new())),
+            url_downloads: Arc::new(RwLock::new(HashMap::new())),
+            next_url_download_id: Arc::new(RwLock::new(1)),
+            enabled_plugins: Arc::new(RwLock::new(default_enabled_plugins())),
+            plugin_configs: Arc::new(RwLock::new(HashMap::new())),
+            execute_commands: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+}
+
+async fn reserve_deluge_api_snapshot(
+    state: &AppState,
+    bytes: u64,
+) -> Result<Option<MemoryLease>, String> {
+    let Some(engine) = &state.engine else {
+        return Ok(None);
+    };
+    engine.reserve_memory(MemoryClass::ApiSnapshot, bytes).await
+}
+
+fn estimate_deluge_torrents_snapshot_bytes(torrent_count: usize) -> u64 {
+    (torrent_count as u64).saturating_mul(3072)
+}
+
+fn estimate_deluge_update_ui_snapshot_bytes(torrent_count: usize) -> u64 {
+    32 * 1024 + (torrent_count as u64).saturating_mul(4096)
+}
+
+fn estimate_deluge_torrent_detail_snapshot_bytes() -> u64 {
+    64 * 1024
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JsonRpcRequest {
+    pub id: Option<Value>,
+    pub method: String,
+    #[serde(default)]
+    pub params: Vec<Value>,
+}
+
+pub fn build_deluge_router(state: AppState) -> Router {
+    Router::new()
+        .route("/json", post(json_rpc))
+        .route("/deluge/json", post(json_rpc))
+        .with_state(state)
+}
+
+pub async fn json_rpc(
+    State(state): State<AppState>,
+    Json(req): Json<JsonRpcRequest>,
+) -> impl IntoResponse {
+    let result = dispatch(&state, &req.method, &req.params).await;
+    let payload = match result {
+        Ok(result) => json!({
+            "id": req.id,
+            "result": result,
+            "error": null,
+        }),
+        Err(message) => json!({
+            "id": req.id,
+            "result": null,
+            "error": {
+                "message": message,
+                "code": 1,
+            },
+        }),
+    };
+    Json(payload)
+}
+
+async fn dispatch(state: &AppState, method: &str, params: &[Value]) -> Result<Value, String> {
+    match method {
+        "auth.login" => Ok(json!(true)),
+        "auth.check_session" => Ok(json!(true)),
+        "daemon.login" => Ok(json!(true)),
+        "daemon.info" => Ok(json!({
+            "version": "TorrentNG",
+            "libtorrent": "native",
+        })),
+        "daemon.get_method_list" => Ok(json!(supported_methods())),
+        "daemon.shutdown" => Ok(json!(true)),
+        "web.connected" => Ok(json!(true)),
+        "web.add_host" => Ok(json!("TorrentNG")),
+        "web.edit_host" | "web.remove_host" => Ok(json!(true)),
+        "web.get_config" => Ok(deluge_web_config()),
+        "web.get_host_status" => Ok(json!(["TorrentNG", "127.0.0.1", 0, "Online"])),
+        "web.get_hosts" => Ok(json!([["TorrentNG", "127.0.0.1", 0, "TorrentNG"]])),
+        "web.connect" | "web.disconnect" | "web.start_daemon" | "web.stop_daemon" => {
+            Ok(json!(true))
+        }
+        "web.download_torrent_from_url" => web_download_torrent_from_url(state, params).await,
+        "web.add_torrents" => web_add_torrents(state, params).await,
+        "web.get_events" => web_events(state).await,
+        "web.get_plugins" => Ok(json!(deluge_plugins())),
+        "web.get_plugin_info" => Ok(plugin_info(params.first().and_then(Value::as_str))),
+        "web.upload_plugin" | "web.update_config" | "web.save_config" => Ok(json!(true)),
+        "web.get_torrent_files" => {
+            let hash = params
+                .first()
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing torrent id".to_owned())?;
+            torrent_files(state, hash).await
+        }
+        "web.update_ui" => update_ui(state, params).await,
+        "core.get_session_status" => session_status(state).await,
+        "core.get_stats" => session_status(state).await,
+        "core.get_num_connections" => Ok(json!(0)),
+        "core.get_download_rate" => Ok(json!(deluge_session_download_rate(state).await)),
+        "core.get_upload_rate" => Ok(json!(deluge_session_upload_rate(state).await)),
+        "core.get_filter_tree" => filter_tree(state).await,
+        "core.get_session_state" => session_state(state).await,
+        "core.get_torrents_status" => torrents_status(state, params).await,
+        "core.get_torrent_status" => {
+            let hash = params
+                .first()
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing torrent id".to_owned())?;
+            torrent_status(state, hash, params.get(1)).await
+        }
+        "core.pause_torrent" => {
+            for hash in string_list(params.first()) {
+                if let Some(engine) = &state.engine {
+                    let _ = engine.pause_torrent(hash).await;
+                }
+            }
+            Ok(json!(true))
+        }
+        "core.resume_torrent" => {
+            for hash in string_list(params.first()) {
+                if let Some(engine) = &state.engine {
+                    let _ = engine.resume_torrent(hash).await;
+                }
+            }
+            Ok(json!(true))
+        }
+        "core.force_recheck" => {
+            for hash in string_list(params.first()) {
+                if let Some(engine) = &state.engine {
+                    let _ = engine.recheck_torrent(hash).await;
+                }
+            }
+            Ok(json!(true))
+        }
+        "core.queue_top"
+        | "core.queue_up"
+        | "core.queue_down"
+        | "core.queue_bottom"
+        | "core.create_torrent"
+        | "core.upload_plugin"
+        | "core.rescan_plugins" => Ok(json!(true)),
+        "core.set_torrent_prioritize_first_last" => set_prioritize_first_last(state, params).await,
+        "core.set_torrent_file_priorities" => set_file_priorities(state, params).await,
+        "core.set_torrent_trackers" => set_trackers(state, params).await,
+        "core.connect_peer" => connect_peer(state, params).await,
+        "core.rename_files" => rename_files(state, params).await,
+        "core.rename_folder" => rename_folder(state, params).await,
+        "core.move_storage" => move_storage(state, params).await,
+        "core.get_torrent_file_status" => {
+            if let Some(hash) = params.first().and_then(Value::as_str) {
+                torrent_files(state, hash).await
+            } else {
+                Ok(json!([]))
+            }
+        }
+        "core.remove_torrent" => {
+            let hash = params
+                .first()
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing torrent id".to_owned())?;
+            let remove_data = params.get(1).and_then(Value::as_bool).unwrap_or(false);
+            if let Some(engine) = &state.engine {
+                let _ = engine.remove_torrent(hash.to_owned(), remove_data).await;
+            }
+            Ok(json!(true))
+        }
+        "core.add_torrent_magnet" => {
+            let uri = params
+                .first()
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing magnet URI".to_owned())?;
+            add_magnet(state, uri, params.get(1)).await
+        }
+        "core.add_torrent_file" => {
+            let data = params
+                .get(1)
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing torrent data".to_owned())?;
+            add_torrent_file(state, data, params.get(2)).await
+        }
+        "core.set_torrent_options" => set_torrent_options(state, params).await,
+        "label.get_labels" => labels(state).await,
+        "label.add" => Ok(json!(true)),
+        "label.remove" => Ok(json!(true)),
+        "label.set_options" => Ok(json!(true)),
+        "label.set_torrent" => {
+            let hash = params
+                .first()
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing torrent id".to_owned())?;
+            let label = params.get(1).and_then(Value::as_str).unwrap_or_default();
+            set_label(state, hash, label).await?;
+            Ok(json!(true))
+        }
+        "core.get_free_space" => Ok(json!(0)),
+        "core.set_config" => Ok(json!(true)),
+        "core.get_listen_port" => Ok(json!(0)),
+        "core.get_external_ip" => Ok(json!("")),
+        "core.get_path_size" => Ok(json!(0)),
+        "core.get_cache_status" => cache_status(state).await,
+        "core.get_config" => Ok(deluge_config()),
+        "core.get_config_values" => Ok(deluge_config_values(params.first())),
+        "core.get_config_value" => Ok(deluge_config_value(params.first())),
+        "core.get_enabled_plugins" => enabled_plugins(state).await,
+        "core.enable_plugin" => set_plugin_enabled(state, params, true).await,
+        "core.disable_plugin" => set_plugin_enabled(state, params, false).await,
+        "core.get_available_plugins" => Ok(json!(deluge_plugins())),
+        "core.get_libtorrent_version" => Ok(json!("native")),
+        "blocklist.get_config" => plugin_config(state, "blocklist", blocklist_config()).await,
+        "blocklist.set_config" => set_plugin_config(state, "blocklist", params).await,
+        "blocklist.get_status" | "blocklist.check_import" => blocklist_status(state).await,
+        "blocklist.import" => Ok(json!(true)),
+        "autoadd.get_config" => plugin_config(state, "autoadd", autoadd_config()).await,
+        "autoadd.set_config" => set_plugin_config(state, "autoadd", params).await,
+        "autoadd.enable" => set_autoadd_enabled(state, true).await,
+        "autoadd.disable" => set_autoadd_enabled(state, false).await,
+        "execute.get_commands" => execute_commands(state).await,
+        "execute.save_command" => save_execute_command(state, params).await,
+        "execute.remove_command" => remove_execute_command(state, params).await,
+        "scheduler.get_config" => plugin_config(state, "scheduler", scheduler_config()).await,
+        "scheduler.set_config" => set_plugin_config(state, "scheduler", params).await,
+        "extractor.get_config" => plugin_config(state, "extractor", extractor_config()).await,
+        "extractor.set_config" => set_plugin_config(state, "extractor", params).await,
+        "notifications.get_handled_events" => Ok(json!(notification_events())),
+        "notifications.get_subscriptions" => Ok(notification_subscriptions()),
+        "notifications.set_config" | "notifications.add_subscription" => Ok(json!(true)),
+        _ => Err(format!("unsupported method {method}")),
+    }
+}
+
+fn supported_methods() -> Vec<&'static str> {
+    vec![
+        "auth.login",
+        "auth.check_session",
+        "daemon.login",
+        "daemon.info",
+        "daemon.get_method_list",
+        "daemon.shutdown",
+        "web.connected",
+        "web.add_host",
+        "web.edit_host",
+        "web.remove_host",
+        "web.get_config",
+        "web.update_ui",
+        "web.get_events",
+        "web.get_hosts",
+        "web.get_host_status",
+        "web.connect",
+        "web.disconnect",
+        "web.start_daemon",
+        "web.stop_daemon",
+        "web.download_torrent_from_url",
+        "web.add_torrents",
+        "web.get_plugins",
+        "web.get_plugin_info",
+        "web.upload_plugin",
+        "web.update_config",
+        "web.save_config",
+        "web.get_torrent_files",
+        "core.get_torrents_status",
+        "core.get_torrent_status",
+        "core.get_torrent_file_status",
+        "core.get_session_state",
+        "core.get_session_status",
+        "core.get_stats",
+        "core.get_num_connections",
+        "core.get_download_rate",
+        "core.get_upload_rate",
+        "core.get_filter_tree",
+        "core.pause_torrent",
+        "core.resume_torrent",
+        "core.force_recheck",
+        "core.queue_top",
+        "core.queue_up",
+        "core.queue_down",
+        "core.queue_bottom",
+        "core.remove_torrent",
+        "core.add_torrent_magnet",
+        "core.add_torrent_file",
+        "core.set_torrent_options",
+        "core.set_torrent_file_priorities",
+        "core.set_torrent_trackers",
+        "core.set_torrent_prioritize_first_last",
+        "core.connect_peer",
+        "core.rename_files",
+        "core.rename_folder",
+        "core.move_storage",
+        "core.get_config",
+        "core.get_config_values",
+        "core.get_config_value",
+        "core.set_config",
+        "core.get_free_space",
+        "core.get_listen_port",
+        "core.get_external_ip",
+        "core.get_path_size",
+        "core.get_cache_status",
+        "core.get_enabled_plugins",
+        "core.enable_plugin",
+        "core.disable_plugin",
+        "core.get_available_plugins",
+        "core.get_libtorrent_version",
+        "core.create_torrent",
+        "core.upload_plugin",
+        "core.rescan_plugins",
+        "blocklist.get_config",
+        "blocklist.set_config",
+        "blocklist.get_status",
+        "blocklist.check_import",
+        "blocklist.import",
+        "autoadd.get_config",
+        "autoadd.set_config",
+        "autoadd.enable",
+        "autoadd.disable",
+        "execute.get_commands",
+        "execute.save_command",
+        "execute.remove_command",
+        "scheduler.get_config",
+        "scheduler.set_config",
+        "extractor.get_config",
+        "extractor.set_config",
+        "label.get_labels",
+        "label.add",
+        "label.remove",
+        "label.set_options",
+        "label.set_torrent",
+        "notifications.get_handled_events",
+        "notifications.get_subscriptions",
+        "notifications.set_config",
+        "notifications.add_subscription",
+    ]
+}
+
+fn deluge_config() -> Value {
+    json!({
+        "download_location": "/downloads",
+        "move_completed": false,
+        "move_completed_path": "/downloads",
+        "copy_torrent_file": false,
+        "torrentfiles_location": "/downloads",
+        "autoadd_enable": false,
+        "autoadd_location": "/watch",
+        "max_download_speed": -1.0,
+        "max_upload_speed": -1.0,
+        "max_connections_global": -1,
+        "max_upload_slots_global": -1,
+        "max_active_limit": -1,
+        "max_active_downloading": -1,
+        "max_active_seeding": -1,
+        "queue_new_to_top": false,
+        "ignore_limits_on_local_network": true,
+        "share_ratio_limit": -1.0,
+        "seed_time_ratio_limit": -1.0,
+        "seed_time_limit": -1,
+        "stop_seed_at_ratio": false,
+        "stop_seed_ratio": 2.0,
+        "remove_seed_at_ratio": false,
+        "listen_ports": [0, 0],
+        "random_port": true,
+        "dht": true,
+        "upnp": false,
+        "natpmp": false,
+        "utpex": true,
+        "lsd": false,
+        "enc_in_policy": 1,
+        "enc_out_policy": 1,
+        "enc_level": 2,
+    })
+}
+
+fn deluge_config_values(keys: Option<&Value>) -> Value {
+    let config = deluge_config();
+    let Some(keys) = keys.and_then(Value::as_array) else {
+        return config;
+    };
+    let mut out = serde_json::Map::new();
+    for key in keys.iter().filter_map(Value::as_str) {
+        out.insert(
+            key.to_owned(),
+            config.get(key).cloned().unwrap_or(Value::Null),
+        );
+    }
+    Value::Object(out)
+}
+
+fn deluge_config_value(key: Option<&Value>) -> Value {
+    let Some(key) = key.and_then(Value::as_str) else {
+        return Value::Null;
+    };
+    deluge_config().get(key).cloned().unwrap_or(Value::Null)
+}
+
+fn deluge_web_config() -> Value {
+    json!({
+        "base": "/",
+        "pwd_salt": "",
+        "pwd_sha1": "",
+        "sessions": {},
+        "session_timeout": 3600,
+        "default_daemon": "TorrentNG",
+        "sidebar_show_zero": false,
+        "sidebar_multiple_filters": true,
+        "show_session_speed": false,
+        "theme": "gray",
+        "first_login": false,
+    })
+}
+
+async fn web_add_torrents(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let Some(torrents) = params.first().and_then(Value::as_array) else {
+        return Ok(json!(true));
+    };
+    let mut results = Vec::new();
+    for torrent in torrents {
+        let options = torrent.get("options").or_else(|| torrent.get("params"));
+        let path = torrent
+            .get("path")
+            .or_else(|| torrent.get("url"))
+            .or_else(|| torrent.get("filename"))
+            .or_else(|| torrent.get("file"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let result = if path.starts_with("magnet:") {
+            add_magnet(state, path, options).await
+        } else if let Some(url) = state.url_downloads.write().await.remove(path) {
+            if url.starts_with("magnet:") {
+                add_magnet(state, &url, options).await
+            } else {
+                Ok(json!({
+                    "url": url,
+                    "downloaded": false,
+                    "reason": "server-side URL fetch is disabled; token preserves Deluge WebUI flow",
+                }))
+            }
+        } else if path.starts_with("http://") || path.starts_with("https://") {
+            Ok(json!({
+                "url": path,
+                "downloaded": false,
+                "reason": "server-side URL fetch is disabled; pass web.download_torrent_from_url token to preserve flow",
+            }))
+        } else if let Some(data) = torrent
+            .get("data")
+            .or_else(|| torrent.get("torrent"))
+            .or_else(|| torrent.get("metainfo"))
+            .or_else(|| torrent.get("filedata"))
+            .or_else(|| torrent.get("content"))
+            .and_then(Value::as_str)
+        {
+            add_torrent_file(state, data, options).await
+        } else if !path.trim().is_empty() {
+            add_torrent_path(state, path, options).await
+        } else {
+            Ok(json!(true))
+        };
+        results.push(json!({
+            "path": path,
+            "success": result.is_ok(),
+            "result": result.unwrap_or(Value::Null),
+        }));
+    }
+    Ok(Value::Array(results))
+}
+
+async fn web_download_torrent_from_url(
+    state: &AppState,
+    params: &[Value],
+) -> Result<Value, String> {
+    let url = params
+        .first()
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "missing URL".to_owned())?;
+    if !(url.starts_with("http://") || url.starts_with("https://") || url.starts_with("magnet:")) {
+        return Err("unsupported torrent URL scheme".to_owned());
+    }
+
+    let mut next = state.next_url_download_id.write().await;
+    let token = format!("torrentng-url-download-{}.torrent", *next);
+    *next = next.saturating_add(1);
+    state
+        .url_downloads
+        .write()
+        .await
+        .insert(token.clone(), url.to_owned());
+    Ok(json!(token))
+}
+
+async fn move_storage(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let location = params
+        .get(1)
+        .and_then(Value::as_str)
+        .ok_or_else(|| "missing storage path".to_owned())?;
+    for hash in string_list(params.first()) {
+        if let Some(engine) = &state.engine {
+            let _ = engine
+                .update_torrent_fields(hash, None, Some(std::path::PathBuf::from(location)))
+                .await;
+        } else {
+            let mut reg = state.registry.write().await;
+            if let Some(entry) = reg.get_mut(&hash) {
+                entry.save_path = location.to_owned();
+            }
+        }
+    }
+    Ok(json!(true))
+}
+
+async fn session_state(state: &AppState) -> Result<Value, String> {
+    let reg = state.registry.read().await;
+    Ok(json!(reg
+        .iter()
+        .map(|entry| entry.info_hash.clone())
+        .collect::<Vec<_>>()))
+}
+
+async fn session_status(state: &AppState) -> Result<Value, String> {
+    let reg = state.registry.read().await;
+    let torrent_count = reg.iter().count();
+    let total_payload_download = reg.iter().fold(0_u64, |acc, entry| {
+        acc.saturating_add(entry.stats.downloaded)
+    });
+    let total_payload_upload = reg
+        .iter()
+        .fold(0_u64, |acc, entry| acc.saturating_add(entry.stats.uploaded));
+    let download_rate = deluge_session_download_rate(state).await;
+    let upload_rate = deluge_session_upload_rate(state).await;
+    Ok(json!({
+        "payload_download_rate": download_rate,
+        "payload_upload_rate": upload_rate,
+        "download_rate": download_rate,
+        "upload_rate": upload_rate,
+        "num_connections": 0,
+        "total_payload_download": total_payload_download,
+        "total_payload_upload": total_payload_upload,
+        "num_torrents": torrent_count,
+    }))
+}
+
+async fn deluge_session_download_rate(state: &AppState) -> i64 {
+    let Some(engine) = &state.engine else {
+        return 0;
+    };
+    let hashes = {
+        let reg = state.registry.read().await;
+        reg.iter()
+            .map(|entry| entry.info_hash.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut total = 0_i64;
+    for hash in hashes {
+        if let Ok(peers) = engine.torrent_peers(hash).await {
+            total = total.saturating_add(deluge_peer_download_rate(Some(&peers)));
+        }
+    }
+    total
+}
+
+async fn deluge_session_upload_rate(state: &AppState) -> i64 {
+    let Some(engine) = &state.engine else {
+        return 0;
+    };
+    let hashes = {
+        let reg = state.registry.read().await;
+        reg.iter()
+            .map(|entry| entry.info_hash.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut total = 0_i64;
+    for hash in hashes {
+        if let Ok(peers) = engine.torrent_peers(hash).await {
+            total = total.saturating_add(deluge_peer_upload_rate(Some(&peers)));
+        }
+    }
+    total
+}
+
+async fn cache_status(state: &AppState) -> Result<Value, String> {
+    let (num_torrents, total_done, total_left) = {
+        let reg = state.registry.read().await;
+        reg.iter()
+            .fold((0_u64, 0_u64, 0_u64), |(count, done, left), entry| {
+                (
+                    count + 1,
+                    done.saturating_add(entry.total_length.saturating_sub(entry.amount_left)),
+                    left.saturating_add(entry.amount_left),
+                )
+            })
+    };
+    let jobs_active = if let Some(engine) = &state.engine {
+        engine
+            .stats()
+            .await
+            .map(|stats| stats.jobs_active)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    Ok(json!({
+        "blocks_read": 0,
+        "blocks_written": 0,
+        "cache_size": total_done.saturating_add(total_left),
+        "read_cache_hits": 0,
+        "read_cache_size": total_done,
+        "total_used_buffers": num_torrents,
+        "write_cache_size": total_left,
+        "queued_jobs": jobs_active,
+    }))
+}
+
+async fn web_events(state: &AppState) -> Result<Value, String> {
+    let reg = state.registry.read().await;
+    Ok(json!(reg
+        .iter()
+        .map(|entry| {
+            json!({
+                "event": "TorrentStateChangedEvent",
+                "value": [entry.info_hash, deluge_state(entry.state.as_str())],
+            })
+        })
+        .collect::<Vec<_>>()))
+}
+
+fn deluge_plugins() -> Vec<&'static str> {
+    vec![
+        "AutoAdd",
+        "Blocklist",
+        "Execute",
+        "Extractor",
+        "Label",
+        "Notifications",
+        "Scheduler",
+    ]
+}
+
+fn default_enabled_plugins() -> HashSet<String> {
+    deluge_plugins()
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<HashSet<_>>()
+}
+
+fn canonical_plugin_name(name: &str) -> Option<&'static str> {
+    match name {
+        "AutoAdd" | "autoadd" => Some("AutoAdd"),
+        "Blocklist" | "blocklist" => Some("Blocklist"),
+        "Execute" | "execute" => Some("Execute"),
+        "Extractor" | "extractor" => Some("Extractor"),
+        "Label" | "label" => Some("Label"),
+        "Notifications" | "notifications" => Some("Notifications"),
+        "Scheduler" | "scheduler" => Some("Scheduler"),
+        _ => None,
+    }
+}
+
+async fn enabled_plugins(state: &AppState) -> Result<Value, String> {
+    let mut plugins = state
+        .enabled_plugins
+        .read()
+        .await
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    plugins.sort();
+    Ok(json!(plugins))
+}
+
+async fn set_plugin_enabled(
+    state: &AppState,
+    params: &[Value],
+    enabled: bool,
+) -> Result<Value, String> {
+    let name = params
+        .first()
+        .and_then(Value::as_str)
+        .and_then(canonical_plugin_name)
+        .ok_or_else(|| "missing plugin name".to_owned())?;
+    let mut plugins = state.enabled_plugins.write().await;
+    if enabled {
+        plugins.insert(name.to_owned());
+    } else {
+        plugins.remove(name);
+    }
+    Ok(json!(true))
+}
+
+fn plugin_info(name: Option<&str>) -> Value {
+    let name = name.unwrap_or_default();
+    match name {
+        "AutoAdd" | "autoadd" => json!({
+            "name": "AutoAdd",
+            "version": "TorrentNG",
+            "author": "TorrentNG",
+            "description": "Watch-directory compatibility configuration; server-side watch execution is disabled unless native automation owns it.",
+            "enabled": true,
+        }),
+        "Blocklist" | "blocklist" => json!({
+            "name": "Blocklist",
+            "version": "TorrentNG",
+            "author": "TorrentNG",
+            "description": "Blocklist compatibility configuration with zero-entry status until a native blocklist backend is configured.",
+            "enabled": true,
+        }),
+        "Execute" | "execute" => json!({
+            "name": "Execute",
+            "version": "TorrentNG",
+            "author": "TorrentNG",
+            "description": "Execute plugin compatibility surface; arbitrary command execution is intentionally not performed by the facade.",
+            "enabled": true,
+        }),
+        "Extractor" | "extractor" => json!({
+            "name": "Extractor",
+            "version": "TorrentNG",
+            "author": "TorrentNG",
+            "description": "Extractor plugin compatibility configuration; archive extraction is left to explicit operator workflows.",
+            "enabled": true,
+        }),
+        "Label" | "label" => json!({
+            "name": "Label",
+            "version": "TorrentNG",
+            "author": "TorrentNG",
+            "description": "Category and label compatibility backed by native torrent labels.",
+            "enabled": true,
+        }),
+        "Notifications" | "notifications" => json!({
+            "name": "Notifications",
+            "version": "TorrentNG",
+            "author": "TorrentNG",
+            "description": "Native session event notification compatibility.",
+            "enabled": true,
+        }),
+        "Scheduler" | "scheduler" => json!({
+            "name": "Scheduler",
+            "version": "TorrentNG",
+            "author": "TorrentNG",
+            "description": "Scheduler plugin compatibility configuration; native limits remain controlled by TorrentNG settings.",
+            "enabled": true,
+        }),
+        _ => json!({}),
+    }
+}
+
+fn blocklist_config() -> Value {
+    json!({
+        "enabled": false,
+        "url": "",
+        "load_on_start": false,
+        "check_after_days": 4,
+        "list_size": 0,
+        "last_update": 0,
+    })
+}
+
+fn autoadd_config() -> Value {
+    json!({
+        "enabled": false,
+        "watchdirs": {},
+        "next_id": 1,
+    })
+}
+
+fn scheduler_config() -> Value {
+    json!({
+        "low_down": -1.0,
+        "low_up": -1.0,
+        "high_down": -1.0,
+        "high_up": -1.0,
+        "button_state": [[0, 0, 0, 0, 0, 0, 0, 0]],
+    })
+}
+
+fn extractor_config() -> Value {
+    json!({
+        "enabled": false,
+        "extract_path": "",
+        "use_name_folder": true,
+    })
+}
+
+async fn blocklist_status(state: &AppState) -> Result<Value, String> {
+    let config = plugin_config_value(state, "blocklist", blocklist_config()).await;
+    let enabled = config
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let url = config
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Ok(json!({
+        "state": if enabled { "Idle" } else { "Disabled" },
+        "message": if enabled && !url.is_empty() { "Blocklist configured" } else { "No native blocklist configured" },
+        "num_blocked": config.get("list_size").and_then(Value::as_i64).unwrap_or(0).max(0),
+        "file_progress": 0.0,
+        "file_type": "",
+        "up_to_date": true,
+    }))
+}
+
+async fn plugin_config(state: &AppState, key: &str, default: Value) -> Result<Value, String> {
+    Ok(plugin_config_value(state, key, default).await)
+}
+
+async fn plugin_config_value(state: &AppState, key: &str, default: Value) -> Value {
+    state
+        .plugin_configs
+        .read()
+        .await
+        .get(key)
+        .cloned()
+        .unwrap_or(default)
+}
+
+async fn set_plugin_config(state: &AppState, key: &str, params: &[Value]) -> Result<Value, String> {
+    let incoming = params.first().cloned().unwrap_or_else(|| json!({}));
+    let mut current = plugin_config_value(state, key, default_plugin_config(key)).await;
+    merge_json_object(&mut current, incoming);
+    state
+        .plugin_configs
+        .write()
+        .await
+        .insert(key.to_owned(), current);
+    Ok(json!(true))
+}
+
+async fn set_autoadd_enabled(state: &AppState, enabled: bool) -> Result<Value, String> {
+    let mut current = plugin_config_value(state, "autoadd", autoadd_config()).await;
+    if let Some(map) = current.as_object_mut() {
+        map.insert("enabled".to_owned(), enabled.into());
+    }
+    state
+        .plugin_configs
+        .write()
+        .await
+        .insert("autoadd".to_owned(), current);
+    Ok(json!(true))
+}
+
+fn default_plugin_config(key: &str) -> Value {
+    match key {
+        "blocklist" => blocklist_config(),
+        "autoadd" => autoadd_config(),
+        "scheduler" => scheduler_config(),
+        "extractor" => extractor_config(),
+        _ => json!({}),
+    }
+}
+
+fn merge_json_object(target: &mut Value, incoming: Value) {
+    let Some(target_map) = target.as_object_mut() else {
+        *target = incoming;
+        return;
+    };
+    let Some(incoming_map) = incoming.as_object() else {
+        *target = incoming;
+        return;
+    };
+    for (key, value) in incoming_map {
+        target_map.insert(key.clone(), value.clone());
+    }
+}
+
+async fn execute_commands(state: &AppState) -> Result<Value, String> {
+    Ok(Value::Array(state.execute_commands.read().await.clone()))
+}
+
+async fn save_execute_command(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let event = params
+        .first()
+        .and_then(Value::as_str)
+        .unwrap_or("complete")
+        .to_owned();
+    let command = params
+        .get(1)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let mut commands = state.execute_commands.write().await;
+    let id = commands.len() as i64 + 1;
+    commands.push(json!({
+        "id": id,
+        "event": event,
+        "command": command,
+    }));
+    Ok(json!(id))
+}
+
+async fn remove_execute_command(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let id = params.first().and_then(Value::as_i64).unwrap_or_default();
+    state
+        .execute_commands
+        .write()
+        .await
+        .retain(|command| command.get("id").and_then(Value::as_i64) != Some(id));
+    Ok(json!(true))
+}
+
+fn notification_events() -> Vec<&'static str> {
+    vec![
+        "TorrentAddedEvent",
+        "TorrentRemovedEvent",
+        "TorrentStateChangedEvent",
+        "TorrentFinishedEvent",
+    ]
+}
+
+fn notification_subscriptions() -> Value {
+    notification_events()
+        .into_iter()
+        .map(|event| (event.to_owned(), json!([])))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
+async fn filter_tree(state: &AppState) -> Result<Value, String> {
+    let reg = state.registry.read().await;
+    let mut labels = std::collections::BTreeMap::<String, usize>::new();
+    let mut states = std::collections::BTreeMap::<String, usize>::new();
+    for entry in reg.iter() {
+        *labels
+            .entry(entry.category.clone().unwrap_or_default())
+            .or_default() += 1;
+        *states
+            .entry(deluge_state(entry.state.as_str()).to_owned())
+            .or_default() += 1;
+    }
+    Ok(json!({
+        "label": labels.into_iter().map(|(label, count)| json!([label, count])).collect::<Vec<_>>(),
+        "state": states.into_iter().map(|(state, count)| json!([state, count])).collect::<Vec<_>>(),
+    }))
+}
+
+async fn update_ui(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let wanted_fields = deluge_requested_fields(params.first());
+    let entries = {
+        let reg = state.registry.read().await;
+        reg.iter().cloned().collect::<Vec<_>>()
+    };
+    let _lease = if state.engine.is_some() {
+        Some(
+            reserve_deluge_api_snapshot(
+                state,
+                estimate_deluge_update_ui_snapshot_bytes(entries.len()),
+            )
+            .await?
+            .ok_or_else(|| "api snapshot memory budget exhausted".to_owned())?,
+        )
+    } else {
+        None
+    };
+    let mut metadata = std::collections::HashMap::new();
+    let mut peers = std::collections::HashMap::new();
+    let mut trackers = std::collections::HashMap::new();
+    let mut active_rechecks = HashSet::new();
+    let mut limits_by_hash = state.torrent_options.read().await.clone();
+    let move_completed_by_hash = state.move_completed_options.read().await.clone();
+    if let Some(engine) = &state.engine {
+        active_rechecks = deluge_active_recheck_hashes(engine).await;
+        for entry in &entries {
+            if let Ok(meta) = engine.torrent_metadata(entry.info_hash.clone()).await {
+                metadata.insert(entry.info_hash.clone(), meta);
+            }
+            if deluge_fields_need_peers(&wanted_fields) {
+                if let Ok(snapshot) = engine.torrent_peers(entry.info_hash.clone()).await {
+                    peers.insert(entry.info_hash.clone(), snapshot);
+                }
+            }
+            if let Ok(limits) = engine.torrent_limits(entry.info_hash.clone()).await {
+                limits_by_hash.insert(entry.info_hash.clone(), limits);
+            }
+            if deluge_fields_need_trackers(&wanted_fields) {
+                if let Ok(snapshot) = engine.torrent_trackers(entry.info_hash.clone()).await {
+                    trackers.insert(entry.info_hash.clone(), snapshot);
+                }
+            }
+        }
+    }
+    let torrents = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.info_hash.clone(),
+                filter_deluge_torrent_fields(
+                    deluge_torrent(
+                        entry,
+                        metadata.get(&entry.info_hash),
+                        peers.get(&entry.info_hash).map(Vec::as_slice),
+                        trackers.get(&entry.info_hash).map(Vec::as_slice),
+                        limits_by_hash.get(&entry.info_hash),
+                        move_completed_by_hash.get(&entry.info_hash),
+                        active_rechecks.contains(&entry.info_hash),
+                    ),
+                    &wanted_fields,
+                ),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    Ok(json!({
+        "connected": true,
+        "torrents": torrents,
+        "filters": deluge_filters_from_entries(&entries, &active_rechecks),
+        "stats": {
+            "download_rate": 0.0,
+            "upload_rate": 0.0,
+            "num_connections": 0,
+            "dht_nodes": 0,
+            "has_incoming_connections": true,
+            "free_space": 0,
+        }
+    }))
+}
+
+fn deluge_filters_from_entries(
+    entries: &[rt_session::TorrentEntry],
+    active_rechecks: &HashSet<String>,
+) -> Value {
+    let mut states = std::collections::BTreeMap::<String, usize>::new();
+    for entry in entries {
+        *states
+            .entry(deluge_state_with_recheck(
+                entry.state.as_str(),
+                active_rechecks.contains(&entry.info_hash),
+            ))
+            .or_default() += 1;
+    }
+    let mut state_filters = vec![json!(["All", entries.len()])];
+    state_filters.extend(
+        states
+            .into_iter()
+            .map(|(state, count)| json!([state, count]))
+            .collect::<Vec<_>>(),
+    );
+    json!({
+        "state": state_filters,
+        "label": labels_from_entries(entries),
+    })
+}
+
+async fn labels(state: &AppState) -> Result<Value, String> {
+    let reg = state.registry.read().await;
+    Ok(json!(reg
+        .iter()
+        .filter_map(|entry| entry.category.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()))
+}
+
+async fn set_label(state: &AppState, hash: &str, label: &str) -> Result<(), String> {
+    let label = label.trim();
+    let category = if label.is_empty() {
+        None
+    } else {
+        Some(label.to_owned())
+    };
+    if let Some(engine) = &state.engine {
+        engine
+            .update_torrent_labels(hash.to_owned(), Some(category), Vec::new(), Vec::new())
+            .await?;
+        return Ok(());
+    }
+    let mut reg = state.registry.write().await;
+    let entry = reg
+        .get_mut(hash)
+        .ok_or_else(|| format!("torrent {hash} not found"))?;
+    entry.category = category;
+    Ok(())
+}
+
+async fn torrents_status(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let filter = params.first();
+    let wanted_fields = deluge_requested_fields(params.get(1));
+    let entries = {
+        let reg = state.registry.read().await;
+        reg.iter().cloned().collect::<Vec<_>>()
+    };
+    let _lease = if state.engine.is_some() {
+        Some(
+            reserve_deluge_api_snapshot(
+                state,
+                estimate_deluge_torrents_snapshot_bytes(entries.len()),
+            )
+            .await?
+            .ok_or_else(|| "api snapshot memory budget exhausted".to_owned())?,
+        )
+    } else {
+        None
+    };
+    let mut metadata = std::collections::HashMap::new();
+    let mut peers = std::collections::HashMap::new();
+    let mut trackers = std::collections::HashMap::new();
+    let mut active_rechecks = HashSet::new();
+    let mut limits_by_hash = state.torrent_options.read().await.clone();
+    let move_completed_by_hash = state.move_completed_options.read().await.clone();
+    if let Some(engine) = &state.engine {
+        active_rechecks = deluge_active_recheck_hashes(engine).await;
+        for entry in &entries {
+            if let Ok(meta) = engine.torrent_metadata(entry.info_hash.clone()).await {
+                metadata.insert(entry.info_hash.clone(), meta);
+            }
+            if deluge_fields_need_peers(&wanted_fields) {
+                if let Ok(snapshot) = engine.torrent_peers(entry.info_hash.clone()).await {
+                    peers.insert(entry.info_hash.clone(), snapshot);
+                }
+            }
+            if let Ok(limits) = engine.torrent_limits(entry.info_hash.clone()).await {
+                limits_by_hash.insert(entry.info_hash.clone(), limits);
+            }
+            if deluge_fields_need_trackers(&wanted_fields) {
+                if let Ok(snapshot) = engine.torrent_trackers(entry.info_hash.clone()).await {
+                    trackers.insert(entry.info_hash.clone(), snapshot);
+                }
+            }
+        }
+    }
+    let torrents = entries
+        .iter()
+        .filter(|entry| {
+            deluge_torrent_matches_filter(entry, filter, active_rechecks.contains(&entry.info_hash))
+        })
+        .map(|entry| {
+            (
+                entry.info_hash.clone(),
+                filter_deluge_torrent_fields(
+                    deluge_torrent(
+                        entry,
+                        metadata.get(&entry.info_hash),
+                        peers.get(&entry.info_hash).map(Vec::as_slice),
+                        trackers.get(&entry.info_hash).map(Vec::as_slice),
+                        limits_by_hash.get(&entry.info_hash),
+                        move_completed_by_hash.get(&entry.info_hash),
+                        active_rechecks.contains(&entry.info_hash),
+                    ),
+                    &wanted_fields,
+                ),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    Ok(Value::Object(torrents))
+}
+
+fn deluge_torrent_matches_filter(
+    entry: &rt_session::TorrentEntry,
+    filter: Option<&Value>,
+    active_recheck: bool,
+) -> bool {
+    let Some(filter) = filter.and_then(Value::as_object) else {
+        return true;
+    };
+    for (key, value) in filter {
+        match key.as_str() {
+            "id" | "ids" | "hash" | "hashes" => {
+                let values = string_list(Some(value));
+                if !values.is_empty() && !values.iter().any(|hash| hash == &entry.info_hash) {
+                    return false;
+                }
+            }
+            "label" => {
+                let values = string_list(Some(value));
+                if !values.is_empty()
+                    && !values
+                        .iter()
+                        .any(|label| entry.category.as_deref().unwrap_or_default() == label)
+                {
+                    return false;
+                }
+            }
+            "state" => {
+                let values = string_list(Some(value));
+                if !values.is_empty()
+                    && !values.iter().any(|state| {
+                        deluge_state_with_recheck(entry.state.as_str(), active_recheck)
+                            .eq_ignore_ascii_case(state)
+                    })
+                {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+async fn torrent_status(
+    state: &AppState,
+    hash: &str,
+    fields: Option<&Value>,
+) -> Result<Value, String> {
+    let entry = {
+        let reg = state.registry.read().await;
+        reg.get(hash)
+            .cloned()
+            .ok_or_else(|| format!("torrent {hash} not found"))?
+    };
+    let _lease = if state.engine.is_some() {
+        Some(
+            reserve_deluge_api_snapshot(state, estimate_deluge_torrent_detail_snapshot_bytes())
+                .await?
+                .ok_or_else(|| "api snapshot memory budget exhausted".to_owned())?,
+        )
+    } else {
+        None
+    };
+    let meta = if let Some(engine) = &state.engine {
+        engine.torrent_metadata(hash.to_owned()).await.ok()
+    } else {
+        None
+    };
+    let peers = if let Some(engine) = &state.engine {
+        engine.torrent_peers(hash.to_owned()).await.ok()
+    } else {
+        None
+    };
+    let trackers = if let Some(engine) = &state.engine {
+        engine.torrent_trackers(hash.to_owned()).await.ok()
+    } else {
+        None
+    };
+    let active_recheck = if let Some(engine) = &state.engine {
+        deluge_active_recheck_hashes(engine).await.contains(hash)
+    } else {
+        false
+    };
+    let limits = deluge_torrent_limits(state, hash).await;
+    let move_completed = state.move_completed_options.read().await.get(hash).cloned();
+    let wanted_fields = deluge_requested_fields(fields);
+    Ok(filter_deluge_torrent_fields(
+        deluge_torrent(
+            &entry,
+            meta.as_ref(),
+            peers.as_deref(),
+            trackers.as_deref(),
+            limits.as_ref(),
+            move_completed.as_ref(),
+            active_recheck,
+        ),
+        &wanted_fields,
+    ))
+}
+
+fn deluge_requested_fields(value: Option<&Value>) -> Option<std::collections::BTreeSet<String>> {
+    let fields = value?.as_array()?;
+    if fields.is_empty() {
+        return None;
+    }
+    Some(
+        fields
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+fn filter_deluge_torrent_fields(
+    torrent: Value,
+    fields: &Option<std::collections::BTreeSet<String>>,
+) -> Value {
+    let Some(fields) = fields else {
+        return torrent;
+    };
+    let Some(obj) = torrent.as_object() else {
+        return torrent;
+    };
+    Value::Object(
+        fields
+            .iter()
+            .filter_map(|field| obj.get(field).cloned().map(|value| (field.clone(), value)))
+            .collect(),
+    )
+}
+
+fn deluge_fields_need_peers(fields: &Option<std::collections::BTreeSet<String>>) -> bool {
+    let Some(fields) = fields else {
+        return true;
+    };
+    fields.iter().any(|field| {
+        matches!(
+            field.as_str(),
+            "download_payload_rate"
+                | "upload_payload_rate"
+                | "eta"
+                | "num_peers"
+                | "num_seeds"
+                | "total_peers"
+                | "total_seeds"
+                | "distributed_copies"
+                | "seeds_peers_ratio"
+        )
+    })
+}
+
+fn deluge_fields_need_trackers(fields: &Option<std::collections::BTreeSet<String>>) -> bool {
+    let Some(fields) = fields else {
+        return true;
+    };
+    fields.iter().any(|field| {
+        matches!(
+            field.as_str(),
+            "tracker" | "tracker_host" | "tracker_status" | "next_announce"
+        )
+    })
+}
+
+async fn deluge_active_recheck_hashes(engine: &EngineHandle) -> HashSet<String> {
+    let Ok(jobs) = engine.list_jobs().await else {
+        return HashSet::new();
+    };
+    jobs.into_iter()
+        .filter(|job| {
+            job.kind == "recheck_torrent"
+                && !matches!(
+                    job.state.as_str(),
+                    "completed" | "failed" | "cancelled" | "canceled"
+                )
+        })
+        .flat_map(|job| job.affected_torrents)
+        .collect()
+}
+
+async fn torrent_files(state: &AppState, hash: &str) -> Result<Value, String> {
+    if let Some(engine) = &state.engine {
+        if let Ok(meta) = engine.torrent_metadata(hash.to_owned()).await {
+            return Ok(json!(meta
+                .files
+                .into_iter()
+                .map(|file| json!({
+                    "index": file.index,
+                    "path": file.path,
+                    "size": file.length,
+                    "offset": 0,
+                    "progress": 0.0,
+                    "priority": 1,
+                }))
+                .collect::<Vec<_>>()));
+        }
+    }
+    Ok(json!([]))
+}
+
+fn deluge_torrent(
+    entry: &rt_session::TorrentEntry,
+    meta: Option<&EngineTorrentMetadata>,
+    peers: Option<&[EnginePeerSnapshot]>,
+    trackers: Option<&[EngineTrackerSnapshot]>,
+    limits: Option<&EngineTorrentLimits>,
+    move_completed: Option<&DelugeMoveCompletedOptions>,
+    active_recheck: bool,
+) -> Value {
+    let now = unix_now();
+    let progress = if entry.total_length == 0 {
+        0.0
+    } else {
+        entry.total_length.saturating_sub(entry.amount_left) as f64 * 100.0
+            / entry.total_length as f64
+    };
+    let message = entry.error_message.clone().unwrap_or_default();
+    let tracker_state = trackers.and_then(|trackers| trackers.first());
+    let tracker = tracker_state
+        .map(|tracker| tracker.announce.clone())
+        .or_else(|| meta.and_then(|meta| meta.trackers.first()).cloned())
+        .unwrap_or_default();
+    let next_announce = tracker_state
+        .and_then(|tracker| tracker.next_announce_at)
+        .unwrap_or(0);
+    let tracker_status = tracker_state
+        .map(deluge_tracker_status)
+        .unwrap_or_else(|| deluge_fallback_tracker_status(entry, &tracker));
+    json!({
+        "hash": entry.info_hash,
+        "name": entry.name,
+        "state": deluge_state_with_recheck(entry.state.as_str(), active_recheck),
+        "progress": progress,
+        "total_size": entry.total_length,
+        "total_done": entry.total_length.saturating_sub(entry.amount_left),
+        "download_payload_rate": deluge_peer_download_rate(peers),
+        "upload_payload_rate": deluge_peer_upload_rate(peers),
+        "ratio": entry.stats.ratio(),
+        "save_path": entry.save_path,
+        "label": entry.category.clone().unwrap_or_default(),
+        "tags": entry.tags,
+        "is_finished": entry.completed_at.is_some(),
+        "eta": deluge_eta(entry.amount_left, deluge_peer_download_rate(peers)),
+        "num_peers": deluge_leecher_count(peers),
+        "num_seeds": deluge_seed_count(peers),
+        "total_peers": peers.map(|peers| peers.len()).unwrap_or(0),
+        "total_seeds": deluge_seed_count(peers),
+        "num_files": meta.map(|meta| meta.files.len()).unwrap_or(0),
+        "num_pieces": meta.map(|meta| meta.piece_count).unwrap_or(0),
+        "piece_length": meta.map(|meta| meta.piece_length).unwrap_or(0),
+        "distributed_copies": deluge_distributed_copies(peers),
+        "seeds_peers_ratio": deluge_seeds_peers_ratio(peers),
+        "max_download_speed": limits.and_then(|limits| limits.download_limit).map(bytes_to_deluge_kib).unwrap_or(-1.0),
+        "max_upload_speed": limits.and_then(|limits| limits.upload_limit).map(bytes_to_deluge_kib).unwrap_or(-1.0),
+        "is_auto_managed": limits.map(|limits| limits.auto_management).unwrap_or(false),
+        "stop_at_ratio": limits.and_then(|limits| limits.seed_ratio_limit).is_some(),
+        "stop_ratio": limits.and_then(|limits| limits.seed_ratio_limit).unwrap_or(0.0),
+        "remove_at_ratio": false,
+        "prioritize_first_last": limits.map(|limits| limits.first_last_piece_prio).unwrap_or(false),
+        "sequential_download": limits.map(|limits| limits.sequential_download).unwrap_or(false),
+        "super_seeding": limits.map(|limits| limits.super_seeding).unwrap_or(false),
+        "move_on_completed": move_completed.map(|options| options.enabled).unwrap_or(false),
+        "move_on_completed_path": move_completed.map(|options| options.path.as_str()).unwrap_or(""),
+        "time_added": entry.added_at,
+        "completed_time": entry.completed_at.unwrap_or(0),
+        "active_time": now.saturating_sub(entry.added_at as i64),
+        "seeding_time": entry.completed_at.map(|completed| now.saturating_sub(completed as i64)).unwrap_or(0),
+        "finished_time": entry.completed_at.unwrap_or(0),
+        "all_time_download": entry.stats.downloaded,
+        "total_uploaded": entry.stats.uploaded,
+        "total_payload_upload": entry.stats.uploaded,
+        "total_payload_download": entry.stats.downloaded,
+        "next_announce": next_announce,
+        "private": meta.map(|meta| meta.is_private).unwrap_or(false),
+        "owner": "localclient",
+        "shared": false,
+        "tracker_host": tracker_host(&tracker),
+        "tracker_status": tracker_status,
+        "tracker": tracker,
+        "comment": meta
+            .and_then(|meta| meta.comment.as_deref())
+            .unwrap_or(""),
+        "message": message,
+    })
+}
+
+fn tracker_host(announce: &str) -> String {
+    announce
+        .split("://")
+        .nth(1)
+        .unwrap_or(announce)
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn deluge_tracker_status(tracker: &EngineTrackerSnapshot) -> String {
+    if let Some(reason) = tracker
+        .failure_reason
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    {
+        return format!("Error: {reason}");
+    }
+    if let Some(warning) = tracker
+        .warning_message
+        .as_deref()
+        .filter(|warning| !warning.is_empty())
+    {
+        return format!("Warning: {warning}");
+    }
+    match tracker.status.as_str() {
+        "working" => "Announce OK".to_owned(),
+        "error" => "Error".to_owned(),
+        "warning" => "Warning".to_owned(),
+        "pending" => "Announce pending".to_owned(),
+        status if status.is_empty() => String::new(),
+        status => status.to_owned(),
+    }
+}
+
+fn deluge_fallback_tracker_status(entry: &rt_session::TorrentEntry, tracker: &str) -> String {
+    let message = entry.error_message.clone().unwrap_or_default();
+    if entry.state.as_str() == "error" && !message.is_empty() {
+        format!("Error: {message}")
+    } else if tracker.is_empty() {
+        String::new()
+    } else {
+        "Announce OK".to_owned()
+    }
+}
+
+fn deluge_peer_download_rate(peers: Option<&[EnginePeerSnapshot]>) -> i64 {
+    peers
+        .map(|peers| {
+            peers
+                .iter()
+                .fold(0_i64, |sum, peer| sum.saturating_add(peer.download_rate))
+        })
+        .unwrap_or(0)
+}
+
+fn deluge_peer_upload_rate(peers: Option<&[EnginePeerSnapshot]>) -> i64 {
+    peers
+        .map(|peers| {
+            peers
+                .iter()
+                .fold(0_i64, |sum, peer| sum.saturating_add(peer.upload_rate))
+        })
+        .unwrap_or(0)
+}
+
+fn deluge_seed_count(peers: Option<&[EnginePeerSnapshot]>) -> usize {
+    peers
+        .map(|peers| peers.iter().filter(|peer| peer.progress >= 1.0).count())
+        .unwrap_or(0)
+}
+
+fn deluge_leecher_count(peers: Option<&[EnginePeerSnapshot]>) -> usize {
+    peers
+        .map(|peers| peers.iter().filter(|peer| peer.progress < 1.0).count())
+        .unwrap_or(0)
+}
+
+fn deluge_eta(amount_left: u64, download_rate: i64) -> i64 {
+    if amount_left == 0 {
+        0
+    } else if download_rate > 0 {
+        (amount_left / download_rate as u64) as i64
+    } else {
+        -1
+    }
+}
+
+fn deluge_distributed_copies(peers: Option<&[EnginePeerSnapshot]>) -> f64 {
+    let Some(peers) = peers else {
+        return 0.0;
+    };
+    peers
+        .iter()
+        .map(|peer| peer.progress.clamp(0.0, 1.0))
+        .fold(0.0_f64, f64::max)
+}
+
+fn deluge_seeds_peers_ratio(peers: Option<&[EnginePeerSnapshot]>) -> f64 {
+    let seeds = deluge_seed_count(peers);
+    let leechers = deluge_leecher_count(peers);
+    if leechers == 0 {
+        seeds as f64
+    } else {
+        seeds as f64 / leechers as f64
+    }
+}
+
+fn labels_from_entries<'a>(
+    entries: impl IntoIterator<Item = &'a rt_session::TorrentEntry>,
+) -> Vec<Value> {
+    let mut labels = std::collections::BTreeMap::<String, usize>::new();
+    for entry in entries {
+        if let Some(label) = &entry.category {
+            *labels.entry(label.clone()).or_default() += 1;
+        }
+    }
+    labels
+        .into_iter()
+        .map(|(label, count)| json!([label, count]))
+        .collect()
+}
+
+async fn add_magnet(state: &AppState, uri: &str, options: Option<&Value>) -> Result<Value, String> {
+    let Some(engine) = &state.engine else {
+        return Ok(json!(true));
+    };
+    let magnet = parse_magnet(uri).map_err(|e| e.to_string())?;
+    let save_path = options
+        .and_then(|value| value.get("download_location"))
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from);
+    let hash = engine
+        .add_magnet_with_labels(magnet, save_path, false, None, Vec::new())
+        .await?;
+    Ok(json!(hash))
+}
+
+async fn add_torrent_file(
+    state: &AppState,
+    data: &str,
+    options: Option<&Value>,
+) -> Result<Value, String> {
+    let Some(engine) = &state.engine else {
+        return Ok(json!(true));
+    };
+    let raw = decode_deluge_torrent_data(data)?;
+    let meta = parse_torrent(&raw).map_err(|e| e.to_string())?;
+    let save_path = options
+        .and_then(|value| value.get("download_location"))
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from);
+    let hash = engine
+        .add_torrent_with_labels(meta, save_path, false, None, Vec::new())
+        .await?;
+    Ok(json!(hash))
+}
+
+async fn add_torrent_path(
+    state: &AppState,
+    path: &str,
+    options: Option<&Value>,
+) -> Result<Value, String> {
+    if state.engine.is_none() {
+        return Ok(json!(true));
+    }
+    let raw = std::fs::read(path).map_err(|e| e.to_string())?;
+    let data = general_purpose::STANDARD.encode(raw);
+    add_torrent_file(state, &data, options).await
+}
+
+fn decode_deluge_torrent_data(data: &str) -> Result<Vec<u8>, String> {
+    let payload = data
+        .split_once(',')
+        .filter(|(prefix, _)| prefix.contains(";base64"))
+        .map(|(_, payload)| payload)
+        .unwrap_or(data)
+        .trim();
+    general_purpose::STANDARD
+        .decode(payload)
+        .or_else(|_| general_purpose::URL_SAFE.decode(payload))
+        .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(payload))
+        .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(payload))
+        .map_err(|e| e.to_string())
+}
+
+async fn set_torrent_options(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let hashes = hashes_from_param(params.first());
+    let Some(options) = params.get(1).and_then(Value::as_object) else {
+        return Ok(json!(true));
+    };
+    for hash in hashes {
+        let mut limits = deluge_torrent_limits(state, &hash)
+            .await
+            .unwrap_or_default();
+        apply_deluge_options(&mut limits, options);
+        if let Some(move_completed) = deluge_move_completed_options(options) {
+            state
+                .move_completed_options
+                .write()
+                .await
+                .insert(hash.clone(), move_completed);
+        }
+        state
+            .torrent_options
+            .write()
+            .await
+            .insert(hash.clone(), limits.clone());
+        if let Some(engine) = &state.engine {
+            engine.update_torrent_limits(hash, limits).await?;
+        }
+    }
+    Ok(json!(true))
+}
+
+fn deluge_move_completed_options(
+    options: &serde_json::Map<String, Value>,
+) -> Option<DelugeMoveCompletedOptions> {
+    let enabled = options
+        .get("move_completed")
+        .or_else(|| options.get("move_on_completed"))
+        .and_then(|value| deluge_bool(Some(value)));
+    let path = options
+        .get("move_completed_path")
+        .or_else(|| options.get("move_on_completed_path"))
+        .and_then(Value::as_str);
+    if enabled.is_none() && path.is_none() {
+        return None;
+    }
+    Some(DelugeMoveCompletedOptions {
+        enabled: enabled.unwrap_or(false),
+        path: path.unwrap_or_default().to_owned(),
+    })
+}
+
+async fn set_prioritize_first_last(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let hashes = hashes_from_param(params.first());
+    let Some(enabled) = deluge_bool(params.get(1)) else {
+        return Ok(json!(true));
+    };
+    for hash in hashes {
+        let mut limits = deluge_torrent_limits(state, &hash)
+            .await
+            .unwrap_or_default();
+        limits.first_last_piece_prio = enabled;
+        state
+            .torrent_options
+            .write()
+            .await
+            .insert(hash.clone(), limits.clone());
+        if let Some(engine) = &state.engine {
+            engine.update_torrent_limits(hash, limits).await?;
+        }
+    }
+    Ok(json!(true))
+}
+
+async fn set_file_priorities(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let Some(hash) = params.first().and_then(Value::as_str) else {
+        return Ok(json!(true));
+    };
+    let updates = deluge_file_priority_updates(params.get(1), params.get(2));
+    if updates.is_empty() {
+        return Ok(json!(true));
+    }
+    let Some(engine) = &state.engine else {
+        return Ok(json!(true));
+    };
+    for (file_ids, priority) in updates {
+        engine
+            .update_file_priorities(hash.to_owned(), file_ids, priority)
+            .await?;
+    }
+    Ok(json!(true))
+}
+
+async fn set_trackers(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let Some(hash) = params.first().and_then(Value::as_str) else {
+        return Ok(json!(true));
+    };
+    let trackers = deluge_trackers_arg(params.get(1));
+    let Some(engine) = &state.engine else {
+        return Ok(json!(true));
+    };
+    engine
+        .update_torrent_trackers(hash.to_owned(), trackers)
+        .await?;
+    Ok(json!(true))
+}
+
+async fn connect_peer(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let Some(hash) = params.first().and_then(Value::as_str) else {
+        return Ok(json!(true));
+    };
+    let peer = if let Some(addr) = params.get(1).and_then(deluge_peer_addr_arg) {
+        Some(addr)
+    } else {
+        deluge_peer_host_port(params.get(1), params.get(2))
+    };
+    let Some(peer) = peer else {
+        return Ok(json!(true));
+    };
+    let Some(engine) = &state.engine else {
+        return Ok(json!(true));
+    };
+    engine.add_peers(hash.to_owned(), vec![peer]).await?;
+    Ok(json!(true))
+}
+
+async fn rename_files(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let Some(hash) = params.first().and_then(Value::as_str) else {
+        return Ok(json!(true));
+    };
+    let renames = deluge_rename_file_args(params.get(1));
+    let Some(engine) = &state.engine else {
+        return Ok(json!(true));
+    };
+    for (file_id, new_path) in renames {
+        engine
+            .rename_file_path(hash.to_owned(), file_id, new_path)
+            .await?;
+    }
+    Ok(json!(true))
+}
+
+async fn rename_folder(state: &AppState, params: &[Value]) -> Result<Value, String> {
+    let Some(hash) = params.first().and_then(Value::as_str) else {
+        return Ok(json!(true));
+    };
+    let Some(old_path) = params.get(1).and_then(Value::as_str) else {
+        return Ok(json!(true));
+    };
+    let Some(new_path) = params.get(2).and_then(Value::as_str) else {
+        return Ok(json!(true));
+    };
+    let Some(engine) = &state.engine else {
+        return Ok(json!(true));
+    };
+    engine
+        .rename_folder_path(hash.to_owned(), old_path.to_owned(), new_path.to_owned())
+        .await?;
+    Ok(json!(true))
+}
+
+fn string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn hashes_from_param(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::String(hash)) if !hash.trim().is_empty() => vec![hash.trim().to_owned()],
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|hash| !hash.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn apply_deluge_options(
+    limits: &mut EngineTorrentLimits,
+    options: &serde_json::Map<String, Value>,
+) {
+    if let Some(value) = options
+        .get("prioritize_first_last")
+        .and_then(|value| deluge_bool(Some(value)))
+    {
+        limits.first_last_piece_prio = value;
+    }
+    if let Some(value) = options
+        .get("sequential_download")
+        .and_then(|value| deluge_bool(Some(value)))
+    {
+        limits.sequential_download = value;
+    }
+    if let Some(value) = options
+        .get("super_seeding")
+        .and_then(|value| deluge_bool(Some(value)))
+    {
+        limits.super_seeding = value;
+    }
+    if let Some(value) = options
+        .get("auto_managed")
+        .and_then(|value| deluge_bool(Some(value)))
+    {
+        limits.auto_management = value;
+    }
+    if let Some(value) = options
+        .get("max_download_speed")
+        .and_then(|value| deluge_speed_limit(Some(value)))
+    {
+        limits.download_limit = value;
+    }
+    if let Some(value) = options
+        .get("max_upload_speed")
+        .and_then(|value| deluge_speed_limit(Some(value)))
+    {
+        limits.upload_limit = value;
+    }
+    if matches!(
+        options
+            .get("stop_at_ratio")
+            .and_then(|value| deluge_bool(Some(value))),
+        Some(false)
+    ) {
+        limits.seed_ratio_limit = None;
+    } else if let Some(value) = options.get("stop_ratio").and_then(Value::as_f64) {
+        limits.seed_ratio_limit = Some(value);
+    }
+}
+
+async fn deluge_torrent_limits(state: &AppState, hash: &str) -> Option<EngineTorrentLimits> {
+    if let Some(engine) = &state.engine {
+        if let Ok(limits) = engine.torrent_limits(hash.to_owned()).await {
+            return Some(limits);
+        }
+    }
+    state.torrent_options.read().await.get(hash).cloned()
+}
+
+fn bytes_to_deluge_kib(value: i64) -> f64 {
+    value.max(0) as f64 / 1024.0
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn deluge_bool(value: Option<&Value>) -> Option<bool> {
+    match value {
+        Some(Value::Bool(value)) => Some(*value),
+        Some(Value::Number(value)) => Some(value.as_i64().unwrap_or_default() != 0),
+        Some(Value::String(value)) => match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Some(true),
+            "false" | "0" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn deluge_speed_limit(value: Option<&Value>) -> Option<Option<i64>> {
+    let kib = match value {
+        Some(Value::Number(value)) => value.as_f64()?,
+        Some(Value::String(value)) => value.trim().parse::<f64>().ok()?,
+        _ => return None,
+    };
+    if kib <= 0.0 {
+        Some(None)
+    } else {
+        Some(Some((kib * 1024.0) as i64))
+    }
+}
+
+fn deluge_file_priority_updates(
+    ids_or_priorities: Option<&Value>,
+    priority: Option<&Value>,
+) -> Vec<(Vec<u32>, i64)> {
+    if let Some(priority) = priority.and_then(Value::as_i64) {
+        let ids = deluge_file_ids(ids_or_priorities);
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        return vec![(ids, deluge_file_priority(priority))];
+    }
+    let Some(priorities) = ids_or_priorities.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut skipped = Vec::new();
+    let mut normal = Vec::new();
+    let mut high = Vec::new();
+    for (idx, value) in priorities.iter().enumerate() {
+        let Some(priority) = value.as_i64() else {
+            continue;
+        };
+        match deluge_file_priority(priority) {
+            0 => skipped.push(idx as u32),
+            2 => high.push(idx as u32),
+            _ => normal.push(idx as u32),
+        }
+    }
+    let mut updates = Vec::new();
+    if !skipped.is_empty() {
+        updates.push((skipped, 0));
+    }
+    if !normal.is_empty() {
+        updates.push((normal, 1));
+    }
+    if !high.is_empty() {
+        updates.push((high, 2));
+    }
+    updates
+}
+
+fn deluge_file_ids(value: Option<&Value>) -> Vec<u32> {
+    value
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_u64().map(|value| value as u32))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn deluge_file_priority(priority: i64) -> i64 {
+    if priority <= 0 {
+        0
+    } else if priority >= 5 {
+        2
+    } else {
+        1
+    }
+}
+
+fn deluge_trackers_arg(value: Option<&Value>) -> Vec<String> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let mut trackers = Vec::new();
+    collect_deluge_trackers(value, &mut trackers);
+    normalize_deluge_trackers(trackers)
+}
+
+fn collect_deluge_trackers(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(value) => out.push(value.to_owned()),
+        Value::Array(values) => {
+            for value in values {
+                collect_deluge_trackers(value, out);
+            }
+        }
+        Value::Object(obj) => {
+            if let Some(url) = obj
+                .get("url")
+                .or_else(|| obj.get("announce"))
+                .and_then(Value::as_str)
+            {
+                out.push(url.to_owned());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn normalize_deluge_trackers(values: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if !value.is_empty() && !out.iter().any(|existing| existing == value) {
+            out.push(value.to_owned());
+        }
+    }
+    out
+}
+
+fn deluge_peer_addr_arg(value: &Value) -> Option<SocketAddr> {
+    match value {
+        Value::String(value) => value.trim().parse().ok(),
+        Value::Array(values) => deluge_peer_host_port(values.first(), values.get(1)),
+        Value::Object(obj) => {
+            deluge_peer_host_port(obj.get("ip").or_else(|| obj.get("host")), obj.get("port"))
+        }
+        _ => None,
+    }
+}
+
+fn deluge_peer_host_port(host: Option<&Value>, port: Option<&Value>) -> Option<SocketAddr> {
+    let host = host.and_then(Value::as_str)?.trim();
+    let port = match port {
+        Some(Value::Number(value)) => value.as_u64()? as u16,
+        Some(Value::String(value)) => value.trim().parse().ok()?,
+        _ => return None,
+    };
+    format!("{host}:{port}").parse().ok()
+}
+
+fn deluge_rename_file_args(value: Option<&Value>) -> Vec<(u32, String)> {
+    value
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(deluge_rename_file_arg).collect())
+        .unwrap_or_default()
+}
+
+fn deluge_rename_file_arg(value: &Value) -> Option<(u32, String)> {
+    match value {
+        Value::Array(values) => {
+            let id = values.first()?.as_u64()? as u32;
+            let path = values.get(1)?.as_str()?.to_owned();
+            Some((id, path))
+        }
+        Value::Object(obj) => {
+            let id = obj
+                .get("index")
+                .or_else(|| obj.get("id"))
+                .or_else(|| obj.get("file_id"))?
+                .as_u64()? as u32;
+            let path = obj
+                .get("path")
+                .or_else(|| obj.get("name"))
+                .or_else(|| obj.get("new_path"))?
+                .as_str()?
+                .to_owned();
+            Some((id, path))
+        }
+        _ => None,
+    }
+}
+
+fn deluge_state(state: &str) -> &'static str {
+    match state {
+        "seeding" => "Seeding",
+        "downloading" | "metadata_pending" => "Downloading",
+        "checking" => "Checking",
+        "paused" | "stopped" => "Paused",
+        "error" => "Error",
+        _ => "Queued",
+    }
+}
+
+fn deluge_state_with_recheck(state: &str, active_recheck: bool) -> String {
+    if active_recheck {
+        "Checking".to_owned()
+    } else {
+        deluge_state(state).to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use rt_session::TorrentEntry;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn deluge_update_ui_projects_registry() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            let mut entry = TorrentEntry::new("a".repeat(40), "alpha".into(), "/data".into());
+            entry.total_length = 100;
+            entry.amount_left = 25;
+            entry.category = Some("movies".into());
+            reg.add(entry).unwrap();
+        }
+        let app = build_deluge_router(AppState::new(registry));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":1,"method":"web.update_ui","params":[[],{}]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["error"].is_null());
+        assert_eq!(
+            body["result"]["torrents"]["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]["name"],
+            "alpha"
+        );
+        assert_eq!(
+            body["result"]["torrents"]["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]["progress"],
+            75.0
+        );
+        assert_eq!(body["result"]["filters"]["state"][0], json!(["All", 1]));
+        assert_eq!(body["result"]["filters"]["state"][1], json!(["Paused", 1]));
+        assert_eq!(body["result"]["filters"]["label"][0], json!(["movies", 1]));
+        assert_json_keys(
+            &body["result"]["stats"],
+            &[
+                "download_rate",
+                "upload_rate",
+                "num_connections",
+                "dht_nodes",
+                "has_incoming_connections",
+                "free_space",
+            ],
+        );
+    }
+
+    #[test]
+    fn deluge_state_projects_active_recheck_as_checking() {
+        assert_eq!(deluge_state_with_recheck("downloading", true), "Checking");
+        assert_eq!(deluge_state_with_recheck("seeding", false), "Seeding");
+    }
+
+    #[tokio::test]
+    async fn deluge_update_ui_honors_requested_fields() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            let mut entry = TorrentEntry::new("b".repeat(40), "bravo".into(), "/data".into());
+            entry.total_length = 100;
+            entry.amount_left = 10;
+            reg.add(entry).unwrap();
+        }
+        let app = build_deluge_router(AppState::new(registry));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":1,"method":"web.update_ui","params":[["name","progress"],{}]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let torrent = &body["result"]["torrents"]["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
+        assert_eq!(torrent["name"], "bravo");
+        assert_eq!(torrent["progress"], 90.0);
+        assert_eq!(torrent.as_object().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn deluge_torrent_status_field_matrix_is_present() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            let mut entry = TorrentEntry::new("a".repeat(40), "alpha".into(), "/data".into());
+            entry.total_length = 100;
+            entry.amount_left = 25;
+            entry.added_at = 100;
+            entry.completed_at = Some(200);
+            entry.category = Some("movies".into());
+            entry.tags = vec!["hd".into()];
+            entry.set_error("disk full");
+            entry.stats.add_download(75);
+            entry.stats.add_upload(150);
+            reg.add(entry).unwrap();
+        }
+        let app = build_deluge_router(AppState::new(registry));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":1,"method":"core.get_torrent_status","params":["{}",[]]}}"#,
+                        "a".repeat(40)
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 16384).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["error"].is_null(), "{:?}", body["error"]);
+        assert!(body["result"]["active_time"].as_i64().unwrap() > 0);
+        assert!(body["result"]["seeding_time"].as_i64().unwrap() > 0);
+        assert_eq!(body["result"]["finished_time"], 200);
+        assert_eq!(body["result"]["state"], "Error");
+        assert_eq!(body["result"]["message"], "disk full");
+        assert_eq!(body["result"]["tracker_status"], "Error: disk full");
+        assert_json_keys(
+            &body["result"],
+            &[
+                "hash",
+                "name",
+                "state",
+                "progress",
+                "total_size",
+                "total_done",
+                "download_payload_rate",
+                "upload_payload_rate",
+                "ratio",
+                "save_path",
+                "label",
+                "tags",
+                "is_finished",
+                "eta",
+                "num_peers",
+                "num_seeds",
+                "total_peers",
+                "total_seeds",
+                "num_files",
+                "num_pieces",
+                "piece_length",
+                "distributed_copies",
+                "seeds_peers_ratio",
+                "max_download_speed",
+                "max_upload_speed",
+                "is_auto_managed",
+                "stop_at_ratio",
+                "stop_ratio",
+                "remove_at_ratio",
+                "prioritize_first_last",
+                "sequential_download",
+                "super_seeding",
+                "move_on_completed",
+                "move_on_completed_path",
+                "time_added",
+                "completed_time",
+                "active_time",
+                "seeding_time",
+                "finished_time",
+                "all_time_download",
+                "total_uploaded",
+                "total_payload_upload",
+                "total_payload_download",
+                "next_announce",
+                "private",
+                "owner",
+                "shared",
+                "tracker_host",
+                "tracker_status",
+                "tracker",
+                "comment",
+                "message",
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn deluge_torrent_status_honors_requested_fields() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            let mut entry = TorrentEntry::new("a".repeat(40), "alpha".into(), "/data".into());
+            entry.total_length = 100;
+            entry.amount_left = 25;
+            reg.add(entry).unwrap();
+        }
+        let app = build_deluge_router(AppState::new(registry));
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":1,"method":"core.get_torrent_status","params":["{}",["name","progress"]]}}"#,
+                        "a".repeat(40)
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["result"]["name"], "alpha");
+        assert_eq!(body["result"]["progress"], 75.0);
+        assert_eq!(body["result"].as_object().unwrap().len(), 2);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":1,"method":"core.get_torrents_status","params":[{},["name","state"]]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let torrent = &body["result"]["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"];
+        assert_eq!(torrent["name"], "alpha");
+        assert_eq!(torrent["state"], "Paused");
+        assert_eq!(torrent.as_object().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn deluge_torrents_status_honors_filter_dictionary() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            let mut alpha = TorrentEntry::new("a".repeat(40), "alpha".into(), "/data".into());
+            alpha.category = Some("movies".into());
+            reg.add(alpha).unwrap();
+            let mut bravo = TorrentEntry::new("b".repeat(40), "bravo".into(), "/data".into());
+            bravo.category = Some("tv".into());
+            reg.add(bravo).unwrap();
+        }
+        let app = build_deluge_router(AppState::new(registry));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":1,"method":"core.get_torrents_status","params":[{"label":["movies"],"state":["Paused"]},["name","label","state"]]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["result"]["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"].is_object());
+        assert!(body["result"]["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"].is_null());
+        assert_eq!(
+            body["result"]["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]["label"],
+            "movies"
+        );
+        assert_eq!(
+            body["result"]["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+                .as_object()
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn deluge_peer_projection_uses_native_snapshots() {
+        let seed = EnginePeerSnapshot {
+            addr: "127.0.0.1:6881".parse().unwrap(),
+            client: "seed".to_owned(),
+            choked: false,
+            upload_choked: false,
+            interested: false,
+            pieces: 10,
+            pieces_total: 10,
+            progress: 1.0,
+            download_rate: 1_000,
+            upload_rate: 2_000,
+            downloaded: 10,
+            uploaded: 20,
+        };
+        let leecher = EnginePeerSnapshot {
+            addr: "127.0.0.2:6881".parse().unwrap(),
+            client: "leecher".to_owned(),
+            choked: false,
+            upload_choked: false,
+            interested: true,
+            pieces: 3,
+            pieces_total: 10,
+            progress: 0.3,
+            download_rate: 3_000,
+            upload_rate: 4_000,
+            downloaded: 30,
+            uploaded: 40,
+        };
+        let peers = [seed, leecher];
+        assert_eq!(deluge_peer_download_rate(Some(&peers)), 4_000);
+        assert_eq!(deluge_peer_upload_rate(Some(&peers)), 6_000);
+        assert_eq!(deluge_seed_count(Some(&peers)), 1);
+        assert_eq!(deluge_leecher_count(Some(&peers)), 1);
+        assert_eq!(
+            deluge_eta(8_000, deluge_peer_download_rate(Some(&peers))),
+            2
+        );
+        assert_eq!(deluge_distributed_copies(Some(&peers)), 1.0);
+        assert_eq!(deluge_seeds_peers_ratio(Some(&peers)), 1.0);
+    }
+
+    #[test]
+    fn deluge_tracker_projection_uses_persisted_engine_state() {
+        let tracker = EngineTrackerSnapshot {
+            id: 1,
+            tier: 0,
+            announce: "https://tracker.example/announce".to_owned(),
+            status: "warning".to_owned(),
+            last_announce_at: Some(100),
+            next_announce_at: Some(200),
+            last_success_at: Some(90),
+            failure_reason: None,
+            warning_message: Some("slow scrape".to_owned()),
+            seeders: Some(3),
+            leechers: Some(4),
+            completed: Some(5),
+        };
+        assert_eq!(
+            deluge_tracker_status(&tracker),
+            "Warning: slow scrape".to_owned()
+        );
+        let mut entry = TorrentEntry::new("c".repeat(40), "charlie".into(), "/data".into());
+        entry.total_length = 100;
+        entry.amount_left = 50;
+        let body = deluge_torrent(&entry, None, None, Some(&[tracker]), None, None, false);
+        assert_eq!(body["tracker"], "https://tracker.example/announce");
+        assert_eq!(body["tracker_host"], "tracker.example");
+        assert_eq!(body["tracker_status"], "Warning: slow scrape");
+        assert_eq!(body["next_announce"], 200);
+    }
+
+    fn assert_json_keys(value: &Value, keys: &[&str]) {
+        let obj = value.as_object().expect("expected JSON object");
+        for key in keys {
+            assert!(obj.contains_key(*key), "missing key {key} in {obj:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn deluge_auth_and_config_are_supported() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            reg.add(TorrentEntry::new(
+                "a".repeat(40),
+                "alpha".into(),
+                "/data".into(),
+            ))
+            .unwrap();
+        }
+        let app = build_deluge_router(AppState::new(registry));
+        for (method, params) in deluge_method_matrix() {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/deluge/json")
+                        .header("content-type", "application/json")
+                        .body(Body::from(format!(
+                            r#"{{"id":1,"method":"{method}","params":{params}}}"#
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(resp.status().is_success());
+            let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            if let Some(message) = body["error"].get("message").and_then(Value::as_str) {
+                assert!(
+                    !message.starts_with("unsupported method"),
+                    "{method} returned {:?}",
+                    body["error"]
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn deluge_advertised_method_list_matches_probe_matrix() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        let app = build_deluge_router(AppState::new(registry));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/deluge/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":1,"method":"daemon.get_method_list","params":[]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 16384).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let mut advertised = body["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        advertised.sort_unstable();
+        let mut probed = deluge_method_matrix()
+            .into_iter()
+            .map(|(method, _)| method)
+            .collect::<Vec<_>>();
+        probed.sort_unstable();
+        assert_eq!(advertised, probed);
+    }
+
+    fn deluge_method_matrix() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("auth.login", r#"[]"#),
+            ("auth.check_session", r#"[]"#),
+            ("daemon.login", r#"[]"#),
+            ("daemon.info", r#"[]"#),
+            ("daemon.get_method_list", r#"[]"#),
+            ("daemon.shutdown", r#"[]"#),
+            ("web.connected", r#"[]"#),
+            ("web.add_host", r#"["127.0.0.1",58846,"localclient",""]"#),
+            (
+                "web.edit_host",
+                r#"["TorrentNG","127.0.0.1",58846,"localclient",""]"#,
+            ),
+            ("web.remove_host", r#"["TorrentNG"]"#),
+            ("web.get_config", r#"[]"#),
+            ("web.update_ui", r#"[[],{}]"#),
+            ("web.get_events", r#"[]"#),
+            ("web.get_hosts", r#"[]"#),
+            ("web.get_host_status", r#"[]"#),
+            ("web.connect", r#"[]"#),
+            ("web.disconnect", r#"[]"#),
+            ("web.start_daemon", r#"[]"#),
+            ("web.stop_daemon", r#"[]"#),
+            (
+                "web.download_torrent_from_url",
+                r#"["https://example.invalid/test.torrent"]"#,
+            ),
+            ("web.add_torrents", r#"[[]]"#),
+            ("web.get_plugins", r#"[]"#),
+            ("web.get_plugin_info", r#"["Label"]"#),
+            ("web.upload_plugin", r#"[]"#),
+            ("web.update_config", r#"[{}]"#),
+            ("web.save_config", r#"[]"#),
+            (
+                "web.get_torrent_files",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]"#,
+            ),
+            ("core.get_torrents_status", r#"[{},[]]"#),
+            (
+                "core.get_torrent_status",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",[]]"#,
+            ),
+            ("core.get_torrent_file_status", r#"[]"#),
+            ("core.get_session_state", r#"[]"#),
+            ("core.get_session_status", r#"[]"#),
+            ("core.get_stats", r#"[]"#),
+            ("core.get_num_connections", r#"[]"#),
+            ("core.get_download_rate", r#"[]"#),
+            ("core.get_upload_rate", r#"[]"#),
+            ("core.get_filter_tree", r#"[]"#),
+            ("core.pause_torrent", r#"[[]]"#),
+            ("core.resume_torrent", r#"[[]]"#),
+            ("core.force_recheck", r#"[[]]"#),
+            ("core.queue_top", r#"[[]]"#),
+            ("core.queue_up", r#"[[]]"#),
+            ("core.queue_down", r#"[[]]"#),
+            ("core.queue_bottom", r#"[[]]"#),
+            (
+                "core.remove_torrent",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",false]"#,
+            ),
+            (
+                "core.add_torrent_magnet",
+                r#"["magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",{}]"#,
+            ),
+            ("core.add_torrent_file", r#"["test.torrent","",{}]"#),
+            ("core.set_torrent_options", r#"[[],{}]"#),
+            (
+                "core.set_torrent_file_priorities",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",[]]"#,
+            ),
+            (
+                "core.set_torrent_trackers",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",[]]"#,
+            ),
+            ("core.set_torrent_prioritize_first_last", r#"[[],false]"#),
+            (
+                "core.connect_peer",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","127.0.0.1",6881]"#,
+            ),
+            (
+                "core.rename_files",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",[]]"#,
+            ),
+            (
+                "core.rename_folder",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","old","new"]"#,
+            ),
+            ("core.move_storage", r#"[[],"/tmp"]"#),
+            ("core.get_config", r#"[]"#),
+            ("core.get_config_values", r#"[["download_location"]]"#),
+            ("core.get_config_value", r#"["download_location"]"#),
+            ("core.set_config", r#"[{}]"#),
+            ("core.get_free_space", r#"[]"#),
+            ("core.get_listen_port", r#"[]"#),
+            ("core.get_external_ip", r#"[]"#),
+            ("core.get_path_size", r#"["/tmp"]"#),
+            ("core.get_cache_status", r#"[]"#),
+            ("core.get_enabled_plugins", r#"[]"#),
+            ("core.enable_plugin", r#"["Label"]"#),
+            ("core.disable_plugin", r#"["Label"]"#),
+            ("core.get_available_plugins", r#"[]"#),
+            ("core.get_libtorrent_version", r#"[]"#),
+            ("core.create_torrent", r#"[]"#),
+            ("core.upload_plugin", r#"[]"#),
+            ("core.rescan_plugins", r#"[]"#),
+            ("blocklist.get_config", r#"[]"#),
+            ("blocklist.set_config", r#"[{}]"#),
+            ("blocklist.get_status", r#"[]"#),
+            ("blocklist.check_import", r#"[]"#),
+            ("blocklist.import", r#"[]"#),
+            ("autoadd.get_config", r#"[]"#),
+            ("autoadd.set_config", r#"[{}]"#),
+            ("autoadd.enable", r#"[1]"#),
+            ("autoadd.disable", r#"[1]"#),
+            ("execute.get_commands", r#"[]"#),
+            ("execute.save_command", r#"["complete","echo done"]"#),
+            ("execute.remove_command", r#"[1]"#),
+            ("scheduler.get_config", r#"[]"#),
+            ("scheduler.set_config", r#"[{}]"#),
+            ("extractor.get_config", r#"[]"#),
+            ("extractor.set_config", r#"[{}]"#),
+            ("label.get_labels", r#"[]"#),
+            ("label.add", r#"["test"]"#),
+            ("label.remove", r#"["test"]"#),
+            ("label.set_options", r#"["test",{}]"#),
+            (
+                "label.set_torrent",
+                r#"["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","test"]"#,
+            ),
+            ("notifications.get_handled_events", r#"[]"#),
+            ("notifications.get_subscriptions", r#"[]"#),
+            ("notifications.set_config", r#"[{}]"#),
+            (
+                "notifications.add_subscription",
+                r#"["TorrentAddedEvent","email"]"#,
+            ),
+        ]
+    }
+
+    #[tokio::test]
+    async fn deluge_plugin_cache_and_notification_shapes_are_structured() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            let mut entry = TorrentEntry::new("c".repeat(40), "cache".into(), "/data".into());
+            entry.total_length = 100;
+            entry.amount_left = 40;
+            reg.add(entry).unwrap();
+        }
+        let app = build_deluge_router(AppState::new(registry));
+        for (method, assertion_key) in [
+            ("core.get_cache_status", "cache_size"),
+            ("web.get_plugin_info", "name"),
+            ("blocklist.get_status", "num_blocked"),
+            ("autoadd.get_config", "watchdirs"),
+            ("scheduler.get_config", "button_state"),
+            ("extractor.get_config", "extract_path"),
+            ("notifications.get_subscriptions", "TorrentAddedEvent"),
+        ] {
+            let params = if method == "web.get_plugin_info" {
+                r#"["Blocklist"]"#
+            } else {
+                "[]"
+            };
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/json")
+                        .header("content-type", "application/json")
+                        .body(Body::from(format!(
+                            r#"{{"id":1,"method":"{method}","params":{params}}}"#
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert!(body["error"].is_null());
+            assert!(!body["result"][assertion_key].is_null(), "{method}");
+        }
+    }
+
+    #[tokio::test]
+    async fn deluge_auxiliary_plugin_state_roundtrips() {
+        let app = build_deluge_router(AppState::new(Arc::new(RwLock::new(SessionRegistry::new()))));
+
+        for body in [
+            r#"{"id":1,"method":"blocklist.set_config","params":[{"enabled":true,"url":"https://example.test/blocklist","list_size":42}]}"#,
+            r#"{"id":2,"method":"autoadd.set_config","params":[{"watchdirs":{"1":{"path":"/watch","enabled":true}}}]}"#,
+            r#"{"id":3,"method":"autoadd.enable","params":[1]}"#,
+            r#"{"id":4,"method":"scheduler.set_config","params":[{"low_down":10.0,"button_state":[[1,1,1,1,1,1,1,1]]}]}"#,
+            r#"{"id":5,"method":"extractor.set_config","params":[{"enabled":true,"extract_path":"/extract"}]}"#,
+            r#"{"id":6,"method":"execute.save_command","params":["complete","echo done"]}"#,
+            r#"{"id":7,"method":"core.disable_plugin","params":["Execute"]}"#,
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/json")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        }
+
+        for (method, expected) in [
+            (
+                "blocklist.get_config",
+                json!({"enabled": true, "url": "https://example.test/blocklist", "list_size": 42}),
+            ),
+            (
+                "autoadd.get_config",
+                json!({"enabled": true, "watchdirs": {"1": {"path": "/watch", "enabled": true}}}),
+            ),
+            (
+                "scheduler.get_config",
+                json!({"low_down": 10.0, "button_state": [[1,1,1,1,1,1,1,1]]}),
+            ),
+            (
+                "extractor.get_config",
+                json!({"enabled": true, "extract_path": "/extract"}),
+            ),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/json")
+                        .header("content-type", "application/json")
+                        .body(Body::from(format!(
+                            r#"{{"id":10,"method":"{method}","params":[]}}"#
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            for (key, value) in expected.as_object().unwrap() {
+                assert_eq!(&body["result"][key], value, "{method} {key}");
+            }
+        }
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":11,"method":"blocklist.get_status","params":[]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["result"]["state"], "Idle");
+        assert_eq!(body["result"]["num_blocked"], 42);
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":12,"method":"execute.get_commands","params":[]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["result"][0]["event"], "complete");
+        assert_eq!(body["result"][0]["command"], "echo done");
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":13,"method":"core.get_enabled_plugins","params":[]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(!body["result"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Execute")));
+    }
+
+    #[tokio::test]
+    async fn deluge_label_methods_update_registry() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            reg.add(TorrentEntry::new(
+                "b".repeat(40),
+                "beta".into(),
+                "/data".into(),
+            ))
+            .unwrap();
+        }
+        let app = build_deluge_router(AppState::new(Arc::clone(&registry)));
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":1,"method":"label.set_torrent","params":["{}","movies"]}}"#,
+                        "b".repeat(40)
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(resp.status().is_success());
+        assert_eq!(
+            registry
+                .read()
+                .await
+                .get(&"b".repeat(40))
+                .unwrap()
+                .category
+                .as_deref(),
+            Some("movies")
+        );
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":2,"method":"label.get_labels","params":[]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["result"], json!(["movies"]));
+    }
+
+    #[tokio::test]
+    async fn deluge_file_probe_returns_array_shape() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            reg.add(TorrentEntry::new(
+                "c".repeat(40),
+                "gamma".into(),
+                "/data".into(),
+            ))
+            .unwrap();
+        }
+        let app = build_deluge_router(AppState::new(registry));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":1,"method":"web.get_torrent_files","params":["{}"]}}"#,
+                        "c".repeat(40)
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["error"].is_null());
+        assert!(body["result"].as_array().is_some());
+    }
+
+    #[tokio::test]
+    async fn deluge_web_add_torrents_accepts_common_webui_payload_shapes_without_engine() {
+        let app = build_deluge_router(AppState::new(Arc::new(RwLock::new(SessionRegistry::new()))));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":1,"method":"web.add_torrents","params":[[
+                            {"path":"magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","options":{"download_location":"/data"}},
+                            {"path":"/tmp/uploaded.torrent","options":{}},
+                            {"filename":"https://example.invalid/file.torrent","options":{}},
+                            {"path":"inline.torrent","filedata":"ZHVtbXk=","params":{}}
+                        ]]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["error"].is_null(), "{:?}", body["error"]);
+        let results = body["result"].as_array().unwrap();
+        assert_eq!(results.len(), 4);
+        assert!(results.iter().all(|result| result["success"] == true));
+        assert_eq!(
+            results[0]["path"],
+            "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(results[2]["path"], "https://example.invalid/file.torrent");
+        assert_eq!(results[3]["path"], "inline.torrent");
+    }
+
+    #[tokio::test]
+    async fn deluge_url_download_returns_stateful_safe_token() {
+        let app = build_deluge_router(AppState::new(Arc::new(RwLock::new(SessionRegistry::new()))));
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"id":1,"method":"web.download_torrent_from_url","params":["https://example.invalid/file.torrent"]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["error"].is_null(), "{:?}", body["error"]);
+        let token = body["result"].as_str().unwrap();
+        assert!(token.starts_with("torrentng-url-download-"));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":2,"method":"web.add_torrents","params":[[{{"path":"{token}","options":{{}}}}]]}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["error"].is_null(), "{:?}", body["error"]);
+        let result = &body["result"][0];
+        assert_eq!(result["success"], true);
+        assert_eq!(result["path"], token);
+        assert_eq!(
+            result["result"]["url"],
+            "https://example.invalid/file.torrent"
+        );
+        assert_eq!(result["result"]["downloaded"], false);
+    }
+
+    #[tokio::test]
+    async fn deluge_url_download_tokens_are_one_shot_and_magnets_use_add_path() {
+        let app = build_deluge_router(AppState::new(Arc::new(RwLock::new(SessionRegistry::new()))));
+        let magnet = "magnet:?xt=urn:btih:0123456789012345678901234567890123456789&dn=TokenMagnet";
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":1,"method":"web.download_torrent_from_url","params":["{magnet}"]}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let token = body["result"].as_str().unwrap();
+
+        for id in [2, 3] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/json")
+                        .header("content-type", "application/json")
+                        .body(Body::from(format!(
+                            r#"{{"id":{id},"method":"web.add_torrents","params":[[{{"path":"{token}","options":{{}}}}]]}}"#
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert!(body["error"].is_null(), "{:?}", body["error"]);
+            let result = &body["result"][0];
+            assert_eq!(result["success"], true);
+            if id == 2 {
+                assert_eq!(result["result"], true);
+            } else {
+                assert_eq!(result["result"], true);
+                assert!(result["result"]["downloaded"].is_null());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn deluge_torrent_options_roundtrip_through_status_without_engine() {
+        let registry = Arc::new(RwLock::new(SessionRegistry::new()));
+        {
+            let mut reg = registry.write().await;
+            reg.add(TorrentEntry::new(
+                "d".repeat(40),
+                "delta".into(),
+                "/data".into(),
+            ))
+            .unwrap();
+        }
+        let hash = "d".repeat(40);
+        let app = build_deluge_router(AppState::new(registry));
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":1,"method":"core.set_torrent_options","params":[["{hash}"],{{"max_download_speed":10.5,"max_upload_speed":4.0,"auto_managed":true,"stop_at_ratio":true,"stop_ratio":1.25,"sequential_download":true,"super_seeding":true,"prioritize_first_last":true,"move_completed":true,"move_completed_path":"/done"}}]}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/json")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":2,"method":"core.get_torrent_status","params":["{hash}",["max_download_speed","max_upload_speed","is_auto_managed","stop_at_ratio","stop_ratio","sequential_download","super_seeding","prioritize_first_last","move_on_completed","move_on_completed_path"]]}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let result = &body["result"];
+        assert_eq!(result["max_download_speed"], 10.5);
+        assert_eq!(result["max_upload_speed"], 4.0);
+        assert_eq!(result["is_auto_managed"], true);
+        assert_eq!(result["stop_at_ratio"], true);
+        assert_eq!(result["stop_ratio"], 1.25);
+        assert_eq!(result["sequential_download"], true);
+        assert_eq!(result["super_seeding"], true);
+        assert_eq!(result["prioritize_first_last"], true);
+        assert_eq!(result["move_on_completed"], true);
+        assert_eq!(result["move_on_completed_path"], "/done");
+    }
+
+    #[test]
+    fn deluge_mutator_parsers_accept_client_shapes() {
+        assert_eq!(
+            hashes_from_param(Some(&json!([" a ", "", "b"]))),
+            vec!["a".to_owned(), "b".to_owned()]
+        );
+        assert_eq!(deluge_file_priority(0), 0);
+        assert_eq!(deluge_file_priority(1), 1);
+        assert_eq!(deluge_file_priority(7), 2);
+        assert_eq!(
+            deluge_file_priority_updates(Some(&json!([0, 1, 5, 7])), None),
+            vec![(vec![0], 0), (vec![1], 1), (vec![2, 3], 2)]
+        );
+        assert_eq!(
+            deluge_file_priority_updates(Some(&json!([2, 4])), Some(&json!(0))),
+            vec![(vec![2, 4], 0)]
+        );
+        assert_eq!(
+            deluge_trackers_arg(Some(&json!([
+                {"url":" udp://tracker.example/announce "},
+                {"announce":"http://tracker.example/announce"},
+                "udp://tracker.example/announce"
+            ]))),
+            vec![
+                "udp://tracker.example/announce".to_owned(),
+                "http://tracker.example/announce".to_owned()
+            ]
+        );
+        assert_eq!(
+            deluge_peer_addr_arg(&json!(["127.0.0.1", 6881])).unwrap(),
+            "127.0.0.1:6881".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            deluge_rename_file_args(Some(&json!([
+                [1, "new/a.bin"],
+                {"index": 2, "path": "new/b.bin"}
+            ]))),
+            vec![(1, "new/a.bin".to_owned()), (2, "new/b.bin".to_owned())]
+        );
+    }
+
+    #[test]
+    fn deluge_options_project_to_engine_limits() {
+        let mut limits = EngineTorrentLimits::default();
+        let options = json!({
+            "prioritize_first_last": true,
+            "sequential_download": "1",
+            "super_seeding": 1,
+            "auto_managed": false,
+            "max_download_speed": 10.5,
+            "max_upload_speed": "-1",
+            "stop_at_ratio": true,
+            "stop_ratio": 1.25
+        });
+        apply_deluge_options(&mut limits, options.as_object().unwrap());
+        assert!(limits.first_last_piece_prio);
+        assert!(limits.sequential_download);
+        assert!(limits.super_seeding);
+        assert!(!limits.auto_management);
+        assert_eq!(limits.download_limit, Some(10_752));
+        assert_eq!(limits.upload_limit, None);
+        assert_eq!(limits.seed_ratio_limit, Some(1.25));
+
+        apply_deluge_options(
+            &mut limits,
+            json!({"stop_at_ratio": false}).as_object().unwrap(),
+        );
+        assert_eq!(limits.seed_ratio_limit, None);
+    }
+
+    #[test]
+    fn deluge_torrent_data_decoder_accepts_data_urls_and_unpadded_base64() {
+        assert_eq!(
+            decode_deluge_torrent_data("data:application/x-bittorrent;base64,ZHVtbXk=").unwrap(),
+            b"dummy"
+        );
+        assert_eq!(decode_deluge_torrent_data("ZHVtbXk").unwrap(), b"dummy");
+    }
+
+    #[test]
+    fn deluge_api_snapshot_estimates_scale_with_torrent_count() {
+        assert_eq!(estimate_deluge_torrents_snapshot_bytes(0), 0);
+        assert_eq!(estimate_deluge_torrents_snapshot_bytes(10), 30_720);
+        assert_eq!(estimate_deluge_update_ui_snapshot_bytes(0), 32 * 1024);
+        assert_eq!(
+            estimate_deluge_update_ui_snapshot_bytes(10),
+            32 * 1024 + 40_960
+        );
+        assert_eq!(estimate_deluge_torrent_detail_snapshot_bytes(), 64 * 1024);
+    }
+}

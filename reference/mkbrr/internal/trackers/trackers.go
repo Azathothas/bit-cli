@@ -1,0 +1,386 @@
+package trackers
+
+import "strings"
+
+// TrackerConfig holds tracker-specific configuration
+type TrackerConfig struct {
+	DefaultSource    string           // default source to use for this tracker
+	URLs             []string         // list of tracker URLs that share this config
+	PieceSizeRanges  []PieceSizeRange // custom piece size ranges for specific content sizes
+	MaxPieceLength   uint             // maximum piece length exponent (2^n). default is 24 (16 MiB) from create.go
+	MaxTorrentSize   uint64           // maximum .torrent file size in bytes (0 means no limit)
+	UseDefaultRanges bool             // whether to use default piece size ranges when content size is outside custom ranges
+}
+
+// PieceSizeRange defines a range of content sizes and their corresponding piece size exponent
+type PieceSizeRange struct {
+	MaxSize  uint64 // maximum content size in bytes for this range
+	PieceExp uint   // piece size exponent (2^n)
+}
+
+// trackerConfigs maps known tracker base URLs to their configurations
+var trackerConfigs = []TrackerConfig{
+	{
+		URLs: []string{
+			"anthelion.me",
+		},
+		MaxTorrentSize: 250 << 10, // 250 KiB torrent file size limit
+		DefaultSource:  "ANT",
+	},
+	{
+		URLs: []string{
+			"nebulance.io",
+		},
+		MaxTorrentSize: 1024 << 10, // 1 MiB torrent file size limit
+		DefaultSource:  "NBL",
+	},
+	{
+		URLs: []string{
+			"hdbits.org",
+			"superbits.org",
+			"sptracker.cc",
+		},
+		MaxPieceLength:   24, // max 16 MiB pieces (2^24)
+		UseDefaultRanges: true,
+	},
+	{
+		URLs: []string{
+			"beyond-hd.me",
+		},
+		MaxPieceLength:   24, // max 16 MiB pieces (2^24)
+		UseDefaultRanges: true,
+		DefaultSource:    "BHD",
+	},
+	{
+		URLs: []string{
+			"passthepopcorn.me",
+		}, // https://ptp/upload.php?action=piecesize
+		MaxPieceLength: 24, // max 16 MiB pieces (2^24)
+		PieceSizeRanges: []PieceSizeRange{
+			{MaxSize: 58 << 20, PieceExp: 16},    // 64 KiB for <= 58 MiB
+			{MaxSize: 122 << 20, PieceExp: 17},   // 128 KiB for 58-122 MiB
+			{MaxSize: 213 << 20, PieceExp: 18},   // 256 KiB for 122-213 MiB
+			{MaxSize: 444 << 20, PieceExp: 19},   // 512 KiB for 213-444 MiB
+			{MaxSize: 922 << 20, PieceExp: 20},   // 1 MiB for 444-922 MiB
+			{MaxSize: 3977 << 20, PieceExp: 21},  // 2 MiB for 922 MiB-3.88 GiB
+			{MaxSize: 6861 << 20, PieceExp: 22},  // 4 MiB for 3.88-6.70 GiB
+			{MaxSize: 14234 << 20, PieceExp: 23}, // 8 MiB for 6.70-13.90 GiB
+			{MaxSize: ^uint64(0), PieceExp: 24},  // 16 MiB for > 13.90 GiB
+		},
+		UseDefaultRanges: false,
+		DefaultSource:    "PTP",
+	},
+	{
+		URLs: []string{
+			"morethantv.me", // https://mtv/forum/thread/3237?postid=74725#post74725
+		},
+		MaxPieceLength:   23, // max 8 MiB pieces (2^23)
+		UseDefaultRanges: true,
+		DefaultSource:    "MTV",
+	},
+	{
+		URLs: []string{
+			"empornium.sx",
+		},
+		MaxPieceLength:   23, // max 8 MiB pieces (2^23)
+		UseDefaultRanges: true,
+		DefaultSource:    "Emp",
+	},
+	{
+		URLs: []string{
+			"gazellegames.net",
+		},
+		MaxPieceLength: 26, // max 64 MiB pieces (2^26)
+		PieceSizeRanges: []PieceSizeRange{ // https://ggn/wiki.php?action=article&id=300
+			{MaxSize: 64 << 20, PieceExp: 15},    // 32 KiB for < 64 MB
+			{MaxSize: 128 << 20, PieceExp: 16},   // 64 KiB for 64-128 MB
+			{MaxSize: 256 << 20, PieceExp: 17},   // 128 KiB for 128-256 MB
+			{MaxSize: 512 << 20, PieceExp: 18},   // 256 KiB for 256-512 MB
+			{MaxSize: 1024 << 20, PieceExp: 19},  // 512 KiB for 512 MB-1 GB
+			{MaxSize: 2048 << 20, PieceExp: 20},  // 1 MiB for 1-2 GB
+			{MaxSize: 4096 << 20, PieceExp: 21},  // 2 MiB for 2-4 GB
+			{MaxSize: 8192 << 20, PieceExp: 22},  // 4 MiB for 4-8 GB
+			{MaxSize: 16384 << 20, PieceExp: 23}, // 8 MiB for 8-16 GB
+			{MaxSize: 32768 << 20, PieceExp: 24}, // 16 MiB for 16-32 GB
+			{MaxSize: 65536 << 20, PieceExp: 25}, // 32 MiB for 32-64 GB
+			{MaxSize: ^uint64(0), PieceExp: 26},  // 64 MiB for > 64 GB
+		},
+		UseDefaultRanges: false,
+		MaxTorrentSize:   1 << 20, // 1 MB torrent file size limit
+		DefaultSource:    "GGn",
+	},
+	{
+		URLs: []string{
+			"tracker.alpharatio.cc",
+		},
+		MaxPieceLength: 26, // max 64 MiB pieces (2^26)
+		PieceSizeRanges: []PieceSizeRange{
+			{MaxSize: 64 << 20, PieceExp: 15},    // 32 KiB for < 64 MB
+			{MaxSize: 128 << 20, PieceExp: 16},   // 64 KiB for 64-128 MB
+			{MaxSize: 256 << 20, PieceExp: 17},   // 128 KiB for 128-256 MB
+			{MaxSize: 512 << 20, PieceExp: 18},   // 256 KiB for 256-512 MB
+			{MaxSize: 1024 << 20, PieceExp: 19},  // 512 KiB for 512 MB-1 GB
+			{MaxSize: 2048 << 20, PieceExp: 20},  // 1 MiB for 1-2 GB
+			{MaxSize: 4096 << 20, PieceExp: 21},  // 2 MiB for 2-4 GB
+			{MaxSize: 8192 << 20, PieceExp: 22},  // 4 MiB for 4-8 GB
+			{MaxSize: 16384 << 20, PieceExp: 23}, // 8 MiB for 8-16 GB
+			{MaxSize: 32768 << 20, PieceExp: 24}, // 16 MiB for 16-32 GB
+			{MaxSize: 65536 << 20, PieceExp: 25}, // 32 MiB for 32-64 GB
+			{MaxSize: ^uint64(0), PieceExp: 26},  // 64 MiB for > 64 GB
+		},
+		UseDefaultRanges: false,
+		MaxTorrentSize:   2 << 20, // 2 MB torrent file size limit
+		DefaultSource:    "AlphaRatio",
+	},
+	{
+		URLs: []string{
+			"seedpool.org",
+		},
+		MaxPieceLength: 27, // max 128 MiB pieces (2^27)
+		PieceSizeRanges: []PieceSizeRange{ // Mirror default calculation logic from create.go
+			{MaxSize: 64 << 20, PieceExp: 15},     // 32 KiB for <= 64 MB
+			{MaxSize: 128 << 20, PieceExp: 16},    // 64 KiB for 64-128 MB
+			{MaxSize: 256 << 20, PieceExp: 17},    // 128 KiB for 128-256 MB
+			{MaxSize: 512 << 20, PieceExp: 18},    // 256 KiB for 256-512 MB
+			{MaxSize: 1024 << 20, PieceExp: 19},   // 512 KiB for 512 MB-1 GB
+			{MaxSize: 2048 << 20, PieceExp: 20},   // 1 MiB for 1-2 GB
+			{MaxSize: 4096 << 20, PieceExp: 21},   // 2 MiB for 2-4 GB
+			{MaxSize: 8192 << 20, PieceExp: 22},   // 4 MiB for 4-8 GB
+			{MaxSize: 16384 << 20, PieceExp: 23},  // 8 MiB for 8-16 GB
+			{MaxSize: 32768 << 20, PieceExp: 24},  // 16 MiB for 16-32 GB
+			{MaxSize: 65536 << 20, PieceExp: 25},  // 32 MiB for 32-64 GB
+			{MaxSize: 131072 << 20, PieceExp: 26}, // 64 MiB for 64-128 GB
+			{MaxSize: ^uint64(0), PieceExp: 27},   // 128 MiB for > 128 GB
+		},
+		UseDefaultRanges: false,
+		DefaultSource:    "seedpool.org",
+	},
+	{
+		URLs: []string{
+			"norbits.net",
+		},
+		PieceSizeRanges: []PieceSizeRange{ // https://nb/ulguide.php
+			{MaxSize: 250 << 20, PieceExp: 18},   // 256 KiB for < 250 MB
+			{MaxSize: 1024 << 20, PieceExp: 20},  // 1 MiB for 250-1024 MB
+			{MaxSize: 5120 << 20, PieceExp: 21},  // 2 MiB for 1-5 GB
+			{MaxSize: 20480 << 20, PieceExp: 22}, // 4 MiB for 5-20 GB
+			{MaxSize: 40960 << 20, PieceExp: 23}, // 8 MiB for 20-40 GB
+			{MaxSize: ^uint64(0), PieceExp: 24},  // 16 MiB for > 40 GB
+		},
+		MaxPieceLength:   24, // max 16 MiB pieces (2^24)
+		UseDefaultRanges: false,
+	},
+	{
+		URLs: []string{
+			"landof.tv",
+		},
+		PieceSizeRanges: []PieceSizeRange{ // https://btn/forums.php?action=viewthread&threadid=18301
+			{MaxSize: 32 << 20, PieceExp: 15},   // 32 KiB for <= 32 MiB
+			{MaxSize: 62 << 20, PieceExp: 16},   // 64 KiB for 32-62 MiB
+			{MaxSize: 125 << 20, PieceExp: 17},  // 128 KiB for 62-125 MiB
+			{MaxSize: 250 << 20, PieceExp: 18},  // 256 KiB for 125-250 MiB
+			{MaxSize: 500 << 20, PieceExp: 19},  // 512 KiB for 250-500 MiB
+			{MaxSize: 1000 << 20, PieceExp: 20}, // 1 MiB for 500-1000 MiB
+			{MaxSize: 1945 << 20, PieceExp: 21}, // 2 MiB for 1000 MiB-1.95 GiB
+			{MaxSize: 3906 << 20, PieceExp: 22}, // 4 MiB for 1.95-3.906 GiB
+			{MaxSize: 7810 << 20, PieceExp: 23}, // 8 MiB for 3.906-7.81 GiB
+			{MaxSize: ^uint64(0), PieceExp: 24}, // 16 MiB for > 7.81 GiB
+		},
+		MaxPieceLength:   24, // max 16 MiB pieces (2^24)
+		UseDefaultRanges: false,
+	},
+	{
+		URLs: []string{
+			"torrent-syndikat.org",
+			"tee-stube.org",
+		},
+		MaxPieceLength: 24, // max 16 MiB pieces (2^24)
+		PieceSizeRanges: []PieceSizeRange{
+			{MaxSize: 250 << 20, PieceExp: 20},   // 1 MiB for < 250 MB
+			{MaxSize: 1024 << 20, PieceExp: 20},  // 1 MiB for 250 MB-1 GB
+			{MaxSize: 5120 << 20, PieceExp: 20},  // 1 MiB for 1-5 GB
+			{MaxSize: 20480 << 20, PieceExp: 22}, // 4 MiB for 5-20 GB
+			{MaxSize: 51200 << 20, PieceExp: 23}, // 8 MiB for 20-50 GB
+			{MaxSize: ^uint64(0), PieceExp: 24},  // 16 MiB for > 50 GB
+		},
+		UseDefaultRanges: false,
+	},
+	{
+		URLs: []string{
+			"onlyencodes.cc",
+		},
+		MaxPieceLength: 24, // max 16 MiB pieces (2^24)
+		PieceSizeRanges: []PieceSizeRange{
+			{MaxSize: 1024 << 20, PieceExp: 20},  // 1 MiB < 1 GB
+			{MaxSize: 4096 << 20, PieceExp: 21},  // 2 MiB for 1-4 GB
+			{MaxSize: 12288 << 20, PieceExp: 22}, // 4 MiB for 4-12 GB
+			{MaxSize: 20480 << 20, PieceExp: 23}, // 8 MiB for 12-20 GB
+			{MaxSize: ^uint64(0), PieceExp: 24},  // 16 MiB for > 20 GB
+		},
+		UseDefaultRanges: false,
+	},
+	{
+		URLs: []string{
+			"lst.gg",
+		},
+		MaxPieceLength: 24, // max 16 MiB pieces (2^24)
+		PieceSizeRanges: []PieceSizeRange{ // https://lst/pages/8
+			{MaxSize: 1024 << 20, PieceExp: 20},  // 1 MiB < 1 GB
+			{MaxSize: 4096 << 20, PieceExp: 21},  // 2 MiB for 1-4 GB
+			{MaxSize: 12288 << 20, PieceExp: 22}, // 4 MiB for 4-12 GB
+			{MaxSize: 20480 << 20, PieceExp: 23}, // 8 MiB for 12-20 GB
+			{MaxSize: ^uint64(0), PieceExp: 24},  // 16 MiB for > 20 GB
+		},
+		UseDefaultRanges: false,
+		DefaultSource:    "lst.gg",
+	},
+	{
+		URLs: []string{
+			"aither.cc",
+		},
+		MaxPieceLength: 27, // max 128 MiB pieces (2^27) (only when set with --piece-size)
+		PieceSizeRanges: []PieceSizeRange{
+			{MaxSize: 1024 << 20, PieceExp: 20},  // 1 MiB < 1 GB
+			{MaxSize: 4096 << 20, PieceExp: 21},  // 2 MiB for 1-4 GB
+			{MaxSize: 12288 << 20, PieceExp: 22}, // 4 MiB for 4-12 GB
+			{MaxSize: 20480 << 20, PieceExp: 23}, // 8 MiB for 12-20 GB
+			{MaxSize: ^uint64(0), PieceExp: 24},  // 16 MiB for > 20 GB
+		},
+		UseDefaultRanges: false,
+		DefaultSource:    "Aither",
+	},
+	{
+		URLs: []string{
+			"upload.cx",
+		},
+		DefaultSource: "ULCX",
+	},
+	{
+		URLs: []string{
+			"capybarabr.com",
+		},
+		DefaultSource: "CapybaraBR",
+	},
+	{
+		URLs: []string{
+			"hawke.uno",
+		},
+		DefaultSource: "HUNO",
+	},
+	{
+		URLs: []string{
+			"tracker.torrentleech.org",
+			"tracker.tleechreload.org",
+		},
+		MaxPieceLength: 27, // max 128 MiB pieces (2^27)
+		PieceSizeRanges: []PieceSizeRange{
+			{MaxSize: 50 << 20, PieceExp: 15},     // 32 KiB for <= 50 MiB
+			{MaxSize: 150 << 20, PieceExp: 16},    // 64 KiB for 50-150 MiB
+			{MaxSize: 350 << 20, PieceExp: 17},    // 128 KiB for 150-350 MiB
+			{MaxSize: 512 << 20, PieceExp: 18},    // 256 KiB for 350-512 MiB
+			{MaxSize: 1024 << 20, PieceExp: 19},   // 512 KiB for 512 MiB-1 GiB
+			{MaxSize: 2048 << 20, PieceExp: 20},   // 1 MiB for 1-2 GiB
+			{MaxSize: 4096 << 20, PieceExp: 21},   // 2 MiB for 2-4 GiB
+			{MaxSize: 8192 << 20, PieceExp: 22},   // 4 MiB for 4-8 GiB
+			{MaxSize: 16384 << 20, PieceExp: 23},  // 8 MiB for 8-16 GiB
+			{MaxSize: 32768 << 20, PieceExp: 24},  // 16 MiB for 16-32 GiB
+			{MaxSize: 65536 << 20, PieceExp: 25},  // 32 MiB for 32-64 GiB
+			{MaxSize: 122880 << 20, PieceExp: 26}, // 64 MiB for 64-120 GiB
+			{MaxSize: ^uint64(0), PieceExp: 27},   // 128 MiB for 120+ GiB (TL supports 2^28 but mkbrr caps at 2^27)
+		},
+		UseDefaultRanges: false,
+		DefaultSource:    "TorrentLeech.org",
+	},
+}
+
+// findTrackerConfig returns the config for a given tracker URL
+func findTrackerConfig(trackerURL string) *TrackerConfig {
+	for i := range trackerConfigs {
+		for _, url := range trackerConfigs[i].URLs {
+			if strings.Contains(trackerURL, url) {
+				return &trackerConfigs[i]
+			}
+		}
+	}
+	return nil
+}
+
+// GetTrackerMaxPieceLength returns the maximum piece length exponent for a tracker if known.
+// This is a hard limit that will not be exceeded.
+func GetTrackerMaxPieceLength(trackerURL string) (uint, bool) {
+	if config := findTrackerConfig(trackerURL); config != nil {
+		return config.MaxPieceLength, config.MaxPieceLength > 0
+	}
+	return 0, false
+}
+
+// DefaultPieceSizeRanges defines the default piece size calculation ranges
+// Used by both the trackers package and torrent/create.go for automatic piece length
+var DefaultPieceSizeRanges = []PieceSizeRange{
+	{MaxSize: 64 << 20, PieceExp: 15},     // 32 KiB for <= 64 MB
+	{MaxSize: 128 << 20, PieceExp: 16},    // 64 KiB for 64-128 MB
+	{MaxSize: 256 << 20, PieceExp: 17},    // 128 KiB for 128-256 MB
+	{MaxSize: 512 << 20, PieceExp: 18},    // 256 KiB for 256-512 MB
+	{MaxSize: 1024 << 20, PieceExp: 19},   // 512 KiB for 512 MB-1 GB
+	{MaxSize: 2048 << 20, PieceExp: 20},   // 1 MiB for 1-2 GB
+	{MaxSize: 4096 << 20, PieceExp: 21},   // 2 MiB for 2-4 GB
+	{MaxSize: 8192 << 20, PieceExp: 22},   // 4 MiB for 4-8 GB
+	{MaxSize: 16384 << 20, PieceExp: 23},  // 8 MiB for 8-16 GB
+	{MaxSize: 32768 << 20, PieceExp: 24},  // 16 MiB for 16-32 GB
+	{MaxSize: 65536 << 20, PieceExp: 25},  // 32 MiB for 32-64 GB
+	{MaxSize: 131072 << 20, PieceExp: 26}, // 64 MiB for 64-128 GB
+	{MaxSize: ^uint64(0), PieceExp: 27},   // 128 MiB for > 128 GB
+}
+
+// GetTrackerPieceSizeExp returns the recommended piece size exponent for a given content size and tracker
+func GetTrackerPieceSizeExp(trackerURL string, contentSize uint64) (uint, bool) {
+	config := findTrackerConfig(trackerURL)
+	if config == nil {
+		return 0, false
+	}
+
+	// Determine which ranges to use
+	ranges := config.PieceSizeRanges
+	if len(ranges) == 0 && config.UseDefaultRanges {
+		ranges = DefaultPieceSizeRanges
+	}
+
+	if len(ranges) == 0 {
+		return 0, false
+	}
+
+	// Find the appropriate piece size for the content size
+	for _, r := range ranges {
+		if contentSize <= r.MaxSize {
+			exp := r.PieceExp
+			// Clamp to tracker's max piece length if set
+			if config.MaxPieceLength > 0 && exp > config.MaxPieceLength {
+				exp = config.MaxPieceLength
+			}
+			return exp, true
+		}
+	}
+
+	// Use the highest defined piece size (clamped to max)
+	exp := ranges[len(ranges)-1].PieceExp
+	if config.MaxPieceLength > 0 && exp > config.MaxPieceLength {
+		exp = config.MaxPieceLength
+	}
+	return exp, true
+}
+
+// GetTrackerMaxTorrentSize returns the maximum allowed .torrent file size for a tracker if known
+func GetTrackerMaxTorrentSize(trackerURL string) (uint64, bool) {
+	if config := findTrackerConfig(trackerURL); config != nil {
+		return config.MaxTorrentSize, config.MaxTorrentSize > 0
+	}
+	return 0, false
+}
+
+// GetTrackerDefaultSource returns the default source for a tracker if defined
+func GetTrackerDefaultSource(trackerURL string) (string, bool) {
+	if config := findTrackerConfig(trackerURL); config != nil && config.DefaultSource != "" {
+		return config.DefaultSource, true
+	}
+	return "", false
+}

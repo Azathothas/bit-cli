@@ -1,0 +1,190 @@
+use std::{collections::HashMap, path::PathBuf, str::FromStr};
+
+use crate::{
+    bit_torrent::{
+        bencode::{self, BencodeInfo, BencodeMode},
+        torrent::{
+            metainfo::{
+                InfoHash, InfoHashV2, PieceLength, TorrentCommon, TorrentError, TorrentFile,
+                v1::EmbededFile,
+                v2::{FileTreeNode, TorrentV2},
+            },
+            path::TorrentPath,
+            piece_hash::{PieceHasher, PieceHasherV1},
+        },
+    },
+    torrent::metainfo::TorrentAddr,
+    types::{ByteSize, PieceByte, UnixDate},
+    utils::bqti,
+};
+
+pub struct V2Builder {
+    name: String,
+    files: TorrentPath,
+    piece_length: PieceLength,
+    announce: Option<String>,
+    announce_list: Option<Vec<Vec<String>>>,
+    web_seeds: Option<Vec<String>>,
+    creation_date: Option<u64>,
+    comment: Option<String>,
+    created_by: Option<String>,
+
+    // NOTE improve torrent v2 support
+    #[allow(dead_code)]
+    piece_layers: Option<Vec<EmbededFile>>,
+
+    #[allow(dead_code)]
+    file_tree: Option<HashMap<String, FileTreeNode>>,
+
+    dht_nodes: Option<Vec<TorrentAddr>>,
+}
+
+impl V2Builder {
+    pub fn new(name: impl Into<String>, path: impl Into<PathBuf>, piece_length: ByteSize) -> Self {
+        Self {
+            name: name.into(),
+            piece_length: PieceLength::from(piece_length),
+            files: TorrentPath::new(path),
+            piece_layers: None,
+            file_tree: None,
+            announce: None,
+            announce_list: None,
+            web_seeds: None,
+            creation_date: None,
+            comment: None,
+            created_by: None,
+            dht_nodes: None,
+        }
+    }
+
+    pub fn file(mut self, input: impl Into<PathBuf>) -> Self {
+        let input_path = input.into();
+        self.files = self.files.add(input_path);
+
+        self
+    }
+
+    pub fn files(mut self, file_paths: impl IntoIterator<Item = impl Into<PathBuf>>) -> Self {
+        for path in file_paths {
+            self = self.file(path);
+        }
+
+        self
+    }
+
+    pub fn announce(mut self, url: impl Into<String>) -> Self {
+        let url: String = url.into();
+
+        let tiers = self.announce_list.get_or_insert_with(|| vec![Vec::new()]);
+
+        if tiers.is_empty() {
+            tiers.push(Vec::new());
+        }
+
+        tiers[0].push(url.clone());
+
+        if self.announce.is_none() {
+            self.announce = Some(url);
+        }
+
+        self
+    }
+
+    pub fn announce_list(mut self, tiers: impl Into<Vec<Vec<String>>>) -> Self {
+        self.announce_list = Some(tiers.into());
+
+        self.announce = self
+            .announce_list
+            .as_ref()
+            .and_then(|l| l.first())
+            .and_then(|t| t.first())
+            .cloned();
+
+        self
+    }
+
+    pub fn web_seeds(mut self, urls: impl Into<Option<Vec<String>>>) -> Self {
+        self.web_seeds = urls.into();
+        self
+    }
+
+    pub fn dht_nodes(mut self, nodes: impl Into<Option<Vec<String>>>) -> Self {
+        self.dht_nodes = nodes.into().map(|vec| {
+            vec.into_iter()
+                .filter_map(|s| TorrentAddr::from_str(&s).ok())
+                .collect()
+        });
+
+        self
+    }
+
+    pub fn comment(mut self, comment: impl Into<Option<String>>) -> Self {
+        self.comment = comment.into();
+        self
+    }
+
+    pub fn created_by(mut self, created_by: impl Into<Option<String>>) -> Self {
+        self.created_by = created_by.into();
+        self
+    }
+
+    pub fn creation_date(mut self, date: impl Into<Option<UnixDate>>) -> Self {
+        self.creation_date = date.into();
+        self
+    }
+
+    fn info_hash(&self, pieces: &PieceByte, mode: &BencodeMode) -> Result<InfoHash, TorrentError> {
+        let meta_info = BencodeInfo::v1(
+            self.name.clone(),
+            None,
+            pieces.clone(),
+            self.piece_length.0 as i64,
+            mode.clone(),
+        );
+
+        match bencode::info_hash(&meta_info) {
+            Ok(info_hash) => Ok(InfoHash::V2(InfoHashV2::new(&info_hash))),
+            Err(e) => Err(TorrentError::Failed(e.to_string())),
+        }
+    }
+
+    pub fn build(self) -> Result<TorrentFile, TorrentError> {
+        self.piece_length.validate()?;
+
+        if self.files.is_empty() {
+            return Err(TorrentError::NotValid(
+                "the provided path contains no files".into(),
+            ));
+        }
+
+        let files = self.files.clone();
+        let mut hasher = PieceHasherV1::new(self.piece_length.0 as usize);
+
+        for (abs, rel) in &files.build() {
+            hasher.file(abs, rel);
+        }
+
+        let (pieces, mode) = hasher.finalize()?;
+        let info_hash = self.info_hash(&pieces, &BencodeMode::from(mode.clone()))?;
+
+        Ok(TorrentFile::V2(TorrentV2::new(
+            TorrentCommon::new(
+                info_hash,
+                self.name,
+                self.announce,
+                self.announce_list,
+                self.piece_length,
+                self.creation_date.or(Some(bqti::fetch_current_timestamp())),
+                self.comment,
+                self.created_by.or(Some(bqti::version())),
+                self.web_seeds,
+                self.dht_nodes,
+            ),
+            Some(2),        // version
+            HashMap::new(), //piece_layers,
+            None,           // file tree
+            None,           // flatten
+            0,              // total size
+        )))
+    }
+}

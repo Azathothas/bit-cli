@@ -1,0 +1,4202 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Torrust-Actix API Debugger",
+    "description": "This swagger debugger page, is used for documentation and testing of the Torrust-Actix API service. Use this page to test and see how the API responses on requests, which can be used for your website or application.",
+    "version": "v4.2.8"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Localhost /"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Prometheus Metrics",
+      "description": "Requests about the Metrics"
+    },
+    {
+      "name": "Torrent",
+      "description": "Requests about the Torrent"
+    },
+    {
+      "name": "Torrents",
+      "description": "Requests about the Torrents"
+    },
+    {
+      "name": "Whitelist",
+      "description": "Requests about the Whitelist"
+    },
+    {
+      "name": "Whitelists",
+      "description": "Requests about the Whitelists"
+    },
+    {
+      "name": "Blacklist",
+      "description": "Requests about the Blacklist"
+    },
+    {
+      "name": "Blacklists",
+      "description": "Requests about the Blacklists"
+    },
+    {
+      "name": "Key",
+      "description": "Requests about the Key"
+    },
+    {
+      "name": "Keys",
+      "description": "Requests about the Keys"
+    },
+    {
+      "name": "User",
+      "description": "Requests about the User"
+    },
+    {
+      "name": "Users",
+      "description": "Requests about the Users"
+    },
+    {
+      "name": "Statistics",
+      "description": "Requests about the Tracker Statistics"
+    },
+    {
+      "name": "Certificate",
+      "description": "Requests about the SSL Certificates"
+    }
+  ],
+  "paths": {
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Prometheus Metrics"
+        ],
+        "summary": "Get prometheus format statistics.",
+        "operationId": "getMetrics",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/plain": {}
+            }
+          }
+        },
+        "security": [
+          {
+            "token_auth": [
+              "write:apiKey",
+              "read:apiKey"
+            ]
+          }
+        ]
+      }
+    },
+    "/stats": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Get tracker statistics",
+        "description": "Returns comprehensive tracker statistics including torrents, users, peers, and connection metrics",
+        "operationId": "getStats",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "started": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 1234567890
+                    },
+                    "timestamp_run_save": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 1234567890
+                    },
+                    "timestamp_run_timeout": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 1234567890
+                    },
+                    "timestamp_run_console": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 1234567890
+                    },
+                    "timestamp_run_keys_timeout": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 1234567890
+                    },
+                    "torrents": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 100
+                    },
+                    "torrents_updates": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 5000
+                    },
+                    "users": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 50
+                    },
+                    "users_updates": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 1000
+                    },
+                    "seeds": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 200
+                    },
+                    "peers": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 500
+                    },
+                    "completed": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 1000
+                    },
+                    "whitelist_enabled": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "whitelist": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 25
+                    },
+                    "whitelist_updates": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 100
+                    },
+                    "blacklist_enabled": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "blacklist": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 5
+                    },
+                    "blacklist_updates": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 50
+                    },
+                    "keys_enabled": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "keys": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 10
+                    },
+                    "keys_updates": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 25
+                    },
+                    "tcp4_not_found": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "tcp4_failure": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "tcp4_connections_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 1000
+                    },
+                    "tcp4_api_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 500
+                    },
+                    "tcp4_announces_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 10000
+                    },
+                    "tcp4_scrapes_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 2000
+                    },
+                    "tcp6_not_found": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "tcp6_failure": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "tcp6_connections_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 100
+                    },
+                    "tcp6_api_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 50
+                    },
+                    "tcp6_announces_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 1000
+                    },
+                    "tcp6_scrapes_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 200
+                    },
+                    "udp4_bad_request": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "udp4_invalid_request": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "udp4_connections_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 2000
+                    },
+                    "udp4_announces_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 20000
+                    },
+                    "udp4_scrapes_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 4000
+                    },
+                    "udp6_bad_request": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "udp6_invalid_request": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "udp6_connections_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 200
+                    },
+                    "udp6_announces_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 2000
+                    },
+                    "udp6_scrapes_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 400
+                    },
+                    "udp_queue_len": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "ws_connections_active": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "ws_requests_sent": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "ws_requests_received": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "ws_responses_sent": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "ws_responses_received": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "ws_timeouts": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "ws_reconnects": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "ws_auth_success": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "ws_auth_failed": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt4_connections_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt4_announces_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt4_offers_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt4_answers_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt4_scrapes_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt4_failure": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt6_connections_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt6_announces_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt6_offers_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt6_answers_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt6_scrapes_handled": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    },
+                    "wt6_failure": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 0
+                    }
+                  }
+                },
+                "example": {
+                  "started": 1234567890,
+                  "torrents": 100,
+                  "torrents_updates": 5000,
+                  "users": 50,
+                  "users_updates": 1000,
+                  "seeds": 200,
+                  "peers": 500,
+                  "completed": 1000,
+                  "whitelist_enabled": true,
+                  "whitelist": 25,
+                  "whitelist_updates": 100,
+                  "blacklist_enabled": true,
+                  "blacklist": 5,
+                  "blacklist_updates": 50,
+                  "keys_enabled": true,
+                  "keys": 10,
+                  "keys_updates": 25
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token_auth": [
+              "read:apiKey"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/torrent/{info_hash}": {
+      "get": {
+        "tags": [
+          "Torrent"
+        ],
+        "summary": "Get torrent data with a hash (in HEX).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "operationId": "getTorrent",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "seeds": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "peer_id": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "example": "1234567890123456789012345678901234567890"
+                              },
+                              "client": {
+                                "type": "string",
+                                "example": "PicoTorrent"
+                              }
+                            }
+                          },
+                          "peer_addr": {
+                            "type": "string",
+                            "example": "127.0.0.1:6881"
+                          },
+                          "updated": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "example": 1727976989944
+                          },
+                          "uploaded": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "example": 12345
+                          },
+                          "downloaded": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "example": 54321
+                          },
+                          "left": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "example": 12345
+                          }
+                        }
+                      }
+                    },
+                    "peers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "peer_id": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "example": "1234567890123456789012345678901234567890"
+                              },
+                              "client": {
+                                "type": "string",
+                                "example": "PicoTorrent"
+                              }
+                            }
+                          },
+                          "peer_addr": {
+                            "type": "string",
+                            "example": "127.0.0.1:6881"
+                          },
+                          "updated": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "example": 1727976989944
+                          },
+                          "uploaded": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "example": 12345
+                          },
+                          "downloaded": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "example": 54321
+                          },
+                          "left": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "example": 12345
+                          }
+                        }
+                      }
+                    },
+                    "completed": {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 12345
+                    },
+                    "updated": {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 12345
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "unknown info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Info_hash is not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown info_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token_auth": [
+              "write:apiKey",
+              "read:apiKey"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Torrent"
+        ],
+        "summary": "Post torrent data with a hash (in HEX).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "operationId": "postTorrent",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "info_hash updated 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad info_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Torrent"
+        ],
+        "summary": "Delete torrent data with a hash (in HEX).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "operationId": "deleteTorrent",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown info_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/torrent/{info_hash}/{completed}": {
+      "post": {
+        "tags": [
+          "Torrent"
+        ],
+        "summary": "Update torrent completion count",
+        "description": "Increments the completion count for a specific torrent by a specified amount",
+        "operationId": "updateTorrentCompletion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true,
+            "description": "40-character hexadecimal info_hash of the torrent",
+            "example": "1234567890123456789012345678901234567890"
+          },
+          {
+            "in": "path",
+            "name": "completed",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "required": true,
+            "description": "Number of completions to add",
+            "example": 1
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Torrent completion count updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                },
+                "example": {
+                  "status": "ok"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Torrent completion count updated (conditional response)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "info_hash updated 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad info_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Torrent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown info_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token_auth": [
+              "write:apiKey"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/torrents": {
+      "get": {
+        "tags": [
+          "Torrents"
+        ],
+        "summary": "Get torrents data with a hash list in the body. If you get an error on execution about BODY not allowed in GET method, this is false and is a limitation of Swagger. Use the cURL command to see what happens.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getTorrents",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "torrents": {
+                      "type": "object",
+                      "properties": {
+                        "1234567890123456789012345678901234567890": {
+                          "type": "object",
+                          "properties": {
+                            "seeds": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "peer_id": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "example": "1234567890123456789012345678901234567890"
+                                      },
+                                      "client": {
+                                        "type": "string",
+                                        "example": "PicoTorrent"
+                                      }
+                                    }
+                                  },
+                                  "peer_addr": {
+                                    "type": "string",
+                                    "example": "127.0.0.1:6881"
+                                  },
+                                  "updated": {
+                                    "type": "integer",
+                                    "format": "uint64",
+                                    "example": 1727976989944
+                                  },
+                                  "uploaded": {
+                                    "type": "integer",
+                                    "format": "uint64",
+                                    "example": 12345
+                                  },
+                                  "downloaded": {
+                                    "type": "integer",
+                                    "format": "uint64",
+                                    "example": 54321
+                                  },
+                                  "left": {
+                                    "type": "integer",
+                                    "format": "uint64",
+                                    "example": 12345
+                                  }
+                                }
+                              }
+                            },
+                            "peers": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "peer_id": {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "example": "1234567890123456789012345678901234567890"
+                                      },
+                                      "client": {
+                                        "type": "string",
+                                        "example": "PicoTorrent"
+                                      }
+                                    }
+                                  },
+                                  "peer_addr": {
+                                    "type": "string",
+                                    "example": "127.0.0.1:6881"
+                                  },
+                                  "updated": {
+                                    "type": "integer",
+                                    "format": "uint64",
+                                    "example": 1727976989944
+                                  },
+                                  "uploaded": {
+                                    "type": "integer",
+                                    "format": "uint64",
+                                    "example": 12345
+                                  },
+                                  "downloaded": {
+                                    "type": "integer",
+                                    "format": "uint64",
+                                    "example": 54321
+                                  },
+                                  "left": {
+                                    "type": "integer",
+                                    "format": "uint64",
+                                    "example": 12345
+                                  }
+                                }
+                              }
+                            },
+                            "completed": {
+                              "type": "integer",
+                              "format": "uint64",
+                              "example": 12345
+                            },
+                            "updated": {
+                              "type": "integer",
+                              "format": "uint64",
+                              "example": 12345
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Torrents"
+        ],
+        "summary": "Post torrents data with all data in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "1234567890123456789012345678901234567890": {
+                    "type": "string",
+                    "example": 12345
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "postTorrents",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "torrents": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "string",
+                              "example": 12345
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "torrents": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "string",
+                              "example": "info_hash updated"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "<Error String>"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Torrents"
+        ],
+        "summary": "Delete torrents data with a hash list in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "deleteTorrents",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "torrents": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "ok"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "torrents": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "unknown info_hash"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/whitelist/{info_hash}": {
+      "get": {
+        "tags": [
+          "Whitelist"
+        ],
+        "summary": "Get whitelist",
+        "operationId": "getWhitelist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or bad info_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad info_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Info_hash is not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown whitelist 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Whitelist"
+        ],
+        "summary": "Post whitelist",
+        "operationId": "postWhitelist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or bad info_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad info_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Info_hash is not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown whitelist 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Whitelist"
+        ],
+        "summary": "Delete whitelist",
+        "operationId": "deleteWhitelist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or bad info_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad info_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Info_hash is not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown whitelist 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/whitelists": {
+      "get": {
+        "tags": [
+          "Whitelists"
+        ],
+        "summary": "Get whitelist data with a hash list in the body. If you get an error on execution about BODY not allowed in GET method, this is false and is a limitation of Swagger. Use the cURL command to see what happens.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getWhitelists",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "whitelists": {
+                      "type": "object",
+                      "properties": {
+                        "1234567890123456789012345678901234567890": {
+                          "type": "boolean",
+                          "example": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Whitelists"
+        ],
+        "summary": "Post whitelists data with all data in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "postWhitelists",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "whitelists": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "string",
+                              "example": "ok"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "whitelists": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "string",
+                              "example": "info_hash updated"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "<Error String>"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Whitelists"
+        ],
+        "summary": "Delete torrents data with a hash list in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "deleteWhitelists",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "torrents": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "ok"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "torrents": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "unknown info_hash"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/blacklist/{info_hash}": {
+      "get": {
+        "tags": [
+          "Blacklist"
+        ],
+        "summary": "Get blacklist",
+        "operationId": "getBlacklist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or bad info_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad info_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Info_hash is not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown blacklist 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Blacklist"
+        ],
+        "summary": "Post blacklist",
+        "operationId": "postBlacklist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or bad info_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad info_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Info_hash is not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown blacklist 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Blacklist"
+        ],
+        "summary": "Delete blacklist",
+        "operationId": "deleteBlacklist",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "info_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or bad info_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad info_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Info_hash is not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown blacklist 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/blacklists": {
+      "get": {
+        "tags": [
+          "Blacklists"
+        ],
+        "summary": "Get blacklist data with a hash list in the body. If you get an error on execution about BODY not allowed in GET method, this is false and is a limitation of Swagger. Use the cURL command to see what happens.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getBlacklists",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "blacklists": {
+                      "type": "object",
+                      "properties": {
+                        "1234567890123456789012345678901234567890": {
+                          "type": "boolean",
+                          "example": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Blacklists"
+        ],
+        "summary": "Post blacklists data with all data in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "postBlacklists",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "blacklists": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "string",
+                              "example": "ok"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "blacklists": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "string",
+                              "example": "info_hash updated"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "<Error String>"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Blacklists"
+        ],
+        "summary": "Delete blacklist data with a hash list in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "deleteBlacklists",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "blacklists": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "ok"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "blacklists": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "unknown info_hash"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid info_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/key/{key_hash}": {
+      "get": {
+        "tags": [
+          "Key"
+        ],
+        "summary": "Get key data with a hash (in HEX).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "operationId": "getKey",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "timeout": {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 1234
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid key_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid key_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "unknown key_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Info_hash is not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown key_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token_auth": [
+              "write:apiKey",
+              "read:apiKey"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Key"
+        ],
+        "summary": "Delete key data with a hash (in HEX).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "operationId": "deleteKey",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown key_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "invalid key_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/key/{key_hash}/{timeout}": {
+      "post": {
+        "tags": [
+          "Key"
+        ],
+        "summary": "Post key data with a hash (in HEX).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_hash",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "timeout",
+            "schema": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "required": true
+          }
+        ],
+        "operationId": "postKey",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "key_hash updated 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid key_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid key_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad key_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/keys": {
+      "get": {
+        "tags": [
+          "Keys"
+        ],
+        "summary": "Get keys data with a hash list in the body. If you get an error on execution about BODY not allowed in GET method, this is false and is a limitation of Swagger. Use the cURL command to see what happens.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getKeys",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "keys": {
+                      "type": "object",
+                      "properties": {
+                        "1234567890123456789012345678901234567890": {
+                          "type": "integer",
+                          "format": "uint64",
+                          "example": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid key_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid key_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Keys"
+        ],
+        "summary": "Post keys data with all data in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "1234567890123456789012345678901234567890": {
+                    "type": "string",
+                    "example": 12345
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "postKeys",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "keys": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "string",
+                              "example": 12345
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "keys": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "string",
+                              "example": "key_hash updated"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "<Error String>"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid key_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Keys"
+        ],
+        "summary": "Delete keys data with a hash list in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "deleteKeys",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "keys": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "ok"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "keys": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "unknown key_hash"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid key_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid key_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/user/{id}": {
+      "get": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Get user data with a hash (in HEX).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "operationId": "getUser",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uuid": {
+                      "type": "string",
+                      "example": "550e8400-e29b-41d4-a716-446655440000"
+                    },
+                    "key": {
+                      "type": "string",
+                      "example": "1234567890123456789012345678901234567890"
+                    },
+                    "uploaded": {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 12345
+                    },
+                    "downloaded": {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 12345
+                    },
+                    "completed": {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 12345
+                    },
+                    "updated": {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 1425744000
+                    },
+                    "active": {
+                      "type": "integer",
+                      "format": "uint8",
+                      "example": 1
+                    },
+                    "torrents_active": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "1234567890123456789012345678901234567890": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "example": 1425744000
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid user_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid user_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "unknown user_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User_hash is not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown user_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token_auth": [
+              "write:apiKey",
+              "read:apiKey"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Delete user data with a hash (in HEX).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$"
+            },
+            "required": true
+          }
+        ],
+        "operationId": "deleteUser",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "unknown user_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "invalid user_hash 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/user/{id}/{key}/{uploaded}/{downloaded}/{completed}/{updated}/{active}": {
+      "post": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Post user data with a hash (in HEX).",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "This is either a UUID or ID number.",
+            "schema": {
+              "type": "string",
+              "pattern": "^([0-9]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+              "example": "550e8400-e29b-41d4-a716-446655440000"
+            },
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "key",
+            "description": "This is a SHA1 hash in HEX (40 characters).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{40}$",
+              "example": "1234567890123456789012345678901234567890"
+            },
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "uploaded",
+            "description": "This a number how much in Bytes has been uploaded in total by the user.",
+            "schema": {
+              "type": "integer",
+              "format": "uint64",
+              "example": 12345
+            },
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "downloaded",
+            "description": "This a number how much in Bytes has been downloaded in total by the user.",
+            "schema": {
+              "type": "integer",
+              "format": "uint64",
+              "example": 12345
+            },
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "completed",
+            "description": "This a number how many times in total downloads has been completed by the user.",
+            "schema": {
+              "type": "integer",
+              "format": "uint64",
+              "example": 12345
+            },
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "updated",
+            "description": "This is a UNIX timestamp in seconds when user was active for the last time.",
+            "schema": {
+              "type": "integer",
+              "format": "uint64",
+              "example": 12345
+            },
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "active",
+            "description": "A simple 0 or a 1 if a user account is supposed to be active or not.",
+            "schema": {
+              "type": "integer",
+              "format": "uint8",
+              "example": 1
+            },
+            "required": true
+          }
+        ],
+        "operationId": "postUser",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "user_hash added 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "user_hash updated 1234567890123456789012345678901234567890"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid info_hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid id 0"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid uuid 550e8400-e29b-41d4-a716-446655440000"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad key_hash"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/users": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Get users data with a hash list in the body. If you get an error on execution about BODY not allowed in GET method, this is false and is a limitation of Swagger. Use the cURL command to see what happens.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getUsers",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "users": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "1234567890123456789012345678901234567890": {
+                                  "type": "object",
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "example": "ok"
+                                    },
+                                    "uuid": {
+                                      "type": "string",
+                                      "example": "550e8400-e29b-41d4-a716-446655440000"
+                                    },
+                                    "key": {
+                                      "type": "string",
+                                      "example": "1234567890123456789012345678901234567890"
+                                    },
+                                    "uploaded": {
+                                      "type": "integer",
+                                      "format": "uint64",
+                                      "example": 12345
+                                    },
+                                    "downloaded": {
+                                      "type": "integer",
+                                      "format": "uint64",
+                                      "example": 12345
+                                    },
+                                    "completed": {
+                                      "type": "integer",
+                                      "format": "uint64",
+                                      "example": 12345
+                                    },
+                                    "updated": {
+                                      "type": "integer",
+                                      "format": "uint64",
+                                      "example": 1425744000
+                                    },
+                                    "active": {
+                                      "type": "integer",
+                                      "format": "uint8",
+                                      "example": 1
+                                    },
+                                    "torrents_active": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "1234567890123456789012345678901234567890": {
+                                            "type": "integer",
+                                            "format": "uint64",
+                                            "example": 1425744000
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "1234567890123456789012345678901234567890": {
+                                  "type": "object",
+                                  "properties": {
+                                    "status": {
+                                      "type": "string",
+                                      "example": "unknown user_hash"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid user_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Post users data with all data in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^([0-9]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+                      "example": "550e8400-e29b-41d4-a716-446655440000"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^[a-fA-F0-9]{40}$",
+                      "example": "1234567890123456789012345678901234567890"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 12345
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 12345
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 12345
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "example": 1425744000
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint8",
+                      "example": 1
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "operationId": "postUsers",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "torrents": {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "string",
+                              "example": 12345
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "ok"
+                        },
+                        "users": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "1234567890123456789012345678901234567890": {
+                                  "type": "string",
+                                  "example": "user_hash added"
+                                }
+                              }
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "1234567890123456789012345678901234567890": {
+                                  "type": "string",
+                                  "example": "user_hash updated"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "<Error String>"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid id 1"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid uuid 550e8400-e29b-41d4-a716-446655440000"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Delete users data with a hash list in the body.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "example": "1234567890123456789012345678901234567890"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "deleteUsers",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "users": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "ok"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "1234567890123456789012345678901234567890": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "example": "unknown user_hash"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid user_hash or errors on handling body data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "invalid user_hash 1234567890123456789012345678901234567890"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "chunk error"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "body overflow"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "example": "bad json body"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/certificate/reload": {
+      "post": {
+        "tags": [
+          "Certificate"
+        ],
+        "summary": "Reload SSL certificates",
+        "description": "Reloads SSL/TLS certificates for the tracker. Optionally filters by server type and/or bind address.",
+        "operationId": "reloadCertificate",
+        "requestBody": {
+          "description": "Optional filters to specify which certificates to reload",
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "server_type": {
+                    "type": "string",
+                    "description": "Server type to filter (e.g., 'http', 'api')",
+                    "example": "http"
+                  },
+                  "bind_address": {
+                    "type": "string",
+                    "description": "Bind address to filter (e.g., '0.0.0.0:6881')",
+                    "example": "0.0.0.0:6881"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Certificate reload completed (may be partial or full success)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["ok", "partial", "failed", "no_certificates"],
+                      "description": "Status of the reload operation",
+                      "example": "ok"
+                    },
+                    "reloaded": {
+                      "type": "array",
+                      "description": "List of successfully reloaded certificates",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "server_type": {
+                            "type": "string",
+                            "example": "http"
+                          },
+                          "bind_address": {
+                            "type": "string",
+                            "example": "0.0.0.0:6881"
+                          },
+                          "loaded_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "RFC3339 timestamp when certificate was loaded",
+                            "example": "2024-01-15T10:30:00Z"
+                          }
+                        }
+                      }
+                    },
+                    "errors": {
+                      "type": "array",
+                      "description": "List of certificates that failed to reload",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "server_type": {
+                            "type": "string",
+                            "example": "api"
+                          },
+                          "bind_address": {
+                            "type": "string",
+                            "example": "0.0.0.0:9696"
+                          },
+                          "error": {
+                            "type": "string",
+                            "example": "Failed to read certificate file"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "example": {
+                    "status": "ok",
+                    "reloaded": [
+                      {
+                        "server_type": "http",
+                        "bind_address": "0.0.0.0:6881",
+                        "loaded_at": "2024-01-15T10:30:00Z"
+                      }
+                    ],
+                    "errors": []
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token_auth": [
+              "write:apiKey"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/certificate/status": {
+      "get": {
+        "tags": [
+          "Certificate"
+        ],
+        "summary": "Get SSL certificate status",
+        "description": "Returns the current status of all loaded SSL/TLS certificates",
+        "operationId": "getCertificateStatus",
+        "responses": {
+          "200": {
+            "description": "Certificate status retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "certificates": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "server_type": {
+                            "type": "string",
+                            "description": "Type of server (http, api, etc.)",
+                            "example": "http"
+                          },
+                          "bind_address": {
+                            "type": "string",
+                            "description": "Address and port the server is bound to",
+                            "example": "0.0.0.0:6881"
+                          },
+                          "cert_path": {
+                            "type": "string",
+                            "description": "Path to the certificate file",
+                            "example": "/etc/ssl/certs/torrust.crt"
+                          },
+                          "key_path": {
+                            "type": "string",
+                            "description": "Path to the private key file",
+                            "example": "/etc/ssl/private/torrust.key"
+                          },
+                          "loaded_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "RFC3339 timestamp when certificate was loaded",
+                            "example": "2024-01-15T10:30:00Z"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "example": {
+                    "status": "ok",
+                    "certificates": [
+                      {
+                        "server_type": "http",
+                        "bind_address": "0.0.0.0:6881",
+                        "cert_path": "/etc/ssl/certs/torrust.crt",
+                        "key_path": "/etc/ssl/private/torrust.key",
+                        "loaded_at": "2024-01-15T10:30:00Z"
+                      },
+                      {
+                        "server_type": "api",
+                        "bind_address": "0.0.0.0:9696",
+                        "cert_path": "/etc/ssl/certs/torrust.crt",
+                        "key_path": "/etc/ssl/private/torrust.key",
+                        "loaded_at": "2024-01-15T10:30:00Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token_auth": [
+              "read:apiKey"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "token_auth": {
+        "type": "apiKey",
+        "name": "token",
+        "in": "query"
+      }
+    }
+  }
+}
