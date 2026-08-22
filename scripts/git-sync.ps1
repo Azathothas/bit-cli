@@ -257,10 +257,17 @@ $script:CiSkipPatterns = @(
 # `.github/` is deliberately **not** safe: a workflow edit is the one change
 # whose effect is only visible in a run.
 
+# `patches/` is safe for the same reason `TODO/` is: nothing in it is a build
+# input. The `.patch` files are DERIVED from `vendor/` by
+# scripts/vendor-diff.ps1 and are never applied to anything, so editing one
+# changes no byte cargo compiles. `vendor/` itself is **not** in this list and
+# must not be: that is source, and it is the source CI exists to build.
+
 $script:SafeForNoCi = @(
     '^TODO/',
     '^docs/',
     '^bench/',
+    '^patches/',
     '^scripts/',
     '^README\.md$',
     '^LICENSE',

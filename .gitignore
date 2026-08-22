@@ -47,3 +47,14 @@
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Upstream scan records.
+#
+# `scripts/upstream-scan.ps1` writes one per run and a session runs it several
+# times while tuning what it triages against. The same rule as bench/ applies:
+# the run that IS the record for a reconciliation goes in on purpose, and the
+# other nine do not.
+#
+#   git add -f patches/scan/upstream-20260822T124645139Z.json
+#
+/patches/scan/*.json

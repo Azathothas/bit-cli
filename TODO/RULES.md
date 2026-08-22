@@ -43,6 +43,13 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 gh run list --limit 1
 ```
 
+6. If the session touches `vendor/`, one more, and it goes first because it is
+   the one that says whether a reconciliation is due:
+
+```bash
+pwsh -NoProfile -File scripts/vendor-status.ps1
+```
+
 ## 2. Ending a session
 
 When the operator says the session is ending, in this order:
@@ -87,6 +94,17 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 5. Commit and push with `scripts/git-sync.ps1`. Nothing else. Pass `-Summary
    -Since <the start instant>` on the last push of the session, so the numbers
    in `PROGRESS.md` are measured rather than counted by hand.
+
+   A session that touched `vendor/` also has to leave these two clean, and
+   neither is covered by the gates:
+
+```bash
+pwsh -NoProfile -File scripts/vendor-status.ps1
+```
+
+```bash
+pwsh -NoProfile -File scripts/check-prompts.ps1
+```
 6. Read the CI run the push started. A push that leaves CI red without an entry
    naming why is not finished. A push carrying only documentation should carry
    `-NoCi` and then there is no run to read.
@@ -115,7 +133,16 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 
 ## 3. The kickoff prompt
 
-Printed in chat, in a code block, never written to a file.
+Printed in chat, in a code block, at the end of the session.
+
+**Three of them are kept as samples**, at `reference/PROMPT-SAMPLEs/`, on the
+`references` branch: `PROMPT_TASK.md` for ordinary work, `PROMPT_VENDOR.md`
+for the vendored trees, and `PROMPT_MISC.md` for a one-off, which is the only
+one with blanks to fill. They are samples rather than the source of truth: what
+goes to chat at the end of a session is written for that session, and a sample
+is what it is written from. `scripts/check-prompts.ps1` checks that every path
+and script they name still resolves, because a prompt is the first thing a
+session reads and nothing else would catch a renamed script there.
 
 **It is generic and it stays generic.** Everything that changes from session to
 session lives in `PROGRESS.md`, which is tracked, versioned, and read first
@@ -304,6 +331,49 @@ pwsh -NoProfile -File scripts/session-report.ps1 -Since 2026-08-22T01:11:24Z
 ```
 
 - **`scripts/git-sync.ps1`.** Section 4.
+
+### The vendoring scripts
+
+`librqbit` is vendored under `vendor/` since 2026-08-22 and this repository
+controls that fork. Why is [`docs/vendoring.md`](../docs/vendoring.md); how is
+[`patches/README.md`](../patches/README.md). Four scripts, and the first is the
+one to run at the top of any session that touches them.
+
+- **`scripts/vendor-status.ps1`.** One screen, a few seconds: what each
+  upstream is pinned to, whether a newer release exists, how far behind the
+  base is, whether the patch series matches the trees, whether every patch has
+  a section in `patches/UPSTREAM.md`, and whether the version, the changelog
+  and the pins agree. `-Offline` skips the two that need GitHub.
+
+```bash
+pwsh -NoProfile -File scripts/vendor-status.ps1
+```
+
+- **`scripts/upstream-scan.ps1`.** Every release, issue and pull request each
+  upstream has, open and closed, ranked against the entries this repository
+  still has open. The vocabulary is derived from `INDEX.md` rather than written
+  down, so it cannot go stale. Run it before taking a release.
+
+- **`scripts/vendor-sync.ps1`.** Three-way merges a new upstream release onto
+  our tree using the recorded base as the common ancestor. It refuses to
+  advance that base while a file is in conflict, and refuses to finish while a
+  vendored file is one this repository's own `.gitignore` would swallow.
+
+- **`scripts/vendor-diff.ps1`.** Regenerates the patch series from the tree.
+  The tree is the truth; the series is derived and is never applied.
+  `-Check` fails when they disagree, which is a state a commit must not be in.
+
+- **`scripts/release.ps1`.** Moves the version and writes the changelog
+  section, which names the upstream commit each vendored tree was built from.
+  A version bump has three things following it and CI fails on each
+  separately: `Cargo.lock`, `THIRD_PARTY.md`, and the changelog heading. The
+  script prints all three.
+
+- **`scripts/check-prompts.ps1`.** The kickoff prompts live on the
+  `references` branch, so a commit that renames a script never touches them.
+  This checks that every path and script they name still resolves. A prompt is
+  the first thing a session reads, so a stale one is worse than a stale
+  citation.
 
 ### The rest
 

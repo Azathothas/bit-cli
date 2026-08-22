@@ -4,7 +4,7 @@
 is built from. Why they are vendored at all is [`docs/vendoring.md`](../docs/vendoring.md).
 This is how to work on them.
 
-Three files and three scripts, and nothing else binds:
+Three files and four scripts, and nothing else binds:
 
 | | |
 | --- | --- |
@@ -13,7 +13,8 @@ Three files and three scripts, and nothing else binds:
 | [`TASKS.md`](TASKS.md) | the work the fork exists to do, in order |
 | `scripts/vendor-sync.ps1` | put a tree in, or reconcile a new release onto it |
 | `scripts/vendor-diff.ps1` | regenerate the patch series from the tree |
-| `scripts/upstream-scan.ps1` | what has happened upstream since our base |
+| `scripts/upstream-scan.ps1` | everything upstream has, ranked against our open entries |
+| `scripts/vendor-status.ps1` | one screen: is the fork healthy, is a merge due |
 
 ## The model: the tree is the truth
 
@@ -64,10 +65,12 @@ commit must never be in.
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-5. **Run upstream's own tests** when the change is in `librqbit` itself. They
-   are not in `gates.ps1`, because upstream's warnings are upstream's and a
-   lint released after their last commit would fail this build for something
-   nobody here wrote.
+5. **Run upstream's own tests** when the change is in `librqbit` itself.
+   `gates.ps1` runs `cargo test --workspace`, and the vendored crates are not
+   workspace members, so their tests are not in it. CI does compile them under
+   `-D warnings`, so a warning in them is still ours to patch: cargo caps lints
+   for a registry dependency and does not cap them for a path dependency. The
+   first entry in `UPSTREAM.md` is exactly that case.
 
 ```bash
 cargo test --manifest-path vendor/rqbit/Cargo.toml
@@ -76,13 +79,24 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml
 ## Taking a new upstream release
 
 ```bash
+pwsh -NoProfile -File scripts/vendor-status.ps1
+```
+
+That says whether anything is due at all, in a few seconds. Then read what is
+in the release rather than merging blind:
+
+```bash
 pwsh -NoProfile -File scripts/upstream-scan.ps1
 ```
 
-Read what changed before merging it. The scan lists releases, commits, pull
-requests and issues since the recorded base, and flags the ones whose words
-match what `TODO/` says this repository is blocked on. A flag means a person
-should look, not that anything is wrong.
+The scan fetches **everything** each upstream has: every release, every issue
+and every pull request, open and closed, plus the commits since our base. Then
+it ranks them, because six hundred items nobody reads is the same as no scan.
+The vocabulary is the nouns in the titles of entries that are still open,
+partial or blocked, taken from `TODO/INDEX.md` so it cannot go stale, plus a
+short curated list of protocol and type names a title never says. A high tier
+means a person should look, not that anything is wrong; the JSON record under
+`patches/scan/` keeps every item either way.
 
 ```bash
 pwsh -NoProfile -File scripts/vendor-sync.ps1 -Upstream rqbit -Ref v9.1.0 -Check
