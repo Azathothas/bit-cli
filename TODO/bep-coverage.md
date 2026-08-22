@@ -452,7 +452,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    bep
 Priority:    P2
 Effort:      S
-Status:      blocked
+Status:      partial
 
 Problem:     A peer's bitfield only ever grows. BEP 3 has `Have` and no
              inverse, so once a peer has claimed a piece there is no way for
@@ -549,6 +549,54 @@ reconnect, which is an optimisation of a path that has to exist either way.
 T-005 was built on the reconnect, and this entry becomes an optimisation of it
 rather than a prerequisite for it. The work order that put this first was
 written before the dispatch above had been read.
+
+## The receive side is built, 2026-08-22, and this is partial rather than blocked
+
+The blocker above is gone, and it was option 1 of the three listed: "`librqbit`
+adds `lt_donthave` to `PeerExtendedMessageIds` and an `on_donthave` beside
+`on_have` that clears the bit". The trees are vendored, so it was done here.
+
+- `MY_EXTENDED_LT_DONTHAVE = 4`, and `PeerExtendedMessageIds` carries
+  `lt_donthave`. That struct is the `m` dictionary of the extended handshake,
+  so the field advertises the extension.
+- `ExtendedMessage::LtDontHave(u32)` with its own serialize and deserialize.
+  **It cannot go through the generic `Dyn` arm**: every other extension message
+  in that crate has a bencoded body and this one's payload is four big-endian
+  bytes and nothing else, which is the detail
+  `fx-torrent/src/peer/extension/donthave.rs:19` names and the one a reader
+  would get wrong.
+- `PeerHandler::on_donthave` clears the bit, the inverse of `on_have` down to
+  the shape. One difference, deliberate: a bitfield that was never allocated is
+  left alone rather than allocated and cleared, because a peer that has claimed
+  nothing cannot retract anything.
+
+**What is proved.** `test_lt_donthave_round_trips` asserts the ten byte wire
+form, the extension id, the big-endian payload and the round trip;
+`test_lt_donthave_needs_the_peer_to_have_asked_for_it` asserts a peer that never
+advertised the extension cannot be sent one. 142 upstream tests pass.
+
+**What is not, and why this stays open.** Nothing here sends one, so nothing
+has driven the handler end to end. That is the send half and it is now the only
+thing left:
+
+1. **The bridge has to read the session's `m`.** It drops every extension frame
+   at `crates/bit-cli-core/src/webseed/bridge.rs`, against `OUR_EXTENSIONS`,
+   which is right for an incoming message and is why the second BEP 10 table
+   [T-166](peers.md) names does not exist yet. The extended **handshake** is id
+   0 in both directions by BEP 10, so it is the one frame that can be decoded
+   without agreeing a numbering first, and `m.lt_donthave` is what to keep.
+2. **The `FileGone` path is where to send it.** `run` narrows `params.pieces`
+   and reconnects with a smaller bitfield today, and the comment there already
+   names this entry. With `lt_donthave` the bridge sends one message per
+   dropped piece and stays connected. That needs the narrowing to move from
+   `run` into `serve`, which holds the socket, and it needs `serve` to report
+   the narrowing back so a later reconnect advertises the smaller bitfield.
+3. **The acceptance is the entry's own**, and `FileGone` is already exercised,
+   so it is a matter of asserting the connection survives and the session stops
+   asking rather than building a new fixture.
+
+Sending it when the session has not advertised it must stay a no-op: this
+repository's own session advertises it now, and a real peer may not.
 
 ### T-168 WebTorrent peers and WSS trackers are not supported
 

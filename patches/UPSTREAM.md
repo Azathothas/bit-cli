@@ -105,7 +105,7 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0007-crates-librqbit-src-peer_info_reader-mod.rs.patch
              patches/rqbit/0011-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0013-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0014-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0016-package-lock.json.patch
+             patches/rqbit/0017-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -390,7 +390,7 @@ Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
              patches/rqbit/0009-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0015-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0016-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T17:26Z
 ```
@@ -740,7 +740,7 @@ Files:       vendor/rqbit/crates/librqbit/src/lib.rs
              patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
              patches/rqbit/0009-crates-librqbit-src-session.rs.patch
              patches/rqbit/0010-crates-librqbit-src-torrent_state-initializing.rs.patch
-             patches/rqbit/0014-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0015-crates-rqbit-src-main.rs.patch
 Upstream:    not offered yet, and the first two thirds of it should be
 Added:       2026-08-22T19:28Z
 ```
@@ -838,3 +838,71 @@ constructs `PeerStatsFilter { state: PeerStatsFilterState::All }` with no
 
 **Offer it upstream.** One line, no behaviour, and the type it completes is
 already public.
+---
+
+## librqbit: BEP 54 lt_donthave is received and ignored
+
+```
+Unblocks:    T-167, TODO/bep-coverage.md, which was blocked on exactly this
+Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
+             vendor/rqbit/crates/peer_binary_protocol/src/extended/mod.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
+Upstream:    not offered yet, and it should be
+Added:       2026-08-22T19:49Z
+```
+
+A peer's bitfield only ever grew. BEP 3 has `Have` and no inverse, so a peer
+that loses a file cannot withdraw the claim and the far end goes on asking it
+for pieces it cannot serve. BEP 54 `lt_donthave` is that message and `librqbit`
+had no receive side: `PeerExtendedMessageIds` carried `ut_metadata` and
+`ut_pex` and nothing else, so one arrived as `ExtendedMessage::Dyn` and fell to
+
+```rust
+message => {
+    warn!("received unsupported message {:?}, ignoring", message)
+}
+```
+
+which is a log line per retracted piece and no change to what is requested.
+
+The change is the whole receive side:
+
+- `MY_EXTENDED_LT_DONTHAVE = 4`, and `PeerExtendedMessageIds` carries
+  `lt_donthave`. That struct **is** the `m` dictionary of the extended
+  handshake, so adding the field advertises the extension.
+- `ExtendedMessage::LtDontHave(u32)`, with its own serialize and deserialize.
+  It cannot go through the generic `Dyn` arm: every other extension message
+  here has a bencoded body and this one's payload is four big-endian bytes and
+  nothing else.
+- `PeerHandler::on_donthave` clears the bit, and is the inverse of `on_have`
+  down to the shape. One difference, deliberate: a bitfield that was never
+  allocated is left alone rather than allocated and cleared, because a peer
+  that has claimed nothing cannot retract anything.
+
+**Why it has to be here.** `PeerExtendedMessageIds` is the wire's `m`
+dictionary, the message dispatch is a private method on a private type, and
+`peers::update_bitfield` is `pub` inside a private module tree, so it reaches
+nothing. T-167 recorded the near miss: `pub` in a private module looks like a
+seam and is not one.
+
+**How it was measured.** Two tests in `peer_binary_protocol`:
+`test_lt_donthave_round_trips` asserts the ten byte wire form, the extension
+id, the big-endian payload, and that it deserializes back to the same piece;
+`test_lt_donthave_needs_the_peer_to_have_asked_for_it` asserts a peer that
+never advertised the extension cannot be sent one.
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+```
+
+142 upstream tests pass, two of them new.
+
+**What is proved and what is not.** The message round trips on the wire and is
+dispatched to a handler that clears the bit. It is not yet proved end to end,
+because nothing in this repository sends one: that is the send half, which is
+`bit-cli`'s own web seed bridge, and T-167 carries it. This patch is what makes
+sending one worth doing.
+
+**Offer it upstream.** It is a BEP with an implementation in two other clients,
+the receive side is twenty lines, and a client that honours a retraction
+without sending one is a posture another project has taken deliberately.

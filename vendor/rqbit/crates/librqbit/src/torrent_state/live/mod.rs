@@ -1099,6 +1099,11 @@ impl PeerConnectionHandler for &'_ PeerHandler {
                 trace!("keepalive received");
             }
             Message::Have(h) => self.on_have(h),
+            // BEP 54. The inverse of `Have`, and until 2026-08-22 this fell to
+            // the catch-all that logs "unsupported message, ignoring": a peer
+            // that told us it had lost a piece was not believed and went on
+            // being asked for it. See TODO/bep-coverage.md T-167.
+            Message::Extended(ExtendedMessage::LtDontHave(piece)) => self.on_donthave(piece),
             Message::NotInterested => {
                 trace!("received \"not interested\", but we don't process it yet")
             }
@@ -1597,6 +1602,37 @@ impl PeerHandler {
                 }
             });
         self.on_bitfield_notify.notify_waiters();
+    }
+
+    /// BEP 54 `lt_donthave`: the peer no longer has this piece.
+    ///
+    /// The inverse of [`Self::on_have`], and deliberately the same shape. A
+    /// bitfield that was never allocated is left alone rather than allocated
+    /// and cleared: a peer that has claimed nothing cannot retract anything,
+    /// and allocating here would record an empty bitfield for a peer that has
+    /// not sent one yet, which `on_bitfield` would then have to reconcile.
+    fn on_donthave(&self, piece: u32) {
+        self.state
+            .peers
+            .with_live_mut(self.addr, "on_donthave", |live| {
+                if live.bitfield.is_empty() {
+                    trace!("received donthave={piece} from a peer that has claimed nothing");
+                    return;
+                }
+                match live.bitfield.get_mut(piece as usize) {
+                    Some(mut v) => *v = false,
+                    None => {
+                        warn!(
+                            id = self.state.shared.id,
+                            info_hash = ?self.state.shared.info_hash,
+                            addr = ?self.addr,
+                            "received donthave {piece} out of range"
+                        );
+                        return;
+                    }
+                };
+                trace!("updated bitfield with donthave={piece}");
+            });
     }
 
     fn on_bitfield(&self, bitfield: ByteBufOwned) -> anyhow::Result<()> {

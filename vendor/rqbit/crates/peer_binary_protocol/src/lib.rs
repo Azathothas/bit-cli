@@ -57,6 +57,16 @@ pub const MY_EXTENDED_UT_METADATA: u8 = 3;
 pub const EXTENDED_UT_PEX_KEY: &[u8] = b"ut_pex";
 pub const MY_EXTENDED_UT_PEX: u8 = 1;
 
+/// BEP 54 `lt_donthave`, the inverse of `Have`.
+///
+/// A peer's bitfield only ever grew: BEP 3 has `Have` and nothing that
+/// withdraws a claim, so a peer that loses a file has no way to say so and the
+/// far end keeps asking it for pieces it cannot serve. This is the number this
+/// client advertises for that message in its own extended handshake, so it is
+/// the number a peer will use when it sends us one. See TODO/bep-coverage.md
+/// T-167.
+pub const MY_EXTENDED_LT_DONTHAVE: u8 = 4;
+
 #[derive(Clone, Copy)]
 pub struct MsgIdDebug(MsgId);
 impl MsgIdDebug {
@@ -244,6 +254,8 @@ pub enum SerializeError {
     NeedUtMetadata,
     #[error("need peer's handshake to serialize ut_pex, or peer does't support ut_pex")]
     NeedPex,
+    #[error("need peer's handshake to serialize lt_donthave, or peer doesn't support lt_donthave")]
+    NeedLtDontHave,
 }
 
 impl From<std::io::Error> for SerializeError {
@@ -815,6 +827,48 @@ mod tests {
     // fit in MAX_MSG_LEN, and a buffer of that size refuses to hold it just
     // past 131,960 pieces.
     #[test]
+    /// BEP 54 `lt_donthave` round trips, and its payload is not bencode.
+    ///
+    /// Four big-endian bytes and nothing else. Every other extension message
+    /// in this crate carries a bencoded body, so a `lt_donthave` that reached
+    /// the generic arm would be parsed as bencode and fail. See
+    /// TODO/bep-coverage.md T-167.
+    #[test]
+    fn test_lt_donthave_round_trips() {
+        use crate::extended::{ExtendedMessage, PeerExtendedMessageIds};
+
+        let msg = Message::Extended(ExtendedMessage::LtDontHave(70_000));
+        let mut buf = vec![0u8; 64];
+        let len = msg
+            .serialize(&mut buf, &|| PeerExtendedMessageIds::my())
+            .unwrap();
+
+        // 4 length prefix, 1 message id, 1 extension id, 4 payload.
+        assert_eq!(len, 10);
+        assert_eq!(&buf[6..10], &70_000u32.to_be_bytes());
+        assert_eq!(buf[5], MY_EXTENDED_LT_DONTHAVE);
+
+        let (de, dlen) = Message::deserialize(&buf[..len], &[]).unwrap();
+        assert_eq!(dlen, len);
+        match de {
+            Message::Extended(ExtendedMessage::LtDontHave(piece)) => assert_eq!(piece, 70_000),
+            other => panic!("expected lt_donthave, got {other:?}"),
+        }
+    }
+
+    /// A peer that never advertised it cannot be sent one.
+    #[test]
+    fn test_lt_donthave_needs_the_peer_to_have_asked_for_it() {
+        use crate::extended::{ExtendedMessage, PeerExtendedMessageIds};
+
+        let msg = Message::Extended(ExtendedMessage::LtDontHave(1));
+        let mut buf = vec![0u8; 64];
+        assert!(matches!(
+            msg.serialize(&mut buf, &PeerExtendedMessageIds::default),
+            Err(SerializeError::NeedLtDontHave)
+        ));
+    }
+
     fn test_bitfield_larger_than_max_msg_len() {
         const PIECES: usize = 131_961;
         let bitfield = vec![0xffu8; PIECES.div_ceil(8)];

@@ -169,7 +169,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested *(title disproved: it is not reachable)* |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
 | [T-103](bep-coverage.md) | P2 | bep | open | Filenames that are not valid UTF-8 are refused |
-| [T-167](bep-coverage.md) | P2 | bep | blocked | BEP 54 lt_donthave is not implemented |
+| [T-167](bep-coverage.md) | P2 | bep | partial | BEP 54 lt_donthave is not implemented |
 | [T-168](bep-coverage.md) | P3 | bep | open | WebTorrent peers and WSS trackers are not supported |
 | [T-171](metainfo.md) | P2 | metainfo | **done** | httpseeds written as a bencoded string is silently dropped |
 | [T-172](metainfo.md) | P2 | metainfo | **done** | Strictness on read is undecided, and the error does not say |
@@ -237,7 +237,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 159 items: 149 to work through, and 10 deferred to Phase C.
-45 open, 4 partial, 1 blocked, 99 done.
+45 open, 5 partial, 0 blocked, 99 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -285,13 +285,17 @@ nothing it cannot serve. What the fixture actually found is that files nobody
 selected land on disk, one of them at its full length.
 
 **One entry moved to blocked rather than done**, and reading the code is what
-moved it. [T-167](bep-coverage.md), BEP 54 `lt_donthave`, is twenty lines to
-send and nothing to receive: `librqbit` 9.0.0 has `on_have` and no inverse, and
-every extension message it does not know reaches a catch-all that logs
-"received unsupported message" and ignores it. Sending one would be noise that
-looks like a feature. The entry names the two upstream changes that would
+moved it. [T-167](bep-coverage.md), BEP 54 `lt_donthave`, was twenty lines to
+send and nothing to receive: `librqbit` 9.0.0 had `on_have` and no inverse, and
+every extension message it did not know reached a catch-all that logs "received
+unsupported message" and ignores it. Sending one would have been noise that
+looks like a feature. The entry named the two upstream changes that would
 unblock it and the `pub` function inside a private module that is the near
 miss.
+
+That was written before the trees were vendored. The first of those two changes
+was made here on 2026-08-22, so the entry is partial now: the receive side
+exists and the send side is this repository's own bridge.
 
 **One was added by building another.** [T-183](cli-surface.md) is
 `--web-seed-list-url`, which is read and read only into a function that always
@@ -492,19 +496,21 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 1 | 0 | 11 | 12 |
 | P1 | 1 | 0 | 0 | 53 | 54 |
-| P2 | 23 | 3 | 1 | 32 | 59 |
+| P2 | 23 | 4 | 0 | 32 | 59 |
 | P3 | 21 | 0 | 0 | 3 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **45** | **4** | **1** | **99** | **159** |
+| **All** | **45** | **5** | **0** | **99** | **159** |
 
-`blocked` is one item. [T-167](bep-coverage.md): BEP 54's send side is inert
-without an upstream receive side. It stays here rather than moving, with the
-upstream line that blocks it and what would unblock it.
+`blocked` is empty, for the first time. It was two entries until 2026-08-22
+and both were blocked on `librqbit` rather than on anything here, which is what
+vendoring it was for.
 
-It was two until 2026-08-22. [T-016](disk-io.md) was blocked on a resume cache
-being impossible without the session persistence decision 7.4 puts in Phase C,
-and the vendored tree takes a `BitVFactory` now, so the cache exists and no
-session state is written. That is what vendoring is for.
+[T-016](disk-io.md) was blocked on a resume cache being impossible without the
+session persistence decision 7.4 puts in Phase C; `SessionOptions` takes a
+`BitVFactory` now, so the cache exists and no session state is written.
+[T-167](bep-coverage.md) was blocked on BEP 54 having no receive side upstream;
+it has one, and the entry is partial because the send half is this
+repository's own bridge and is not built.
 
 A third entry carries a blocker without being counted here.
 [T-164](peers.md) is `partial` rather than `blocked` because one of its three

@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**11 entries: 6 done, 2 partial, 1 blocked, 2 open.** Every one of them was
+**11 entries: 6 done, 3 partial, 0 blocked, 2 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
 record.**
 
@@ -31,7 +31,7 @@ record.**
 | [T-016](../TODO/disk-io.md) | P2 | **done** | a resume cache without session persistence |
 | [T-100](../TODO/bep-coverage.md) | P2 | partial | the send half of an extension message |
 | [T-163](../TODO/peers.md) | P2 | open | MSE, a wire-level handshake |
-| [T-167](../TODO/bep-coverage.md) | P2 | blocked | no inverse of `on_have` |
+| [T-167](../TODO/bep-coverage.md) | P2 | partial | **has** an inverse of `on_have` now |
 | [T-195](../TODO/peers.md) | P2 | **done** | the read side of T-194, at 262,104 pieces |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 
