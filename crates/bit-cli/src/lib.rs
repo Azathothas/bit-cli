@@ -15,6 +15,7 @@ pub mod cmd;
 pub mod env;
 pub mod logging;
 pub mod output;
+pub mod payload;
 pub mod schema;
 #[cfg(test)]
 mod schema_gen;

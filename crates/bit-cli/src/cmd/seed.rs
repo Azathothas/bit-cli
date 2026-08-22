@@ -136,13 +136,35 @@ pub fn run(
     if let Some(data) = &args.data {
         engine_options.download_directory = env.resolve(data);
     }
-    let directory = engine_options.download_directory.clone();
+    let base = engine_options.download_directory.clone();
 
     let kind = Kind::classify(&args.source.source, env)?;
     let meta = match &kind {
         Kind::File(path) => Some(Metainfo::read(path)?),
         _ => None,
     };
+
+    // A multi-file torrent lays its files under a directory named after
+    // itself, so `--data` can name the parent or the torrent directory and
+    // mean the same payload. `verify` accepted either and this accepted only
+    // the parent, which made pointing at the torrent directory a seeder
+    // holding nothing and a warning that said "partial seed". Both commands
+    // now ask the same function. See `TODO/cli-surface.md`, T-186.
+    //
+    // A magnet has no layout until its metadata resolves, and by then the
+    // session has already decided where to look, so it keeps `--data` as
+    // given. Nothing is lost: a magnet has nothing on disk to be pointed at
+    // two ways.
+    let root = meta
+        .as_ref()
+        .map(|meta| crate::payload::resolve(&base, &meta.layout()));
+    let directory = root
+        .as_ref()
+        .map_or_else(|| base.clone(), |r| r.path.clone());
+    let payload_root = root.as_ref().map(|r| r.path.display().to_string());
+    // The place this payload could have been and was not, kept for the warning
+    // a seeder holding nothing gets. See `TODO/cli-surface.md`, T-186.
+    let other_root = root.as_ref().and_then(|r| r.other.clone());
     if global.dry_run {
         // A dry run reports without doing, so a `--tracker-list-url` is
         // refused rather than fetched. That is the decision
@@ -215,6 +237,14 @@ pub fn run(
             // is what `overwrite` allows. Without it the add fails on the
             // files that are the whole point of the command.
             overwrite: true,
+            // The resolved payload root, which the files hang directly off.
+            // Naming it rather than letting the session append the torrent's
+            // own name is what makes `--data <parent>` and
+            // `--data <parent>/<name>` the same payload, and it is right even
+            // when the directory on disk was renamed. `None` for a magnet,
+            // which has no layout to resolve against yet. See
+            // `TODO/cli-surface.md`, T-186.
+            output_folder: payload_root.clone(),
             trackers: trackers.clone(),
             disable_trackers: trackers.as_ref().is_some_and(Vec::is_empty),
             tracker_interval: swarm::optional_duration(
@@ -254,6 +284,33 @@ pub fn run(
                     "only {} of {} is present, so this is a partial seed",
                     format_size(snapshot.progress_bytes),
                     format_size(snapshot.total_bytes)
+                ),
+            );
+        }
+        // Holding **none** of it is the case a partial seed's warning cannot
+        // describe, because a partial seed is legitimate and a wrong `--data`
+        // is not. Saying which directory was searched, and which other one a
+        // multi-file torrent's files also sit under, is the difference.
+        //
+        // Keyed on bytes rather than on whether the files exist, and that is
+        // deliberate: a seeder creates the tree it was looking for, so by the
+        // second run the directory holds full-length files with nothing in
+        // them and "the payload is not here" would be false. See
+        // `TODO/cli-surface.md`, T-186.
+        if snapshot.progress_bytes == 0 {
+            let elsewhere = match &other_root {
+                Some(other) => format!(
+                    "; a multi-file torrent's files also sit under {}",
+                    other.display()
+                ),
+                None => String::new(),
+            };
+            renderer.warn(
+                env,
+                format!(
+                    "none of {} is in {}, which is where --data resolved to{elsewhere}",
+                    layout.name,
+                    directory.display()
                 ),
             );
         }
@@ -665,11 +722,10 @@ mod tests {
             &[
                 "seed",
                 fixture.path_str(),
-                // The parent, not the torrent directory: `seed --data` is the
-                // session's download directory and a multi-file torrent lays
-                // its files under a directory named after itself. `verify
-                // --data` takes either, which is a difference between two
-                // commands that read the same layout.
+                // The parent. Since `TODO/cli-surface.md` T-186 the torrent
+                // directory works too, and
+                // `either_spelling_of_data_seeds_the_same_payload` is what
+                // pins that.
                 "--data",
                 out.to_str().unwrap(),
                 "--port",
@@ -694,6 +750,135 @@ mod tests {
             report["complete"], false,
             "and it does not claim to hold the rest"
         );
+    }
+
+    /// `TODO/cli-surface.md` T-186's acceptance.
+    ///
+    /// A multi-file torrent lays its files under a directory named after
+    /// itself, so `--data` can name the parent or the torrent directory. Both
+    /// spellings are the same payload, and before this only one of them was:
+    /// the other reported `have: 0` with "this is a partial seed", which is
+    /// the right observation with the wrong reason, and created an empty tree
+    /// one level deeper on its way to saying it.
+    #[test]
+    fn either_spelling_of_data_seeds_the_same_payload() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let data = fixture.dir().join("data");
+        fixture.place(&data, &[]);
+
+        let seed = |dir: &std::path::Path| {
+            crate::test_support::run_json_code(
+                &[
+                    "seed",
+                    fixture.path_str(),
+                    "--data",
+                    dir.to_str().unwrap(),
+                    "--port",
+                    "0",
+                    "--no-dht",
+                    "--no-lsd",
+                    "--no-tracker",
+                    "--stop-after",
+                    "1s",
+                ],
+                fixture.dir(),
+                // Nothing connects, so the run stops on its deadline.
+                ExitCode::Timeout,
+            )
+        };
+
+        let parent = seed(&data);
+        let torrent_dir = seed(&data.join("album"));
+        assert_eq!(parent["have"]["bytes"], 2000, "{parent}");
+        assert_eq!(
+            torrent_dir["have"]["bytes"], parent["have"]["bytes"],
+            "the torrent directory is the same payload as its parent: {torrent_dir}"
+        );
+        assert_eq!(torrent_dir["complete"], true, "{torrent_dir}");
+        // Both resolve to the directory the files hang off, so the report says
+        // where the payload is rather than what was typed.
+        assert_eq!(
+            torrent_dir["data_directory"], parent["data_directory"],
+            "both spellings name the same directory: {torrent_dir}"
+        );
+        // And nothing was created a level deeper on the way.
+        assert!(
+            !data.join("album").join("album").exists(),
+            "a seeder pointed at the torrent directory built one inside it"
+        );
+    }
+
+    /// A seeder holding nothing says which directory it searched and which
+    /// other one a multi-file torrent's files sit under. A partial-seed
+    /// warning on its own cannot: a partial seed is legitimate and a `--data`
+    /// naming the wrong place is not, and "0 B of 1.95 KiB" is what both look
+    /// like. See `TODO/cli-surface.md`, T-186.
+    ///
+    /// Run twice on purpose. The first run creates the tree it was looking
+    /// for, at full length and empty, so a message keyed on whether the files
+    /// exist would be true once and false afterwards. This one is keyed on
+    /// bytes and says the same thing both times.
+    #[test]
+    fn a_seed_that_holds_nothing_names_the_directories_it_searched() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let empty = fixture.dir().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+
+        for run in 1..=2 {
+            let (mut env, captured) = crate::env::Env::test(
+                &[
+                    "seed",
+                    fixture.path_str(),
+                    "--data",
+                    empty.to_str().unwrap(),
+                    "--port",
+                    "0",
+                    "--no-dht",
+                    "--no-lsd",
+                    "--no-tracker",
+                    "--stop-after",
+                    "1s",
+                ],
+                fixture.dir(),
+            );
+            assert_eq!(crate::run(&mut env), ExitCode::Timeout);
+            let err = captured.err();
+            assert!(err.contains("none of album is in"), "run {run}: {err}");
+            assert!(err.contains(empty.to_str().unwrap()), "run {run}: {err}");
+            assert!(
+                err.contains(empty.join("album").to_str().unwrap()),
+                "run {run}: the other candidate is named too: {err}"
+            );
+        }
+    }
+
+    /// And a seeder that holds the payload says none of that.
+    #[test]
+    fn a_complete_seed_says_nothing_about_where_it_looked() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let data = fixture.dir().join("data");
+        fixture.place(&data, &[]);
+
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "seed",
+                fixture.path_str(),
+                "--data",
+                data.to_str().unwrap(),
+                "--port",
+                "0",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--stop-after",
+                "1s",
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(crate::run(&mut env), ExitCode::Timeout);
+        let err = captured.err();
+        assert!(!err.contains("none of album"), "{err}");
+        assert!(!err.contains("partial seed"), "{err}");
     }
 
     #[test]

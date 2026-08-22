@@ -106,7 +106,18 @@ the payload, and the healthy mirror joins once the liar has served a byte. The
 correction is under T-179 and [RULES.md](RULES.md) section 5 carries the shape
 as its own line.
 
-T-186 next.
+**[T-186](cli-surface.md) is done**, 2026-08-22T03:00Z. 1,050 tests passing, 0
+failing. Measured before building and the premise held, with one thing the
+entry did not know: the wrong spelling does not only report nothing, it
+**writes**. `seed` hash-checks on add, so pointing at the torrent directory
+left an empty `album/album/` inside it at full length. `crate::payload::resolve`
+is now the shared rule and `seed` takes the resolved root as
+`AddOptions::output_folder`, which is also what makes it right for a payload
+directory the caller renamed.
+
+**That is the whole work order the last session left.** All four entries closed
+or advanced, and three defects found and fixed on the way: T-188 filed,
+T-179's test race, and T-013's closing claim corrected.
 
 ## Open questions for the operator
 

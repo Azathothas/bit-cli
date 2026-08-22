@@ -408,6 +408,10 @@ pub fn run(
 /// A multi-file torrent lays its files under a directory named after the
 /// torrent, so `--data` pointing at the parent and pointing at the directory
 /// itself both have to work. Whichever contains the first file wins.
+///
+/// The rule itself is [`crate::payload::resolve`], shared with `seed`, which
+/// had a different one and reported a seeder holding nothing. See
+/// `TODO/cli-surface.md`, T-186.
 fn resolve_root(args: &VerifyArgs, global: &Global, env: &Env, meta: &Metainfo) -> PathBuf {
     let base = args
         .data
@@ -416,20 +420,7 @@ fn resolve_root(args: &VerifyArgs, global: &Global, env: &Env, meta: &Metainfo) 
         .map(|p| env.resolve(&p))
         .unwrap_or_else(|| env.cwd.clone());
 
-    let layout = meta.layout();
-    let Some(first) = layout.files.first() else {
-        return base;
-    };
-    let direct: PathBuf = first.path.iter().fold(base.clone(), |acc, c| acc.join(c));
-    if direct.exists() {
-        return base;
-    }
-    let nested = base.join(&layout.name);
-    let inside: PathBuf = first.path.iter().fold(nested.clone(), |acc, c| acc.join(c));
-    if inside.exists() {
-        return nested;
-    }
-    base
+    crate::payload::resolve(&base, &meta.layout()).path
 }
 
 /// The path helper is also useful to callers checking a single file.

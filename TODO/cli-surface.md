@@ -2086,7 +2086,7 @@ Source:      found while building [T-184](disk-io.md)'s acceptance, 2026-08-21
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-22T03:00Z
 
 Problem:     A multi-file torrent lays its files under a directory named after
              itself, so a payload can be pointed at two ways: at the parent, or
@@ -2125,3 +2125,66 @@ Acceptance:  `bit-cli seed <MULTI> --data out/<name>` and
              `--data out` report the same `have` for the same payload on disk,
              and a `seed` that finds nothing where a sibling directory holds
              the payload says which directory it looked in.
+
+**Measured before building, and the premise held exactly.** A two-file torrent,
+3,000 and 1,000 bytes at a 1,024 byte piece length:
+
+```
+$ bit-cli verify album.torrent --data .tmp/t186        pieces ok 4 of 4
+$ bit-cli verify album.torrent --data .tmp/t186/album  pieces ok 4 of 4
+
+$ bit-cli seed album.torrent --data .tmp/t186          have 3.91 KiB of 3.91 KiB
+$ bit-cli seed album.torrent --data .tmp/t186/album
+warning: only 0 B of 3.91 KiB is present, so this is a partial seed
+                                                       have 0 B of 3.91 KiB
+```
+
+**One thing the entry did not know**: the wrong spelling does not only report
+nothing, it writes. `seed` hash-checks on add, which creates the tree it is
+looking for, so pointing at the torrent directory left an empty `album/album/`
+inside it at full length.
+
+**Closed 2026-08-22T03:00Z.** `crate::payload::resolve` is the shared rule, in a
+module of its own for the reason [`crate::selection`](#t-185---exclude-file-on-its-own-selects-nothing-and-downloads-everything)
+is: two commands need the same answer from the same flag, and a second copy is a
+second set of off-by-one bugs. `verify::resolve_root` is now four lines calling
+it.
+
+`seed` takes the resolved root as `AddOptions::output_folder` rather than as the
+session's download directory. That is what makes it right for a **renamed**
+payload directory as well: naming the folder means the files hang directly off
+it, where letting the session append the torrent's own name assumes the
+directory is still called that.
+
+```
+$ bit-cli seed album.torrent --data .tmp/t186        have 3.91 KiB of 3.91 KiB
+$ bit-cli seed album.torrent --data .tmp/t186/album  have 3.91 KiB of 3.91 KiB
+```
+
+and nothing is created a level deeper by either.
+
+**The message went through two shapes and the second one is the point.** The
+first said the first file was in neither candidate, which is what
+`resolve` actually checks. It is true on the first run and false on every run
+after it, because the run before created that file at full length with nothing
+in it. Keyed on bytes instead:
+
+```
+$ bit-cli seed album.torrent --data .tmp/t186/empty
+warning: only 0 B of 3.91 KiB is present, so this is a partial seed
+warning: none of album is in <dir>\empty, which is where --data
+         resolved to; a multi-file torrent's files also sit under
+         <dir>\empty\album
+```
+
+Two warnings, and they say different things on purpose. The first is what a
+partial seed gets and a partial seed is legitimate. The second only fires on
+nothing at all, which is the case a partial seed's wording could not describe,
+and it names both directories. A complete seed says neither, which
+`a_complete_seed_says_nothing_about_where_it_looked` pins.
+
+Seven tests. `either_spelling_of_data_seeds_the_same_payload` is the acceptance
+and was run against the old behaviour first: the torrent directory reports
+`have: 0` where the parent reports 2,000.
+`a_seed_that_holds_nothing_names_the_directories_it_searched` runs twice over,
+because a message keyed on the files existing would pass once and fail after.
