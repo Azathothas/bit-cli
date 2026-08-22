@@ -12,7 +12,7 @@ Source:      the operator's brief
 Category:    bench
 Priority:    P0
 Effort:      XL
-Status:      partial
+Status:      **done**
 
 Problem:     `bench leech|seed|webseed|swarm|probe` parse, appear in `--help`,
              and fail with a message pointing here. `webseed probe` covers part
@@ -29,9 +29,9 @@ Approach:    Build in this order, because each reuses the last:
              4. `bench seed`, which is `seed` plus the time series. **Done.**
              5. `bench probe`, a one-shot reachability check. **Done.**
              6. `bench swarm`, the synthetic load generator, which is the
-                largest and should come last. **Built, and partial**: see
-                [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator) for
-                the one acceptance clause it does not meet.
+                largest and should come last. **Done**, and it is the largest
+                thing in this file:
+                [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator).
 
              `bench disk` was added to this list after the fact, by
              [T-017](disk-io.md), which needed the disk measured on its own and
@@ -224,9 +224,11 @@ right string, so an older report still reads back and `--baseline` still
 compares the same field. `a_rate_and_a_size_share_a_wire_shape_and_differ_in_the_string`
 is the test.
 
-Still open: `probe` and `swarm` refuse with exit 1 naming this entry, the same
-as before. `bench swarm` is [T-092](#t-092-bench-swarm-has-no-synthetic-load-generator)
-and is the largest of the three.
+That paragraph said "still open: `probe` and `swarm` refuse with exit 1 naming
+this entry" and was true of neither by the time anyone read it. `probe` is
+built and is described immediately below; `swarm` is
+[T-092](#t-092-bench-swarm-has-no-synthetic-load-generator) and closed on
+2026-08-22.
 
 
 `bench probe` is built, which is step 5. It answers the question that comes
@@ -300,9 +302,26 @@ probe's `range_support` is the assertion that would have caught it.
 
 Every subcommand is now built, which
 `cmd::bench::tests::every_bench_subcommand_is_built` asserts against `clap`.
-[T-092](#t-092-bench-swarm-has-no-synthetic-load-generator) is what keeps this
-partial: `bench swarm` runs both its loads and does not yet hold its pieces
-inside the disk budget as bytes on disk.
+
+**Done 2026-08-22**, when
+[T-092](#t-092-bench-swarm-has-no-synthetic-load-generator) closed and took the
+last of the seven with it. The acceptance has two halves and both hold across
+all seven of `webseed`, `leech`, `seed`, `disk`, `probe`, `swarm` and the
+report envelope they share. Every subcommand writes a report carrying the
+A3.11 metrics, with the exception recorded above: the peer-only metrics are
+populated by `leech` and `seed`, which are the two subcommands that have peers.
+And `--fail-under` above the observed rate exits 14, measured on the last one
+to get it:
+
+```
+$ bit-cli bench swarm 127.0.0.1:52891 --for payload.torrent --peers 2 \
+    --duration 10s --fail-under 100GiB/s --format text
+threshold              100.00 GiB/s required, 195.12 MiB/s observed: not met
+$LASTEXITCODE = 14
+```
+
+The same run at `--fail-under 1MiB/s` prints `333.33 MiB/s observed: met` and
+exits 0.
 
 ### T-091 Bench reports do not capture their environment
 
@@ -387,7 +406,7 @@ Source:      the operator's brief
 Category:    bench
 Priority:    P1
 Effort:      XL
-Status:      partial
+Status:      **done**
 
 Problem:     `bench swarm` is meant to generate synthetic peers and torrents to
              load a target. Nothing exists.
@@ -484,10 +503,12 @@ given.
 **Built, and where it stands. This is a checkpoint, not a close.**
 
 Both loads are implemented and both work.
-`crates/bit-cli-core/src/bench/swarm.rs` is the peer, 1,084 lines with 12 unit
-tests. `crates/bit-cli/src/cmd/bench.rs` wires it, generates the info
-dictionaries, and turns the outcome into notes.
-`scripts/check-swarm.ps1` drives nine cases against a live `bit-cli seed`.
+`crates/bit-cli-core/src/bench/swarm.rs` is the peer, 2,168 lines with 28 unit
+tests, two of which drive the whole peer against a scripted target on loopback
+because a real seeder never asks a peer for anything.
+`crates/bit-cli/src/cmd/bench.rs` wires it, generates the info dictionaries,
+and turns the outcome into notes. `scripts/check-swarm.ps1` drives ten cases
+against a live `bit-cli seed`.
 
 The last full run is `bench/swarm-20260821T063418798Z.json`, and its verdict is
 **fail on one clause of the acceptance**. Everything else in the entry is met.
@@ -569,12 +590,56 @@ now, because it was verified and it was not kept and the budget is why. The
 case is two peers over a 32 piece payload at a quarter of it: 64 verified, 8
 kept, 8 duplicates of the kept ones, and 48 refused.
 
-**Also not built: a synthetic peer does not serve.** The target model above
-says a peer keeps its verified pieces and serves them to the other synthetic
-peers and to the target. It keeps them. It announces nothing and answers no
-request, so the load is still a hundred leeches rather than a swarm, and a
-target that ranks peers by what they have uploaded sees the same thing it would
-have seen without this. That is the second half of what is left.
+**The serving side, built 2026-08-22.** A synthetic peer is a peer on the
+connection it already has rather than a downloader. After the handshake it
+sends a bitfield, which is all zeros because it starts with nothing, then
+unchokes the target, then declares interest. Every piece it verifies and keeps
+is announced with a `have`, and a request for one of those pieces is answered
+out of the packed hold file. A request for anything else is refused: a BEP 6
+`reject request` where the target negotiated the fast extension, and silence
+where it did not, because BEP 3 has no way to decline.
+
+Three rules fell out of building it, and each is a test.
+
+- **A piece the budget refused is not announced.** `Held::keep` reports back
+  whether the bytes are on disk when it returns, and only then does a `have` go
+  out. A peer that announces what it cannot serve spends the target's requests
+  on refusals. The `budget` case is the measurement: 8 pieces on disk, 2 peers,
+  **16 announced**, and nothing for the 48 that were dropped.
+- **Packing had to become reversible.** The store kept a set of the pieces it
+  held; it keeps the offset each one landed at now, because a piece is at the
+  byte it was written to rather than at the byte it occupies in the torrent.
+  Nothing read the held bytes back before this, which is what let the offset go
+  unrecorded.
+- **A peer that has everything stays only if the target wants something.** It
+  stopped at `complete` before; it stops at `complete` unless the target
+  declared interest, and then it stays to the deadline serving. Against a
+  seeder, which is never interested, the three leech cases finish the moment
+  they complete exactly as they did.
+
+**What a synthetic peer cannot do, and the entry's target model got this
+wrong.** The model says a peer serves its pieces "to the other synthetic peers
+and to the target if it asks". The second half is built. The first half cannot
+be, and neither half can put a byte into the target:
+
+- **A synthetic peer has exactly one source, which is the target.** Everything
+  it can announce is something the target served it, so the pieces it can offer
+  are pieces the target already has. There is no arrangement of this load in
+  which the target is missing something a synthetic peer holds. Measured, over
+  the three leech cases: **32, 128 and 512 pieces announced, and
+  `peers_asked` 0 in every one**, with `target_interested` 0. The target is a
+  seeder and a seeder has nothing to ask for.
+- **Serving other synthetic peers contradicts the clause the acceptance
+  checks.** Peers would have to dial each other, and "it dials the target and
+  nothing else, ever" is the property `sources_ignored` now proves from the
+  operating system's socket table. It also measures nothing about the target:
+  it is the load generator loading itself.
+
+So what the serving side changes is what the target **sees**, which is the half
+the entry's own Relevance line rests on: a target that superseeds, or that
+ranks peers by what they hold, is reading the announcement. `pieces_announced`
+is the number that says it happened, and `peers_asked` is the number that says
+what the target did about it.
 
 **What the acceptance found that is not this entry's defect.** The first full
 run reported zero peers handshaked in every leech case and read as a broken
@@ -604,35 +669,78 @@ contacted. `swarm.dialled` makes it a one-case addition to
 `check-swarm.ps1` and it is not there yet.
 
 **Two things a review of `swarm.rs` found, neither of which fires against
-`librqbit`.**
+`librqbit`. Both fixed 2026-08-22.**
 
-`leech` removes an outstanding request as `(piece, begin, length)` using the
+`leech` removed an outstanding request as `(piece, begin, length)` using the
 length of the block that arrived. A target that answers a 16 KiB request with a
-shorter block leaves the original tuple in `in_flight` forever. The piece still
-completes, because `PieceBuffer::place` marks the block received either way, but
-the window slot never comes back and `Leecher::finished` never sees an empty
-`in_flight`, so the peer runs to `--duration` instead of stopping at `complete`.
-Remove by `(piece, begin)` rather than by the triple.
+shorter block left the original tuple in `in_flight` forever. The piece still
+completed, because `PieceBuffer::place` marks the block received either way,
+but the window slot never came back and `Leecher::finished` never saw an empty
+`in_flight`, so the peer ran to `--duration` instead of stopping at `complete`.
+`in_flight` is keyed by `(piece, begin)` now, which is also all `next_gap`
+needs: there is only ever one outstanding request per offset.
 
-And `read_handshake` bounds itself on the run deadline rather than on
-`--connect-timeout`. That is deliberate in connect mode, where holding the
-connection is the measurement, and it is why `handshake_timeout` is the class
-99 of 100 peers report against a poisoned listener. It does mean a leech peer
-against a target that accepts and never answers costs the whole `--duration`
-before it says so.
+And `read_handshake` bounded itself on the run deadline rather than on
+`--connect-timeout`. That is right in connect mode, where holding the
+connection is the measurement and where `handshake_timeout` is the class 99 of
+100 peers report against a poisoned listener. It is wrong in leech mode, where
+a target that accepts and never answers cost the whole `--duration` before the
+peer said so. The bound is the mode's now, and the cost of it is measured:
+`listener_poisoned` took **30.3 s** where it took about 50, because the leech
+probe against the poisoned listener gives up at `--connect-timeout` instead of
+sitting out its thirty seconds.
 
-The residue is three items and all three are named above: pack the held pieces,
-make a synthetic peer serve, and add the configuration-file case. Until the
-first is done this entry does not close, because it is an acceptance clause and
-not a nice-to-have.
+**The configuration-file case, and the entry asked for something that does not
+exist.** The residue named "a run with a configuration file naming a different
+peer, showing that peer is never contacted". There is no such setting.
+`ConfigFile` in `crates/bit-cli-core/src/config.rs:82-105` has twenty-two keys
+and not one of them carries a peer address, so a config file cannot name a
+peer. The same question in the form the configuration surface does have is a
+file that turns on every mechanism which **discovers** peers, and the case is
+`sources_ignored`:
 
-Acceptance, run:
+- `enable_dht`, `enable_pex` and `enable_lsd` are all true in a config file
+  passed with `--config`, and the case fails if the file was not read, because
+  a mistyped path would leave the run with no config and pass.
+- A second seeder serves the same torrent on its own port with local service
+  discovery left on, so it announces itself on this machine. Every other seeder
+  in the script has it off, which is what keeps those two from finding each
+  other and handing this case a connection it cannot attribute.
+- The judgement reads the **operating system's socket table** rather than the
+  report. `swarm.dialled` is the tool's own claim about itself and this entry
+  had been resting on it; `Get-NetTCPConnection` over the running process is
+  somebody else's account. Measured: 6 samples, 42 sightings of the target,
+  `remote_endpoints` exactly `["127.0.0.1:49294"]`, **0 UDP endpoints**, **0
+  listening sockets**, and the second seeder never saw a peer.
+
+**What running it found in the script itself, and it had been passing.** The
+first version of `sources_ignored` sampled the decoy's connections into a local
+called `$peers`. PowerShell variable names are case-insensitive, so that is the
+script's own `$Peers` parameter, and every case after it built its argument list
+from whatever the loop last measured, which was 0. `listener_poisoned`'s connect
+load exited on `--peers cannot be zero`, opened no socket, poisoned nothing, and
+**the case recorded three nulls and passed**. RULES.md section 5 names this
+exact trap and it still cost a run.
+
+The case is what let it through, so the case is fixed too. `listener_poisoned`
+read only the reports and judged only what they said, so a run that never
+happened was indistinguishable from one that found nothing. It records the exit
+code of all three runs now and fails when any of them wrote no report, and when
+the connect load reached no peers, which is a run that did not happen rather
+than a listener that survived. What the reports **say** is still `judged:
+false`, because that is T-020 and T-020 is open.
+
+Acceptance, run 2026-08-22:
 
 ```powershell
 pwsh -NoProfile -File scripts/check-swarm.ps1
 ```
 
-Exit 1, one failure, `bench/swarm-20260821T063418798Z.json`.
+Exit 0, ten cases, no failures: `bench/swarm-20260822T074823843Z.json`.
+`acceptance` completes with 20,964 bytes on disk against a 2 GiB budget,
+`acceptance_cleanup` leaves no directory, `no_target` exits 2, and
+`sources_ignored` is the whole-run reading of "refuses to load-test a host it
+was not explicitly pointed at".
 
 ### T-093 --baseline comparison is not implemented
 

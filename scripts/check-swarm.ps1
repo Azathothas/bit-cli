@@ -6,7 +6,7 @@
 # this run invented. The reasoning is under the entry; what this checks is that
 # both loads behave as the entry says.
 #
-# Nine cases:
+# Ten cases:
 #
 #   acceptance        The entry's own command, near enough to matter:
 #                     `bench swarm <TARGET> --peers 100 --torrents 4
@@ -23,8 +23,12 @@
 #                     four times, which is what the budget counts.
 #   leech_16          Sixteen. The three together are the serving curve.
 #   budget            A budget smaller than the payload. Verified pieces past
-#                     it are dropped and counted, and the bytes on disk never
-#                     cross it.
+#                     it are dropped and counted, the bytes on disk never
+#                     cross it, and a piece that was dropped is not announced.
+#   sources_ignored   A config file with every discovery mechanism on, and a
+#                     second seeder for the same torrent announcing itself.
+#                     The operating system's socket table says the run
+#                     connected to the target and to nothing else.
 #   listener_poisoned Leech, then the connect load, then leech again, against
 #                     one seeder. Recorded and not judged: it is T-020, which
 #                     is open.
@@ -67,6 +71,9 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 
 $script:Seeder = $null
+# The second seeder in the sources_ignored case. It outlives one Start-Seeder
+# call, so it is killed separately.
+$script:Decoy = $null
 
 function Stop-Background {
     if ($script:Seeder -and -not $script:Seeder.HasExited) {
@@ -75,9 +82,17 @@ function Stop-Background {
     $script:Seeder = $null
 }
 
+function Stop-Decoy {
+    if ($script:Decoy -and -not $script:Decoy.HasExited) {
+        try { $script:Decoy.Kill() } catch { }
+    }
+    $script:Decoy = $null
+}
+
 function Exit-With([int]$code, [string]$message) {
     [Console]::Error.WriteLine("check-swarm: $message")
     Stop-Background
+    Stop-Decoy
     exit $code
 }
 
@@ -89,7 +104,7 @@ function Write-Step($message) {
     Write-Host "$(Get-Timestamp) $message"
 }
 
-trap { Stop-Background; throw }
+trap { Stop-Background; Stop-Decoy; throw }
 
 $exe = if ($IsWindows -or $env:OS -eq "Windows_NT") { ".exe" } else { "" }
 $bitCli = Join-Path $repo "target/$Profile/bit-cli$exe"
@@ -325,6 +340,12 @@ foreach ($n in $LeechPeers) {
         if ($swarm.bytes_held.bytes -ne $payloadLength) { Add-Failure $name "held $($swarm.bytes_held.bytes) bytes, expected the payload once at $payloadLength" }
         if ($onDisk -gt $payloadLength) { Add-Failure $name "$onDisk bytes on disk, more than the payload" }
         if ($run.report.summary.sustained_rate.bytes -le 0) { Add-Failure $name "sustained rate is $($run.report.summary.sustained_rate.bytes), and $($swarm.bytes_received.bytes) bytes arrived" }
+        # The serving half. At a 512 MiB budget against an 8 MiB payload every
+        # verified piece is kept, and a peer announces every piece it can
+        # serve, so the two counts are the same number.
+        if ($swarm.serving.pieces_announced -ne ($pieceCount * $n)) { Add-Failure $name "announced $($swarm.serving.pieces_announced) pieces, expected $($pieceCount * $n), one per piece each peer verified and kept" }
+        if ($swarm.serving.requests_refused -ne 0) { Add-Failure $name "refused $($swarm.serving.requests_refused) requests for pieces it announced" }
+        if ($swarm.serving.bytes_sent.bytes -ne 0 -and $swarm.serving.blocks_sent -eq 0) { Add-Failure $name "$($swarm.serving.bytes_sent.bytes) bytes sent in zero blocks" }
     }
     $curve += [pscustomobject][ordered]@{
         peers          = $n
@@ -341,6 +362,16 @@ foreach ($n in $LeechPeers) {
         received  = $swarm.bytes_received.bytes
         verified  = $swarm.pieces_verified
         held      = $swarm.bytes_held.bytes
+        # What the peers gave back. `peers_asked` is the one to read: a
+        # target that already holds the whole payload has nothing to ask a
+        # synthetic peer for, because a synthetic peer can only hold what
+        # that same target served it. Recorded rather than judged, because it
+        # is a fact about the target.
+        announced = $swarm.serving.pieces_announced
+        peers_asked = $swarm.serving.peers_asked
+        target_interested = $swarm.serving.peers_target_interested
+        blocks_sent = $swarm.serving.blocks_sent
+        bytes_sent = $swarm.serving.bytes_sent.bytes
         # Every synthetic peer offers the BEP 6 bit, so this is the target's
         # answer rather than the peer's offer. `librqbit` 9.0.0 has no BEP 6,
         # so zero is the expected reading and a non-zero one means the session
@@ -373,6 +404,14 @@ else {
     # The download still completes: the budget bounds what is kept, not what
     # is fetched and checked.
     if ($swarm.pieces_verified -ne ($pieceCount * 2)) { Add-Failure "budget" "verified $($swarm.pieces_verified) pieces, expected $($pieceCount * 2): the budget must not stop the transfer" }
+    # A piece the budget refused is a piece neither peer can serve, so neither
+    # announces it. Both peers fetch the whole payload, so both reach every
+    # piece that is on disk and each announces exactly those: twice the pieces
+    # kept, and nothing for the three quarters that were dropped.
+    $keptPieces = [math]::Floor($swarm.bytes_held.bytes / (256 * 1024))
+    if ($swarm.serving.pieces_announced -ne ($keptPieces * 2)) {
+        Add-Failure "budget" "announced $($swarm.serving.pieces_announced) pieces against $keptPieces on disk, expected $($keptPieces * 2): a piece the budget refused must not be announced"
+    }
 }
 if ($onDisk -gt $budget) { Add-Failure "budget" "$onDisk bytes on disk against a $budget byte budget" }
 $cases += [pscustomobject][ordered]@{
@@ -382,6 +421,159 @@ $cases += [pscustomobject][ordered]@{
     held_bytes    = $swarm.bytes_held.bytes
     on_disk_bytes = $onDisk
     dropped       = $swarm.pieces_dropped_over_budget
+    announced     = $swarm.serving.pieces_announced
+}
+
+# ---------------------------------------------------------------------------
+# sources_ignored: nothing but the target is ever contacted
+# ---------------------------------------------------------------------------
+#
+# The entry's target model says `bench swarm` dials the target and nothing
+# else, ever. Until now that was checked by reading the source and by trusting
+# `swarm.dialled`, which is the tool's own claim about itself. This checks it
+# from outside, against the operating system's socket table.
+#
+# Two things are arranged so there is something to find. A config file turns on
+# every discovery mechanism `bit-cli` has a setting for, and a second seeder
+# serves the same torrent on its own port with local service discovery left on,
+# so it announces itself on this machine. If anything in the run were looking
+# for peers, that is a peer to find.
+#
+# The entry asked for "a configuration file naming a different peer". There is
+# no such setting: `ConfigFile` in crates/bit-cli-core/src/config.rs has no key
+# that carries a peer address, so a config file cannot name one. Turning on the
+# three mechanisms that discover peers is the same question asked in the form
+# the configuration surface actually has.
+
+Write-Step "case sources_ignored (discovery on in a config file, a second seeder to find)"
+$target = Start-Seeder
+
+$decoyOut = Join-Path $Root "decoy.out"
+$decoyErr = Join-Path $Root "decoy.err"
+# Local service discovery is deliberately left on for this one, so it announces
+# itself. Every other seeder in this script has it off, which is what keeps the
+# two from finding each other and giving this case a connection it cannot
+# attribute.
+$script:Decoy = Start-Process -FilePath $bitCli -ArgumentList @(
+    "--jsonl", "seed", $torrent, "--dir", $serve, "--port", "0",
+    "--no-tracker", "--no-dht", "--stop-after", "120s"
+) -PassThru -NoNewWindow -RedirectStandardOutput $decoyOut -RedirectStandardError $decoyErr
+$decoyAddr = $null
+for ($attempt = 0; $attempt -lt 150; $attempt++) {
+    Start-Sleep -Milliseconds 100
+    if ($script:Decoy.HasExited) {
+        Exit-With 2 "the decoy seeder exited $($script:Decoy.ExitCode): $(Get-Content $decoyErr -Raw)"
+    }
+    foreach ($line in (Get-Content $decoyOut -ErrorAction SilentlyContinue)) {
+        try { $event = $line | ConvertFrom-Json } catch { continue }
+        if ($event.listen_addr) { $decoyAddr = $event.listen_addr }
+    }
+    if ($decoyAddr) { break }
+}
+if (-not $decoyAddr) { Exit-With 2 "the decoy seeder never printed a listen address" }
+$decoyPort = ($decoyAddr -split ':')[-1]
+Write-Step "  decoy seeder serving the same torrent on 127.0.0.1:$decoyPort"
+
+$cfg = Join-Path $Root "discovery.toml"
+Set-Content -Path $cfg -Encoding utf8NoBOM -Value @(
+    "enable_dht = true",
+    "enable_pex = true",
+    "enable_lsd = true",
+    "max_peers = 200",
+    "max_peers_total = 400"
+)
+
+# The config file has to be real and has to be read, or this case proves
+# nothing at all: a mistyped path would leave the run with no config and pass.
+$cfgShowOut = Join-Path $Root "config-show.json"
+$cfgProc = Start-Process -FilePath $bitCli -ArgumentList @(
+    "--config", $cfg, "config", "show", "--json"
+) -PassThru -NoNewWindow -RedirectStandardOutput $cfgShowOut -RedirectStandardError (Join-Path $Root "config-show.err")
+$cfgProc.WaitForExit(30000) | Out-Null
+$cfgShown = $null
+if (Test-Path $cfgShowOut) { try { $cfgShown = Get-Content $cfgShowOut -Raw | ConvertFrom-Json } catch { } }
+$cfgRead = $false
+if ($cfgShown) {
+    $cfgRead = @($cfgShown.files_read) -contains $cfg
+}
+if (-not $cfgRead) { Add-Failure "sources_ignored" "the config file at $cfg was not read, so the case measured nothing" }
+
+# The connect load, because its peers hold their connections for the whole
+# duration and a leech peer against an 8 MiB payload is gone before the socket
+# table can be sampled.
+$sourcesReport = Join-Path $Root "sources_ignored.json"
+$sourcesDir = New-CaseDir "sources_ignored"
+$swarmProc = Start-Process -FilePath $bitCli -ArgumentList @(
+    "--config", $cfg, "bench", "swarm", $target, "--peers", "8", "--torrents", "1",
+    "--disk-budget", "64MiB", "--duration", "6s", "--warmup", "500ms",
+    "--connect-timeout", "3s", "--dir", $sourcesDir,
+    "--report", $sourcesReport, "--format", "json"
+) -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $Root "sources_ignored.out") `
+    -RedirectStandardError (Join-Path $Root "sources_ignored.err")
+
+$sockets = $IsWindows -or $env:OS -eq "Windows_NT"
+$remotes = @{}
+$samples = 0
+$targetSeen = 0
+$udpSeen = 0
+$listeners = 0
+$decoyPeak = 0
+if ($sockets) {
+    while (-not $swarmProc.HasExited) {
+        $samples++
+        foreach ($conn in (Get-NetTCPConnection -OwningProcess $swarmProc.Id -ErrorAction SilentlyContinue)) {
+            if ($conn.State -eq "Listen") { $listeners++; continue }
+            if (-not $conn.RemotePort -or $conn.RemotePort -eq 0) { continue }
+            $remote = "$($conn.RemoteAddress):$($conn.RemotePort)"
+            $remotes[$remote] = $true
+            if ($remote -eq $target) { $targetSeen++ }
+        }
+        $udpSeen += @(Get-NetUDPEndpoint -OwningProcess $swarmProc.Id -ErrorAction SilentlyContinue).Count
+        # Named so it cannot collide with the $Peers parameter. PowerShell
+        # variable names are case-insensitive, so a local called $peers here is
+        # the script's own $Peers, and every later case built its argument list
+        # from whatever this loop last measured. See RULES.md section 5.
+        $decoyLive = @(Get-NetTCPConnection -OwningProcess $script:Decoy.Id -State Established -ErrorAction SilentlyContinue).Count
+        if ($decoyLive -gt $decoyPeak) { $decoyPeak = $decoyLive }
+        Start-Sleep -Milliseconds 50
+    }
+}
+$swarmProc.WaitForExit(60000) | Out-Null
+Stop-Decoy
+
+$sourcesSwarm = $null
+if (Test-Path $sourcesReport) { try { $sourcesSwarm = (Get-Content $sourcesReport -Raw | ConvertFrom-Json).swarm } catch { } }
+if ($swarmProc.ExitCode -ne 0) { Add-Failure "sources_ignored" "exited $($swarmProc.ExitCode), expected 0" }
+if (-not $sourcesSwarm) { Add-Failure "sources_ignored" "no swarm block" }
+elseif ($sourcesSwarm.dialled -ne $target) { Add-Failure "sources_ignored" "the report says it dialled $($sourcesSwarm.dialled), expected $target" }
+
+if ($sockets) {
+    # The premise first. A run whose sockets were never seen proves nothing,
+    # and passing on an empty sample is how a check like this rots.
+    if ($targetSeen -eq 0) {
+        Add-Failure "sources_ignored" "the socket table was sampled $samples times and never showed a connection to the target, so nothing was measured"
+    }
+    $strangers = @($remotes.Keys | Where-Object { $_ -ne $target })
+    if ($strangers.Count -gt 0) {
+        Add-Failure "sources_ignored" "connected to $($strangers -join ', '), and the only address it was given is $target"
+    }
+    if ($udpSeen -gt 0) { Add-Failure "sources_ignored" "bound $udpSeen UDP endpoints, and a run that speaks no DHT needs none" }
+    if ($listeners -gt 0) { Add-Failure "sources_ignored" "bound a listening socket, and nothing is meant to connect to a load generator" }
+    if ($decoyPeak -gt 0) { Add-Failure "sources_ignored" "the second seeder saw $decoyPeak peers, and nothing was told about it" }
+}
+$cases += [pscustomobject][ordered]@{
+    case            = "sources_ignored"
+    exit_code       = $swarmProc.ExitCode
+    judged          = $sockets
+    config_read     = $cfgRead
+    decoy_port      = [int]$decoyPort
+    dialled         = $sourcesSwarm.dialled
+    socket_samples  = $samples
+    target_sightings = $targetSeen
+    remote_endpoints = @($remotes.Keys)
+    udp_endpoints   = $udpSeen
+    listening_sockets = $listeners
+    decoy_peak_peers = $decoyPeak
 }
 
 # ---------------------------------------------------------------------------
@@ -424,6 +616,25 @@ $afterSwarm = if ($poisonAfter.report) { $poisonAfter.report.swarm } else { $nul
 if (-not $beforeSwarm -or $beforeSwarm.peers_handshaked -ne 1) {
     Add-Failure "listener_poisoned" "the target did not serve the first leech, so the case measured nothing"
 }
+# And that every one of the three runs happened at all. A run that fails
+# before it starts writes no report, and this case reads only the reports: it
+# recorded three nulls and passed, for a run that exited on its arguments and
+# never opened a socket. What is judged is that each run produced a report,
+# not what the report says, because what it says is T-020 and T-020 is open.
+foreach ($stage in @(
+    @{ name = "poison_before"; run = $poisonBefore },
+    @{ name = "poison_load"; run = $poisonLoad },
+    @{ name = "poison_after"; run = $poisonAfter }
+)) {
+    if (-not $stage.run.report) {
+        Add-Failure "listener_poisoned" "$($stage.name) wrote no report and exited $($stage.run.exit_code): $($stage.run.stderr)"
+    }
+}
+# The load has to have been a load. Zero connections is not a poisoned
+# listener, it is a run that did not happen.
+if ($loadSwarm -and $loadSwarm.peers_connected -lt 1) {
+    Add-Failure "listener_poisoned" "the connect load reached $($loadSwarm.peers_connected) peers, so it poisoned nothing"
+}
 $poisoned = $null
 if ($beforeSwarm -and $afterSwarm) {
     $poisoned = ($beforeSwarm.peers_handshaked -eq 1 -and $afterSwarm.peers_handshaked -eq 0)
@@ -435,6 +646,9 @@ $cases += [pscustomobject][ordered]@{
     case                = "listener_poisoned"
     judged              = $false
     todo                = "T-020"
+    before_exit         = $poisonBefore.exit_code
+    load_exit           = $poisonLoad.exit_code
+    after_exit          = $poisonAfter.exit_code
     before_handshaked   = $beforeSwarm.peers_handshaked
     before_bytes        = $beforeSwarm.bytes_received.bytes
     load_connected      = $loadSwarm.peers_connected
@@ -526,7 +740,9 @@ $reportPath = Join-Path $ReportDir "swarm-$stamp.json"
         "In leech mode every peer is an independent leecher, so the payload arrives once per peer, and it is held on disk once between them.",
         "Every case but no_target and dead_target starts its own seeder. The connect load leaves the target unable to complete a handshake for any info hash, so a case sharing a seeder with the one before it measures the previous case. That is T-020, and listener_poisoned is where it is measured rather than tripped over.",
         "listener_poisoned carries judged: false. T-020 is open and recorded, and an acceptance script does not fail the build for a defect that already has an entry.",
-        "fast_negotiated is the target's answer to a BEP 6 offer every synthetic peer makes. Recorded rather than judged: librqbit 9.0.0 has no BEP 6, so zero is expected, and the entry that owns the number is TODO/bep-coverage.md T-100."
+        "fast_negotiated is the target's answer to a BEP 6 offer every synthetic peer makes. Recorded rather than judged: librqbit 9.0.0 has no BEP 6, so zero is expected, and the entry that owns the number is TODO/bep-coverage.md T-100.",
+        "A synthetic peer announces every piece it verified and kept and answers requests for those pieces. peers_asked is zero against a seeder and that is the only result that load can produce: a synthetic peer holds only what the target served it, so it can never offer the target a piece the target is missing. What the serving side changes is what the target sees, and pieces_announced is the number that says it happened.",
+        "sources_ignored reads the operating system's socket table rather than the report, because the report is the tool's own claim about itself. It is judged only on Windows, where Get-NetTCPConnection is; on any other platform it records judged: false."
     )
 } | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8NoBOM
 

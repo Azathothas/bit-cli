@@ -22,6 +22,13 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 
 ## State
 
+- **This session:** started 2026-08-22T07:17:07Z, unattended. Working the
+  order below, in order: [T-092](bench.md) the serving side of a synthetic
+  peer in `crates/bit-cli-core/src/bench/swarm.rs` and the case in
+  `scripts/check-swarm.ps1`, then [T-022](peers.md), then [T-007](webseed.md),
+  then [T-018](disk-io.md). Baseline re-measured at the start rather than
+  trusted: gates clean, 1,091 tests, `check-todo` agrees, CI green at
+  **32557742549**.
 - **Last session:** 2026-08-22T04:05:27Z to 07:10Z, 3h 4m, unattended
   throughout. The
   whole four-item work order, then three things the work found, two more

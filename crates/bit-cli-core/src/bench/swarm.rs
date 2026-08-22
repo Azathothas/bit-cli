@@ -42,8 +42,21 @@
 //! a swarm that stopped growing is a different measurement from one that did
 //! not.
 //!
-//! Serving those held pieces back to the swarm is not built. See
-//! `TODO/bench.md`, T-092.
+//! # Serving them back
+//!
+//! A peer announces what it holds and answers requests for it, on the same
+//! connection it leeches over. It sends a bitfield, unchokes the target, sends
+//! a `have` for every piece it verified and kept, and reads a requested block
+//! back out of the packed hold file. That is what makes it a peer rather than
+//! a downloader, and it is what a target that superseeds or that ranks peers
+//! by what they uploaded is looking at.
+//!
+//! **What it cannot do is give the target something the target does not
+//! have.** A synthetic peer has exactly one source, which is the target, so
+//! everything it can announce is something the target served it. The bytes it
+//! can send back are therefore only ever bytes the target already has. What
+//! the serving side measures is what the target does with the announcement and
+//! whether it asks at all. See `TODO/bench.md`, T-092.
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -53,8 +66,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use hdrhistogram::Histogram;
+use librqbit::ByteBuf;
 use librqbit_core::Id20;
-use librqbit_peer_protocol::{Handshake, Message, Request};
+use librqbit_peer_protocol::{Handshake, Message, Piece, Request};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -67,6 +81,14 @@ use crate::webseed::bridge::Framer;
 
 /// Blocks are 16 KiB by convention and every client in circulation assumes it.
 const BLOCK_LEN: u32 = 16 * 1024;
+
+/// The largest block this peer will serve, whatever a target asks for.
+///
+/// A request carries a 32-bit length and nothing on the wire stops a target
+/// naming 4 GiB of it. Serving is allocation, so the length is bounded before
+/// the buffer is made rather than after. Eight times the conventional block is
+/// past anything in circulation and still small.
+const MAX_SERVED_BLOCK: u32 = 8 * BLOCK_LEN;
 
 /// Peer id prefix. `-BC` is this tool, then a version, in the BEP 20 style.
 /// Distinct from the bridge's prefix so a target's logs can tell a synthetic
@@ -200,6 +222,21 @@ pub struct PeerOutcome {
     pub pieces_failed: u64,
     pub choke_events: u64,
     pub unchoke_events: u64,
+    /// Pieces this peer announced with a `have`, which is what a target that
+    /// ranks peers by what they hold is reading.
+    pub pieces_announced: u64,
+    /// Blocks the target asked this peer for. Zero against a target that
+    /// already has everything, which is not a failure and is the point of
+    /// reporting it: it says the serving path was never exercised.
+    pub requests_received: u64,
+    /// Requests refused because this peer does not hold that piece. A target
+    /// asking for one it was never told about is asking out of turn.
+    pub requests_refused: u64,
+    pub cancels_received: u64,
+    pub blocks_sent: u64,
+    pub bytes_sent: u64,
+    /// Whether the target ever declared interest in what this peer holds.
+    pub target_interested: bool,
     /// Milliseconds to the established connection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connect_ms: Option<u64>,
@@ -239,6 +276,11 @@ pub struct Outcome {
     pub pieces_failed: u64,
     pub choke_events: u64,
     pub unchoke_events: u64,
+    /// What the peers gave back, folded. `peers_asked` is the one to read
+    /// first: it is zero against a target that already holds everything, and
+    /// then every other number here is zero for that reason rather than
+    /// because the serving path is broken.
+    pub serving: Serving,
     /// Bytes written to the scratch directory, and the cap they were held
     /// under. Both are stated so "never exceeded the budget" is a number.
     pub bytes_held: Size,
@@ -248,6 +290,28 @@ pub struct Outcome {
     /// What the target did with BEP 6, folded across every peer.
     pub fast_extension: FastSummary,
     pub peers: Vec<PeerOutcome>,
+}
+
+/// What the synthetic peers gave back, across the whole run.
+///
+/// A synthetic peer holds only what the target served it, so it can never hand
+/// the target a piece the target is missing. Everything here is therefore
+/// about the announcement and about whether the target acted on it, which is
+/// the half a seeder's behaviour actually turns on.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Serving {
+    /// Pieces announced with a `have`, summed over the peers.
+    pub pieces_announced: u64,
+    /// Peers the target sent at least one request to. Zero says the target
+    /// never asked, which is what a full seeder does.
+    pub peers_asked: usize,
+    /// Peers the target declared interest in.
+    pub peers_target_interested: usize,
+    pub requests_received: u64,
+    pub requests_refused: u64,
+    pub cancels_received: u64,
+    pub blocks_sent: u64,
+    pub bytes_sent: Size,
 }
 
 /// BEP 6 across the whole run.
@@ -365,6 +429,16 @@ fn summarise(options: &Options, peers: &[PeerOutcome], held: &Held) -> Outcome {
         pieces_failed: sum(|p| p.pieces_failed),
         choke_events: sum(|p| p.choke_events),
         unchoke_events: sum(|p| p.unchoke_events),
+        serving: Serving {
+            pieces_announced: sum(|p| p.pieces_announced),
+            peers_asked: peers.iter().filter(|p| p.requests_received > 0).count(),
+            peers_target_interested: peers.iter().filter(|p| p.target_interested).count(),
+            requests_received: sum(|p| p.requests_received),
+            requests_refused: sum(|p| p.requests_refused),
+            cancels_received: sum(|p| p.cancels_received),
+            blocks_sent: sum(|p| p.blocks_sent),
+            bytes_sent: Size(sum(|p| p.bytes_sent)),
+        },
         bytes_held: Size(held.written.load(Ordering::Relaxed)),
         disk_budget: Size(options.disk_budget),
         pieces_dropped_over_budget: held.dropped.load(Ordering::Relaxed),
@@ -422,6 +496,13 @@ async fn one_peer(
         pieces_failed: 0,
         choke_events: 0,
         unchoke_events: 0,
+        pieces_announced: 0,
+        requests_received: 0,
+        requests_refused: 0,
+        cancels_received: 0,
+        blocks_sent: 0,
+        bytes_sent: 0,
+        target_interested: false,
         connect_ms: None,
         handshake_ms: None,
         open_ms: 0,
@@ -471,7 +552,14 @@ async fn one_peer(
     }
 
     let mut frames = Framer::default();
-    let theirs = match read_handshake(&mut read, &mut frames, deadline).await {
+    // See `read_handshake`: connect mode holds to the run deadline because
+    // holding is the measurement, leech mode gives up at `--connect-timeout`
+    // because a target that will not answer is not going to serve either.
+    let handshake_deadline = match options.mode {
+        Mode::Connect => deadline,
+        Mode::Leech => (Instant::now() + options.connect_timeout).min(deadline),
+    };
+    let theirs = match read_handshake(&mut read, &mut frames, handshake_deadline).await {
         Ok(theirs) => theirs,
         Err(reason) => {
             outcome.ended = reason;
@@ -563,6 +651,27 @@ async fn leech(
     outcome: &mut PeerOutcome,
 ) {
     let mut state = Leecher::new(torrent, options.requests_in_flight, outcome.index);
+    // The greeting, in wire order. A bitfield has to be the first message
+    // after the handshake if it is sent at all, so it goes out before
+    // anything else even though it is all zeros: this peer starts with
+    // nothing and says so, and every piece it later keeps is announced with
+    // a `have`. The unchoke is what makes the announcement worth anything,
+    // because a target will not request from a peer that has it choked.
+    let bits = vec![0u8; torrent.piece_count().div_ceil(8) as usize];
+    if send(
+        write,
+        &Message::Bitfield(ByteBuf(&bits)),
+        bits.len(),
+        outcome,
+    )
+    .await
+    .is_err()
+    {
+        return;
+    }
+    if send(write, &Message::Unchoke, 0, outcome).await.is_err() {
+        return;
+    }
     if send(write, &Message::Interested, 0, outcome).await.is_err() {
         return;
     }
@@ -583,8 +692,8 @@ async fn leech(
                     // A refused request is refused. Left in flight it holds a
                     // slot in the window until the deadline, which is the
                     // stall BEP 6 exists to prevent.
-                    FastMsg::Reject(index, begin, length) => {
-                        state.in_flight.remove(&(index, begin, length));
+                    FastMsg::Reject(index, begin, _) => {
+                        state.in_flight.remove(&(index, begin));
                     }
                     FastMsg::Suggest | FastMsg::AllowedFast(_) => {}
                 }
@@ -620,12 +729,17 @@ async fn leech(
                     block.extend_from_slice(first);
                     block.extend_from_slice(second);
                     let length = block.len() as u32;
-                    state.in_flight.remove(&(index, begin, length));
+                    // Removed by `(piece, begin)` and not by the triple. A
+                    // target that answers a 16 KiB request with a shorter
+                    // block would otherwise leave the original tuple in
+                    // flight forever, holding a window slot until the
+                    // deadline and keeping `finished` from ever being true.
+                    state.in_flight.remove(&(index, begin));
                     outcome.bytes_received += u64::from(length);
                     outcome.blocks_received += 1;
                     recorder.observe_bulk(torrent_index, u64::from(length), 1);
                     if let Some(complete) = state.place(index, begin, &block) {
-                        finish_piece(
+                        let servable = finish_piece(
                             torrent,
                             torrent_index,
                             index,
@@ -636,8 +750,46 @@ async fn leech(
                         );
                         state.done.insert(index);
                         state.buffers.remove(&index);
+                        // Announced only once it can be served. A `have` for
+                        // a piece the budget refused would spend the
+                        // target's requests on a refusal.
+                        if servable {
+                            if send(write, &Message::Have(index), 0, outcome)
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                            outcome.pieces_announced += 1;
+                            state.announced.insert(index);
+                        }
                     }
                 }
+                // The serving half. A synthetic peer answers out of the
+                // packed hold file, which is the whole reason the pieces are
+                // kept rather than dropped.
+                Message::Request(request) => {
+                    outcome.requests_received += 1;
+                    if !serve(
+                        write,
+                        torrent,
+                        torrent_index,
+                        &state,
+                        request,
+                        held,
+                        outcome,
+                    )
+                    .await
+                    {
+                        return;
+                    }
+                }
+                // Answered synchronously, so by the time a cancel arrives the
+                // block has already gone out. Counted rather than acted on:
+                // what it says is that the target changed its mind, which is
+                // a fact about the target.
+                Message::Cancel(_) => outcome.cancels_received += 1,
+                Message::Interested => outcome.target_interested = true,
                 _ => {}
             }
         }
@@ -646,11 +798,17 @@ async fn leech(
             return;
         }
         // A peer holding everything the target advertised has nothing left to
-        // measure, so it stops rather than sitting on the connection until the
+        // take, so it stops rather than sitting on the connection until the
         // deadline. `--duration` is the bound on the run, not its length: a
         // load that finishes in a second and is reported over ten reads as a
         // tenth of the rate it reached.
-        if state.finished() {
+        //
+        // Unless the target wants what this peer now holds. Then hanging up
+        // is what would end the measurement, and the peer stays to the
+        // deadline serving. A target that already has the payload is never
+        // interested, which is why the leech cases still finish the moment
+        // they complete.
+        if state.finished() && !outcome.target_interested {
             outcome.ended = "complete".into();
             return;
         }
@@ -685,7 +843,80 @@ async fn leech(
     }
 }
 
+/// Answer one request out of what this peer holds.
+///
+/// Returns whether the connection is still usable. A refusal is not a failure
+/// of the connection: under BEP 6 it is a `reject request`, which says so on
+/// the wire, and without it the only honest answer is silence, because BEP 3
+/// has no way to decline.
+#[allow(clippy::too_many_arguments)]
+async fn serve(
+    write: &mut (impl tokio::io::AsyncWrite + Unpin),
+    torrent: &TorrentUnderTest,
+    torrent_index: usize,
+    state: &Leecher<'_>,
+    request: Request,
+    held: &Held,
+    outcome: &mut PeerOutcome,
+) -> bool {
+    let piece_len = torrent.length_of(request.index);
+    // Only what this peer announced. Another peer in the same run may have
+    // held a piece this one never verified, and serving it would answer for
+    // somebody else.
+    let block = state
+        .announced
+        .contains(&request.index)
+        .then(|| {
+            held.read_block(
+                torrent_index,
+                request.index,
+                request.begin,
+                request.length,
+                piece_len,
+            )
+        })
+        .flatten();
+    let Some(block) = block else {
+        outcome.requests_refused += 1;
+        if outcome.fast.negotiated {
+            let frame = reject_frame(request);
+            if write.write_all(&frame).await.is_err() {
+                outcome.ended = "write".into();
+                return false;
+            }
+        }
+        return true;
+    };
+    let length = block.len();
+    let message = Message::Piece(Piece::from_data(request.index, request.begin, &block));
+    if send(write, &message, length, outcome).await.is_err() {
+        return false;
+    }
+    outcome.blocks_sent += 1;
+    outcome.bytes_sent += length as u64;
+    true
+}
+
+/// BEP 6 `reject request`, built by hand.
+///
+/// `librqbit_peer_protocol` 9.0.0 knows none of the five fast-extension ids,
+/// so it cannot serialize one either. The frame is a 4-byte length, the id,
+/// and the request triple.
+fn reject_frame(request: Request) -> [u8; 17] {
+    let mut frame = [0u8; 17];
+    frame[0..4].copy_from_slice(&13u32.to_be_bytes());
+    frame[4] = MSGID_REJECT_REQUEST;
+    frame[5..9].copy_from_slice(&request.index.to_be_bytes());
+    frame[9..13].copy_from_slice(&request.begin.to_be_bytes());
+    frame[13..17].copy_from_slice(&request.length.to_be_bytes());
+    frame
+}
+
 /// Check a completed piece and keep it if the budget allows.
+///
+/// Returns whether the piece can now be served, which is what decides if it is
+/// announced. A piece the budget refused is not announced, because a peer that
+/// announces what it cannot serve is a peer that wastes the target's requests.
 fn finish_piece(
     torrent: &TorrentUnderTest,
     torrent_index: usize,
@@ -694,7 +925,7 @@ fn finish_piece(
     held: &Held,
     recorder: &Arc<Recorder>,
     outcome: &mut PeerOutcome,
-) {
+) -> bool {
     let started = Instant::now();
     let digest: [u8; 20] = <sha1::Sha1 as sha1::Digest>::digest(bytes).into();
     let expected = torrent.piece_hashes.get(piece as usize);
@@ -703,13 +934,16 @@ fn finish_piece(
         Some(want) if *want == digest => {
             outcome.pieces_verified += 1;
             recorder.observe_hashing(1, bytes.len() as u64, elapsed);
-            held.keep(torrent_index, piece, bytes);
+            held.keep(torrent_index, piece, bytes)
         }
         // No hash to check against cannot be a pass. It is a torrent this run
         // does not fully know, which is a caller error rather than a target
         // fault, and counting it as verified would report a check that did not
         // happen.
-        Some(_) | None => outcome.pieces_failed += 1,
+        Some(_) | None => {
+            outcome.pieces_failed += 1;
+            false
+        }
     }
 }
 
@@ -720,10 +954,17 @@ struct Leecher<'a> {
     available: Vec<bool>,
     /// Pieces this peer has completed.
     done: HashSet<u32>,
+    /// Pieces this peer told the target it has, which is exactly the set it
+    /// will serve from.
+    announced: HashSet<u32>,
     /// Partly received pieces, by index.
     buffers: HashMap<u32, PieceBuffer>,
-    /// Blocks asked for and not yet answered.
-    in_flight: HashSet<(u32, u32, u32)>,
+    /// Blocks asked for and not yet answered, keyed by `(piece, begin)`.
+    ///
+    /// Not by the length as well. A target answering a 16 KiB request with a
+    /// shorter block would leave the original triple in flight forever, and
+    /// there is only ever one outstanding request per offset anyway.
+    in_flight: HashSet<(u32, u32)>,
     window: usize,
     choked: bool,
     /// Where in the piece list this peer starts looking. A hundred peers all
@@ -739,6 +980,7 @@ impl<'a> Leecher<'a> {
             torrent,
             available: vec![false; count as usize],
             done: HashSet::new(),
+            announced: HashSet::new(),
             buffers: HashMap::new(),
             in_flight: HashSet::new(),
             window: window.max(1),
@@ -800,7 +1042,7 @@ impl<'a> Leecher<'a> {
                 .or_insert_with(|| PieceBuffer::new(piece_len));
             if let Some(begin) = buffer.next_gap(&self.in_flight, piece) {
                 let length = BLOCK_LEN.min(piece_len - begin);
-                self.in_flight.insert((piece, begin, length));
+                self.in_flight.insert((piece, begin));
                 return Some(Request::new(piece, begin, length));
             }
         }
@@ -851,15 +1093,13 @@ impl PieceBuffer {
     }
 
     /// The offset of the first block neither received nor already asked for.
-    fn next_gap(&self, in_flight: &HashSet<(u32, u32, u32)>, piece: u32) -> Option<u32> {
-        let total = self.bytes.len() as u32;
+    fn next_gap(&self, in_flight: &HashSet<(u32, u32)>, piece: u32) -> Option<u32> {
         for (slot, got) in self.received.iter().enumerate() {
             if *got {
                 continue;
             }
             let begin = slot as u32 * BLOCK_LEN;
-            let length = BLOCK_LEN.min(total - begin);
-            if !in_flight.contains(&(piece, begin, length)) {
+            if !in_flight.contains(&(piece, begin)) {
                 return Some(begin);
             }
         }
@@ -892,9 +1132,13 @@ struct Held {
 struct Store {
     /// One file per torrent, opened on first use.
     files: HashMap<usize, std::fs::File>,
-    /// Pieces already on disk, so two peers holding the same piece write it
-    /// once and the budget counts it once.
-    have: HashSet<(usize, u32)>,
+    /// Pieces already on disk and where each one landed, so two peers holding
+    /// the same piece write it once, the budget counts it once, and either of
+    /// them can read it back to serve it.
+    ///
+    /// Packing is why the offset has to be recorded: a piece is at the byte it
+    /// was written to, not at the byte it occupies in the torrent.
+    have: HashMap<(usize, u32), u64>,
     /// Bytes used in each torrent's file so far, which is where the next piece
     /// goes.
     used: HashMap<usize, u64>,
@@ -926,19 +1170,23 @@ impl Held {
     /// budget before this changed. Nothing reads the held bytes back, so the
     /// offset bought nothing; it was written that way because it is what a
     /// real client does. See `TODO/bench.md`, T-092.
-    fn keep(&self, index: usize, piece: u32, bytes: &[u8]) {
-        let Some(dir) = &self.dir else { return };
+    ///
+    /// Returns whether the piece is on disk when the call returns, which is
+    /// what says a peer may announce it. A piece another peer already wrote
+    /// counts: this peer verified it too, and the bytes are there to serve.
+    fn keep(&self, index: usize, piece: u32, bytes: &[u8]) -> bool {
+        let Some(dir) = &self.dir else { return false };
         let length = bytes.len() as u64;
         let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
 
-        if store.have.contains(&(index, piece)) {
-            return;
+        if store.have.contains_key(&(index, piece)) {
+            return true;
         }
         // Refused whole rather than trimmed: half a piece on disk is worse
         // than none, and the budget is what this command promises.
         if self.written.load(Ordering::SeqCst) + length > self.budget {
             self.dropped.fetch_add(1, Ordering::Relaxed);
-            return;
+            return false;
         }
 
         // Read before the file map is borrowed, because both live in `store`.
@@ -949,17 +1197,19 @@ impl Held {
                 let path = dir.join(format!("torrent-{index}.hold"));
                 // Truncated, because the file is packed from zero and a
                 // leftover from an earlier run into the same `--dir` would be
-                // counted as this run's bytes on disk.
+                // counted as this run's bytes on disk. Opened for reading as
+                // well, because serving a held piece reads it back out.
                 match std::fs::OpenOptions::new()
                     .create(true)
                     .truncate(true)
+                    .read(true)
                     .write(true)
                     .open(&path)
                 {
                     Ok(file) => entry.insert(file),
                     Err(_) => {
                         self.dropped.fetch_add(1, Ordering::Relaxed);
-                        return;
+                        return false;
                     }
                 }
             }
@@ -967,15 +1217,58 @@ impl Held {
 
         if crate::storage::pwrite_all(file, offset, bytes).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
-            return;
+            return false;
         }
         store.used.insert(index, offset + length);
-        store.have.insert((index, piece));
+        store.have.insert((index, piece), offset);
         self.written.fetch_add(length, Ordering::SeqCst);
+        true
+    }
+
+    /// Read one block back out of a held piece, for serving it.
+    ///
+    /// `None` when the piece was never kept, when the request runs off the end
+    /// of it, or when the read fails. All three are the same answer to the
+    /// target, which is that this peer will not serve that block.
+    ///
+    /// The read is blocking and under the store's lock. Both are deliberate:
+    /// the block is 16 KiB from a local file that was written moments ago, the
+    /// write side is already blocking on the same task, and the alternative is
+    /// a second file handle per peer for a path that a full seeder never even
+    /// takes.
+    fn read_block(
+        &self,
+        index: usize,
+        piece: u32,
+        begin: u32,
+        length: u32,
+        piece_len: u32,
+    ) -> Option<Vec<u8>> {
+        if length == 0 || length > MAX_SERVED_BLOCK {
+            return None;
+        }
+        if u64::from(begin) + u64::from(length) > u64::from(piece_len) {
+            return None;
+        }
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let offset = *store.have.get(&(index, piece))?;
+        let file = store.files.get_mut(&index)?;
+        let mut block = vec![0u8; length as usize];
+        crate::storage::pread_exact(file, offset + u64::from(begin), &mut block).ok()?;
+        Some(block)
     }
 }
 
 /// Read one handshake, or the class of what went wrong instead.
+///
+/// `deadline` is whichever of the run deadline and this peer's handshake
+/// budget comes first, and the two modes want different budgets. In
+/// [`Mode::Connect`] holding the connection **is** the measurement, so a
+/// target that accepts and never answers should be held to the end of the run
+/// and reported as `handshake_timeout` then: that is the shape of T-020. In
+/// [`Mode::Leech`] the same target costs the whole `--duration` before the
+/// peer says anything, and the answer was known at `--connect-timeout`. The
+/// caller picks; this reads until whichever it was told.
 async fn read_handshake(
     read: &mut (impl tokio::io::AsyncRead + Unpin),
     frames: &mut Framer,
@@ -1231,6 +1524,13 @@ mod tests {
             pieces_failed: 0,
             choke_events: 0,
             unchoke_events: 0,
+            pieces_announced: 0,
+            requests_received: 0,
+            requests_refused: 0,
+            cancels_received: 0,
+            blocks_sent: 0,
+            bytes_sent: 0,
+            target_interested: false,
             connect_ms: None,
             handshake_ms: None,
             open_ms: 0,
@@ -1405,8 +1705,31 @@ mod tests {
         let buffer = PieceBuffer::new(BLOCK_LEN * 3);
         let mut in_flight = HashSet::new();
         assert_eq!(buffer.next_gap(&in_flight, 0), Some(0));
-        in_flight.insert((0, 0, BLOCK_LEN));
+        in_flight.insert((0, 0));
         assert_eq!(buffer.next_gap(&in_flight, 0), Some(BLOCK_LEN));
+    }
+
+    /// A block that comes back shorter than it was asked for still clears the
+    /// window slot.
+    ///
+    /// This is why `in_flight` is keyed by `(piece, begin)` rather than by the
+    /// whole request triple. Keyed by the triple, a target answering a 16 KiB
+    /// request with 8 KiB leaves the original entry in flight for good: the
+    /// slot never comes back, `finished` never sees an empty set, and the peer
+    /// runs to `--duration` instead of stopping at `complete`.
+    #[test]
+    fn a_short_block_still_clears_the_slot_it_was_asked_for() {
+        let t = torrent(BLOCK_LEN as u64 * 4, BLOCK_LEN * 2);
+        let mut leecher = Leecher::new(&t, 4, 0);
+        leecher.set_all(true);
+        leecher.choked = false;
+        let request = leecher.next_request().expect("a first request");
+        assert_eq!((request.index, request.begin), (0, 0));
+        assert_eq!(leecher.in_flight.len(), 1);
+
+        // Half of what was asked for.
+        leecher.in_flight.remove(&(request.index, request.begin));
+        assert!(leecher.in_flight.is_empty());
     }
 
     #[test]
@@ -1539,5 +1862,307 @@ mod tests {
         let b = generate_peer_id();
         assert_eq!(&a[..PEER_ID_PREFIX.len()], PEER_ID_PREFIX);
         assert_ne!(a, b, "two peers with one id is one peer to the target");
+    }
+
+    // -----------------------------------------------------------------
+    // Serving what was held
+    // -----------------------------------------------------------------
+
+    /// The packing has to be reversible or nothing can be served.
+    ///
+    /// A piece is written at the next free byte of its file rather than at its
+    /// torrent offset, so the only thing that knows where piece 7 went is the
+    /// map the write built. Kept out of order on purpose: in order, every
+    /// offset would happen to be the torrent offset and the test would pass
+    /// against the bug it exists to catch.
+    #[test]
+    fn a_held_piece_reads_back_out_of_the_packed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = Held::new(Some(dir.path().to_path_buf()), 1 << 20, 1);
+        for piece in [7u32, 2, 5] {
+            assert!(held.keep(0, piece, &[piece as u8; 1024]));
+        }
+        for piece in [7u32, 2, 5] {
+            let block = held.read_block(0, piece, 0, 1024, 1024).expect("held");
+            assert_eq!(block, vec![piece as u8; 1024], "piece {piece}");
+        }
+        // Halfway into a piece, which is what a 16 KiB request into a larger
+        // piece is.
+        let block = held.read_block(0, 5, 512, 512, 1024).expect("held");
+        assert_eq!(block, vec![5u8; 512]);
+    }
+
+    /// Three ways a request is refused, and none of them is an error.
+    #[test]
+    fn a_request_this_peer_cannot_answer_is_refused_rather_than_guessed_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = Held::new(Some(dir.path().to_path_buf()), 1 << 20, 1);
+        assert!(held.keep(0, 3, &[3u8; 1024]));
+
+        assert!(
+            held.read_block(0, 4, 0, 1024, 1024).is_none(),
+            "a piece that was never kept"
+        );
+        assert!(
+            held.read_block(0, 3, 512, 1024, 1024).is_none(),
+            "a block running off the end of the piece"
+        );
+        assert!(
+            held.read_block(0, 3, 0, MAX_SERVED_BLOCK + 1, MAX_SERVED_BLOCK + 1)
+                .is_none(),
+            "a length past what this peer will ever allocate"
+        );
+        assert!(
+            held.read_block(0, 3, 0, 0, 1024).is_none(),
+            "an empty block"
+        );
+    }
+
+    /// A piece the budget refused is a piece this peer must not announce.
+    ///
+    /// This is why `keep` reports back rather than returning nothing: the
+    /// announcement is decided by whether the bytes are there to serve, not by
+    /// whether the piece verified.
+    #[test]
+    fn a_piece_the_budget_refused_is_not_servable() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = Held::new(Some(dir.path().to_path_buf()), 2048, 1);
+        assert!(held.keep(0, 0, &[0u8; 1024]));
+        assert!(held.keep(0, 1, &[1u8; 1024]));
+        assert!(!held.keep(0, 2, &[2u8; 1024]), "the budget is full");
+        assert!(held.read_block(0, 2, 0, 1024, 1024).is_none());
+        // A second peer verifying a piece another one already wrote can serve
+        // it: it verified the same bytes and they are on disk.
+        assert!(held.keep(0, 1, &[1u8; 1024]));
+        assert_eq!(held.written.load(Ordering::Relaxed), 2048);
+    }
+
+    /// The reject this file writes is one this file can read.
+    ///
+    /// `librqbit_peer_protocol` 9.0.0 serializes none of the five fast ids, so
+    /// the frame is built by hand and there is no library to check it against.
+    /// The parser on the other side of the same file is the check.
+    #[test]
+    fn a_reject_written_here_parses_as_the_request_it_refused() {
+        let frame = reject_frame(Request::new(11, 32768, 16384));
+        assert_eq!(
+            fast_message(&frame),
+            Some(FastMsg::Reject(11, 32768, 16384))
+        );
+    }
+
+    // A scripted target on loopback: it serves one piece, then asks for it
+    // back. Nothing else in this file exercises the serving path end to end,
+    // because the only real target available is a seeder and a seeder never
+    // asks.
+    //
+    // `interested` is the whole difference between the two tests below: a
+    // target that says it wants something keeps the peer on the connection
+    // past `complete`, and a target that does not lets it go.
+    struct Script {
+        /// What came back when the target asked for piece 0.
+        served: Option<Vec<u8>>,
+        /// Whether the peer announced the piece before being asked.
+        announced: bool,
+    }
+
+    async fn scripted_target(
+        listener: tokio::net::TcpListener,
+        info_hash: [u8; 20],
+        payload: Vec<u8>,
+        interested: bool,
+    ) -> Script {
+        let (stream, _) = listener.accept().await.expect("an accepted peer");
+        let (mut read, mut write) = stream.into_split();
+
+        let mut frames = Framer::default();
+        while Handshake::deserialize(frames.buffered()).is_err() {
+            let n = frames.fill(&mut read).await.expect("a handshake");
+            assert_ne!(n, 0, "the peer hung up before handshaking");
+        }
+        let size = Handshake::deserialize(frames.buffered()).unwrap().1;
+        frames.consume(size);
+
+        let theirs = Handshake::new(Id20::new(info_hash), Id20::new([9u8; 20]));
+        let mut buf = [0u8; 68];
+        let len = theirs.serialize_unchecked_len(&mut buf);
+        write.write_all(&buf[..len]).await.unwrap();
+
+        let mut greeting = Vec::new();
+        for message in [Message::Bitfield(ByteBuf(&[0b1000_0000])), Message::Unchoke] {
+            let mut out = vec![0u8; 64];
+            let n = message.serialize(&mut out, &Default::default).unwrap();
+            greeting.extend_from_slice(&out[..n]);
+        }
+        if interested {
+            let mut out = vec![0u8; 64];
+            let n = Message::Interested
+                .serialize(&mut out, &Default::default)
+                .unwrap();
+            greeting.extend_from_slice(&out[..n]);
+        }
+        write.write_all(&greeting).await.unwrap();
+
+        let mut script = Script {
+            served: None,
+            announced: false,
+        };
+        let mut asked = false;
+        loop {
+            let frame = match frames.take_frame() {
+                Ok(Some(frame)) => frame,
+                Ok(None) => match frames.fill(&mut read).await {
+                    Ok(0) | Err(_) => return script,
+                    Ok(_) => continue,
+                },
+                Err(_) => return script,
+            };
+            let Ok((message, _)) = Message::deserialize(&frame, &[]) else {
+                continue;
+            };
+            match message {
+                // Answer the peer out of the payload, which is what makes it
+                // hold a piece it can then be asked for.
+                Message::Request(request) => {
+                    let start = request.begin as usize;
+                    let end = start + request.length as usize;
+                    let block = &payload[start..end];
+                    let mut out = vec![0u8; 64 + block.len()];
+                    let n = Message::Piece(Piece::from_data(request.index, request.begin, block))
+                        .serialize(&mut out, &Default::default)
+                        .unwrap();
+                    write.write_all(&out[..n]).await.unwrap();
+                }
+                // The peer announcing the piece is the cue to ask for it.
+                Message::Have(0) => {
+                    script.announced = true;
+                    if !asked {
+                        asked = true;
+                        let mut out = vec![0u8; 64];
+                        let n = Message::Request(Request::new(0, 0, BLOCK_LEN))
+                            .serialize(&mut out, &Default::default)
+                            .unwrap();
+                        write.write_all(&out[..n]).await.unwrap();
+                    }
+                }
+                Message::Piece(piece) => {
+                    let (first, second) = piece.data();
+                    let mut block = Vec::with_capacity(first.len() + second.len());
+                    block.extend_from_slice(first);
+                    block.extend_from_slice(second);
+                    script.served = Some(block);
+                    return script;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// One piece of `BLOCK_LEN * 2`, with the hash that makes it real.
+    fn served_torrent(payload: &[u8]) -> TorrentUnderTest {
+        let digest: [u8; 20] = <sha1::Sha1 as sha1::Digest>::digest(payload).into();
+        TorrentUnderTest {
+            info_hash: [4u8; 20],
+            name: "payload".into(),
+            piece_length: payload.len() as u32,
+            total_length: payload.len() as u64,
+            piece_hashes: vec![digest],
+        }
+    }
+
+    fn serving_options(
+        target: SocketAddr,
+        dir: &std::path::Path,
+        torrent: TorrentUnderTest,
+    ) -> Options {
+        Options {
+            target,
+            peers: 1,
+            duration: Duration::from_secs(20),
+            connect_timeout: Duration::from_secs(5),
+            requests_in_flight: 4,
+            disk_budget: 1 << 20,
+            hold_dir: Some(dir.to_path_buf()),
+            torrents: vec![torrent],
+            mode: Mode::Leech,
+        }
+    }
+
+    /// The serving path, end to end: the peer takes a piece, announces it,
+    /// and hands it back when asked.
+    ///
+    /// The bytes are compared rather than counted. A peer that answered with
+    /// the right length and the wrong offset would satisfy every counter in
+    /// the report and be serving garbage.
+    #[tokio::test]
+    async fn a_synthetic_peer_serves_back_the_piece_it_was_given() {
+        let payload: Vec<u8> = (0..BLOCK_LEN * 2).map(|i| (i % 251) as u8).collect();
+        let torrent = served_torrent(&payload);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = listener.local_addr().unwrap();
+        let script = tokio::spawn(scripted_target(
+            listener,
+            torrent.info_hash,
+            payload.clone(),
+            true,
+        ));
+
+        let dir = tempfile::tempdir().unwrap();
+        let options = serving_options(target, dir.path(), torrent);
+        let recorder = Arc::new(Recorder::new(Duration::ZERO, Duration::from_millis(50), 1));
+        let outcome = run(&options, &recorder).await.expect("a run");
+        let script = script.await.expect("the target");
+
+        assert!(script.announced, "the peer never announced the piece");
+        assert_eq!(
+            script.served.as_deref(),
+            Some(&payload[..BLOCK_LEN as usize]),
+            "the target got back something other than the block it asked for"
+        );
+        assert_eq!(outcome.serving.pieces_announced, 1);
+        assert_eq!(outcome.serving.peers_asked, 1);
+        assert_eq!(outcome.serving.peers_target_interested, 1);
+        assert_eq!(outcome.serving.blocks_sent, 1);
+        assert_eq!(outcome.serving.bytes_sent.0, u64::from(BLOCK_LEN));
+        assert_eq!(outcome.serving.requests_refused, 0);
+        assert_eq!(outcome.pieces_verified, 1);
+    }
+
+    /// A target that wants nothing does not keep the peer on the connection.
+    ///
+    /// This is the rule the three leech cases in `check-swarm.ps1` depend on:
+    /// against a seeder, which is never interested, a peer that has everything
+    /// stops at `complete` rather than sitting out `--duration`. Without it
+    /// every one of those cases would take the full sixty seconds.
+    #[tokio::test]
+    async fn a_peer_stops_at_complete_when_the_target_wants_nothing() {
+        let payload: Vec<u8> = (0..BLOCK_LEN * 2).map(|i| (i % 251) as u8).collect();
+        let torrent = served_torrent(&payload);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = listener.local_addr().unwrap();
+        let script = tokio::spawn(scripted_target(
+            listener,
+            torrent.info_hash,
+            payload.clone(),
+            false,
+        ));
+
+        let dir = tempfile::tempdir().unwrap();
+        let options = serving_options(target, dir.path(), torrent);
+        let recorder = Arc::new(Recorder::new(Duration::ZERO, Duration::from_millis(50), 1));
+        let started = Instant::now();
+        let outcome = run(&options, &recorder).await.expect("a run");
+        let elapsed = started.elapsed();
+        script.abort();
+
+        assert_eq!(outcome.peers[0].ended, "complete");
+        assert_eq!(outcome.serving.peers_target_interested, 0);
+        assert!(
+            elapsed < options.duration,
+            "the peer sat out the whole duration at {elapsed:?}"
+        );
+        // It still announced, because the announcement is what a target reads
+        // before it decides whether it wants anything.
+        assert_eq!(outcome.serving.pieces_announced, 1);
     }
 }

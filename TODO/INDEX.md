@@ -150,9 +150,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-085](create-seed.md) | P1 | create | **done** | Creation determinism is not proven across platforms |
 | [T-175](create-seed.md) | P2 | create | open | create does not normalise NFD filenames |
 | [T-176](create-seed.md) | P2 | create | open | Three lints the corpus names are missing, and one message is wrong |
-| [T-090](bench.md) | P0 | bench | partial | bit-cli bench is not implemented |
+| [T-090](bench.md) | P0 | bench | done | bit-cli bench is not implemented |
 | [T-091](bench.md) | P0 | bench | **done** | Bench reports do not capture their environment |
-| [T-092](bench.md) | P1 | bench | partial | bench swarm has no synthetic load generator |
+| [T-092](bench.md) | P1 | bench | done | bench swarm has no synthetic load generator |
 | [T-093](bench.md) | P2 | bench | **done** | --baseline comparison is not implemented |
 | [T-094](bench.md) | P2 | bench | open | Trace output has no measured cost |
 | [T-148](bench.md) | P2 | bench | **done** | The peer probe test asserted an exit code inside its own retry loop |
@@ -225,7 +225,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 147 items: 137 to work through, and 10 deferred to Phase C.
-48 open, 7 partial, 2 blocked, 80 done.
+48 open, 5 partial, 2 blocked, 82 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -478,12 +478,12 @@ sessions earlier.
 
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
-| P0 | 1 | 2 | 0 | 8 | 11 |
-| P1 | 2 | 2 | 0 | 47 | 51 |
+| P0 | 1 | 1 | 0 | 9 | 11 |
+| P1 | 2 | 1 | 0 | 48 | 51 |
 | P2 | 23 | 3 | 2 | 23 | 51 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **48** | **7** | **2** | **80** | **147** |
+| **All** | **48** | **5** | **2** | **82** | **147** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4
@@ -754,8 +754,8 @@ ten is what a source is trusted with and what a torrent is allowed to say.
    that collide only on NTFS both land. The mapping is in `--json`. A `C:`
    component escaping the output directory turned up while fixing it and is
    fixed too.
-3. [T-091](bench.md), [T-042](memory.md), and [T-093](bench.md) are **done**,
-   and [T-090](bench.md) is **partial**. Every `bench` report carries the
+3. [T-091](bench.md), [T-042](memory.md), [T-093](bench.md) and
+   [T-090](bench.md) are all **done**. Every `bench` report carries the
    machine it was taken on, the exact command line, and what the process cost
    in memory, CPU, and handles. `bench webseed` measures HTTP sources with
    latency percentiles, a concurrency curve, per-source attribution, and error
@@ -771,21 +771,27 @@ ten is what a source is trusted with and what a torrent is allowed to say.
    six subcommands is now built**, which is what `every_bench_subcommand_is_built`
    asserts against `clap`.
 
-   [T-092](bench.md) is **partial** and is the last of T-090. `bench swarm` has
-   both its loads. Without `--for` it generates info hashes the target does not
-   have and measures the accept path; with `--for` its synthetic peers leech a
-   torrent the target serves, check every piece against the torrent's own
-   hashes, and hold what they verified once between them. Measured against
-   `bit-cli seed`: **333.33 MiB/s at one peer, 666.67 at four, 941.18 at
-   sixteen**, so the target's aggregate stops scaling between four and sixteen
-   rather than falling over. `pwsh scripts/check-swarm.ps1` drives nine cases.
+   [T-092](bench.md) is **done** as of 2026-08-22 and was the last of T-090.
+   `bench swarm` has both its loads. Without `--for` it generates info hashes
+   the target does not have and measures the accept path; with `--for` its
+   synthetic peers leech a torrent the target serves, check every piece against
+   the torrent's own hashes, hold what they verified once between them, and
+   **serve it back**: a bitfield, an unchoke, a `have` per piece kept, and
+   requests answered out of the packed hold file. Measured against `bit-cli
+   seed`: **333.33 MiB/s at one peer, 666.67 at four, 941.18 at sixteen**, so
+   the target's aggregate stops scaling between four and sixteen rather than
+   falling over. `pwsh scripts/check-swarm.ps1` drives ten cases.
 
-   It does not close, on one acceptance clause and two unbuilt halves.
-   `--disk-budget` bounds the bytes written and not the bytes on disk, because
-   a held piece is written at its own offset: a 2 MiB budget leaves a 4.75 MiB
-   file. A synthetic peer keeps its pieces and does not serve them, so the load
-   is a hundred leeches rather than a swarm. And the case that proves no peer
-   but the target is ever dialled is not written yet.
+   Two things the closing measured are worth carrying. **A synthetic peer can
+   never put a byte into the target**: its only source is the target, so
+   everything it can offer is something the target already has, and across the
+   three leech cases 32, 128 and 512 pieces were announced and the target asked
+   for none of them. What the serving side changes is what the target sees.
+   And **the run contacts nothing but the target**, now checked from the
+   operating system's socket table rather than from the tool's own report: with
+   DHT, PEX and LSD all on in a config file and a second seeder announcing
+   itself, the only remote endpoint the process ever held was the target, with
+   no UDP endpoint and no listening socket.
 4. [T-001](webseed.md) is **done**, and so is [T-006](webseed.md).
    `scripts/bench-webseed.ps1` takes the number in four stages so the cost is
    attributed rather than asserted, and it was run twice: on loopback and

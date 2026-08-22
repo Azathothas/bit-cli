@@ -1013,6 +1013,40 @@ fn annotate(
             "no peer was ever unchoked, so no byte could be requested. The target has the torrent and is not serving it to these peers.",
         );
     }
+    annotate_serving(report, outcome);
+}
+
+/// What the peers gave back, said in a line rather than left to be read out of
+/// eight counters.
+///
+/// The number that needs saying is zero. A synthetic peer holds only what the
+/// target served it, so it can never offer the target a piece the target is
+/// missing, and a target that already has the payload will never ask. Without
+/// a note, `blocks_sent: 0` reads as a broken serving path rather than as the
+/// only answer that load can produce.
+fn annotate_serving(report: &mut Report, outcome: &bench_swarm::Outcome) {
+    if outcome.mode != bench_swarm::Mode::Leech {
+        return;
+    }
+    let serving = &outcome.serving;
+    if serving.pieces_announced == 0 {
+        return;
+    }
+    if serving.peers_asked == 0 {
+        report.note(format!(
+            "the peers announced {} pieces and the target asked for none of them. A synthetic peer can only hold what this target served it, so a target that has the whole payload has nothing to ask for.",
+            serving.pieces_announced
+        ));
+        return;
+    }
+    report.note(format!(
+        "the target asked {} of {} peers for {} blocks and was served {} ({} refused)",
+        serving.peers_asked,
+        outcome.peers_handshaked,
+        serving.requests_received,
+        bit_cli_core::units::format_size(serving.bytes_sent.0),
+        serving.requests_refused
+    ));
 }
 
 /// Lowercase hex of a twenty byte hash.
