@@ -27,6 +27,10 @@
 #   - Builds with `--bins --examples` when asked. `--examples` alone builds the
 #     examples and no binaries, which is how a script comes to run yesterday's
 #     `bit-cli.exe`. TODO/RULES.md section 5.
+#   - Prints the toolchain and warns when the stable it is using is behind the
+#     one CI would install. Clippy gains lints with every release, so a green
+#     run here on an older rustc is not a green clippy job there. It warns
+#     rather than fails: a stale toolchain is not a reason to stop working.
 #
 # See TODO/RULES.md.
 
@@ -69,6 +73,39 @@ $stray = @(Get-Process bit-cli, loopback-fileserver, loopback-tracker, loopback-
 if ($stray.Count -gt 0) {
     Write-Step "stopping $($stray.Count) stray process(es) that would lock the build output"
     $stray | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
+# ---------------------------------------------------------------------------
+# The toolchain, which is not a gate but decides what the gates can see
+# ---------------------------------------------------------------------------
+#
+# CI pins `stable`, which moves. Clippy gains lints with every release, so a
+# local toolchain a release behind passes a clippy CI then fails. That has
+# happened: `clippy::chunks_exact_with_const` arrived in 1.98 and a push that
+# was green here was red there, on nothing but the age of this machine's
+# rustc. This warns rather than fails, because a red gate for a toolchain
+# nobody has updated yet would stop work that is otherwise fine.
+
+$toolchain = (& rustc --version 2>&1 | Out-String).Trim()
+Write-Step "toolchain $toolchain"
+if (-not $Fast -and (Get-Command rustup -ErrorAction SilentlyContinue)) {
+    $check = & rustup check 2>&1 | Out-String
+    $stale = $check -split "`n" | Where-Object {
+        $_ -match '^stable-' -and $_ -match 'update available'
+    }
+    if ($stale) {
+        # Only the toolchain in use matters. `rustup check` lists every one
+        # installed, and a stale `windows-gnu` beside a current `windows-msvc`
+        # is not a problem anybody has.
+        $inUse = (& rustup show active-toolchain 2>&1 | Out-String).Trim()
+        foreach ($line in $stale) {
+            $name = ($line -split ' ')[0]
+            if ($inUse -like "$name*") {
+                Write-Step "WARNING: $($line.Trim())"
+                Write-Step "WARNING: CI builds on stable, so a lint this rustc cannot see can still fail there. rustup update stable"
+            }
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------

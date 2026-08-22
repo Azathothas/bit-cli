@@ -126,18 +126,23 @@ pub fn allowed_fast(
     let mut rounds = 0;
     while (out.len() as u32) < set_size && rounds < MAX_ROUNDS {
         rounds += 1;
-        seed = Sha1::digest(&seed).to_vec();
+        let digest = Sha1::digest(&seed);
         // Five big-endian u32s per round, which is the twenty byte digest.
-        for chunk in seed.chunks_exact(4) {
+        // Indexed rather than chunked: the length is fixed and known, and
+        // `chunks_exact` with a constant is a clippy lint from Rust 1.98.
+        for word in 0..5 {
             if (out.len() as u32) >= set_size {
                 break;
             }
-            let word = u32::from_be_bytes(chunk.try_into().unwrap_or([0; 4]));
-            let index = word % num_pieces;
+            let at = word * 4;
+            let value =
+                u32::from_be_bytes([digest[at], digest[at + 1], digest[at + 2], digest[at + 3]]);
+            let index = value % num_pieces;
             if !out.contains(&index) {
                 out.push(index);
             }
         }
+        seed = digest.to_vec();
     }
     out
 }

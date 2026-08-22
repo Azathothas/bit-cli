@@ -219,6 +219,19 @@ exist.
   `-Fast` skips `deny` and the build, `-Build` adds `--bins --examples`, `-Json`
   for a machine.
 
+  It prints the toolchain first and warns when the `stable` it is using is
+  behind the one CI would install. **Green here is not green there when this
+  machine's rustc is older**: CI pins `stable`, which moves, and clippy gains
+  lints with every release. `clippy::chunks_exact_with_const` arrived in 1.98
+  on 2026-08-18 and a push that passed every gate on 1.97.1 was red on that one
+  job four days later. It warns rather than fails, because a toolchain nobody
+  has updated is not a reason to stop working, and it warns only about the
+  toolchain actually in use, because `rustup check` lists every one installed.
+
+```bash
+rustup update stable
+```
+
 ```bash
 pwsh -NoProfile -File scripts/gates.ps1
 ```
@@ -313,6 +326,11 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
 - **Read the code, then the doc, then fix the doc.** Not the other way round.
   Three entries have described a state this tree was not in, and every one took
   one command to check.
+- **The gates are as current as the toolchain under them.** CI installs
+  `stable` on every run and this machine does not, so a clippy lint released
+  between the two is invisible here and fatal there. `gates.ps1` warns about it
+  now; `rustup update stable` is the fix and it costs a minute. Section 4a has
+  the case that cost a red job.
 
 ### Testing
 
