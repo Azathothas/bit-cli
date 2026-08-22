@@ -73,6 +73,42 @@ const BLOCK_LEN: u32 = 16 * 1024;
 /// peer from a web seed bridge.
 const PEER_ID_PREFIX: &[u8] = b"-BCsw01-";
 
+/// BEP 6's reserved bit: the third least significant bit of the last reserved
+/// byte. `librqbit_peer_protocol::Handshake::new` sets bit 20 for the
+/// extension protocol and nothing else, so this is added on top.
+const RESERVED_FAST_EXTENSION: u64 = 1 << 2;
+
+/// BEP 6 message ids. `librqbit_peer_protocol` 9.0.0 knows none of them, so a
+/// frame carrying one fails to deserialize and used to be counted as a
+/// protocol error. Reading the id first is what tells "the target speaks BEP
+/// 6" from "the target is broken".
+const MSGID_SUGGEST: u8 = 0x0D;
+const MSGID_HAVE_ALL: u8 = 0x0E;
+const MSGID_HAVE_NONE: u8 = 0x0F;
+const MSGID_REJECT_REQUEST: u8 = 0x10;
+const MSGID_ALLOWED_FAST: u8 = 0x11;
+
+/// What a target did with BEP 6 on one connection.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FastExtension {
+    /// Whether the target set the fast extension bit in its own handshake.
+    /// Every synthetic peer sets it, so this is the target's answer.
+    pub negotiated: bool,
+    pub have_all: u64,
+    pub have_none: u64,
+    pub suggest: u64,
+    /// Requests the target refused cleanly rather than by going silent, which
+    /// is the half of BEP 6 that matters most to a partial seed.
+    pub reject: u64,
+    /// Piece indices the target offered, in the order they arrived.
+    pub allowed_fast: Vec<u32>,
+    /// Which derivation the offered set matches: `bep6`, `aria2`, `ambiguous`
+    /// when the peer's address makes the two identical, or `neither`. Absent
+    /// when nothing was offered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_fast_rule: Option<String>,
+}
+
 /// Which load to generate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -176,6 +212,8 @@ pub struct PeerOutcome {
     pub ended: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What the target did with BEP 6. See `TODO/bep-coverage.md`, T-100.
+    pub fast: FastExtension,
 }
 
 /// What the whole run found.
@@ -207,7 +245,27 @@ pub struct Outcome {
     pub disk_budget: Size,
     /// Verified pieces dropped because the budget was full.
     pub pieces_dropped_over_budget: u64,
+    /// What the target did with BEP 6, folded across every peer.
+    pub fast_extension: FastSummary,
     pub peers: Vec<PeerOutcome>,
+}
+
+/// BEP 6 across the whole run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FastSummary {
+    /// Peers whose handshake came back with the fast extension bit set. Every
+    /// synthetic peer offers it, so anything less than `peers_handshaked` is
+    /// the target declining.
+    pub peers_negotiated: usize,
+    pub have_all: u64,
+    pub have_none: u64,
+    pub suggest: u64,
+    pub reject: u64,
+    pub allowed_fast: u64,
+    /// Which derivations the offered sets matched, and how many peers each.
+    /// Empty when nothing offered one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allowed_fast_rules: Vec<FailureClass>,
 }
 
 /// One class of failure and how many peers hit it.
@@ -310,7 +368,32 @@ fn summarise(options: &Options, peers: &[PeerOutcome], held: &Held) -> Outcome {
         bytes_held: Size(held.written.load(Ordering::Relaxed)),
         disk_budget: Size(options.disk_budget),
         pieces_dropped_over_budget: held.dropped.load(Ordering::Relaxed),
+        fast_extension: fast_summary(peers),
         peers: peers.to_vec(),
+    }
+}
+
+/// Fold BEP 6 across the peers.
+fn fast_summary(peers: &[PeerOutcome]) -> FastSummary {
+    let mut rules: HashMap<String, usize> = HashMap::new();
+    for peer in peers {
+        if let Some(rule) = &peer.fast.allowed_fast_rule {
+            *rules.entry(rule.clone()).or_default() += 1;
+        }
+    }
+    let mut allowed_fast_rules: Vec<FailureClass> = rules
+        .into_iter()
+        .map(|(class, count)| FailureClass { class, count })
+        .collect();
+    allowed_fast_rules.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.class.cmp(&b.class)));
+    FastSummary {
+        peers_negotiated: peers.iter().filter(|p| p.fast.negotiated).count(),
+        have_all: peers.iter().map(|p| p.fast.have_all).sum(),
+        have_none: peers.iter().map(|p| p.fast.have_none).sum(),
+        suggest: peers.iter().map(|p| p.fast.suggest).sum(),
+        reject: peers.iter().map(|p| p.fast.reject).sum(),
+        allowed_fast: peers.iter().map(|p| p.fast.allowed_fast.len() as u64).sum(),
+        allowed_fast_rules,
     }
 }
 
@@ -344,6 +427,7 @@ async fn one_peer(
         open_ms: 0,
         ended: "deadline".to_string(),
         error: None,
+        fast: FastExtension::default(),
     };
 
     let connect_within = options.connect_timeout.min(remaining(deadline));
@@ -365,10 +449,18 @@ async fn one_peer(
     outcome.connected = true;
     outcome.connect_ms = Some(ms(started.elapsed()));
     let connected_at = Instant::now();
+    // The address the target sees, which is what it derives an allowed-fast
+    // set from. Read here rather than assumed: a target reached over loopback
+    // and one reached over a LAN derive different sets for the same peer.
+    let local = stream.local_addr().ok().map(|a| a.ip());
 
     let (mut read, mut write) = stream.into_split();
     let peer_id = generate_peer_id();
-    let ours = Handshake::new(Id20::new(torrent.info_hash), Id20::new(peer_id));
+    let mut ours = Handshake::new(Id20::new(torrent.info_hash), Id20::new(peer_id));
+    // Advertised on every connection. A peer that does not know the bit
+    // ignores it, and nothing here sends a BEP 6 message, so advertising it
+    // costs nothing and is the only way to see what the target would do.
+    ours.reserved |= RESERVED_FAST_EXTENSION;
     let mut buf = [0u8; 68];
     let len = ours.serialize_unchecked_len(&mut buf);
     if let Err(e) = write.write_all(&buf[..len]).await {
@@ -390,6 +482,7 @@ async fn one_peer(
     outcome.handshaked = true;
     outcome.handshake_ms = Some(ms(connected_at.elapsed()));
     outcome.info_hash_echoed = theirs.info_hash.0 == torrent.info_hash;
+    outcome.fast.negotiated = theirs.reserved & RESERVED_FAST_EXTENSION != 0;
     let now_live = live.fetch_add(1, Ordering::Relaxed) + 1;
     recorder.observe_peers(now_live.min(u64::from(u32::MAX)) as u32);
 
@@ -418,6 +511,8 @@ async fn one_peer(
         }
     }
     live.fetch_sub(1, Ordering::Relaxed);
+    outcome.fast.allowed_fast_rule =
+        classify_allowed_fast(&outcome.fast.allowed_fast, local, torrent);
     outcome.open_ms = ms(started.elapsed());
     outcome
 }
@@ -474,6 +569,27 @@ async fn leech(
 
     loop {
         while let Some(frame) = take_frame(frames, outcome) {
+            // BEP 6 first, because these frames do not deserialize at all and
+            // the three that change what a leecher does are here rather than
+            // in the match below. See `TODO/bep-coverage.md`, T-100.
+            if let Some(kind) = fast_message(&frame) {
+                note_fast(kind, outcome);
+                match kind {
+                    // A bitfield in two bytes. Without this a peer that
+                    // negotiated the fast extension sees no bitfield at all
+                    // and requests nothing.
+                    FastMsg::HaveAll => state.set_all(true),
+                    FastMsg::HaveNone => state.set_all(false),
+                    // A refused request is refused. Left in flight it holds a
+                    // slot in the window until the deadline, which is the
+                    // stall BEP 6 exists to prevent.
+                    FastMsg::Reject(index, begin, length) => {
+                        state.in_flight.remove(&(index, begin, length));
+                    }
+                    FastMsg::Suggest | FastMsg::AllowedFast(_) => {}
+                }
+                continue;
+            }
             let Ok((message, _)) = Message::deserialize(&frame, &[]) else {
                 outcome.ended = "protocol".into();
                 return;
@@ -639,6 +755,13 @@ impl<'a> Leecher<'a> {
             let byte = index / 8;
             let bit = 7 - (index % 8);
             *slot = bits.get(byte).is_some_and(|b| (b >> bit) & 1 == 1);
+        }
+    }
+
+    /// BEP 6's `have all` and `have none`, which stand in for a bitfield.
+    fn set_all(&mut self, present: bool) {
+        for slot in self.available.iter_mut() {
+            *slot = present;
         }
     }
 
@@ -893,8 +1016,111 @@ fn take_frame(frames: &mut Framer, outcome: &mut PeerOutcome) -> Option<Vec<u8>>
     }
 }
 
+/// One BEP 6 message, as far as this tool cares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FastMsg {
+    HaveAll,
+    HaveNone,
+    Suggest,
+    AllowedFast(u32),
+    /// A request the target refused. The triple is what identifies which one.
+    Reject(u32, u32, u32),
+}
+
+/// Read a frame's message id and say whether it is BEP 6.
+///
+/// `librqbit_peer_protocol` 9.0.0 has no variant for any of these, so a frame
+/// carrying one comes back from `Message::deserialize` as an error and used to
+/// end the connection as `protocol`. A target that speaks the fast extension
+/// is not a broken target, and the two have to be told apart before either can
+/// be reported.
+///
+/// A frame from [`Framer::take_frame`] carries its own four byte length
+/// prefix, so the id is at index 4 and the payload begins at 5.
+fn fast_message(frame: &[u8]) -> Option<FastMsg> {
+    let id = *frame.get(4)?;
+    let payload = frame.get(5..).unwrap_or_default();
+    let word = |at: usize| -> Option<u32> {
+        payload
+            .get(at..at + 4)
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_be_bytes)
+    };
+    match id {
+        MSGID_HAVE_ALL => Some(FastMsg::HaveAll),
+        MSGID_HAVE_NONE => Some(FastMsg::HaveNone),
+        MSGID_SUGGEST => Some(FastMsg::Suggest),
+        MSGID_ALLOWED_FAST => Some(FastMsg::AllowedFast(word(0)?)),
+        MSGID_REJECT_REQUEST => Some(FastMsg::Reject(word(0)?, word(4)?, word(8)?)),
+        _ => None,
+    }
+}
+
+/// Fold one BEP 6 message into what the connection reports.
+fn note_fast(kind: FastMsg, outcome: &mut PeerOutcome) {
+    match kind {
+        FastMsg::HaveAll => outcome.fast.have_all += 1,
+        FastMsg::HaveNone => outcome.fast.have_none += 1,
+        FastMsg::Suggest => outcome.fast.suggest += 1,
+        FastMsg::Reject(..) => outcome.fast.reject += 1,
+        FastMsg::AllowedFast(index) => outcome.fast.allowed_fast.push(index),
+    }
+}
+
+/// Which derivation the offered set matches.
+///
+/// Order matters as well as membership: BEP 6 produces a sequence and a
+/// receiver comparing what arrived against what should have arrived compares
+/// sequences. `ambiguous` is a real answer rather than a hedge, because the
+/// two rules give the same set for every address at or above 192.0.0.0, and
+/// loopback is not one of them: 127.x is class A under aria2's rule and the
+/// two agree there too.
+fn classify_allowed_fast(
+    offered: &[u32],
+    local: Option<std::net::IpAddr>,
+    torrent: &TorrentUnderTest,
+) -> Option<String> {
+    if offered.is_empty() {
+        return None;
+    }
+    let Some(std::net::IpAddr::V4(ip)) = local else {
+        // BEP 6 derives the set from a four byte address and says nothing
+        // about IPv6, so there is nothing to compare against.
+        return Some("unknown".into());
+    };
+    let size = offered.len() as u32;
+    let pieces = torrent.piece_count();
+    let bep6 = crate::fast_set::allowed_fast(
+        crate::fast_set::Mask::Bep6,
+        size,
+        pieces,
+        &torrent.info_hash,
+        ip,
+    );
+    let aria2 = crate::fast_set::allowed_fast(
+        crate::fast_set::Mask::Aria2,
+        size,
+        pieces,
+        &torrent.info_hash,
+        ip,
+    );
+    let matches_bep6 = offered == bep6.as_slice();
+    match (matches_bep6, crate::fast_set::Mask::is_ambiguous(ip)) {
+        (true, true) => Some("ambiguous".into()),
+        (true, false) => Some(crate::fast_set::Mask::Bep6.as_str().into()),
+        (false, _) if offered == aria2.as_slice() => {
+            Some(crate::fast_set::Mask::Aria2.as_str().into())
+        }
+        (false, _) => Some("neither".into()),
+    }
+}
+
 /// Count a message in connect mode, where nothing is requested.
 fn note_message(frame: &[u8], outcome: &mut PeerOutcome) {
+    if let Some(kind) = fast_message(frame) {
+        note_fast(kind, outcome);
+        return;
+    }
     let Ok((message, _)) = Message::deserialize(frame, &[]) else {
         outcome.ended = "protocol".into();
         return;
@@ -957,6 +1183,173 @@ mod tests {
             total_length: total,
             piece_hashes: Vec::new(),
         }
+    }
+
+    /// A length-prefixed frame the way `Framer::take_frame` hands one over:
+    /// four bytes of length, the message id, then the payload.
+    fn frame(id: u8, payload: &[u8]) -> Vec<u8> {
+        let mut out = ((payload.len() + 1) as u32).to_be_bytes().to_vec();
+        out.push(id);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    fn blank_outcome() -> PeerOutcome {
+        PeerOutcome {
+            index: 0,
+            torrent: 0,
+            connected: true,
+            handshaked: true,
+            info_hash_echoed: true,
+            unchoked: false,
+            bytes_received: 0,
+            blocks_received: 0,
+            pieces_verified: 0,
+            pieces_failed: 0,
+            choke_events: 0,
+            unchoke_events: 0,
+            connect_ms: None,
+            handshake_ms: None,
+            open_ms: 0,
+            ended: "deadline".into(),
+            error: None,
+            fast: FastExtension::default(),
+        }
+    }
+
+    #[test]
+    fn every_bep6_message_is_recognised_rather_than_called_a_protocol_error() {
+        // The regression this fixes: `librqbit_peer_protocol` knows none of
+        // these ids, so every one of them used to end the connection as
+        // `protocol` and a target that speaks the fast extension read as a
+        // broken one.
+        let mut outcome = blank_outcome();
+        note_message(&frame(MSGID_HAVE_ALL, &[]), &mut outcome);
+        note_message(&frame(MSGID_HAVE_NONE, &[]), &mut outcome);
+        note_message(&frame(MSGID_SUGGEST, &7u32.to_be_bytes()), &mut outcome);
+        note_message(
+            &frame(MSGID_ALLOWED_FAST, &3u32.to_be_bytes()),
+            &mut outcome,
+        );
+        note_message(
+            &frame(MSGID_ALLOWED_FAST, &9u32.to_be_bytes()),
+            &mut outcome,
+        );
+        let mut reject = Vec::new();
+        reject.extend_from_slice(&1u32.to_be_bytes());
+        reject.extend_from_slice(&0u32.to_be_bytes());
+        reject.extend_from_slice(&16384u32.to_be_bytes());
+        note_message(&frame(MSGID_REJECT_REQUEST, &reject), &mut outcome);
+
+        assert_eq!(outcome.ended, "deadline", "nothing was a protocol error");
+        assert_eq!(outcome.fast.have_all, 1);
+        assert_eq!(outcome.fast.have_none, 1);
+        assert_eq!(outcome.fast.suggest, 1);
+        assert_eq!(outcome.fast.reject, 1);
+        assert_eq!(outcome.fast.allowed_fast, vec![3, 9]);
+    }
+
+    #[test]
+    fn a_reject_names_the_request_it_refused() {
+        let mut reject = Vec::new();
+        reject.extend_from_slice(&5u32.to_be_bytes());
+        reject.extend_from_slice(&32768u32.to_be_bytes());
+        reject.extend_from_slice(&16384u32.to_be_bytes());
+        assert_eq!(
+            fast_message(&frame(MSGID_REJECT_REQUEST, &reject)),
+            Some(FastMsg::Reject(5, 32768, 16384))
+        );
+    }
+
+    #[test]
+    fn a_truncated_bep6_frame_is_not_read_as_one() {
+        // Two bytes where four are needed. Reading it as a message would put a
+        // number nobody sent into the report.
+        assert_eq!(fast_message(&frame(MSGID_ALLOWED_FAST, &[0, 1])), None);
+        assert_eq!(
+            fast_message(&frame(MSGID_REJECT_REQUEST, &[0, 0, 0, 1])),
+            None
+        );
+    }
+
+    #[test]
+    fn an_ordinary_message_is_left_to_the_real_parser() {
+        // Choke is id 0 and has no BEP 6 meaning, so `fast_message` must not
+        // claim it.
+        assert_eq!(fast_message(&frame(0, &[])), None);
+        let mut outcome = blank_outcome();
+        note_message(&frame(1, &[]), &mut outcome);
+        assert_eq!(outcome.unchoke_events, 1);
+        assert!(outcome.unchoked);
+    }
+
+    #[test]
+    fn have_all_and_have_none_stand_in_for_a_bitfield() {
+        let t = torrent(4096, 1024);
+        let mut state = Leecher::new(&t, 4, 0);
+        assert!(!state.available.iter().any(|has| *has));
+        state.set_all(true);
+        assert!(state.available.iter().all(|has| *has));
+        state.set_all(false);
+        assert!(!state.available.iter().any(|has| *has));
+    }
+
+    #[test]
+    fn the_offered_set_is_checked_against_the_derivation_it_should_have_used() {
+        let mut t = torrent(1313 * 1024, 1024);
+        t.info_hash = [0xAA; 20];
+        let ip = Some("80.4.4.200".parse().expect("an address"));
+        let conformant = crate::fast_set::allowed_fast(
+            crate::fast_set::Mask::Bep6,
+            7,
+            1313,
+            &t.info_hash,
+            "80.4.4.200".parse().expect("an address"),
+        );
+        assert_eq!(
+            classify_allowed_fast(&conformant, ip, &t),
+            Some("bep6".into())
+        );
+
+        let aria2 = crate::fast_set::allowed_fast(
+            crate::fast_set::Mask::Aria2,
+            7,
+            1313,
+            &t.info_hash,
+            "80.4.4.200".parse().expect("an address"),
+        );
+        assert_eq!(classify_allowed_fast(&aria2, ip, &t), Some("aria2".into()));
+        assert_eq!(
+            classify_allowed_fast(&[0, 1, 2, 3, 4, 5, 6], ip, &t),
+            Some("neither".into())
+        );
+        assert_eq!(classify_allowed_fast(&[], ip, &t), None);
+    }
+
+    #[test]
+    fn a_set_offered_over_loopback_cannot_tell_the_two_rules_apart() {
+        // 127.x is class A under aria2's rule, so both derivations mask to
+        // 127.0.0.0 and agree. Reporting that as a conformance pass would be
+        // a claim the measurement cannot make.
+        let mut t = torrent(1313 * 1024, 1024);
+        t.info_hash = [0xAA; 20];
+        let ip: std::net::Ipv4Addr = "127.0.0.1".parse().expect("an address");
+        let offered =
+            crate::fast_set::allowed_fast(crate::fast_set::Mask::Bep6, 6, 1313, &t.info_hash, ip);
+        assert_eq!(
+            classify_allowed_fast(&offered, Some(ip.into()), &t),
+            Some("ambiguous".into())
+        );
+    }
+
+    #[test]
+    fn an_ipv6_peer_has_no_derivation_to_be_checked_against() {
+        let t = torrent(1313 * 1024, 1024);
+        let ip: std::net::IpAddr = "::1".parse().expect("an address");
+        assert_eq!(
+            classify_allowed_fast(&[1, 2, 3], Some(ip), &t),
+            Some("unknown".into())
+        );
     }
 
     #[test]

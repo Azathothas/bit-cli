@@ -10,7 +10,7 @@ Implemented means there is a test. Inherited means `librqbit` provides it and
 | --- | --- | --- |
 | 3  | The BitTorrent protocol | inherited |
 | 5  | DHT | inherited, not reported (T-052) |
-| 6  | Fast extension | not implemented (T-100) |
+| 6  | Fast extension | **partial** (T-100): the allowed-fast derivation is in `fast_set.rs` and `bench swarm` reads the five messages; nothing sends one, blocked on `librqbit` |
 | 7  | IPv6 tracker extension | implemented in `tracker.rs` |
 | 9  | Metadata from peers (magnet) | inherited |
 | 10 | Extension protocol | implemented in the bridge |
@@ -78,7 +78,7 @@ Source:      https://github.com/ikatson/rqbit/issues/584 (open)
 Category:    bep
 Priority:    P2
 Effort:      L
-Status:      open
+Status:      partial
 
 Problem:     No `have all`, `have none`, `suggest piece`, `reject request`, or
              `allowed fast`.
@@ -142,6 +142,96 @@ The receive half alone is worth having before the send half:
 seedchamp [PR 7](https://github.com/j-c-m/seedchamp/pull/7) honours `Suggest`
 in the picker without ever sending one, and `seedchamp/docs/design.md:152-160`
 records that as a deliberate posture rather than an unfinished one.
+
+**Partial, 2026-08-22. The Approach names the wrong half as the reachable
+one.**
+
+It says "the bridge is the natural place to start, because it is `bit-cli`'s
+own peer implementation" and "the session side needs `librqbit`". The bridge
+half is the one that cannot be done, and for a reason the Approach does not
+consider: **the bridge's only counterparty is the session in the same
+process.** It dials this run's own listen port and nothing else, so whatever it
+advertises is answered by `librqbit`, and `librqbit` 9.0.0 has no BEP 6 at all.
+
+Measured rather than assumed. `librqbit-peer-protocol` 9.0.0 `lib.rs:40-49`
+declares message ids 0 through 8 and 20, and nothing in between: there is no
+`HaveAll`, `HaveNone`, `SuggestPiece`, `RejectRequest` or `AllowedFast` variant
+to construct, so the bridge could not send one without hand-rolling the wire
+format for a peer that would fail to parse it. `Handshake::new` at `lib.rs:480`
+sets `1 << 20` for the extension protocol and no other reserved bit, so the
+session never offers the fast extension and never accepts an offer of it.
+Zero hits for any of the five names in either crate:
+
+```bash
+grep -rniE "haveall|havenone|suggestpiece|rejectrequest|allowedfast|fast_ext"   ~/.cargo/registry/src/*/librqbit-9.0.0/src   ~/.cargo/registry/src/*/librqbit-peer-protocol-9.0.0/src
+```
+
+So this splits into three parts and only one is blocked.
+
+**Part one, the derivation. Done.** `crates/bit-cli-core/src/fast_set.rs`
+implements the allowed-fast set and **reproduces the conformance vector above
+exactly**: `80.4.4.200`, twenty `0xAA` bytes, 1313 pieces, k = 7 gives
+`[1059, 431, 808, 1217, 287, 376, 1188]`, which is
+`the_canonical_vector_reproduces`. This is the part that is hard to get right
+and impossible to check later without a reference, so it is written down while
+the reference is in hand.
+
+**The aria2 divergence is implemented rather than described.** `Mask::Bep6`
+keeps three octets, `Mask::Aria2` keeps two below 192.0.0.0, and
+`aria2_derives_a_different_set_below_192` asserts they disagree for the vector's
+own address. A warning in prose is something to remember; a `Mask` a
+measurement can name is something that reports which of the two the other end
+used. `Mask::is_ambiguous` is the third answer: the two rules agree at and
+above 192.0.0.0, and **loopback is not an exception** because 127.x is class A
+under aria2's rule and agrees too, so a measurement taken over loopback cannot
+tell them apart and says `ambiguous` rather than claiming a pass.
+
+**Part two, the receive and measure side. Done, in `bench swarm`.** Every
+synthetic peer now sets the fast extension bit, reports whether the target set
+it back, counts `have all`, `have none`, `suggest` and `reject request`,
+collects the offered allowed-fast set, and says which derivation it matches.
+`bench swarm` is the right home rather than the bridge: it is the one part of
+this tree that talks to somebody else's client, and `aria2c` 1.37.0 is
+installed on this machine, so the divergence has a live counterparty to be
+measured against.
+
+It reports the blocker from the wire rather than from the source, which is the
+better evidence of the two. `bench/swarm-20260822T054652916Z.json`, every leech
+case: `peers_negotiated` 0 against `peers_handshaked` 1, 4 and 16. The synthetic
+peers offered the bit and `bit-cli seed` declined it every time. Leeching is
+unchanged by the offer: 8,388,608 bytes to one peer and 33,554,432 to four, the
+same as the run before this change.
+
+The leecher acts on what it now understands, which is the difference between
+reading the messages and honouring them. `have all` and `have none` stand in
+for a bitfield, so a peer that negotiated the extension against a target that
+sends two bytes instead of one no longer sees an empty bitfield and requests
+nothing. A `reject request` clears the request from the window, which is the
+stall BEP 6 exists to prevent and which anacrolix's `peerconn.go:960-985`
+records the other side of.
+
+**A defect this found, and it was in this tree.** `bench swarm` handed every
+frame to `librqbit_peer_protocol::Message::deserialize`, which knows none of
+the five ids, so **a target that spoke BEP 6 was reported as
+`ended: "protocol"`**, a broken peer. Nothing had noticed because the only
+target ever pointed at was `librqbit`, which never sends one.
+`every_bep6_message_is_recognised_rather_than_called_a_protocol_error` is the
+regression test.
+
+**Part three, the send side. Blocked, upstream, and this is what keeps the
+entry open.** The Acceptance says "the bridge negotiates BEP 6 with a session
+that supports it", and no such session exists here. What would unblock it is
+`librqbit` gaining the five message variants and the reserved bit, at
+`librqbit-peer-protocol` `lib.rs:40-49` and `lib.rs:480`. The same blocker as
+[T-102](#t-102-bep-55-holepunch-is-not-implemented) and
+[T-167](#t-167-bep-54-lt_donthave-is-not-implemented), and named the same way.
+
+Not blocked and not done: measuring a live `aria2c` seeder with `bench swarm`
+to see which mask it uses on the wire. Everything needed is here, and the one
+thing standing in the way is that a measurement over loopback is `ambiguous` by
+construction, so it needs a target reachable on a class C address or aria2's
+own set derived by hand from the address it sees. That is a session's work, not
+a blocker.
 
 ### T-101 uTP is available but untested
 
