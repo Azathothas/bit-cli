@@ -953,7 +953,7 @@ Status:      open
 Problem:     A hybrid torrent carries both a v1 and a v2 info hash for the same
              payload, and the two name the same bytes. `bit-cli` has no v2
              support at all: [T-081](create-seed.md) is open and
-             `docs/BEP.md` does not exist yet.
+             no BEP coverage document has been written yet.
 Relevance:   Scenario 5 asks to reconcile them. Without it, the same payload
              offered as a v1 torrent and a v2 torrent is two unrelated
              downloads, which is the same waste as

@@ -1,124 +1,146 @@
 # Progress
 
-**Read this first.** It says what the last session did and what is in flight.
+**Read this first.** It is the only thing the kickoff prompt tells a session to
+read, so everything that changes from session to session is here: the baseline,
+what the last session did, and the work order. The prompt carries none of it, by
+[RULES.md](RULES.md) section 3.
+
 It carries no history: every session rewrites it. For history, read the git log
 and the entries themselves.
 
 Rules for working on this repository: [RULES.md](RULES.md).
-The work order: [INDEX.md](INDEX.md), "Start here".
+Every entry, one line each: [INDEX.md](INDEX.md).
+
+> **The shape this file must keep**, from [RULES.md](RULES.md) section 2 step 2:
+> the state line with the session's start instant in ISO 8601 UTC, the measured
+> baseline with the CI run named by id, the entry counts, what the session did,
+> what is in progress, **Start here next session** as an ordered list with entry
+> ids and corpus sources, and open questions for the operator.
+> `scripts/session-report.ps1` prints the numbers; do not count them by hand.
 
 ---
 
 ## State
 
-- **This session:** started 2026-08-22T01:11Z, unattended. Feature work,
-  working the "Start here" order in [INDEX.md](INDEX.md).
-- **Baseline carried in from 2026-08-21T17:20Z**, re-measured at the start of
-  this session rather than trusted: 1,028 tests passing, 0 failing; clippy,
-  fmt and `cargo deny` clean; CI green on all sixteen jobs at run
-  **32507560214** against commit `76e33e8`.
-- **Entries:** 146 items. 56 open, 4 partial, 2 blocked, 74 done, 10 deferred
-  to Phase C.
+- **Last session:** 2026-08-22, started 01:11Z, unattended. Feature work plus
+  a round of tooling the operator asked for mid-session.
+- **Tests:** 1,052 passing, 0 failing. The baseline at the start was 1,028.
+- **Gates:** clean. One command now:
 
-## What this session is going to do
+```bash
+pwsh -NoProfile -File scripts/gates.ps1
+```
 
-The first four of the "Start here" order, in that order. Each closes with the
-acceptance command from its own entry, run, with the output recorded.
+- **CI:** green at run **32548057725**, against commit `14dd46d`. The three
+  before it were green too: **32543990448**, **32545039478**, **32546921561**.
+  Naming a run and the commit it describes is deliberate: that line stays true,
+  where "the latest" is wrong by the next push.
+- **Entries:** 147 items. 51 open, 5 partial, 2 blocked, 79 done, 10 deferred
+  to Phase C. 79 of 137 workable done, 58 left.
+- **Tree:** 82 Rust files, 47,270 lines of code, 10,354 of comment, measured
+  with `scc --no-cocomo crates/`.
 
-1. **[T-185](cli-surface.md)**, `crates/bit-cli/src/cmd/download.rs` and
-   `crates/bit-cli/src/selection.rs`, effort S, P1. `--exclude-file` used
-   without `--select-file` selects nothing and downloads everything, because
-   `download` resolves the selection with no file count and the exclusion-alone
-   branch returns `None` for every file. The count exists for every source but
-   a magnet: `run` parses the metainfo into `metas` before any plan starts. The
-   magnet half and `--select-file 3-` are decided with it, as the entry says.
-2. **[T-143](multi-source.md)**, `TODO/multi-source.md`, effort M. Attaching a
-   source to a torrent that has already started. [T-005](webseed.md) and
-   [T-179](webseed.md) built both halves of the machinery between them; what is
-   left is where the binding comes from mid-run.
-3. **[T-164](peers.md)**, the peer half of smart ban. **Read the `librqbit`
-   seam and name it in the entry before pricing it**, the way
-   [T-167](bep-coverage.md) had to. Corpus:
-   `aria2_rust/aria2-core/src/engine/bt_peer_storage/rejection_state.rs`.
-4. **[T-186](cli-surface.md)**, effort S, P3. `seed --data` and `verify --data`
-   resolve a multi-file payload differently, and the wrong one reports "partial
-   seed" rather than "wrong directory".
+## What the last session did
 
-Not started this session, and each names its blocker in its own entry:
-[T-163](peers.md) MSE, [T-102](bep-coverage.md) BEP 55,
-[T-167](bep-coverage.md) BEP 54, [T-016](disk-io.md) fastresume.
+The whole four-item work order, and then the tooling.
+
+- **[T-185](cli-surface.md)**, done. `--exclude-file` without `--select-file`
+  resolved to `None`, every file, so the flag skipped nothing and the run
+  fetched what it had been told to skip. The count is per source, not per run:
+  `plan_selection` settles it from metadata `run` already parsed. A magnet
+  defers, and only for the two spellings that need a count. **The magnet answer
+  is not the one the entry recommended**: narrowing a live torrent is too late,
+  because `librqbit` initialises by creating every file it was not told to skip.
+- **[T-143](multi-source.md)**, done, and **the entry's premise was too kind**.
+  Above `-j 1` the takers do not fetch the shared file twice, they have no
+  source at all and never finish. Measured before building, both runs recorded.
+- **[T-164](peers.md)**, partial, and the seam is named. It splits into three
+  parts and only two are blocked: `librqbit` already has a peer blocklist,
+  checked before an incoming handshake and before an outgoing dial, and it
+  loads from a `file:` URL, so `--block-peer` needed no upstream change.
+- **[T-186](cli-surface.md)**, done, and **the entry did not know the wrong
+  spelling also writes**: `seed` hash-checks on add, so pointing at the torrent
+  directory left an empty tree one level inside it.
+- **[T-188](disk-io.md)**, filed and closed. Found by measuring T-185. An
+  unselected file landed at zero bytes because `librqbit` issues a zero length
+  write to the file before a chunk that starts on a boundary. It corrects
+  [T-013](disk-io.md)'s closing claim, and the correction stays under T-013.
+
+**Two defects found while running gates, not by reading.**
+[T-179](webseed.md)'s acceptance test depended on a race and failed twice under
+whole-suite load; it is arranged now rather than hoped for, and
+[RULES.md](RULES.md) section 5 carries the shape as its own line. And
+`check-shared-files.ps1` waited exactly as long as the run's own `--stop-after`,
+so a run that stopped on its own deadline was killed at the same instant and
+read as one that wrote no report.
+
+**The tooling round**, all of it from the operator's list:
+
+- `git-sync` no longer force-pushes 52 MB of corpus on a push that did not
+  change it; it compares the tree hash against `origin/references` first.
+- `-BodyFile`, because a commit body typed into a shell has to survive that
+  shell's quoting and twice it did not.
+- `-NoCi`, which puts `[skip ci]` on a commit and is refused unless every
+  staged path is documentation.
+- `scripts/gates.ps1`: fmt, clippy, test, deny, optionally build, one verdict,
+  stray processes killed first.
+- `scripts/check-todo.ps1`: the mechanical half of the two deep reviews. It
+  found four stale citations on its first run, and it would have found the two
+  things this session fixed by hand.
+- `scripts/session-report.ps1`: elapsed, commits, lines, `scc`, entries done
+  out of workable, and what closed.
+- [RULES.md](RULES.md) section 3 rewritten: the kickoff prompt is generic now
+  and this file carries the work order.
 
 ## In progress
 
-**[T-185](cli-surface.md) is done**, 2026-08-22T01:40Z. 1,034 tests passing, 0
-failing. Both halves of the count problem were decided together and the magnet
-half is not what the entry recommended: the entry's
-`api_torrent_action_update_only_files` narrows a torrent that is already added,
-and by then `librqbit`'s initial check has created the files the selection
-excludes. `Engine::resolve_with` reads the metadata first and hands back the
-`.torrent` bytes it built, so the add is one resolution and not two. The
-correction is written under the entry.
+Nothing is half-written. Every entry touched is complete, or explicitly open or
+partial with its blocker named.
 
-**[T-188](disk-io.md) filed** out of T-185's third acceptance run, and it
-corrects [T-013](disk-io.md)'s closing claim. An unselected file lands as a zero
-byte file when the selection starts after it:
-`librqbit-9.0.0/src/file_ops.rs:322` skips a file with `>` where the file is
-exhausted at `==`, so a chunk starting on a file boundary issues a zero length
-write to the file before it, and `SafeStorage` creates a file for any write.
-P3, effort S, and the cause and the fix are both in the entry.
+Three things are carried rather than finished:
 
-**[T-143](multi-source.md) is done**, 2026-08-22T02:00Z. 1,036 tests passing, 0
-failing. Measured before building, and the entry's premise was too kind: above
-`-j 1` the takers do not fetch the shared file twice, they have no source at
-all and never finish. `scripts/check-shared-files.ps1` gained `-Jobs`, which
-the acceptance needed, and both runs are recorded:
-`bench/shared-files-20260822T014247442Z.json` is the failure and
-`bench/shared-files-20260822T015216397Z.json` is the fix.
+- **[T-020](peers.md)** stays the only open P0. Half of it is fixed; the
+  stranded-socket half and the poisoned-listener finding are open.
+- **[T-040](memory.md)** and **[T-090](bench.md)** stay partial. Neither needs
+  a longer run; both need the specific measurements named in their entries.
+- **[T-164](peers.md)** is partial, with two of its three parts blocked on
+  `librqbit` seams that the entry now names with line numbers.
 
-**[T-164](peers.md) is partial**, 2026-08-22T02:20Z. 1,043 tests passing, 0
-failing. The seam was read before anything was priced, which is what the work
-order asked, and it split the entry into three parts rather than one.
+## Start here next session
 
-- `librqbit` already has a peer blocklist, checked at `session.rs:917` before an
-  incoming handshake is read and at `torrent_state/live/mod.rs:629` before an
-  outgoing dial, and `IpRanges::load_from_url` takes a `file:` URL. So
-  **`--block-peer` needed no upstream change and is done**, on `download`,
-  `seed` and `peers`.
-- Adding to that list mid-run is **blocked**: `Session::blocklist` is a plain
-  field behind an `Arc`, and `IpRanges` is in a private module, so even its
-  `pub fn new` is unreachable.
-- Attributing a bad piece to the right peer is **blocked**:
-  `file_ops.rs:310` has the peer and `TorrentStorage::pwrite_all_vectored` does
-  not, and `librqbit` already convicts whichever peer delivered the last chunk
-  of a failed piece, which is the wrong answer [T-179](webseed.md) was written
-  to stop giving.
+The work order. Re-derive it if the reasoning below no longer holds, and say so
+in this file if you do.
 
-**One defect found while running T-164's gates, and fixed rather than filed.**
-[T-179](webseed.md)'s acceptance test failed twice under whole-suite load with
-`served [655360, 0]`: the honest mirror had finished the whole payload before
-the liar's bridge task was scheduled, so nothing was ever disputed. It reran
-clean twenty times on an idle machine, including six from a worktree at
-`86445bf` with none of this session's changes, which is what rules out the work
-in flight. `librqbit`'s `piece_tracker.rs:114` assigns a piece to one peer at a
-time unless another steals it, so "both mirrors served" was a scheduling
-outcome the test did not control. The liar now attaches first, scoped to half
-the payload, and the healthy mirror joins once the liar has served a byte. The
-correction is under T-179 and [RULES.md](RULES.md) section 5 carries the shape
-as its own line.
+1. **[T-020](peers.md)**, the only open P0, and it has been outranked for three
+   sessions by correctness work that is now done. `bench swarm` found that
+   while the pending handshake set is full the target **cannot complete a
+   handshake for any info hash, including one it is serving**, and goes on
+   reporting itself as seeding. A stranded socket is a resource; a listener
+   that accepts and never answers is an outage no health check sees. The
+   `PENDING_HANDSHAKE_CHECKS` change in `crates/bit-cli-core/src/engine.rs`
+   removed the panic; the entry's second finding is open.
+   Corpus: `aria2_rust/aria2-core/src/engine/bt_peer_storage/`.
+2. **[T-040](memory.md)**, partial, and the open question is answered:
+   0.804 MiB an hour, linear, r squared 0.73 over 525 samples. What is left is
+   attribution and not wall clock, because completions run at a constant 228.5
+   an hour and the two are collinear. **Two shorter runs at different leech
+   rates**, not a longer one. Both commands are in the entry.
+3. **[T-064](trackers.md)**, BEP 15 backoff, effort S and the corpus has
+   written it twice: nine lines at `torrent/tracker/udp/timeout.go:9`, and a
+   shorter ladder at `mtorrent/mtorrent-core/src/trackers/udp.rs:150`. The
+   entry's decision to diverge stands; what it owes is the documented total
+   budget, which both references state and this one does not.
+4. **[T-100](bep-coverage.md)**, BEP 6 Fast Extension. The algorithm at
+   `vortex/bittorrent/src/peer_comm/peer_connection.rs:89`, the receive-side
+   bug that makes it silently inert at `torrent/peerconn.go:1047`, a canonical
+   test vector, and a documented divergence in aria2 so a mismatch is not
+   debugged twice.
 
-**[T-186](cli-surface.md) is done**, 2026-08-22T03:00Z. 1,050 tests passing, 0
-failing. Measured before building and the premise held, with one thing the
-entry did not know: the wrong spelling does not only report nothing, it
-**writes**. `seed` hash-checks on add, so pointing at the torrent directory
-left an empty `album/album/` inside it at full length. `crate::payload::resolve`
-is now the shared rule and `seed` takes the resolved root as
-`AddOptions::output_folder`, which is also what makes it right for a payload
-directory the caller renamed.
-
-**That is the whole work order the last session left.** All four entries closed
-or advanced, and three defects found and fixed on the way: T-188 filed,
-T-179's test race, and T-013's closing claim corrected.
+Do not start [T-163](peers.md) MSE, [T-102](bep-coverage.md) BEP 55,
+[T-167](bep-coverage.md) BEP 54, or [T-016](disk-io.md) fastresume. All four are
+blocked on `librqbit` seams and all four name the blocker with line numbers.
 
 ## Open questions for the operator
 
-None. The session is unattended and nothing was left pending by the last one.
+None. Everything the operator asked for mid-session on 2026-08-22 is built and
+recorded above.

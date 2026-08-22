@@ -13,24 +13,25 @@ Read [INDEX.md](INDEX.md) for the work order.
 1. Read [PROGRESS.md](PROGRESS.md). It says what the last session did, what is
    in progress, and where to resume. It carries no history.
 2. Read [INDEX.md](INDEX.md), the "Start here" section. That is the work order.
-3. Rewrite `PROGRESS.md` to say what **this** session is going to do, before
+3. Record the start instant on `PROGRESS.md`'s state line, in ISO 8601 UTC.
+   Everything at the end that measures the session reads it from there.
+
+```bash
+date -u +"%Y-%m-%dT%H:%M:%SZ"
+```
+
+4. Rewrite `PROGRESS.md` to say what **this** session is going to do, before
    doing it. Name the entry ids and the files.
-4. Re-measure the baseline rather than trusting a recorded one:
+5. Re-measure the baseline rather than trusting a recorded one. One command,
+   not four: it kills stray release processes first, filters test failures by
+   test name rather than by the summary line, and prints one verdict.
 
 ```bash
-cargo test --workspace
+pwsh -NoProfile -File scripts/gates.ps1
 ```
 
 ```bash
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-```
-
-```bash
-cargo fmt --all --check
-```
-
-```bash
-cargo deny check
+pwsh -NoProfile -File scripts/check-todo.ps1
 ```
 
 ```bash
@@ -43,43 +44,94 @@ When the operator says the session is ending, in this order:
 
 1. Finish or checkpoint the current task. A half-finished change is recorded in
    `PROGRESS.md` as partial, with the entry id and the file, never left silent.
-2. Update `PROGRESS.md`: what happened, what is in progress with a named
-   reference to the exact `TODO/<file>` and entry id, what is next.
+2. Update `PROGRESS.md`. It is the only thing the next session is told to read,
+   so it carries everything the kickoff prompt does not, and section 3 says the
+   kickoff carries almost nothing. It must hold:
+
+   - **The state line**: when this session ran, in ISO 8601 UTC, and whether it
+     was attended.
+   - **The measured baseline**: tests passing, the gates, and the CI run id and
+     the commit it describes. Named by id, never as "the latest".
+   - **The entry counts**, which `scripts/session-report.ps1` prints.
+   - **What this session did**, in a few lines per entry, and every premise a
+     measurement disproved.
+   - **What is in progress**, with the `TODO/<file>` and the entry id.
+   - **Start here next session**: the ordered list, with the entry ids, the
+     files, and the corpus sources for each by repository and path. This is the
+     work order. It used to live in the kickoff prompt and it belongs here.
+   - **Open questions for the operator**, or that there are none.
 3. Update the affected `TODO/` entries and [INDEX.md](INDEX.md), including the
    counts table, which must be exact against the rows.
-4. **Two deep reviews.** Review 1: every claim written this session against the
-   code or the path it cites. Review 2: cold, as if someone else wrote it.
-   a doc contradicting another doc, an entry id that does not exist, a cited
-   path that does not resolve, counts that no longer add up.
-5. Commit and push with `scripts/git-sync.ps1`. Nothing else.
+4. **Two deep reviews, and the machine does the half it can.**
+
+```bash
+pwsh -NoProfile -File scripts/check-todo.ps1
+```
+
+   That answers four of the questions review 2 asks: a status in `INDEX.md`
+   that disagrees with the entry's own `Status:` line, an entry id that names
+   nothing, a cited path that does not resolve, counts that no longer add up.
+   It is one second and it has already caught two things that had been wrong
+   for a session.
+
+   What it does not answer is whether a claim is **true**, and that is review
+   1: every claim written this session against the code or the path it cites.
+   Doing the mechanical half in one second is what leaves the time for the half
+   that needs reading. Review 2 is then a cold read of the prose, as if someone
+   else wrote it.
+5. Commit and push with `scripts/git-sync.ps1`. Nothing else. Pass `-Summary
+   -Since <the start instant>` on the last push of the session, so the numbers
+   in `PROGRESS.md` are measured rather than counted by hand.
 6. Read the CI run the push started. A push that leaves CI red without an entry
-   naming why is not finished.
+   naming why is not finished. A push carrying only documentation should carry
+   `-NoCi` and then there is no run to read.
 7. Print the kickoff prompt in chat only, in a code block. Section 3 says what
    it must contain.
 
 ## 3. The kickoff prompt
 
-Printed in chat, in a code block, never written to a file. It starts the next
-session with no prior context, so it must be self-contained. It contains:
+Printed in chat, in a code block, never written to a file.
 
-- The one-line statement of what `bit-cli` is and why it exists.
-- What this session did, in three or four lines.
-- Where to resume: the exact `TODO/<file>`, the entry ids, and the corpus
-  sources for each, by repository and path.
-- The measured test count and the CI state as of the last push, named by run
-  id rather than as "the latest".
-- A pointer to this file and to `PROGRESS.md` rather than a restatement of
-  them. Do not paste these rules into the kickoff; they are tracked and the
-  next agent can read them.
+**It is generic and it stays generic.** Everything that changes from session to
+session lives in `PROGRESS.md`, which is tracked, versioned, and read first
+anyway. A prompt that restates the work order is a second copy of it that goes
+stale the moment an entry closes, and it costs the next session's context to
+read something it is about to read again.
+
+So the prompt carries only what a reader cannot get from the repository:
+
+- The one-line statement of what `bit-cli` is and why it exists, because the
+  next agent has to know that before it opens anything.
+- What to read, in order, and nothing about what is in it.
 - Whether the session is attended or unattended, and what to do when blocked.
+- The one-line restore command for the corpus, because a fresh machine cannot
+  read `RULES.md` section 7 out of a directory it does not have.
+
+It carries **no** entry ids, no counts, no test numbers, no CI run id, and no
+work order. Those are `PROGRESS.md`'s, which is where they are already correct.
+
+The kickoff is therefore the same text every session, and the only thing that
+makes one session different from the next is what `PROGRESS.md` says. That is
+the point: the prompt is a pointer, and the record is the record.
+
+`PROGRESS.md` has to hold up its end. Section 2 step 2 says what it must carry,
+and the template at the top of the file says it again where a session will
+see it.
 
 ## 4. Git
 
 **`scripts/git-sync.ps1` is the only sanctioned way to commit and push.** It
 enforces the rules below mechanically, so they stop being things to remember.
 
+**Write the commit body to a file and pass `-BodyFile`.** Never type a body
+into the shell. A body typed into `bash` as a PowerShell here-string ends at the
+first apostrophe, and everything after it becomes shell commands: "the run's own
+deadline" is enough to do it. That has cost two failed pushes and it will cost
+more, because the failure is silent until git-sync reports a subject it never
+received.
+
 ```bash
-pwsh -NoProfile -File scripts/git-sync.ps1 -Message "Subject line" -Body "..."
+pwsh -NoProfile -File scripts/git-sync.ps1 -Message "Subject line" -BodyFile /tmp/msg.txt
 ```
 
 ```bash
@@ -90,13 +142,25 @@ pwsh -NoProfile -File scripts/git-sync.ps1 -PushOnly
 pwsh -NoProfile -File scripts/git-sync.ps1 -Check
 ```
 
-Every switch: `-Message`, `-Body`, `-Path` to stage specific paths, `-Evidence`
-to force-add one benchmark past `.gitignore`, `-NoPush` to commit only,
-`-PushOnly` to push what is already committed, `-Check` to report without
-changing anything, `-FetchReferences` to restore the corpus on a fresh clone,
-`-SkipGates` for a documentation-only change where the tree is known green, and
-`-NoReferences` to skip the corpus mirror on one push. `-SkipGates` prints that
-it was used, so a transcript shows the push carried no proof.
+Every switch: `-Message`, `-BodyFile` (preferred) or `-Body`, `-Path` to stage
+specific paths, `-Evidence` to force-add one benchmark past `.gitignore`,
+`-NoPush` to commit only, `-PushOnly` to push what is already committed,
+`-Check` to report without changing anything, `-FetchReferences` to restore the
+corpus on a fresh clone, `-SkipGates` for a documentation-only change where the
+tree is known green, `-NoReferences` to skip the corpus mirror on one push,
+`-NoCi` to mark the commit so no CI run starts, `-Summary -Since <ISO>` to
+print what the session did, and `-Force` to override the one refusal that is a
+judgement rather than a rule. `-SkipGates` prints that it was used, so a
+transcript shows the push carried no proof.
+
+**`-NoCi` for a push CI could not have caught anything in.** A run is sixteen
+jobs and about five minutes, and the workflow's concurrency group cancels one
+in flight when the next push lands, so a documentation push both costs a run
+and destroys the one before it. `-NoCi` puts `[skip ci]` on the commit. It is
+refused unless every staged path is under `TODO/`, `docs/`, `bench/`, or a
+handful of root files: a "documentation-only" push carrying a source file is
+exactly the one that needed CI. `.github/` is deliberately not in the safe set,
+because a workflow edit is the change whose effect is only visible in a run.
 
 What it enforces, and why each rule exists:
 
@@ -110,17 +174,60 @@ What it enforces, and why each rule exists:
   and the script refuses if a staged path is under it even with `-f`.
 - **`bench/*.json` and `*.csv` are gitignored.** A run that **is** the evidence
   for an entry goes in deliberately with `git add -f`; the other ninety do not.
-- **The corpus is pushed to the `references` branch**, not to `main`. The
-  script syncs it on every push, so `reference/` survives a lost machine
-  without ever entering `main`'s history.
+- **The corpus is pushed to the `references` branch**, not to `main`, and only
+  when it changed. The script writes the tree, compares its hash against what
+  `origin/references` already holds, and pushes nothing when they match. Before
+  that it force-pushed 52 MB on every push, which is most pushes, for a corpus
+  that changes about once a month.
 - **The gates run before the push**, not after. `cargo fmt --all --check`,
   `cargo clippy -- -D warnings`, and `cargo test --workspace`.
 
 ## 4a. Tools on this machine
 
-Three that a session should reach for before its own habits. Recorded here on
-2026-08-21 because the operator added them mid-session and the next agent will
-not know they exist.
+What a session should reach for before its own habits. Recorded here because
+these were added mid-session and the next agent will not otherwise know they
+exist.
+
+### The four scripts a session runs, in the order it runs them
+
+- **`scripts/gates.ps1`.** Every gate, one command, one answer. It is not a
+  wrapper for convenience: it kills stray `bit-cli` and `loopback-*` processes
+  first, because a release binary left running by an acceptance script holds its
+  own executable open and the next build fails on a locked file that names
+  neither; and it filters test failures with `^test \S+ \.\.\. FAILED` and
+  `-CaseSensitive`, because `-match 'FAILED'` matches "0 failed" in the summary
+  line and loses a flake's name exactly when it is needed. `-Fix` formats,
+  `-Fast` skips `deny` and the build, `-Build` adds `--bins --examples`, `-Json`
+  for a machine.
+
+```bash
+pwsh -NoProfile -File scripts/gates.ps1
+```
+
+- **`scripts/check-todo.ps1`.** The mechanical half of the two deep reviews:
+  statuses that disagree between `INDEX.md` and the entry, rows without entries
+  and entries without rows, counts that do not add up in either the prose or
+  the priority table, `T-NNN` references to entries that do not exist, dead
+  links between `TODO/` files, and cited paths and line numbers that do not
+  resolve, in this tree and in `reference/` when it is present.
+
+```bash
+pwsh -NoProfile -File scripts/check-todo.ps1
+```
+
+- **`scripts/session-report.ps1`.** What the session did, measured: elapsed
+  time from the start instant on `PROGRESS.md`'s state line, commits, files
+  changed, lines added and removed, `scc` over `crates/`, entries done out of
+  workable, and which entries closed, advanced or were filed. `git-sync
+  -Summary -Since <ISO>` runs it after the push.
+
+```bash
+pwsh -NoProfile -File scripts/session-report.ps1 -Since 2026-08-22T01:11:24Z
+```
+
+- **`scripts/git-sync.ps1`.** Section 4.
+
+### The rest
 
 - **`codegraph`.** This repository has a `.codegraph/` index. Reach for it
   **before** `grep`, `find`, or opening a file, when the question is "how does
@@ -222,8 +329,26 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
 - **Headless parity is absolute:** nothing TTY-gated, nothing display-only, no
   prompting. stdout carries data only.
 
-### PowerShell
+### PowerShell, and passing text between two shells
 
+- **Never send prose through two shells.** A PowerShell here-string written
+  inside a `bash` command is parsed by bash first, and `@'...'@` is `@` plus a
+  single-quoted string plus `@`: it ends at the first apostrophe in the text.
+  "the run's own deadline" turns the rest of a commit message into shell
+  commands, and the first sign of it is a subject line that reads
+  `on 'main', not 'of'`. It has happened twice.
+
+  The fix is not better quoting. Write the text to a file with a file-writing
+  tool, and pass the path:
+
+  - a commit body: `git-sync -BodyFile <path>`;
+  - anything else: write a `.ps1` to the scratchpad and run
+    `pwsh -NoProfile -File <path>`. A script file is parsed once, by
+    PowerShell, and nothing in it needs escaping.
+
+  Same rule for `python -c` and `python - <<'PY'`: a heredoc is fine for code
+  with no apostrophes and no backslashes, and a Windows path in a Python string
+  literal has both. Prefer a file.
 - **Variable names are case-insensitive**, `$args` inside a function is an
   automatic variable that silently swallows a parameter of that name, and
   `-match` is case-insensitive so `'FAILED'` matches `"0 failed"`. Name locals

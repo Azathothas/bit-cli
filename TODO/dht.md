@@ -18,7 +18,7 @@ is a cost imposed on the network for no gain here. That is the argument
 T-050 needs, and it is stronger than "check what the default persists": the
 answer is client mode, no persistence, and a documented path if persistence is
 ever wanted. `n0-mainline/src/common/closest_nodes.rs:127` `dht_size_estimate`
-and `docs/dht_size_estimate.md` are what a `dht` report object could carry
+and its `n0-mainline/docs/dht_size_estimate.md` are what a `dht` report object could carry
 beyond a routing-table count, for T-052.
 
 `fx-torrent/src/dht/` is the widest BEP 5 surface in the corpus to read

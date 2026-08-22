@@ -94,7 +94,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-018](disk-io.md) | P2 | disk-io | open | The write path issues one operation per 16 KiB block |
 | [T-177](disk-io.md) | P2 | disk-io | **done** | A piece that spans a file boundary has no adversarial fixture |
 | [T-184](disk-io.md) | P2 | disk-io | **done** | A boundary piece under --select-file has no decided behaviour |
-| [T-188](disk-io.md) | P3 | disk-io | open | A chunk starting on a file boundary creates the file before it |
+| [T-188](disk-io.md) | P3 | disk-io | **done** | A chunk starting on a file boundary creates the file before it |
 | [T-020](peers.md) | P0 | peers | open | Connections accumulate in CLOSE_WAIT until TCP is unusable |
 | [T-021](peers.md) | P0 | peers | **done** | A temporary network drop stops the download permanently |
 | [T-022](peers.md) | P1 | peers | open | Peer connections churn on IPv6-only swarms |
@@ -222,7 +222,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 147 items: 137 to work through, and 10 deferred to Phase C.
-52 open, 5 partial, 2 blocked, 78 done.
+51 open, 5 partial, 2 blocked, 79 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -478,9 +478,9 @@ sessions earlier.
 | P0 | 1 | 2 | 0 | 8 | 11 |
 | P1 | 3 | 1 | 0 | 47 | 51 |
 | P2 | 25 | 2 | 2 | 22 | 51 |
-| P3 | 23 | 0 | 0 | 1 | 24 |
+| P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **52** | **5** | **2** | **78** | **147** |
+| **All** | **51** | **5** | **2** | **79** | **147** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

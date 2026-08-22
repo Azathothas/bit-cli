@@ -40,6 +40,16 @@
 #   # get reference/ onto a fresh clone from the references branch
 #   pwsh -NoProfile -File scripts/git-sync.ps1 -FetchReferences
 #
+#   # a body with apostrophes, backticks or dollars in it: pass a file, never
+#   # a shell string
+#   pwsh -NoProfile -File scripts/git-sync.ps1 -Message "Subject" -BodyFile msg.txt
+#
+#   # a documentation-only push, with no CI run to pay for
+#   pwsh -NoProfile -File scripts/git-sync.ps1 -Message "Subject" -NoCi
+#
+#   # and print what the session did on the way out
+#   pwsh -NoProfile -File scripts/git-sync.ps1 -Message "Subject" -Summary -Since 2026-08-22T01:11:24Z
+#
 # Exit codes: 0 all good, 1 a rule was broken or a gate failed, 2 the script
 # could not run (not a git repository, no message, git missing).
 #
@@ -51,7 +61,17 @@ param(
     [string]$Message,
 
     # Commit body. Blank line inserted between subject and body.
+    #
+    # Prefer -BodyFile. A body typed into a shell has to survive that shell's
+    # quoting, and a body with an apostrophe in it does not: a PowerShell
+    # here-string passed from bash ends at the first `'`, and the rest of the
+    # message becomes commands. That has cost this repository two failed
+    # pushes.
     [string]$Body,
+
+    # Read the commit body from a UTF-8 file. Nothing is interpreted, so an
+    # apostrophe, a backtick, a `$`, or a heredoc marker is just text.
+    [string]$BodyFile,
 
     # Paths to stage. Default is everything tracked and untracked, minus
     # whatever .gitignore excludes.
@@ -79,6 +99,28 @@ param(
 
     # Do not sync the corpus to the references branch on this push.
     [switch]$NoReferences,
+
+    # Mark the commit so GitHub Actions does not run. For a push that changes
+    # nothing a job could fail on: documentation, TODO entries, a script the
+    # workflow does not call. A CI run costs sixteen jobs and about five
+    # minutes, and pushing again while one is in flight cancels it, so a push
+    # that cannot go red is a push worth not paying for.
+    #
+    # Refused unless the staged paths are all in the safe set, because a
+    # "documentation-only" push that carries a source file is exactly the one
+    # that needed CI. -Force overrides, and says so.
+    [switch]$NoCi,
+
+    # Print what the session did: files, lines, entries closed, and how long it
+    # took. Needs -Since to measure elapsed time.
+    [switch]$Summary,
+
+    # ISO 8601 UTC instant the session started, for -Summary.
+    [string]$Since,
+
+    # Override a refusal that is a judgement rather than a rule. Today only
+    # -NoCi has one. Never overrides the reference/ rule or the identity rule.
+    [switch]$Force,
 
     [string]$Branch = "main",
     [string]$ReferenceBranch = "references"
@@ -135,6 +177,18 @@ function Invoke-GitAs {
 Set-Location $script:RepoRoot
 Invoke-Git -gitArgs @("rev-parse", "--git-dir") | Out-Null
 
+# `pwsh -File` hands each shell word to PowerShell as one string, so `-Path
+# a,b,c` typed in bash arrives as the single path "a,b,c" and git reports a
+# pathspec that matches nothing. Splitting here makes the flag mean the same
+# thing from either shell, which is what a flag has to do.
+function Split-List {
+    param([string[]]$values)
+    if (-not $values) { return @() }
+    return @($values | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+$Path = Split-List $Path
+$Evidence = Split-List $Evidence
+
 # ---------------------------------------------------------------------------
 # Rule 2: no AI attribution
 # ---------------------------------------------------------------------------
@@ -173,6 +227,36 @@ function Get-ForbiddenStaged {
     $staged = (Invoke-Git -gitArgs @("diff", "--cached", "--name-only")) -split "`r?`n" |
         Where-Object { $_ -and $_.Trim() }
     return @($staged | Where-Object { $_ -match '^reference/' -or $_ -eq 'reference' })
+}
+
+# ---------------------------------------------------------------------------
+# Rule 4: -NoCi only where CI could not have caught anything
+# ---------------------------------------------------------------------------
+#
+# The safe set is named by what it is rather than by what it is not, so a new
+# kind of file defaults to needing CI. Anything outside it is a path some job
+# builds, runs, or lints, and "it is only a small change" is the sentence that
+# precedes a red matrix.
+#
+# `.github/` is deliberately **not** safe: a workflow edit is the one change
+# whose effect is only visible in a run.
+
+$script:SafeForNoCi = @(
+    '^TODO/',
+    '^docs/',
+    '^bench/',
+    '^README\.md$',
+    '^LICENSE',
+    '^\.gitignore$',
+    '^\.gitattributes$'
+)
+
+function Test-NeedsCi {
+    param([string[]]$staged)
+    return @($staged | Where-Object {
+            $path = $_
+            -not ($script:SafeForNoCi | Where-Object { $path -match $_ })
+        })
 }
 
 # ---------------------------------------------------------------------------
@@ -322,6 +406,26 @@ Mirror of reference/ at main $head. $files files.
 Not a history: this branch is force-pushed and holds only the current corpus.
 See TODO/reference-map.md and reference/RESEARCH.md.
 "@
+        # Nothing to do when the remote already holds these exact bytes. The
+        # tree hash is the whole comparison: it is the content of reference/
+        # and nothing else, so an equal hash means an equal corpus. Before
+        # this, every push force-pushed 52 MB whether or not a single file had
+        # changed, which is most pushes.
+        #
+        # `ls-remote` is one round trip and no objects. The commit it names is
+        # local whenever this script pushed it, which is the ordinary case; on
+        # a fresh clone it is not, and then there is nothing to compare and the
+        # push happens.
+        $remote = (Invoke-Git -gitArgs @("ls-remote", "origin", "refs/heads/$ReferenceBranch") -AllowFail).Trim()
+        $remoteHead = if ($remote) { ($remote -split "\s+")[0] } else { $null }
+        if ($remoteHead) {
+            $remoteTree = (Invoke-Git -gitArgs @("rev-parse", "--verify", "--quiet", "${remoteHead}^{tree}") -AllowFail).Trim()
+            if ($remoteTree -eq $tree) {
+                Write-Step "origin/$ReferenceBranch already holds this tree ($files files), nothing to push"
+                return
+            }
+        }
+
         $commit = (Invoke-GitAs -gitArgs @("commit-tree", $tree, "-m", $commitMessage)).Trim()
         if (-not $commit) { Exit-With 1 "could not create the $ReferenceBranch commit" }
 
@@ -342,6 +446,12 @@ See TODO/reference-map.md and reference/RESEARCH.md.
 
 if (-not $PushOnly) {
     if (-not $Message) { Exit-With 2 "-Message is required unless -PushOnly, -Check or -FetchReferences." }
+
+    if ($BodyFile) {
+        if ($Body) { Exit-With 2 "-Body and -BodyFile are two ways to say the same thing. Pass one." }
+        if (-not (Test-Path -LiteralPath $BodyFile)) { Exit-With 2 "-BodyFile '$BodyFile' does not exist." }
+        $Body = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $BodyFile)).TrimEnd()
+    }
 
     $hits = Test-Attribution "$Message`n$Body"
     if ($hits.Count -gt 0) {
@@ -385,9 +495,28 @@ if (-not $PushOnly) {
     }
     Write-Step "$($staged.Count) file(s) staged"
 
+    if ($NoCi) {
+        $risky = Test-NeedsCi $staged
+        if ($risky.Count -gt 0 -and -not $Force) {
+            Exit-With 1 ("-NoCi refused: these staged paths are ones CI is the check for: " +
+                ($risky -join ', ') +
+                ". Push them with CI, or pass -Force if you have a reason and can say what it is.")
+        }
+        if ($risky.Count -gt 0) {
+            Write-Step "-NoCi -Force: skipping CI on a push that touches $($risky.Count) path(s) CI checks"
+        }
+    }
+
     Invoke-Gates
 
     $full = if ($Body) { "$Message`n`n$Body" } else { $Message }
+    if ($NoCi) {
+        # GitHub Actions reads this out of the head commit's message and skips
+        # the run. It goes on its own line at the end so the subject stays
+        # readable in a log, and so a reader can see in `git log` which pushes
+        # were never checked.
+        $full = "$full`n`n[skip ci]"
+    }
     $messageFile = Join-Path ([System.IO.Path]::GetTempPath()) "bit-cli-commit-$PID.txt"
     # UTF-8 without a BOM: pwsh 7 defaults to that, and a BOM ends up as three
     # bytes at the front of the subject line.
@@ -431,7 +560,10 @@ if (-not $NoReferences) { Sync-References }
 # The run the push started. A push that leaves CI red without an entry naming
 # why is not finished, so print the handle rather than making the caller find it.
 $gh = Get-Command gh -ErrorAction SilentlyContinue
-if ($gh) {
+if ($NoCi) {
+    Write-Step "[skip ci] on the commit, so no run was started. Nothing to read."
+}
+elseif ($gh) {
     Write-Step "the run this push started, once it registers:"
     & gh run list --limit 1
     Write-Host ""
@@ -440,6 +572,15 @@ if ($gh) {
 }
 else {
     Write-Step "gh is not on PATH. Check CI by hand before calling this finished."
+}
+
+# What the session did, measured. Printed after the push so the numbers include
+# it. See scripts/session-report.ps1.
+if ($Summary) {
+    $report = Join-Path $PSScriptRoot "session-report.ps1"
+    $reportArgs = @("-NoProfile", "-File", $report)
+    if ($Since) { $reportArgs += @("-Since", $Since) }
+    & pwsh @reportArgs
 }
 
 exit 0
