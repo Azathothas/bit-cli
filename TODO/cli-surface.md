@@ -1907,7 +1907,7 @@ Source:      found while measuring [T-184](disk-io.md), 2026-08-21
 Category:    cli
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-22T01:40Z
 
 Problem:     `--exclude-file <INDEX>` skips files. Used **without**
              `--select-file` it does nothing at all: `selection` in
@@ -1982,9 +1982,103 @@ files on disk: ["donor/extra-a.txt"]
 The first run excluded index 1 and downloaded it anyway. The second selected
 index 0 and got exactly that, which is the control: the selection machinery
 works and only the exclusion-alone path is dead. An earlier run of the first
-command against a mirror missing that file failed with
-`http://127.0.0.1:PORT/donor/extra-a.txt: 404`, which is the same finding from
-the other side: the run asked a mirror for the file it had been told to skip.
+command against a mirror missing that file failed with a 404, which is the same
+finding from the other side: the run asked a mirror for a file it had been told
+to skip.
+
+**Closed 2026-08-22T01:40Z**, and both halves of the count problem were decided
+together the way the approach asked.
+
+The count is per source, not per run, so it is resolved per source. `run`
+already parses the metainfo of a local `.torrent`, a fetched one and a
+Metalink's into `metas` before any plan is handed out, so `plan_selection` in
+`crates/bit-cli/src/cmd/download.rs` settles each plan's `FileSelection` there,
+before the session starts. A usage error surfaces before anything is added
+rather than per worker.
+
+A magnet defers, and only when it has to.
+`crate::selection::needs_file_count` is the one place that says which two
+spellings need a count: an exclusion with no selection beside it, and an
+open-ended range. A magnet with neither adds exactly as before and pays
+nothing.
+
+**The magnet answer is not the one the approach named, and the reason is worth
+recording.** `Api::api_torrent_action_update_only_files` does exist and does
+narrow a live torrent, but narrowing **after** the add is too late for the
+thing this entry is about. `librqbit`'s initial check creates and opens every
+file it was not told to skip, so a selection applied afterwards has already
+created what it excludes. `Engine::resolve_with` reads the metadata first, with
+the caller's own trackers and `--peer` addresses so it resolves against the
+swarm the add is about to use, and it hands back the `.torrent` bytes it built.
+The add then takes those bytes, so this is one metadata resolution and not two.
+The seam upstream is `librqbit-9.0.0/src/session.rs:1298`, where `list_only`
+returns after `resolve_magnet` and before any storage exists.
+
+That resolution is bounded by `--init-timeout`, which `engine.add` never bounded
+for a magnet at all. A swarm that never answers now reports the phase rather
+than hanging the run.
+
+`crate::selection::resolve` no longer answers `None` when it is asked for an
+exclusion's complement without a count. `None` means every file, which is the
+flag doing the opposite of what it says, and that silence is what this entry
+was. It is a usage error now, so a caller that skips `needs_file_count` fails
+loudly instead of quietly downloading everything.
+
+Measured against `target/release/bit-cli`, on the fixture above rebuilt with
+`bit-cli create --piece-length 1024`: `extra-a.txt` 1024 bytes at index 0,
+`shared.bin` 4096 at index 1, five pieces, nothing straddling.
+
+```
+$ bit-cli --json download donor.torrent --dir out --web-seed-only \
+    --web-seed http://127.0.0.1:57364/ --web-seed-mode prefix \
+    --no-torrent-web-seed --no-tracker --no-dht --no-lsd --port 0 \
+    --exclude-file 1 --stop-after 20s
+stopped= completed
+downloaded= 1024
+files on disk: donor/extra-a.txt
+mirror was asked for: GET /   GET /extra-a.txt
+```
+
+The mirror's own log is the half that says the exclusion was applied before the
+fetch rather than after it: `GET /` is [T-004](webseed.md)'s style probe, and
+`shared.bin` was never asked for.
+
+The magnet, against a loopback seeder with `--peer` and no tracker, no DHT and
+no LSD:
+
+```
+$ bit-cli --json download magnet:?xt=urn:btih:9bef473bd4483a6e51c2f5194e983712f8edfec0 \
+    --dir out --peer 127.0.0.1:51899 --no-tracker --no-dht --no-lsd --port 0 \
+    --exclude-file 1 --init-timeout 60s --stop-after 60s
+stopped= completed
+downloaded= 1024
+files on disk: donor/extra-a.txt
+```
+
+And `--select-file 1-`, the open-ended range that was refused for the same
+missing count, on the same magnet:
+
+```
+$ ... --select-file 1- ...
+stopped= completed
+downloaded= 4096
+files on disk: donor/extra-a.txt (0 bytes), donor/shared.bin (4096 bytes)
+```
+
+Six tests. `an_exclusion_with_no_selection_skips_the_file_and_never_asks_for_it`
+and `a_magnet_resolves_its_metadata_before_it_applies_an_exclusion` are the two
+acceptances, and both were run against the old behaviour first: the magnet one
+fails with `["donor/extra-a.txt", "donor/shared.bin"]`, which is the defect.
+`crate::test_support::FileServer` grew a request log for the first of them,
+because what a mirror was **not** asked for is the only evidence that a
+selection was applied before the fetch.
+
+**That third run found something this entry did not**: `extra-a.txt` lands as a
+zero byte file when it is not selected and the selection starts after it. It is
+not this entry's, and it is not new: `--select-file 1`, which needed no count
+and went through unchanged code, does the same. It is filed as
+[T-188](disk-io.md) with the cause, and it corrects
+[T-013](disk-io.md)'s closing claim.
 
 ### T-186 seed --data and verify --data resolve the payload differently
 

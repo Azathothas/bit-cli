@@ -352,6 +352,11 @@ impl TorrentFixture {
 pub struct FileServer {
     pub base: String,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Every request target it was asked for, in order, whether or not the
+    /// file was there. What a mirror was **not** asked for is the only
+    /// evidence that a selection was applied before the fetch rather than
+    /// after it. See `TODO/cli-surface.md`, T-185.
+    asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl FileServer {
@@ -382,6 +387,8 @@ impl FileServer {
             .expect("non-blocking listener");
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = stop.clone();
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = asked.clone();
 
         std::thread::spawn(move || {
             while !flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -397,6 +404,7 @@ impl FileServer {
                 // took a captured failure to see.
                 let _ = stream.set_nonblocking(false);
                 let root = root.clone();
+                let log = log.clone();
                 std::thread::spawn(move || {
                     let mut request = Vec::new();
                     let mut buf = [0u8; 4096];
@@ -414,6 +422,12 @@ impl FileServer {
                     let Some(path) = start.split_whitespace().nth(1) else {
                         return;
                     };
+                    // Recorded before the file is opened, so a request for
+                    // something that is not there is still a request that was
+                    // made.
+                    if let Ok(mut asked) = log.lock() {
+                        asked.push(path.to_string());
+                    }
                     // Header names are case insensitive, and every HTTP client
                     // this is pointed at writes them lower case, so matching
                     // `Range:` exactly matched nothing: every ranged request
@@ -520,7 +534,13 @@ Connection: close
         Self {
             base: format!("http://127.0.0.1:{port}/"),
             stop,
+            asked,
         }
+    }
+
+    /// Every request target served so far, in order.
+    pub fn asked(&self) -> Vec<String> {
+        self.asked.lock().expect("the request log").clone()
     }
 }
 

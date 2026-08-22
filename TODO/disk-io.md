@@ -304,6 +304,21 @@ created because both were written.
 Directories are still created up front. An empty directory a selection did not
 fill is cheap and visible; an empty file pretending to be payload is not.
 
+**Corrected 2026-08-22T01:40Z, while measuring [T-185](cli-surface.md).** The
+acceptance above is true and is only half the shape. It selects index 0, so
+every unselected file is **after** the selection and none of them is created.
+Select index 1 of a two-file torrent whose file 0 ends exactly on a piece
+boundary and file 0 lands as a zero byte file, which is what the last sentence
+above says does not happen.
+
+The rule the fix states, "a write creates a file and a read does not", is not
+the thing that broke. What broke is what counts as a write: `librqbit` issues a
+zero length write to the file **before** a chunk that starts on a file boundary,
+and a write of no bytes is not a write. Filed with the cause and the line
+numbers as [T-188](#t-188-a-chunk-starting-on-a-file-boundary-creates-the-file-before-it).
+Nothing here needs the selection plumbed into storage, which is this entry's
+argument and still holds.
+
 ### T-014 Adding a torrent can fail with "File exists (os error 17)"
 
 Source:      https://github.com/ikatson/rqbit/issues/504 (open)
@@ -1151,3 +1166,83 @@ bitfield is a different rule for a different reason: a **source** scoped to part
 of a payload genuinely cannot serve a piece it holds half of, because the other
 half is on a mirror it does not control.
 
+
+### T-188 A chunk starting on a file boundary creates the file before it
+
+Source:      found while measuring [T-185](cli-surface.md), 2026-08-22
+Category:    disk-io
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     A file the selection did not choose lands on disk as a zero byte
+             file when the selection starts after it and no piece straddles the
+             boundary between them. Nothing is written into it, and it is
+             created anyway.
+Relevance:   This is the exact state [T-013](#t-013-selecting-a-subset-of-files-still-creates-all-of-them)
+             closed on, so its closing claim, "finishes with only the selected
+             file present under `--dir`", is true in one direction and not the
+             other. **The correction is written under T-013.**
+
+             It is P3 rather than P2 because it costs a directory entry and no
+             bytes: an empty file, not a fetch. It is worth an entry because it
+             is the difference between a selection that is invisible on disk and
+             one that leaves a trail, and because a caller scripting over
+             `--dir` cannot tell an empty payload file from a skipped one.
+Approach:    The cause is upstream and the fix is local.
+
+             `librqbit-9.0.0/src/file_ops.rs:319-322` walks the file list to
+             place a chunk and skips a file with `if absolute_offset > file_len`,
+             strictly greater. A chunk that begins at exactly the first byte of
+             the next file leaves `absolute_offset == file_len` for the file
+             before it, so that file is **not** skipped: `remaining_len` is 0,
+             `to_write` is 0, and `pwrite_all_vectored(file_idx, file_len, [])`
+             is called with nothing to write.
+
+             `SafeStorage::pwrite_all_vectored` in
+             `crates/bit-cli-core/src/storage.rs:793` takes `Intent::Write`
+             before it looks at the slices, and `Intent::Write` is what creates
+             a file that is not there. The empty slices are skipped inside the
+             closure, after the file exists. `pwrite_all` at :781 has the same
+             shape.
+
+             So: return `Ok` for a write of zero bytes before opening anything.
+             That is correct independently of the upstream off-by-one, because
+             a write of no bytes changes no file, and it keeps
+             [T-013](#t-013-selecting-a-subset-of-files-still-creates-all-of-them)'s
+             rule intact: a write creates a file, and this is not a write.
+
+             Do **not** reach for the selection here. T-013's whole argument is
+             that storage needs no selection plumbed into it, and that argument
+             still holds: a piece that genuinely straddles into an unselected
+             file writes real bytes and the file is created, which is
+             [T-184](#t-184-a-boundary-piece-under---select-file-has-no-decided-behaviour).
+Acceptance:  `bit-cli download <MULTI> --select-file 1` on a torrent whose file
+             0 ends exactly on a piece boundary finishes with only file 1 under
+             `--dir`, and the same run's `partial` array stays empty because
+             nothing spilled.
+
+**Measured, not read.** The `donor` fixture from [T-185](cli-surface.md):
+`extra-a.txt` 1024 bytes at index 0 and `shared.bin` 4096 at index 1, at a 1024
+byte piece length, so file 0 is exactly piece 0 and nothing straddles.
+
+```
+$ bit-cli --json download donor.torrent --dir out --web-seed-only \
+    --web-seed http://127.0.0.1:57364/ --web-seed-mode prefix \
+    --no-torrent-web-seed --no-tracker --no-dht --no-lsd --port 0 \
+    --select-file 1 --stop-after 20s
+stopped= completed downloaded= 4096
+-rw-r--r--  0     extra-a.txt
+-rw-r--r--  4096  shared.bin
+```
+
+`partial` is `null` on that run, which is the proof that no piece spilled: this
+is not [T-184](#t-184-a-boundary-piece-under---select-file-has-no-decided-behaviour)
+seen again. The reverse direction, `--exclude-file 1`, resolves to the same
+selection read the other way and leaves `shared.bin` absent entirely, because
+there is no file after index 1 for a boundary chunk to start on.
+
+The hash check is not the cause. `--hash-check-only --select-file 1` against an
+empty directory creates `shared.bin` at 4096 and does **not** create
+`extra-a.txt`, so the file appears when the first chunk is written and not
+before.

@@ -10,8 +10,9 @@
 //! parses a flag; `download` may be handed a magnet, where the file list does
 //! not exist until the metadata resolves over the network. Two forms need the
 //! count and nothing else does: an exclusion with no selection beside it, and
-//! an open-ended range. Both are refused rather than guessed at when the count
-//! is absent. See `TODO/cli-surface.md`, T-185.
+//! an open-ended range. [`needs_file_count`] is which, asked before a source is
+//! added so a magnet's metadata is resolved first rather than guessed at. See
+//! `TODO/cli-surface.md`, T-185.
 
 use std::collections::HashSet;
 
@@ -37,10 +38,12 @@ pub fn resolve(
         .collect();
 
     // With no selection **flag**, the selection is everything the exclusion
-    // leaves. That needs the file count, and a caller who cannot supply one
-    // gets the old answer: the exclusion is not applied here.
-    // `TODO/cli-surface.md` T-185 is the entry for the case where it is never
-    // applied anywhere.
+    // leaves. That needs the file count. A caller who cannot supply one has
+    // asked for something this function cannot answer, and the answer it used
+    // to give was `None`, every file, which is the exclusion doing the
+    // opposite of what it says. `needs_file_count` is how a caller asks
+    // whether it has to go and find the count first. See
+    // `TODO/cli-surface.md`, T-185.
     //
     // Keyed on whether the flag was given rather than on what it resolved to.
     // `--select-file 9-` on a five-file torrent resolves to nothing, and that
@@ -48,7 +51,15 @@ pub fn resolve(
     // all of them.
     let selected = match (select.is_empty(), file_count) {
         (true, Some(count)) => (0..count).collect(),
-        (true, None) => return Ok(None),
+        // Refused rather than answered with `None`, which is every file and is
+        // the opposite of what the caller asked for. A caller that cannot
+        // supply the count asks `needs_file_count` first and goes and finds
+        // one; this is what it costs to skip that.
+        (true, None) => {
+            return Err(Error::usage(
+                "--exclude-file with no --select-file needs the file count; name the files to keep with --select-file instead",
+            ));
+        }
         (false, _) => selected,
     };
 
@@ -66,36 +77,64 @@ pub fn resolve(
     Ok(Some(out))
 }
 
+/// Whether these two flags can be resolved at all without the file count.
+///
+/// Two forms need it and nothing else does: an exclusion with no selection
+/// beside it, whose answer is every other file, and an open-ended range, whose
+/// answer runs to the last one. Every other spelling resolves to the same
+/// indices with the count and without it.
+///
+/// `download` asks this before it adds a source, because the answer decides
+/// whether a magnet's metadata has to be resolved before the add rather than
+/// after it. See `TODO/cli-surface.md`, T-185.
+pub fn needs_file_count(select: &[String], exclude: &[String]) -> bool {
+    if select.is_empty() && !exclude.is_empty() {
+        return true;
+    }
+    terms(select).chain(terms(exclude)).any(is_open_ended)
+}
+
+/// One flag's values split the way [`parse`] splits them.
+///
+/// Shared so that what counts as a term cannot drift between deciding that the
+/// count is needed and using it.
+fn terms(values: &[String]) -> impl Iterator<Item = &str> {
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+}
+
+/// Whether a term is a range with no upper bound, such as `3-`.
+fn is_open_ended(term: &str) -> bool {
+    matches!(term.split_once('-'), Some((_, "")))
+}
+
 /// Parse one flag's worth of indices and ranges.
 fn parse(values: &[String], flag: &str, file_count: Option<usize>) -> Result<Vec<usize>> {
     let mut out = Vec::new();
-    for value in values {
-        for term in value.split(',') {
-            let term = term.trim();
-            if term.is_empty() {
-                continue;
+    for term in terms(values) {
+        match term.split_once('-') {
+            None => out.push(term.parse::<usize>().map_err(|_| index_error(flag, term))?),
+            Some((start, "")) => {
+                let start: usize = start.trim().parse().map_err(|_| index_error(flag, term))?;
+                // An open-ended range needs an upper bound. Refuse rather
+                // than guessing at one when the file count is not known.
+                let Some(count) = file_count else {
+                    return Err(Error::usage(format!(
+                        "--{flag} `{term}`: an open-ended range needs the file count; list the indices or use a closed range"
+                    )));
+                };
+                out.extend(start..count);
             }
-            match term.split_once('-') {
-                None => out.push(term.parse::<usize>().map_err(|_| index_error(flag, term))?),
-                Some((start, "")) => {
-                    let start: usize = start.trim().parse().map_err(|_| index_error(flag, term))?;
-                    // An open-ended range needs an upper bound. Refuse rather
-                    // than guessing at one when the file count is not known.
-                    let Some(count) = file_count else {
-                        return Err(Error::usage(format!(
-                            "--{flag} `{term}`: an open-ended range needs the file count; list the indices or use a closed range"
-                        )));
-                    };
-                    out.extend(start..count);
+            Some((start, end)) => {
+                let start: usize = start.trim().parse().map_err(|_| index_error(flag, term))?;
+                let end: usize = end.trim().parse().map_err(|_| index_error(flag, term))?;
+                if start > end {
+                    return Err(Error::usage(format!("--{flag} `{term}` runs backwards")));
                 }
-                Some((start, end)) => {
-                    let start: usize = start.trim().parse().map_err(|_| index_error(flag, term))?;
-                    let end: usize = end.trim().parse().map_err(|_| index_error(flag, term))?;
-                    if start > end {
-                        return Err(Error::usage(format!("--{flag} `{term}` runs backwards")));
-                    }
-                    out.extend(start..=end);
-                }
+                out.extend(start..=end);
             }
         }
     }
@@ -158,11 +197,58 @@ mod tests {
         );
     }
 
-    /// Without it, it is not applied here, which is the state
-    /// `TODO/cli-surface.md` T-185 records.
+    /// Without it, it is refused. Answering `None` is answering "every file",
+    /// which is the exclusion doing the opposite of what it says, and that is
+    /// what `TODO/cli-surface.md` T-185 was.
     #[test]
-    fn an_exclusion_alone_needs_the_file_count() {
-        assert_eq!(resolve(&[], &args(&["1"]), None).unwrap(), None);
+    fn an_exclusion_alone_without_the_count_is_refused_rather_than_ignored() {
+        let err = resolve(&[], &args(&["1"]), None).unwrap_err();
+        assert_eq!(err.code(), ExitCode::Usage);
+        assert!(err.message().contains("file count"), "{}", err.message());
+    }
+
+    /// Which spellings need the count, so a caller knows whether it has to go
+    /// and find one before it can resolve anything.
+    #[test]
+    fn only_an_exclusion_alone_and_an_open_ended_range_need_the_count() {
+        assert!(!needs_file_count(&[], &[]));
+        assert!(!needs_file_count(&args(&["0"]), &[]));
+        assert!(!needs_file_count(&args(&["1-3"]), &args(&["2"])));
+        assert!(needs_file_count(&[], &args(&["1"])));
+        assert!(needs_file_count(&args(&["3-"]), &[]));
+        // An open-ended exclusion beside a selection needs it just as much.
+        assert!(needs_file_count(&args(&["0-9"]), &args(&["3-"])));
+        // Found inside a comma-separated value, not only as a whole one.
+        assert!(needs_file_count(&args(&["0,4-"]), &[]));
+        // Whitespace and empty terms are not terms.
+        assert!(!needs_file_count(&args(&["0, 1 ,"]), &[]));
+    }
+
+    /// For selections that are otherwise well formed, `needs_file_count` is
+    /// exactly the set `resolve` refuses without one. Pinned as a pair because
+    /// a caller that trusts the answer and skips the count hits the refusal.
+    #[test]
+    fn needs_file_count_agrees_with_what_resolve_refuses() {
+        let cases: [(&[&str], &[&str]); 8] = [
+            (&[], &[]),
+            (&["0"], &[]),
+            (&["1-3"], &["2"]),
+            (&["0,4"], &["4"]),
+            (&[], &["1"]),
+            (&["3-"], &[]),
+            (&["0-9"], &["3-"]),
+            (&["0,4-"], &[]),
+        ];
+        for (select, exclude) in cases {
+            let (select, exclude) = (args(select), args(exclude));
+            let resolved = resolve(&select, &exclude, None);
+            assert_eq!(
+                needs_file_count(&select, &exclude),
+                resolved.is_err(),
+                "{select:?} {exclude:?} resolved to {:?}",
+                resolved.map(|r| r.is_some())
+            );
+        }
     }
 
     #[test]

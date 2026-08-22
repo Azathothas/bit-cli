@@ -93,7 +93,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-017](disk-io.md) | P1 | disk-io | **done** | Concurrent receive paths contend on the payload file |
 | [T-018](disk-io.md) | P2 | disk-io | open | The write path issues one operation per 16 KiB block |
 | [T-177](disk-io.md) | P2 | disk-io | **done** | A piece that spans a file boundary has no adversarial fixture |
-| [T-184](disk-io.md) | P2 | disk-io | open | A boundary piece under --select-file has no decided behaviour |
+| [T-184](disk-io.md) | P2 | disk-io | **done** | A boundary piece under --select-file has no decided behaviour |
+| [T-188](disk-io.md) | P3 | disk-io | open | A chunk starting on a file boundary creates the file before it |
 | [T-020](peers.md) | P0 | peers | open | Connections accumulate in CLOSE_WAIT until TCP is unusable |
 | [T-021](peers.md) | P0 | peers | **done** | A temporary network drop stops the download permanently |
 | [T-022](peers.md) | P1 | peers | open | Peer connections churn on IPv6-only swarms |
@@ -190,7 +191,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-181](cli-surface.md) | P1 | cli | **done** | Four flags are accepted in silence and reach no code |
 | [T-183](cli-surface.md) | P1 | cli | **done** | --web-seed-list-url is read, only into a refusal |
-| [T-185](cli-surface.md) | P1 | cli | open | --exclude-file on its own selects nothing and downloads everything |
+| [T-185](cli-surface.md) | P1 | cli | **done** | --exclude-file on its own selects nothing and downloads everything |
 | [T-186](cli-surface.md) | P3 | cli | open | seed --data and verify --data resolve the payload differently |
 | [T-182](cli-surface.md) | P1 | ci | **done** | A macOS test asserted an invariant across two kernel subsystems |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
@@ -220,8 +221,15 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-146 items: 136 to work through, and 10 deferred to Phase C.
-56 open, 4 partial, 2 blocked, 74 done.
+147 items: 137 to work through, and 10 deferred to Phase C.
+55 open, 4 partial, 2 blocked, 76 done.
+
+**A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
+of [T-185](cli-surface.md)'s third acceptance run, and it corrects
+[T-013](disk-io.md)'s closing claim: an unselected file lands as a zero byte
+file when the selection starts after it, because `librqbit` issues a zero length
+write to the file before a chunk that starts on a boundary and this tree's
+storage creates a file for any write.
 
 **Three were added on 2026-08-21 by measuring three others**, which is now the
 most common way this list grows. [T-185](cli-surface.md) and
@@ -460,19 +468,25 @@ squared of 0.73, which is a trend. In both cases the first reading was of the
 fixture rather than of the thing. That is the same lesson T-032 and T-141 wrote
 down, arrived at twice more.
 
+Counted from the rows above on 2026-08-22T01:40Z, not carried forward. The
+previous revision of this table totalled 141 against 146 rows and put `done` at
+63 against a prose count of 74, so it had stopped describing the list some
+sessions earlier.
+
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 | 11 |
-| P1 | 5 | 1 | 0 | 43 | 49 |
-| P2 | 36 | 1 | 1 | 12 | 50 |
-| P3 | 21 | 0 | 0 | 0 | 21 |
+| P1 | 3 | 1 | 0 | 47 | 51 |
+| P2 | 27 | 1 | 2 | 21 | 51 |
+| P3 | 24 | 0 | 0 | 0 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **63** | **4** | **1** | **63** | **141** |
+| **All** | **55** | **4** | **2** | **76** | **147** |
 
-`blocked` is one item, [T-016](disk-io.md): a resume cache cannot be built on
+`blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4
-puts in Phase C. It stays here rather than moving, with the upstream lines that
-block it and what would unblock it.
+puts in Phase C. [T-167](bep-coverage.md): BEP 54's send side is inert without
+an upstream receive side. Both stay here rather than moving, with the upstream
+lines that block them and what would unblock them.
 
 ## Start here
 
@@ -499,7 +513,14 @@ track, and the run fetches it and reports `completed`.
 
 ### 1. A flag that does the opposite of what it says
 
-1. **[T-185](cli-surface.md)**, effort S. Above the web seed work because it is
+1. **[T-185](cli-surface.md)**, **done 2026-08-22T01:40Z.** Both halves of the
+   count problem were decided together, and the magnet answer is not the one
+   the paragraph below names: narrowing after the add is too late, because the
+   initial check has already created the files the selection excludes. The
+   entry carries the correction and the measurement. What follows is what this
+   ordering asked for, kept as written.
+
+   Effort S. Above the web seed work because it is
    a P1 against two P2s, and because most of the machinery exists already:
    `crate::selection::resolve` takes a file count and returns the complement,
    and `verify` passes one. What is left is where `download` gets the count.

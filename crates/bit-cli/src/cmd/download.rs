@@ -492,6 +492,7 @@ pub fn run(
                 (Some(one.torrent_bytes), Some(Box::new(plan)))
             }
         };
+        let files = plan_selection(&args.selection, meta.as_ref())?;
         plans.push(Plan {
             index,
             source: source.clone(),
@@ -499,6 +500,7 @@ pub fn run(
             metalink,
             specs,
             trackers,
+            files,
             donations: Vec::new(),
         });
         metas.push(meta);
@@ -642,7 +644,8 @@ pub fn run(
                     || args.hash_check_only,
                 hash_check_only: args.hash_check_only,
                 init_timeout,
-                only_files: selection(&args.selection)?,
+                select_file: args.selection.select_file.clone(),
+                exclude_file: args.selection.exclude_file.clone(),
                 report_interval,
                 stop: stop.clone(),
                 require: args.web_seeds.web_seed_require,
@@ -757,7 +760,11 @@ struct Options {
     hash_check_only: bool,
     /// How long the hash check gets before the run gives up on it.
     init_timeout: Duration,
-    only_files: Option<Vec<usize>>,
+    /// `--select-file` and `--exclude-file` as given. Carried unresolved
+    /// because a magnet's `Plan` cannot resolve them until its metadata does,
+    /// and every other plan already has. See `TODO/cli-surface.md`, T-185.
+    select_file: Vec<String>,
+    exclude_file: Vec<String>,
     report_interval: Duration,
     stop: StopConditions,
     require: bool,
@@ -803,6 +810,22 @@ const fn wants_in_order(selector: crate::cli::PieceSelector) -> bool {
     )
 }
 
+/// What `--select-file` and `--exclude-file` mean for one source.
+///
+/// Two of their spellings need the number of files in the torrent, and every
+/// source but a magnet has that before the session starts: `run` parses the
+/// metainfo of a local `.torrent`, a fetched one and a Metalink's before any
+/// plan is handed out. A magnet has no file list until its metadata resolves
+/// over the network, so its selection is decided by the worker that adds it.
+/// See `TODO/cli-surface.md`, T-185.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FileSelection {
+    /// Settled before anything was added. `None` is every file.
+    Decided(Option<Vec<usize>>),
+    /// A magnet, and the flags cannot be resolved until it has a file count.
+    AwaitingCount,
+}
+
 /// One source and what was resolved for it before the session started.
 struct Plan {
     /// Position in the run, which is the order the queue hands plans out in.
@@ -817,6 +840,9 @@ struct Plan {
     metalink: Option<Box<MetalinkPlan>>,
     specs: Vec<SourceSpec>,
     trackers: Option<Vec<String>>,
+    /// Which files of this torrent to fetch, from `--select-file` and
+    /// `--exclude-file`. See `TODO/cli-surface.md`, T-185.
+    files: FileSelection,
     /// Files an earlier torrent in this run is proven to hold, computed from
     /// the metadata before anything starts. See `TODO/multi-source.md`, T-140.
     donations: Vec<Donation>,
@@ -979,9 +1005,9 @@ async fn one_inner(
     options: &Options,
     tx: &mpsc::Sender<Msg>,
 ) -> Result<TorrentReport> {
-    let add = AddOptions {
+    let mut add = AddOptions {
         overwrite: options.overwrite,
-        only_files: options.only_files.clone(),
+        only_files: None,
         trackers: plan.trackers.clone(),
         disable_trackers: plan.trackers.as_ref().is_some_and(Vec::is_empty),
         initial_peers: options.peers.clone(),
@@ -989,9 +1015,52 @@ async fn one_inner(
         upload_rate: options.torrent_upload_rate,
         ..Default::default()
     };
-    let handle = match plan.torrent_bytes.clone() {
+    let mut torrent_bytes = plan.torrent_bytes.clone();
+    match &plan.files {
+        FileSelection::Decided(files) => add.only_files = files.clone(),
+        // A magnet whose selection needs a file count. Read the metadata
+        // first, rather than adding the torrent and narrowing it afterwards:
+        // the initial check creates and opens every file it was not told to
+        // skip, so a selection applied after the add has already created the
+        // files it excludes. Resolving keeps the `.torrent` bytes it built, so
+        // the add below is the same one metadata resolution, not a second.
+        // See `TODO/cli-surface.md`, T-185.
+        FileSelection::AwaitingCount => {
+            // Bounded by `--init-timeout`, which is the budget for getting a
+            // torrent ready before anything is fetched. `engine.add` would do
+            // this same resolution with no bound at all, so a magnet that
+            // never resolves used to hang the run rather than report why.
+            let resolved = tokio::time::timeout(
+                options.init_timeout,
+                engine.resolve_with(&plan.source, &add),
+            )
+            .await
+            .map_err(|_| {
+                Error::timeout(format!(
+                    "{}: the metadata did not resolve in {}ms, so --exclude-file and an open-ended --select-file have no file count to work from",
+                    plan.source,
+                    options.init_timeout.as_millis()
+                ))
+                .with("phase", "resolving_metadata")
+                .with(
+                    "waited_ms",
+                    options.init_timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+                )
+            })??;
+            let count = resolved.layout.files.len();
+            add.only_files = crate::selection::resolve(
+                &options.select_file,
+                &options.exclude_file,
+                Some(count),
+            )?;
+            torrent_bytes = Some(resolved.torrent_bytes);
+        }
+    }
+    let only_files = add.only_files.clone();
+    let handle = match torrent_bytes {
         // A Metalink's torrent was fetched while the plans were being built,
-        // so the session gets those exact bytes rather than the URL again.
+        // so the session gets those exact bytes rather than the URL again. A
+        // magnet's were built when its metadata resolved, for the same reason.
         Some(bytes) => engine.add_bytes(&plan.source, bytes, &add).await?,
         None => engine.add(&plan.source, &add).await?,
     };
@@ -1052,7 +1121,7 @@ async fn one_inner(
     // byte of it. Said here, before anything is fetched, so a caller who is
     // about to see files it did not ask for knows why they are there. See
     // `TODO/disk-io.md`, T-184.
-    for partial in partial_files(&layout, options) {
+    for partial in partial_files(&layout, only_files.as_ref()) {
         let _ = tx
             .send(Msg::Warn(format!(
                 "{} was not selected, and a piece it shares with a selected file writes {} into it, leaving a {} file where the torrent says {}",
@@ -1221,7 +1290,7 @@ async fn one_inner(
     );
     report.shared = shared;
     report.announced = announced;
-    report.partial = partial_files(&layout, options);
+    report.partial = partial_files(&layout, only_files.as_ref());
     // Set here rather than passed into `finish`, which already takes nine
     // arguments and does not otherwise know the ledger exists.
     report.attribution = (!sources.is_empty()).then(|| ledger.stats());
@@ -1727,8 +1796,8 @@ fn payload_path(
 /// `TODO/disk-io.md` T-013's closing already predicted would happen.
 ///
 /// What was missing is saying so. See `TODO/disk-io.md`, T-184.
-fn partial_files(layout: &Layout, options: &Options) -> Vec<PartialFile> {
-    let Some(selected) = &options.only_files else {
+fn partial_files(layout: &Layout, only_files: Option<&Vec<usize>>) -> Vec<PartialFile> {
+    let Some(selected) = only_files else {
         return Vec::new();
     };
     layout
@@ -2063,13 +2132,40 @@ pub(crate) fn cache_windows(specs: &[SourceSpec]) -> usize {
 
 /// Resolve `--select-file` and `--exclude-file` into explicit indices.
 ///
-/// The file count is not passed, because a source may be a magnet and the file
-/// list does not exist until its metadata resolves. That is what makes
-/// `--exclude-file` on its own do nothing here, which is
-/// `TODO/cli-surface.md`, T-185. `verify` passes the count and gets the
-/// complement.
-fn selection(args: &crate::cli::SelectionArgs) -> Result<Option<Vec<usize>>> {
-    crate::selection::resolve(&args.select_file, &args.exclude_file, None)
+/// `file_count` is `None` only where the flags do not need one, which
+/// `crate::selection::needs_file_count` is how a caller checks. Every source in
+/// a run is resolved separately because the count is the torrent's, not the
+/// run's. See `TODO/cli-surface.md`, T-185.
+fn selection(
+    args: &crate::cli::SelectionArgs,
+    file_count: Option<usize>,
+) -> Result<Option<Vec<usize>>> {
+    crate::selection::resolve(&args.select_file, &args.exclude_file, file_count)
+}
+
+/// What one source's selection is, given the metadata this run has for it.
+///
+/// The file count comes from metadata `run` has already parsed, so an
+/// exclusion with no selection beside it resolves to its complement before the
+/// torrent is added and before anything is fetched. A magnet has no metadata
+/// yet: it defers only when the flags actually need a count, which keeps the
+/// common case a magnet with no selection at all costing nothing. A usage
+/// error surfaces here, before the session starts, rather than per worker.
+/// See `TODO/cli-surface.md`, T-185.
+fn plan_selection(
+    args: &crate::cli::SelectionArgs,
+    meta: Option<&Metainfo>,
+) -> Result<FileSelection> {
+    match meta {
+        Some(meta) => Ok(FileSelection::Decided(selection(
+            args,
+            Some(meta.layout().files.len()),
+        )?)),
+        None if crate::selection::needs_file_count(&args.select_file, &args.exclude_file) => {
+            Ok(FileSelection::AwaitingCount)
+        }
+        None => Ok(FileSelection::Decided(selection(args, None)?)),
+    }
 }
 
 /// Resolve and report without fetching anything.
@@ -2777,6 +2873,175 @@ mod tests {
         assert_eq!(selected, vec![0xB2u8; 700], "the selected file is whole");
     }
 
+    /// `TODO/cli-surface.md` T-185's acceptance.
+    ///
+    /// `--exclude-file` with no `--select-file` used to resolve to `None`,
+    /// every file, so the flag skipped nothing and the run fetched the file it
+    /// had been told to skip. The donor fixture is `extra-a.txt` (1024 bytes)
+    /// and `shared.bin` (4096) at a 1024 byte piece length, so every file is a
+    /// whole number of pieces and nothing straddles: what lands on disk is
+    /// exactly what was selected. `create` sorts by path, so index 0 is
+    /// `extra-a.txt` and index 1 is `shared.bin`.
+    ///
+    /// The mirror's request log is the half that says the exclusion was
+    /// applied **before** the fetch rather than after it.
+    #[test]
+    fn an_exclusion_with_no_selection_skips_the_file_and_never_asks_for_it() {
+        let (fixture, _receiver) = TorrentFixture::sharing_pair();
+        let server = crate::test_support::FileServer::start(fixture.dir());
+        let source = format!("{}payload/", server.base);
+        let out = fixture.dir().join("out");
+        let report = crate::test_support::run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--web-seed-only",
+                "--web-seed",
+                &source,
+                "--web-seed-mode",
+                "prefix",
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--exclude-file",
+                "1",
+                "--stop-after",
+                "30s",
+            ],
+            fixture.dir(),
+        );
+        let torrent = &report["torrents"][0];
+        assert_eq!(torrent["stopped"], "completed", "{torrent}");
+        assert_eq!(
+            torrent["downloaded"]["bytes"].as_u64().unwrap(),
+            1024,
+            "only the excluded file's complement is fetched, which is one piece"
+        );
+
+        let base = out.join("donor");
+        assert_eq!(
+            std::fs::read(base.join("extra-a.txt")).unwrap(),
+            vec![0x11u8; 1024],
+            "the file that was not excluded is whole"
+        );
+        assert!(
+            !base.join("shared.bin").exists(),
+            "the excluded file is not created: {:?}",
+            walk(&out)
+        );
+
+        let asked = server.asked();
+        assert!(
+            asked.iter().any(|path| path.contains("extra-a.txt")),
+            "the mirror served the file that was kept: {asked:?}"
+        );
+        assert!(
+            !asked.iter().any(|path| path.contains("shared.bin")),
+            "the mirror was asked for the excluded file: {asked:?}"
+        );
+    }
+
+    /// The magnet half of `TODO/cli-surface.md` T-185.
+    ///
+    /// A magnet has no file list until its metadata resolves, which is why the
+    /// exclusion was left unapplied in the first place. The answer is to read
+    /// the metadata before the add rather than narrow the selection after it:
+    /// `librqbit`'s initial check creates and opens every file it was not told
+    /// to skip, so a selection applied afterwards has already created what it
+    /// excludes. The `.torrent` bytes the resolution builds are what the add
+    /// then uses, so this is one metadata resolution and not two.
+    ///
+    /// A seeder on loopback and `--peer` pointed at it is the smallest swarm
+    /// there is, and it is the same shape `cmd::peers`'s test uses. See
+    /// `TODO/peers.md`, T-142 for why the listener is waited on.
+    #[test]
+    fn a_magnet_resolves_its_metadata_before_it_applies_an_exclusion() {
+        let (fixture, _receiver) = TorrentFixture::sharing_pair();
+        let dir = fixture.dir();
+        // The seeder needs the payload under the torrent's own name. The
+        // fixture keeps it under `payload/`.
+        let data = dir.join("seeded");
+        fixture.place(&data, &[]);
+
+        let port = crate::test_support::free_port();
+        let seeder = {
+            let torrent = fixture.path_str().to_string();
+            let data = data.to_str().expect("utf-8 path").to_string();
+            let cwd = dir.clone();
+            std::thread::spawn(move || {
+                let (mut env, _) = crate::env::Env::test(
+                    &[
+                        "seed",
+                        &torrent,
+                        "--data",
+                        &data,
+                        "--port",
+                        &port.to_string(),
+                        "--no-dht",
+                        "--no-lsd",
+                        "--no-tracker",
+                        "--stop-after",
+                        "90s",
+                    ],
+                    cwd,
+                );
+                crate::run(&mut env)
+            })
+        };
+        assert!(
+            crate::test_support::wait_for_listener(port, std::time::Duration::from_secs(10)),
+            "the seeder never listened on {port}"
+        );
+
+        let magnet = format!("magnet:?xt=urn:btih:{}", fixture.info_hash);
+        let out = dir.join("out");
+        // `--stop-after` ends the run the moment it completes, so this is an
+        // upper bound on failure rather than a duration waited out.
+        // `--init-timeout` bounds the metadata resolution, which is otherwise
+        // unbounded for a magnet, so a swarm that never answers reports why
+        // instead of hanging the test binary.
+        let report = crate::test_support::run_json(
+            &[
+                "download",
+                &magnet,
+                "--dir",
+                out.to_str().unwrap(),
+                "--peer",
+                &format!("127.0.0.1:{port}"),
+                "--no-tracker",
+                "--no-dht",
+                "--no-lsd",
+                "--port",
+                "0",
+                "--exclude-file",
+                "1",
+                "--init-timeout",
+                "60s",
+                "--stop-after",
+                "60s",
+            ],
+            dir.clone(),
+        );
+        drop(seeder);
+
+        let torrent = &report["torrents"][0];
+        assert_eq!(torrent["stopped"], "completed", "{torrent}");
+        let base = out.join("donor");
+        assert_eq!(
+            std::fs::read(base.join("extra-a.txt")).unwrap(),
+            vec![0x11u8; 1024],
+            "the file that was not excluded is whole"
+        );
+        assert!(
+            !base.join("shared.bin").exists(),
+            "the excluded file is neither fetched nor created: {:?}",
+            walk(&out)
+        );
+    }
+
     /// The same run without a selection reports nothing, so the field is not
     /// noise on every download.
     #[test]
@@ -2822,21 +3087,71 @@ mod tests {
     }
 
     /// The parsing itself is `crate::selection`'s and tested there. What this
-    /// pins is the one thing that belongs to `download`: it resolves with no
-    /// file count, because a source may be a magnet.
+    /// pins is the one thing that belongs to `download`: it resolves against
+    /// the count of the torrent in hand, and an exclusion with no selection
+    /// beside it is that torrent's complement rather than every file. See
+    /// `TODO/cli-surface.md`, T-185.
     #[test]
-    fn download_resolves_a_selection_without_the_file_count() {
-        assert_eq!(selection(&selection_args(&[], &[])).unwrap(), None);
+    fn download_resolves_a_selection_against_the_file_count() {
+        assert_eq!(selection(&selection_args(&[], &[]), Some(4)).unwrap(), None);
         assert_eq!(
-            selection(&selection_args(&["1-3"], &["2"])).unwrap(),
+            selection(&selection_args(&["1-3"], &["2"]), Some(4)).unwrap(),
             Some(vec![1, 3])
         );
-        // `TODO/cli-surface.md`, T-185: an exclusion alone needs the count and
-        // does not get one here, so it selects everything.
-        assert_eq!(selection(&selection_args(&[], &["1"])).unwrap(), None);
-        let err = selection(&selection_args(&["3-"], &[])).unwrap_err();
+        assert_eq!(
+            selection(&selection_args(&[], &["1"]), Some(4)).unwrap(),
+            Some(vec![0, 2, 3])
+        );
+        assert_eq!(
+            selection(&selection_args(&["1-"], &[]), Some(4)).unwrap(),
+            Some(vec![1, 2, 3])
+        );
+    }
+
+    /// A source whose metadata this run parsed settles its selection before
+    /// the session starts, and the exclusion is applied there rather than
+    /// nowhere. The two-file fixture makes the answer readable: index 0 is
+    /// `disc 1/a.flac` and index 1 is `notes.nfo`.
+    #[test]
+    fn a_torrent_on_disk_settles_its_selection_before_anything_is_added() {
+        let fixture = TorrentFixture::multi_file();
+        let meta = Metainfo::read(std::path::Path::new(fixture.path_str())).expect("the fixture");
+        let decided = |select: &[&str], exclude: &[&str]| {
+            plan_selection(&selection_args(select, exclude), Some(&meta)).unwrap()
+        };
+        assert_eq!(decided(&[], &[]), FileSelection::Decided(None));
+        assert_eq!(
+            decided(&[], &["1"]),
+            FileSelection::Decided(Some(vec![0])),
+            "an exclusion alone is the complement, which is T-185"
+        );
+        assert_eq!(decided(&["1-"], &[]), FileSelection::Decided(Some(vec![1])));
+        assert_eq!(decided(&["0"], &[]), FileSelection::Decided(Some(vec![0])));
+        // Excluding every file it has is a usage error, and it is raised here
+        // rather than after the session is up.
+        let err = plan_selection(&selection_args(&[], &["0-1"]), Some(&meta)).unwrap_err();
         assert_eq!(err.code(), ExitCode::Usage);
-        assert!(err.message().contains("file count"), "{}", err.message());
+    }
+
+    /// A magnet waits for its file count only when the flags need one, so the
+    /// common case still adds without a round trip for metadata it does not
+    /// have to read twice.
+    #[test]
+    fn a_magnet_waits_for_its_file_count_only_when_the_flags_need_one() {
+        let decided = |select: &[&str], exclude: &[&str]| {
+            plan_selection(&selection_args(select, exclude), None).unwrap()
+        };
+        assert_eq!(decided(&[], &[]), FileSelection::Decided(None));
+        assert_eq!(
+            decided(&["0", "2"], &[]),
+            FileSelection::Decided(Some(vec![0, 2]))
+        );
+        assert_eq!(
+            decided(&["1-3"], &["2"]),
+            FileSelection::Decided(Some(vec![1, 3]))
+        );
+        assert_eq!(decided(&[], &["1"]), FileSelection::AwaitingCount);
+        assert_eq!(decided(&["3-"], &[]), FileSelection::AwaitingCount);
     }
 
     #[test]

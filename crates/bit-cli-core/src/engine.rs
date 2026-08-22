@@ -486,9 +486,28 @@ impl Engine {
     /// This resolves a magnet against the swarm, which is the one way to turn
     /// a magnet into a layout.
     pub async fn resolve(&self, source: &str) -> Result<ResolvedTorrent> {
+        self.resolve_with(source, &AddOptions::default()).await
+    }
+
+    /// [`Engine::resolve`] against the swarm the caller is about to add into.
+    ///
+    /// Which swarm a magnet resolves against depends on its trackers and on
+    /// the peers the caller was given, so reading the metadata with the
+    /// defaults would look somewhere the add that follows does not. Nothing is
+    /// written and nothing is started, so the options that describe writing are
+    /// dropped rather than carried. See `TODO/cli-surface.md`, T-185.
+    pub async fn resolve_with(
+        &self,
+        source: &str,
+        options: &AddOptions,
+    ) -> Result<ResolvedTorrent> {
         let options = AddOptions {
             list_only: true,
-            ..Default::default()
+            only_files: None,
+            paused: false,
+            overwrite: false,
+            output_folder: None,
+            ..options.clone()
         };
         let add = AddTorrent::from_cli_argument(source).map_err(|e| {
             Error::source_resolution(format!("{source}: {e}")).with("source", source.to_string())
