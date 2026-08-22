@@ -50,7 +50,7 @@ than on anything here, which is what vendoring it was for.
 
 ## State
 
-- **Last session:** 2026-08-22T16:41:28Z to 22:55Z, unattended. It worked
+- **Last session:** 2026-08-22T16:41:28Z to 23:05Z, unattended, 6h 24m. It worked
   [`patches/TASKS.md`](../patches/TASKS.md) in order. Section 3, MSE, was
   excluded by the operator as too large for one session.
 - **Tests:** 1,131 passing, 0 failing. 1,126 at the start. Plus **142** in the
@@ -65,11 +65,11 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green at run **32600793378** against commit `d2c2ad8`, all
-  **seventeen** jobs. The seventeenth is `Record`, added this session, which
-  runs `scripts/check-todo.ps1` where `-SkipGates` cannot reach it. Two runs
-  went red mid-session and neither was this tree's fault: see
-  [T-211](bench.md).
+- **CI:** green at run **32603933755** against commit `cdc7bea`, all
+  **seventeen** jobs, and that commit is this session's last change to source.
+  The seventeenth job is `Record`, added this session, which runs
+  `scripts/check-todo.ps1` where `-SkipGates` cannot reach it. Two runs went
+  red mid-session and neither was this tree's fault: see [T-211](bench.md).
 - **Entries:** 160 items. 46 open, 4 partial, 0 blocked, 100 done, 10 deferred
   to Phase C. 100 of 150 workable done, 50 left.
 - **Tree:** 87 Rust files, 50,718 lines of code, 11,912 of comment,
