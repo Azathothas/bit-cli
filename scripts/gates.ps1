@@ -21,6 +21,10 @@
 #   - Kills stray `bit-cli` and loopback-* processes first. A release binary
 #     left running by an acceptance script holds its own executable open, and
 #     the next build fails on a locked file with an error that names neither.
+#     One exception, and it is load-bearing: a process running out of `.tmp/`
+#     is spared, because `soak.ps1` copies its binaries there so that a six
+#     hour run holds no build output open. Killing it would end T-040's
+#     acceptance silently, which is the one measurement a session cannot redo.
 #   - Filters test failures with `^test \S+ \.\.\. FAILED` and -CaseSensitive.
 #     `-match 'FAILED'` matches "0 failed" in the summary line, so a flake's
 #     name is lost exactly when it is needed. TODO/RULES.md section 5.
@@ -30,6 +34,9 @@
 #   - Fails on a NUL byte in any tracked text file. Two were in this tree and
 #     neither was noticed, because a file with one in it is what `grep` calls
 #     binary and skips.
+#   - Runs `check-todo.ps1`, so a push cannot carry a record that contradicts
+#     the tree. `patches/TASKS.md` said two P0 entries were open for a session
+#     after both closed, because nothing compared the two files.
 #   - Prints the toolchain and warns when the stable it is using is behind the
 #     one CI would install. Clippy gains lints with every release, so a green
 #     run here on an older rustc is not a green clippy job there. It warns
@@ -72,7 +79,22 @@ function Record([string]$name, [bool]$ok, [string]$detail) {
 # Stray processes
 # ---------------------------------------------------------------------------
 
-$stray = @(Get-Process bit-cli, loopback-fileserver, loopback-tracker, loopback-churn -ErrorAction SilentlyContinue)
+# A process running out of `.tmp/` is not stray and is not killed. `soak.ps1`
+# copies the binaries it needs into `.tmp/soak/bin/` for exactly this reason:
+# the copy holds no build output open, so nothing here is served by stopping
+# it. T-040's acceptance is a six hour run, PROGRESS.md tells a session to
+# start it early, and every gates run in between would otherwise end it. The
+# run is the measurement, so losing it silently costs the whole session.
+$tmpRoot = [System.IO.Path]::GetFullPath((Join-Path $repo ".tmp")) + [System.IO.Path]::DirectorySeparatorChar
+$candidates = @(Get-Process bit-cli, loopback-fileserver, loopback-tracker, loopback-churn -ErrorAction SilentlyContinue)
+$spared = @($candidates | Where-Object {
+        $path = try { $_.Path } catch { $null }
+        $path -and $path.StartsWith($tmpRoot, [StringComparison]::OrdinalIgnoreCase)
+    })
+$stray = @($candidates | Where-Object { $spared -notcontains $_ })
+if ($spared.Count -gt 0) {
+    Write-Step "leaving $($spared.Count) process(es) under .tmp/ alone, they hold no build output"
+}
 if ($stray.Count -gt 0) {
     Write-Step "stopping $($stray.Count) stray process(es) that would lock the build output"
     $stray | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -141,6 +163,37 @@ foreach ($relative in $tracked) {
 }
 Record "text" ($binaryish.Count -eq 0) $(if ($binaryish.Count -eq 0) { "" }
     else { "NUL byte in $($binaryish -join ', ')" })
+
+# ---------------------------------------------------------------------------
+# record
+# ---------------------------------------------------------------------------
+#
+# `TODO/` is the authoritative record and `patches/TASKS.md` is the ordered
+# list of vendored work. Both are second copies of a status that lives in an
+# entry, and a second copy is the thing that goes stale.
+#
+# It went stale, and this gate is what it cost. The session of 2026-08-22
+# closed both P0 entries, wrote it into the entries, into `INDEX.md` and into
+# `PROGRESS.md`, and pushed. `patches/TASKS.md` was rewritten afterwards and
+# never committed, so HEAD went on saying `T-020 | P0 | open` while the entry
+# beside it said `done`. The next session read the stale one first.
+#
+# `check-todo.ps1` compares them: every row against the entry it names, every
+# count against the rows, and PROGRESS.md against what RULES.md section 2 step
+# 2 says it must carry. That is a second, and it runs here so that a push
+# cannot carry a record contradicting the tree it describes. It is not skipped
+# by -Fast: it is the cheapest gate of the seven.
+
+$todoArgs = @("-NoProfile", "-File", (Join-Path $PSScriptRoot "check-todo.ps1"))
+$todoOut = (& pwsh @todoArgs 2>&1 | Out-String)
+$todoOk = ($LASTEXITCODE -eq 0)
+$todoDetail = ""
+if (-not $todoOk) {
+    $lines = @($todoOut -split "`r?`n" | Where-Object { $_ -match '^\s+\[' })
+    $todoDetail = if ($lines.Count -gt 0) { ($lines[0].Trim()) } else { "see: pwsh -NoProfile -File scripts/check-todo.ps1" }
+    if ($lines.Count -gt 1) { $todoDetail += " and $($lines.Count - 1) more" }
+}
+Record "record" $todoOk $todoDetail
 
 # ---------------------------------------------------------------------------
 # man

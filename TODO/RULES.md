@@ -73,7 +73,9 @@ When the operator says the session is ending, in this order:
      work order. It used to live in the kickoff prompt and it belongs here.
    - **Open questions for the operator**, or that there are none.
 3. Update the affected `TODO/` entries and [INDEX.md](INDEX.md), including the
-   counts table, which must be exact against the rows.
+   counts table, which must be exact against the rows. **`patches/TASKS.md` is
+   in this step too**, and so is `patches/UPSTREAM.md` when the session touched
+   `vendor/`. Section 5 says why under "The record is part of the change".
 4. **Two deep reviews, and the machine does the half it can.**
 
 ```bash
@@ -270,6 +272,10 @@ exist.
   `-Fast` skips `deny` and the build, `-Build` adds `--bins --examples`, `-Json`
   for a machine.
 
+  It runs `check-todo.ps1` as the `record` gate, so the ordered work list and
+  the entry it names cannot disagree in a commit. Section 5 has what that cost
+  to learn.
+
   It prints the toolchain first and warns when the `stable` it is using is
   behind the one CI would install. **Green here is not green there when this
   machine's rustc is older**: CI pins `stable`, which moves, and clippy gains
@@ -293,6 +299,13 @@ pwsh -NoProfile -File scripts/gates.ps1
   the priority table, `T-NNN` references to entries that do not exist, dead
   links between `TODO/` files, and cited paths and line numbers that do not
   resolve, in this tree and in `reference/` when it is present.
+
+  **It covers `patches/` now, not only `TODO/`.** `patches/TASKS.md`'s table
+  is checked row by row against the entry each names, for status, priority and
+  link, and its own totals against its rows; `PROGRESS.md` is checked for the
+  sections section 2 step 2 requires and for every count it quotes. Citations
+  and links in `patches/TASKS.md`, `patches/UPSTREAM.md` and `patches/README.md`
+  resolve the same way `TODO/`'s do, including into `vendor/`.
 
   **A citation written short is checked too, and so is what the line holds.**
   Until 2026-08-22 only the long form, `crates/bit-cli/src/cli.rs:2103`, was
@@ -434,6 +447,37 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   closing sentence.
 
 ## 5. The rules that bite most often
+
+### The record
+
+- **The record is part of the change, not a report about it.** A session that
+  fixes something and leaves `patches/TASKS.md` saying it is open has not
+  finished the change; it has made the next session read a lie first. The
+  record files are [PROGRESS.md](PROGRESS.md), [INDEX.md](INDEX.md), the entry
+  itself, `patches/TASKS.md`, and `patches/UPSTREAM.md` when `vendor/` moved.
+  They are edited in the same push as the work, never after it.
+
+  **This is enforced rather than remembered.** `gates.ps1` has a `record` gate
+  that runs `check-todo.ps1`, so a push cannot carry a `TASKS.md` row that
+  disagrees with the entry it names, a count that disagrees with the rows, or a
+  `PROGRESS.md` missing something section 2 step 2 requires. It is not skipped
+  by `-Fast`: it is the cheapest gate there is.
+
+  **What it cost to learn.** The session of 2026-08-22 closed both P0 entries,
+  wrote it into the entries, into `INDEX.md` and into `PROGRESS.md`, and pushed.
+  It then rewrote `patches/TASKS.md` and never pushed again. HEAD went on saying
+  `T-020 | P0 | open` beside an entry saying `done` for the whole of the next
+  session, and the ordered list of vendored work, which is the first thing a
+  vendor session reads, described a state two sessions old. Nothing was wrong
+  with any single file. What was missing was anything that compared two of them.
+
+- **A file that quotes a number another file measures has to be checkable.**
+  `PROGRESS.md` quotes the entry counts, the patch count and a CI run id;
+  `TASKS.md` quotes its own table back as a total. Write those as a fixed line
+  the checker already parses rather than as prose that reads better, because
+  the prose version is the one that goes stale silently. The shapes are
+  `**<N> items. <N> open, ...**`, `**<N> patches**`, `run **<id>**`, and
+  `**<N> entries: <N> done, <N> partial, <N> blocked, <N> open.**`.
 
 ### Process
 

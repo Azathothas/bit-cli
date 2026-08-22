@@ -1543,8 +1543,8 @@ Approach:    Two of the four are work and two are a decision.
              **`--no-pex` cannot be built here.** `librqbit` 9.0.0 has no
              switch for it: `swarm.rs:160-161` shows `--no-dht` and `--no-lsd`
              reaching `enable_dht` and `enable_lsd`, and there is no
-             `enable_pex` beside them. `nanotorrent`'s
-             `patches/0004-pex-toggle.patch` adds exactly that:
+             `enable_pex` beside them.
+             `nanotorrent/patches/0004-pex-toggle.patch` adds exactly that:
              `SessionOptions::disable_pex`, gating **both** directions, which
              is the shape of the upstream change needed and the evidence that
              it is a small one. Until it exists, the flag must either warn or

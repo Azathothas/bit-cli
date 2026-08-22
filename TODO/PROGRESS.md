@@ -44,9 +44,10 @@ the record.**
 
 ## State
 
-- **Last session:** 2026-08-22T13:05:27Z to 16:20Z, unattended at the start and
-  redirected by the operator partway through to the manuals, dependabot and the
-  NASM action.
+- **Last session:** 2026-08-22T16:41:28Z, running, unattended. It is working
+  [`patches/TASKS.md`](../patches/TASKS.md) in order, and the operator excluded
+  section 3, MSE, which is large and belongs to the next session. The session
+  before it ran 2026-08-22T13:05:27Z to 16:20Z and closed both P0 entries.
 - **Tests:** 1,126 passing, 0 failing. 1,116 at the start; the ten new ones are
   the CLIspec generator and the manual drift checks. Plus **139** in the
   vendored trees, which the workspace gates do not run.

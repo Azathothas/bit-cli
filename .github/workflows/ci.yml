@@ -43,6 +43,22 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  # The record has to agree with the tree, and locally that is a gate.
+  #
+  # `gates.ps1` runs `check-todo.ps1`, but `git-sync.ps1 -SkipGates` exists and
+  # a push from a machine that never ran either is possible. This is the copy
+  # that cannot be skipped. It needs no toolchain and no build: it reads
+  # Markdown and resolves paths, so it is the cheapest job here.
+  #
+  # It exists because `patches/TASKS.md` said two P0 entries were open for a
+  # whole session after both closed. See TODO/RULES.md section 5.
+  record:
+    name: Record
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: pwsh -NoProfile -File scripts/check-todo.ps1
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

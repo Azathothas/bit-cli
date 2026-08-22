@@ -59,7 +59,12 @@ commit must never be in.
    be done outside the vendored tree, and whether it is meant to go upstream.
    The last one matters: a change shaped for upstream and a change shaped for
    this repository are different changes, and mixing them makes both harder.
-4. **Regenerate the series** and **run the gates**.
+4. **Regenerate the series** and **run the gates**. The `record` gate reads
+   this directory: [`TASKS.md`](TASKS.md)'s table has to agree with the entry
+   each row names, its totals have to agree with its rows, and every path
+   cited from here, [`UPSTREAM.md`](UPSTREAM.md) or this file has to resolve,
+   including into `vendor/`. See `TODO/RULES.md` section 5 under "The record is
+   part of the change" for the session that paid for it.
 
 ```bash
 pwsh -NoProfile -File scripts/gates.ps1

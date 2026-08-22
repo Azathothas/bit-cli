@@ -21,6 +21,19 @@
 #   6. Every `crates/...:NNN` citation resolves to a file with that many lines.
 #   7. No file has a NUL byte in it. One got in on 2026-08-22 and `grep`
 #      answered "Binary file TODO/trackers.md matches" instead of the line.
+#   8. `patches/TASKS.md`'s table agrees with the entries it names: the same
+#      priority and the same status, and its own counts add up.
+#   9. `TODO/PROGRESS.md` carries what RULES.md section 2 step 2 says it must,
+#      and its entry counts and patch count agree with what is on disk.
+#
+# 8 and 9 exist because of what happened on 2026-08-22. That session closed
+# both P0 entries, wrote it into the entries and into PROGRESS.md, and pushed.
+# `patches/TASKS.md` still said `T-020 | P0 | open` at HEAD for the whole of
+# the next session, because the file was rewritten after the last push and
+# nothing anywhere compared it to anything. `gates.ps1` runs this now, so a
+# record that contradicts the tree cannot be pushed: the working tree at that
+# moment had the entry saying done and the table saying open, which is the
+# disagreement this reports.
 #
 # What it does not check: whether a claim is true. That is the review this does
 # not replace, and the point of doing the mechanical half in one second is to
@@ -50,6 +63,17 @@ function Problem([string]$kind, [string]$text) {
 
 $files = @(Get-ChildItem -Path $todo -Filter *.md -File)
 
+# The record is not only `TODO/`. `patches/TASKS.md` is the ordered list of
+# vendored work, `patches/UPSTREAM.md` is the Apache-2.0 record of what was
+# changed in somebody else's code, and `patches/README.md` says how both are
+# worked on. All three name entries and cite paths, and none of them was
+# compared to anything until 2026-08-22.
+$patchDocs = @("TASKS.md", "UPSTREAM.md", "README.md") |
+    ForEach-Object { Join-Path $repo "patches/$_" } |
+    Where-Object { Test-Path $_ } |
+    ForEach-Object { Get-Item $_ }
+$scanFiles = @($files) + @($patchDocs)
+
 # ---------------------------------------------------------------------------
 # 0. Bytes, before anything reads these as text
 # ---------------------------------------------------------------------------
@@ -66,7 +90,7 @@ $files = @(Get-ChildItem -Path $todo -Filter *.md -File)
 # reviews and gets run on its own, and a review that reads a file `grep` would
 # have skipped is the review this is meant to catch.
 
-foreach ($file in $files) {
+foreach ($file in $scanFiles) {
     $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
     $at = [System.Array]::IndexOf($bytes, [byte]0)
     if ($at -ge 0) {
@@ -90,12 +114,15 @@ foreach ($file in $files) {
                 Problem "duplicate-entry" "$current is defined in both $($entries[$current].file) and $($file.Name)"
             }
             else {
-                $entries[$current] = [ordered]@{ file = $file.Name; line = $lineNo; status = $null }
+                $entries[$current] = [ordered]@{ file = $file.Name; line = $lineNo; status = $null; priority = $null }
             }
             continue
         }
         if ($current -and $null -eq $entries[$current].status -and $line -match '^Status:\s*(.+)$') {
             $entries[$current].status = $Matches[1].Trim()
+        }
+        if ($current -and $null -eq $entries[$current].priority -and $line -match '^Priority:\s*(.+)$') {
+            $entries[$current].priority = ($Matches[1] -replace '\*', '').Trim()
         }
     }
 }
@@ -262,6 +289,26 @@ foreach ($rs in Get-ChildItem -Path (Join-Path $repo "crates") -Filter *.rs -Rec
     $byName[$rs.Name] = $rs.FullName
 }
 
+# The vendored trees are cited the same short way, and `patches/TASKS.md` names
+# a seam as `tracker_comms.rs:293`. They go in a second index rather than the
+# first, consulted only when `crates/` has no file of that name, so adding them
+# cannot take coverage away from a citation into this repository's own source.
+# Within the second index a shared name still resolves to nothing: `mod.rs`
+# exists forty times over and guessing which was meant is worse than silence.
+$byVendorName = @{}
+$vendorRoot = Join-Path $repo "vendor"
+if (Test-Path $vendorRoot) {
+    foreach ($rs in Get-ChildItem -Path $vendorRoot -Filter *.rs -Recurse -File) {
+        if ($byVendorName.ContainsKey($rs.Name)) { $byVendorName[$rs.Name] = $null; continue }
+        $byVendorName[$rs.Name] = $rs.FullName
+    }
+}
+function Resolve-ShortName([string]$name) {
+    if ($byName.ContainsKey($name)) { return $byName[$name] }
+    if ($byVendorName.ContainsKey($name)) { return $byVendorName[$name] }
+    return ""
+}
+
 # Read once per file rather than once per citation.
 $lineCache = @{}
 function Get-Lines([string]$path) {
@@ -295,7 +342,7 @@ function Test-Citation([string]$Path, [string]$Cited, [int]$Cursor, [string]$Pro
     }
 }
 
-foreach ($file in $files) {
+foreach ($file in $scanFiles) {
     $text = [System.IO.File]::ReadAllText($file.FullName)
     $lineNo = 0
     # Inside a fenced block the text is quoted output, a command, or a
@@ -315,18 +362,20 @@ foreach ($file in $files) {
                 Problem "unknown-entry" "$($file.Name):$lineNo references $id, which is not an entry"
             }
         }
-        # A markdown link to a sibling TODO file.
-        foreach ($m in [regex]::Matches($line, '\]\((?<t>[A-Za-z0-9._-]+\.md)(?:#[^)]*)?\)')) {
+        # A markdown link to another document, resolved against the file that
+        # carries it. `patches/TASKS.md` links to `../TODO/peers.md` and
+        # `TODO/INDEX.md` links to `peers.md`, and both have to resolve.
+        foreach ($m in [regex]::Matches($line, '\]\((?<t>(?!https?:)[A-Za-z0-9._/-]+\.md)(?:#[^)]*)?\)')) {
             $target = $m.Groups['t'].Value
-            if (-not (Test-Path (Join-Path $todo $target))) {
-                Problem "dead-link" "$($file.Name):$lineNo links to $target, which is not in TODO/"
+            if (-not (Test-Path (Join-Path $file.DirectoryName $target))) {
+                Problem "dead-link" "$($file.Name):$lineNo links to $target, which does not resolve from $($file.Directory.Name)/"
             }
         }
         # A citation into this tree, as `crates/a/b.rs:123`. The lookbehind is
         # load-bearing: without it `TorrentNG/crates/rt-storage/src/x.rs` from
         # the corpus matches from `crates/` and is reported as a path this
         # repository does not have, which is true and not the question.
-        foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<p>(?:crates|scripts|docs)/[A-Za-z0-9._/-]+\.(?:rs|ps1|md|toml|json|jq|yml))(?::(?<l>\d+))?')) {
+        foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<p>(?:crates|scripts|docs|vendor|patches|man)/[A-Za-z0-9._/-]+\.(?:rs|ps1|md|toml|json|jq|yml|patch))(?::(?<l>\d+))?')) {
             $cited = $m.Groups['p'].Value
             # A path written with an ellipsis is deliberately abbreviated and
             # there is nothing to resolve.
@@ -349,9 +398,8 @@ foreach ($file in $files) {
         # the bare-name index above, and skipped when the name is not unique.
         foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<p>[a-z0-9_]+\.rs):(?<l>\d+)')) {
             $short = $m.Groups['p'].Value
-            if (-not $byName.ContainsKey($short)) { continue }
-            $path = $byName[$short]
-            if ($null -eq $path) { continue }
+            $path = Resolve-ShortName $short
+            if ([string]::IsNullOrEmpty($path)) { continue }
             $lines = Get-Lines $path
             if ([int]$m.Groups['l'].Value -gt $lines.Count) {
                 Problem "dead-line" "$($file.Name):$lineNo cites ${short}:$($m.Groups['l'].Value) and that file has $($lines.Count) lines"
@@ -370,7 +418,7 @@ foreach ($file in $files) {
             # is far more often this tree's `crates/bit-cli-core/src/torrent/`
             # written short than it is the corpus tree called `torrent`, and a
             # checker that cries wolf is a checker nobody runs.
-            foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<r>[A-Za-z0-9_-]+)/(?<p>[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\.(?:rs|go|py|ts|js|md|toml|json))(?::(?<l>\d+))?')) {
+            foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<r>[A-Za-z0-9_-]+)/(?<p>[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\.(?:rs|go|py|ts|js|md|toml|json|patch))(?::(?<l>\d+))?')) {
                 $tree = $m.Groups['r'].Value
                 $treeRoot = Join-Path $corpus $tree
                 if (-not (Test-Path $treeRoot -PathType Container)) { continue }
@@ -390,6 +438,170 @@ foreach ($file in $files) {
             }
         }
     }
+}
+
+# ---------------------------------------------------------------------------
+# 8: patches/TASKS.md, the ordered list of vendored work
+# ---------------------------------------------------------------------------
+#
+# Its table is a second copy of a status that lives in the entry, which is the
+# shape that goes stale. It went stale for a whole session on 2026-08-22: both
+# P0 rows said `open` while both entries said `done`, because the file was
+# rewritten after the last push. Nothing compared them, so nothing said so.
+#
+# The row is `| [T-020](../TODO/peers.md) | **P0** | **done** | why |`.
+
+$tasksPath = Join-Path $repo "patches/TASKS.md"
+if (Test-Path $tasksPath) {
+    $tasksText = [System.IO.File]::ReadAllText($tasksPath)
+    $taskRows = [ordered]@{}
+    foreach ($line in ($tasksText -split "`r?`n")) {
+        if ($line -notmatch '^\|\s*\[(T-\d+)\]\(([^)]+)\)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|') { continue }
+        $id = $Matches[1]
+        if ($taskRows.Contains($id)) {
+            Problem "tasks-duplicate-row" "$id has more than one row in patches/TASKS.md"
+            continue
+        }
+        $taskRows[$id] = [ordered]@{
+            link     = $Matches[2]
+            priority = ($Matches[3] -replace '\*', '').Trim()
+            status   = Normalize ($Matches[4])
+        }
+    }
+    if ($taskRows.Count -eq 0) {
+        Problem "tasks-table" "patches/TASKS.md has no table of entries to check"
+    }
+
+    foreach ($id in $taskRows.Keys) {
+        # An id that names nothing is already reported by the reference pass.
+        if (-not $entries.ContainsKey($id)) { continue }
+        $row = $taskRows[$id]
+        $entryStatus = Normalize $entries[$id].status
+        if ($row.status -ne $entryStatus) {
+            Problem "tasks-status-mismatch" "$id : patches/TASKS.md says '$($row.status)', $($entries[$id].file):$($entries[$id].line) says '$($entries[$id].status)'"
+        }
+        if ($entries[$id].priority -and $row.priority -ne $entries[$id].priority) {
+            Problem "tasks-priority-mismatch" "$id : patches/TASKS.md says '$($row.priority)', $($entries[$id].file) says '$($entries[$id].priority)'"
+        }
+        $wantLink = "../TODO/$($entries[$id].file)"
+        if ($row.link -ne $wantLink) {
+            Problem "tasks-wrong-link" "$id : patches/TASKS.md links to $($row.link), the entry is in $wantLink"
+        }
+    }
+
+    # The counting sentence over the table. This is the number two documents
+    # disagree about when one of them is edited and the other is not.
+    $taskStates = @{}
+    foreach ($id in $taskRows.Keys) {
+        $state = $taskRows[$id].status
+        if (-not $taskStates.ContainsKey($state)) { $taskStates[$state] = 0 }
+        $taskStates[$state]++
+    }
+    $taskCount = {
+        param([string]$state)
+        if ($taskStates.ContainsKey($state)) { $taskStates[$state] } else { 0 }
+    }
+    if ($tasksText -match '\*\*(\d+) entries: (\d+) done, (\d+) partial, (\d+) blocked, (\d+) open\.\*\*') {
+        $claim = @{
+            total   = [int]$Matches[1]
+            done    = [int]$Matches[2]
+            partial = [int]$Matches[3]
+            blocked = [int]$Matches[4]
+            open    = [int]$Matches[5]
+        }
+        if ($claim.total -ne $taskRows.Count) {
+            Problem "tasks-count" "patches/TASKS.md says $($claim.total) entries, its table has $($taskRows.Count) rows"
+        }
+        foreach ($state in @('done', 'partial', 'blocked', 'open')) {
+            $actual = & $taskCount $state
+            if ($claim[$state] -ne $actual) {
+                Problem "tasks-count" "patches/TASKS.md says $($claim[$state]) $state, its table says $actual"
+            }
+        }
+    }
+    else {
+        Problem "tasks-count" "patches/TASKS.md has no '**<N> entries: <N> done, <N> partial, <N> blocked, <N> open.**' line to check"
+    }
+
+    # Every entry the table still calls unfinished has to be argued for
+    # somewhere below it, or the table is a list of work with no work in it.
+    foreach ($id in $taskRows.Keys) {
+        if ($taskRows[$id].status -eq 'done') { continue }
+        $mentions = ([regex]::Matches($tasksText, "(?<![\w-])$id(?![\w-])")).Count
+        if ($mentions -lt 2) {
+            Problem "tasks-unargued" "$id is in patches/TASKS.md's table as '$($taskRows[$id].status)' and appears nowhere else in the file"
+        }
+    }
+}
+else { Problem "tasks-table" "patches/TASKS.md is not there" }
+
+# ---------------------------------------------------------------------------
+# 9: TODO/PROGRESS.md, the only file the next session is told to read
+# ---------------------------------------------------------------------------
+#
+# RULES.md section 2 step 2 lists what it must carry. A missing heading is a
+# session that ends without saying where to resume; a stale count is a number
+# the next session then quotes as measured. Both are mechanical.
+
+$progressPath = Join-Path $todo "PROGRESS.md"
+$progressText = [System.IO.File]::ReadAllText($progressPath)
+
+foreach ($heading in @('## State', '## What the last session did', '## In progress', '## Start here next session', '## Open questions for the operator')) {
+    if ($progressText -notmatch ("(?m)^" + [regex]::Escape($heading) + "\s*$")) {
+        Problem "progress-shape" "PROGRESS.md has no '$heading' section, which RULES.md section 2 step 2 requires"
+    }
+}
+
+if ($progressText -notmatch '\*\*Last session:\*\*\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)') {
+    Problem "progress-shape" "PROGRESS.md's state line carries no start instant in ISO 8601 UTC, and every end-of-session measurement is taken from it"
+}
+if ($progressText -notmatch '\*\*Tests:\*\*\s*[\d,]+ passing') {
+    Problem "progress-shape" "PROGRESS.md carries no '**Tests:** <N> passing' baseline"
+}
+if ($progressText -notmatch '\*\*CI:\*\*[\s\S]{0,400}?run \*\*(\d+)\*\*') {
+    Problem "progress-shape" "PROGRESS.md's CI line does not name a run by id, and 'the latest' is not a run id"
+}
+
+# The counts, against the rows rather than against the last session's memory.
+$workable = $total - (Count 'deferred')
+if ($progressText -match '\*\*Entries:\*\*\s*(\d+) items\. (\d+) open, (\d+) partial, (\d+) blocked, (\d+) done, (\d+) deferred') {
+    $claim = @{
+        total    = [int]$Matches[1]
+        open     = [int]$Matches[2]
+        partial  = [int]$Matches[3]
+        blocked  = [int]$Matches[4]
+        done     = [int]$Matches[5]
+        deferred = [int]$Matches[6]
+    }
+    if ($claim.total -ne $total) { Problem "progress-count" "PROGRESS.md says $($claim.total) items, INDEX.md has $total rows" }
+    foreach ($state in @('open', 'partial', 'blocked', 'done', 'deferred')) {
+        if ($claim[$state] -ne (Count $state)) {
+            Problem "progress-count" "PROGRESS.md says $($claim[$state]) $state, the rows say $(Count $state)"
+        }
+    }
+}
+else { Problem "progress-count" "PROGRESS.md has no '**Entries:** <N> items. <N> open, ...' line to check" }
+
+if ($progressText -match '(\d+) of (\d+) workable done, (\d+) left') {
+    $doneClaim = [int]$Matches[1]
+    $workClaim = [int]$Matches[2]
+    $leftClaim = [int]$Matches[3]
+    if ($doneClaim -ne (Count 'done')) { Problem "progress-count" "PROGRESS.md says $doneClaim workable done, the rows say $(Count 'done')" }
+    if ($workClaim -ne $workable) { Problem "progress-count" "PROGRESS.md says $workClaim workable, the rows say $workable" }
+    if ($leftClaim -ne ($workable - (Count 'done'))) { Problem "progress-count" "PROGRESS.md says $leftClaim left, the rows say $($workable - (Count 'done'))" }
+}
+else { Problem "progress-count" "PROGRESS.md has no '<N> of <N> workable done, <N> left' line to check" }
+
+# The patch count, which vendor-status.ps1 prints and PROGRESS.md quotes back.
+$patchDir = Join-Path $repo "patches"
+$patchCount = @(Get-ChildItem -Path $patchDir -Filter *.patch -Recurse -File -ErrorAction SilentlyContinue).Count
+if ($progressText -match '\*\*(\d+) patches\*\*') {
+    if ([int]$Matches[1] -ne $patchCount) {
+        Problem "progress-count" "PROGRESS.md says $($Matches[1]) patches, patches/ holds $patchCount"
+    }
+}
+elseif ($patchCount -gt 0) {
+    Problem "progress-count" "patches/ holds $patchCount patch(es) and PROGRESS.md's vendored line names no count"
 }
 
 # ---------------------------------------------------------------------------

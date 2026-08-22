@@ -9,53 +9,70 @@ This is not `TODO/INDEX.md` and does not replace it. An item here is a
 with its own acceptance run. `TODO/` remains the authoritative record.
 
 Written 2026-08-22, the session that vendored the trees and changed nothing in
-them. Two to three sessions of work.
+them. Rewritten 2026-08-22T16:41Z by the session that worked sections 4 and 5,
+after that session found the table below still describing a state two sessions
+old. `scripts/check-todo.ps1` compares every row here against the entry it
+names now, and `scripts/gates.ps1` runs it, so this file cannot say `open`
+about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-Nine entries are held up by a seam `librqbit` does not expose. Two of them are
-**P0**.
+**11 entries: 2 done, 4 partial, 2 blocked, 3 open.** Every one of them was
+held up by a seam `librqbit` does not expose. **No open P0 is left in the
+record.**
 
 | entry | priority | status | what it is waiting for |
 | --- | --- | --- | --- |
-| [T-020](../TODO/peers.md) | **P0** | open | a `tokio::select!` arm in upstream's accept loop |
-| [T-040](../TODO/memory.md) | **P0** | partial | nothing reclaims a peer row, and nothing bounds the sets |
+| [T-194](../TODO/peers.md) | **P0** | **done** | a bitfield that does not fit one message buffer |
+| [T-020](../TODO/peers.md) | **P0** | **done** | a `tokio::select!` arm in upstream's accept loop |
+| [T-040](../TODO/memory.md) | **P0** | partial | **bounded.** Only the six hour soak is left |
 | [T-022](../TODO/peers.md) | P1 | partial | an HTTP tracker announce per address family |
 | [T-132](../TODO/multi-source.md) | P1 | partial | peer identity on `TorrentStorage` |
 | [T-016](../TODO/disk-io.md) | P2 | blocked | a resume cache without session persistence |
 | [T-100](../TODO/bep-coverage.md) | P2 | partial | the send half of an extension message |
 | [T-163](../TODO/peers.md) | P2 | open | MSE, a wire-level handshake |
 | [T-167](../TODO/bep-coverage.md) | P2 | blocked | no inverse of `on_have` |
+| [T-195](../TODO/peers.md) | P2 | open | the read side of T-194, at 262,104 pieces |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 
-That is both P0 items in the record, the one open and the one partial, both
-partial P1 items, and both blocked entries.
+Nine are not done, and one of those is not waiting on a seam at all:
+[T-040](../TODO/memory.md) is bounded and waiting on a six hour measurement.
+The other eight are sections 3, 4 and 5, in that order.
 
-## 0. Before anything: is 9.0.1 broken for us
+**Before reconciling anything**, read `README.md` under "Upstream is not
+automatically right". A new release is a proposal, not an authority, and a hunk
+that touches something we have already changed needs three questions answered
+before it is taken.
+
+## 0. DONE. Is 9.0.1 broken for us, and it was
 
 **[rqbit#637](https://github.com/ikatson/rqbit/issues/637)**, "[regression]
-rqbit faill to add torrent larger than 2MB", opened 2026-08-22T11:30:35Z with
-an empty body, against the exact release this tree now vendors. It was found by
+rqbit faill to add torrent larger than 2MB", was found by
 `scripts/upstream-scan.ps1` half an hour after it was filed, which is the
-clearest argument for running that scan there is.
+clearest argument for running that scan there is. This asked whether `bit-cli`
+was exposed. **It was**, and the answer is [T-194](../TODO/peers.md), P0, done.
 
-Nothing here reproduces it yet, and nothing here would: the largest fixture in
-this repository is a few kilobytes of payload, so no test adds a `.torrent`
-anywhere near two megabytes. **Establish whether `bit-cli` is exposed before
-building on top of the vendored tree.** A 2 MB `.torrent` is roughly a hundred
-thousand piece hashes, which is a payload of about 1.6 GiB at a 16 KiB piece
-length or far less at a smaller one, and `bit-cli create` is what would make
-one. Whether it can do so quickly enough to be a test is itself unmeasured.
+- **The size of the `.torrent` is not the variable, the piece count is.** Every
+  peer message was serialized into one fixed buffer, `MAX_MSG_LEN` = 16,500
+  bytes, sized for a `ut_metadata` chunk. A bitfield is one bit per piece, so
+  past **131,960 pieces** it did not fit and the connection was dropped before
+  anything was served, in either role.
+- **Measured to one piece**: 131,960 works, 131,961 does not, and both are
+  2.64 MB torrents. That pair is what rules the file size out.
+- **Whether this is #637 cannot be settled**, because the issue body is empty.
+  The entry says so rather than claiming the scalp.
+- The question this section asked last, whether `bit-cli create` could build
+  such a fixture quickly enough to test with, is answered: **0.195 s** from
+  160 MiB of payload.
+- Residual, measured, and open: [T-195](../TODO/peers.md), the read side, at
+  262,104 pieces. `scripts/check-bitfield.ps1` is the acceptance and it fails
+  on that case, which is how it is known to be able to fail at all.
 
-If it reproduces, it is a P0 and the first patch. If it does not, say so in the
-entry that records this and move on: an upstream report we could not reproduce
-is still worth writing down, because the next reconciliation will meet it
-again.
+## 1. DONE. T-020, and it was one match arm
 
-## 1. T-020, the open P0, and it is one match arm
-
-`TODO/peers.md` T-020 already did the work of finding this and the entry is
-worth reading in full before touching anything.
+`TODO/peers.md` T-020 had already done the work of finding this. The change was
+exactly what the paragraph below said it would be, and the entry carries the
+before and after.
 
 Defect two is `task_listener` in `vendor/rqbit/crates/librqbit/src/session.rs`.
 Its second `tokio::select!` arm is
@@ -71,30 +88,73 @@ peers one at a time, and **the twentieth got a handshake while the nineteen
 before it got nothing**. `bench/listener-20260822T045550230Z.json`, case
 `recovery`.
 
-The change is to match `Some(_)` and handle the `Err` rather than let the
-pattern fail. What has to be proved is the acceptance the entry already names:
+The arm binds the whole result and handles it inside now, so no outcome can
+disable it. The acceptance the entry names **had never passed** and does:
 
 ```bash
 pwsh -NoProfile -File scripts/check-close-wait.ps1 -Ceiling 100
 ```
 
-That script currently fails, and it is written not to fail the build for this
-defect alone, which is the pattern `TODO/RULES.md` section 5 describes. When
-the patch lands, that exemption comes off.
+| | before | after |
+| --- | --- | --- |
+| `no-handshake` CLOSE_WAIT, during and after a settle | 986 and 986 | **0 and 0** |
+| handles | 188 to 1210 | **188 to 194** |
+| connections to clear a 20 connection backlog | 20 | **1** |
 
-**Offer this one upstream.** It is upstream's bug, not our preference, and it
-is small enough to review in one screen.
+**The worse half was never a socket count.** A backed up queue stopped the
+seeder handshaking for **any** info hash, including one it was serving, while
+it went on reporting itself as seeding.
 
-## 2. T-040, the other P0, and there is prior art
+**Closing it broke three acceptance cases, which is the right way round.**
+Three of `scripts/check-listener.ps1`'s four asserted the defect and are
+inverted rather than deleted; `scripts/check-swarm.ps1`'s `listener_poisoned`
+carried `judged: false` and is judged. A fourth, `sources_ignored`, was resting
+on the target being unable to answer its peers and had to be rebuilt: its
+window went from 6 samples to 1 the moment the loop drained. **An acceptance
+that needs the system under test to be slow is measuring the defect.**
 
-`TODO/memory.md` T-040 is partial: attributed and bounded, not fixed. T-020
-found the shape of it, that a peer row is kept for every completed handshake
-and never reclaimed, and that twenty-four handshake-and-close connections leave
-twenty-four rows at `live 0` and `dead 0` forever.
+**Still to offer upstream.** It is
+[rqbit#311](https://github.com/ikatson/rqbit/issues/311), open, and the change
+is one match arm.
 
-There is a maintained patch series for exactly this class of problem, and it is
-usable. See the section on `nzbd` below: four of its nine patches are bounds on
-the sets this entry is about.
+## 2. BOUNDED. T-040, and the nzbd patches were not needed
+
+`TODO/memory.md` T-040 was attributed and bounded, not fixed: a peer row is
+kept for every completed handshake and never reclaimed, and twenty-four
+handshake-and-close connections leave twenty-four rows at `live 0` and `dead 0`
+forever.
+
+**There is a bound now.** `MAX_PEER_RECORDS`, 1,024 per torrent, reclaiming
+`NotNeeded` and `Dead` rows before an insert and never a `Live`, `Connecting`
+or `Queued` one. 2,000 connections leave **exactly 1,024** rows where they left
+2,000, and one row per handshake below the bound is still asserted separately,
+because a bound that reclaimed a live peer would also make the count flat.
+
+Two things worth carrying forward:
+
+- **RSS at that scale did not move, and that is the expected result.** Freeing
+  a row returns it to the allocator, not to the operating system. What the
+  bound changes is that demand stops growing.
+- **A `Dead` row can be in the dial queue when it is reclaimed**, and that path
+  answered a missing row with `Error::BugPeerNotFound`. A bound that logs "bug"
+  for its own correct behaviour is worse than no bound, so it returns quietly
+  now. Found by reading the callers before running anything.
+
+**The nzbd series was read and not used.** `0010-bound-known-peer-records` is
+the same idea against 8.1.1, and forward porting it would have cost more than
+writing the bound against the tree in front of us, which is four functions in
+two files. Nothing was copied, so nothing is owed in `THIRD_PARTY.md`. The
+other three memory patches listed in section 4 are still unread and still worth
+reading before the next bound is written.
+
+**What is left is a measurement, not a change.** This entry's acceptance is
+`scripts/soak.ps1` over **six hours** with the slope of each series recorded,
+and it has not been run since the bound landed. Start it early in a session: it
+outlasts most of one.
+
+**Still to offer upstream.** It is
+[rqbit#525](https://github.com/ikatson/rqbit/issues/525), open, and reported as
+exactly this.
 
 ## 3. MSE, and upstream has a pull request open
 
