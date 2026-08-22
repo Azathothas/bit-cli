@@ -66,7 +66,15 @@ pub struct StorageMetrics {
     pub read_ops: AtomicU64,
     pub read_bytes: AtomicU64,
     pub read_nanos: AtomicU64,
+    /// Positioned writes that reached the device.
     pub write_ops: AtomicU64,
+    /// Writes the session asked for, before any were combined.
+    ///
+    /// `write_ops` divided by this is the coalescing factor, and it is the
+    /// number `TODO/disk-io.md` T-018 exists to move: T-017 measured that
+    /// writes to one file serialise per operation rather than per byte, so an
+    /// operation avoided is the whole saving.
+    pub write_calls: AtomicU64,
     pub write_bytes: AtomicU64,
     pub write_nanos: AtomicU64,
     /// Pieces the session read back and checked against their hash.
@@ -86,6 +94,8 @@ pub struct StorageCounts {
     pub read_bytes: u64,
     pub read_nanos: u64,
     pub write_ops: u64,
+    #[serde(default)]
+    pub write_calls: u64,
     pub write_bytes: u64,
     pub write_nanos: u64,
     pub verify_pieces: u64,
@@ -101,6 +111,7 @@ impl StorageCounts {
             read_bytes: self.read_bytes.saturating_sub(earlier.read_bytes),
             read_nanos: self.read_nanos.saturating_sub(earlier.read_nanos),
             write_ops: self.write_ops.saturating_sub(earlier.write_ops),
+            write_calls: self.write_calls.saturating_sub(earlier.write_calls),
             write_bytes: self.write_bytes.saturating_sub(earlier.write_bytes),
             write_nanos: self.write_nanos.saturating_sub(earlier.write_nanos),
             verify_pieces: self.verify_pieces.saturating_sub(earlier.verify_pieces),
@@ -119,6 +130,7 @@ impl StorageMetrics {
             read_bytes: get(&self.read_bytes),
             read_nanos: get(&self.read_nanos),
             write_ops: get(&self.write_ops),
+            write_calls: get(&self.write_calls),
             write_bytes: get(&self.write_bytes),
             write_nanos: get(&self.write_nanos),
             verify_pieces: get(&self.verify_pieces),
@@ -148,6 +160,11 @@ impl StorageMetrics {
             elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
             Ordering::Relaxed,
         );
+    }
+
+    /// One write the session asked for, however many operations it becomes.
+    fn count_write_call(&self) {
+        self.write_calls.fetch_add(1, Ordering::Relaxed);
     }
 
     fn add_write(&self, bytes: u64, elapsed: std::time::Duration) {
@@ -346,6 +363,7 @@ impl SafeStorageFactory {
             open: Mutex::new(OpenSet::new(self.max_open_files)),
             notes: self.notes.clone(),
             metrics: self.metrics.clone(),
+            coalesce: Coalescer::new(),
         }
     }
 }
@@ -417,6 +435,211 @@ pub struct SafeStorage {
     open: Mutex<OpenSet>,
     notes: Arc<Mutex<Vec<String>>>,
     metrics: Arc<StorageMetrics>,
+    /// Blocks held back so a run of them becomes one write.
+    coalesce: Coalescer,
+}
+
+/// The largest run of bytes held back before it goes to the device.
+///
+/// A piece is read back and hashed the moment its last block lands, and a read
+/// flushes whatever overlaps it, so a buffer never actually holds more than
+/// one piece however large this is. It is the ceiling, not the size.
+const WRITE_REGION: usize = 1024 * 1024;
+
+/// How many runs are held at once, across every file.
+///
+/// One per **active region** rather than one per file, because with N receive
+/// paths the writes arrive as N interleaved sequential streams: the bridge
+/// fetches a 1 MiB range and answers 16 KiB blocks out of it, so one buffer per
+/// file would thrash where N do not. Eight is the shape a download has, and a
+/// ninth stream flushes the oldest rather than growing the ceiling.
+const WRITE_RUNS: usize = 8;
+
+/// Bytes accepted from the session and not yet handed to the device.
+///
+/// [`T-017`](../../TODO/disk-io.md) measured that writes to one file serialise
+/// **per operation** rather than per byte: the same 512 MiB in the same 32,768
+/// writes costs 468 ms over one receive path and 5,101 ms over eight. So the
+/// thing to remove is operations, and 16 KiB blocks arriving in order are 63
+/// operations out of every 64 that need not exist.
+///
+/// # What makes it safe
+///
+/// The session reads every piece back to hash it as soon as the piece's last
+/// block lands. [`SafeStorage::pread_exact`] flushes every run that overlaps
+/// what it is about to read, **before** reading, so a read can never miss a
+/// buffered byte. That is constraint 1 of `TODO/disk-io.md` T-018, and it is
+/// answered by flushing rather than by serving reads out of the buffer, which
+/// would put a reader and a writer on the same lock for the same bytes. The
+/// hazard there is real and named: anacrolix PR 1074 is a deadlock from
+/// exactly that shape, and [`T-010`](../../TODO/disk-io.md) was the same class
+/// here.
+///
+/// It also means the read-back is the flush point that matters, so correctness
+/// does not rest on anything remembering to flush later: by the time a piece is
+/// declared complete, every byte of it has been through the device.
+#[derive(Debug)]
+struct Coalescer {
+    runs: Mutex<Vec<Run>>,
+}
+
+/// One contiguous run of buffered bytes.
+#[derive(Debug)]
+struct Run {
+    file_id: usize,
+    /// Where the first buffered byte belongs in the file.
+    offset: u64,
+    bytes: Vec<u8>,
+}
+
+impl Run {
+    /// The byte after the last one buffered.
+    fn end(&self) -> u64 {
+        self.offset + self.bytes.len() as u64
+    }
+
+    /// Whether this run holds any byte of `[offset, offset + len)`.
+    fn overlaps(&self, file_id: usize, offset: u64, len: u64) -> bool {
+        self.file_id == file_id && self.offset < offset + len && offset < self.end()
+    }
+}
+
+/// What [`Coalescer::append`] decided, and what the caller has to write.
+#[derive(Debug)]
+enum Append {
+    /// The bytes are buffered. Anything here was displaced and has to go to
+    /// the device now.
+    Held(Vec<Run>),
+    /// Too large to be worth buffering. The caller writes it directly.
+    PassThrough,
+}
+
+impl Coalescer {
+    fn new() -> Self {
+        Self {
+            runs: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Run>> {
+        self.runs.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Take `buf` into a run, and name whatever that displaced.
+    ///
+    /// A write that continues an existing run extends it. A write that
+    /// continues nothing starts a run, evicting the oldest when there is no
+    /// room. A write at or over the region size is already the size this
+    /// exists to produce, so it goes straight through: buffering it would
+    /// copy a megabyte to save nothing.
+    fn append(&self, file_id: usize, offset: u64, buf: &[u8]) -> Append {
+        if buf.len() >= WRITE_REGION {
+            return Append::PassThrough;
+        }
+        let mut runs = self.lock();
+        let mut out = Vec::new();
+
+        // An overlapping write is the session revising bytes this run already
+        // holds. Rare, and not worth merging in place: the run goes to the
+        // device and the new bytes start a fresh one, so the later write is
+        // still the later write.
+        let mut extended = false;
+        let mut index = 0;
+        while index < runs.len() {
+            let run = &mut runs[index];
+            if run.file_id == file_id && run.end() == offset && !extended {
+                run.bytes.extend_from_slice(buf);
+                extended = true;
+                if run.bytes.len() >= WRITE_REGION {
+                    out.push(runs.remove(index));
+                    continue;
+                }
+            } else if run.overlaps(file_id, offset, buf.len() as u64) {
+                out.push(runs.remove(index));
+                continue;
+            }
+            index += 1;
+        }
+
+        if !extended {
+            while runs.len() >= WRITE_RUNS {
+                out.push(runs.remove(0));
+            }
+            // Sized to the region up front. Grown by `extend_from_slice`
+            // from 16 KiB, a run reallocates and copies itself as it doubles,
+            // and the copying is the cost this whole change is trying to
+            // avoid paying twice.
+            let mut bytes = Vec::with_capacity(WRITE_REGION);
+            bytes.extend_from_slice(buf);
+            runs.push(Run {
+                file_id,
+                offset,
+                bytes,
+            });
+        }
+        Append::Held(out)
+    }
+
+    /// Take every run holding a byte of `[offset, offset + len)` in one file.
+    fn take_overlapping(&self, file_id: usize, offset: u64, len: u64) -> Vec<Run> {
+        let mut runs = self.lock();
+        let mut out = Vec::new();
+        let mut index = 0;
+        while index < runs.len() {
+            match runs[index].overlaps(file_id, offset, len) {
+                true => out.push(runs.remove(index)),
+                false => index += 1,
+            }
+        }
+        out
+    }
+
+    /// Take every run for one file, whether or not it overlaps anything.
+    fn take_file(&self, file_id: usize) -> Vec<Run> {
+        let mut runs = self.lock();
+        let mut out = Vec::new();
+        let mut index = 0;
+        while index < runs.len() {
+            match runs[index].file_id == file_id {
+                true => out.push(runs.remove(index)),
+                false => index += 1,
+            }
+        }
+        out
+    }
+
+    /// Take everything.
+    fn take_all(&self) -> Vec<Run> {
+        std::mem::take(&mut *self.lock())
+    }
+
+    /// Bytes held right now, for the accounting a report carries.
+    fn buffered(&self) -> u64 {
+        self.lock().iter().map(|run| run.bytes.len() as u64).sum()
+    }
+}
+
+impl Drop for SafeStorage {
+    /// The last resort, and it should never have anything to do.
+    ///
+    /// Every piece is read back to be hashed, and a read flushes what it
+    /// overlaps, so by the time a torrent finishes every held byte has been
+    /// through the device. This catches a run abandoned part way: a download
+    /// that stopped on its deadline with a piece half written. Best effort,
+    /// because a destructor has nobody to report to, and the note is left
+    /// where the caller's own report picks notes up.
+    fn drop(&mut self) {
+        let runs = self.coalesce.take_all();
+        if runs.is_empty() {
+            return;
+        }
+        let held: u64 = runs.iter().map(|run| run.bytes.len() as u64).sum();
+        if let Err(e) = self.flush_runs(runs) {
+            self.note(format!(
+                "{held} buffered bytes could not be written as the run ended: {e}"
+            ));
+        }
+    }
 }
 
 /// Which files are open, in the order they were opened.
@@ -642,6 +865,11 @@ impl SafeStorage {
         };
         for victim in evict {
             if victim != file_id {
+                // Constraint 2 of T-018: a run whose handle is gone is a run
+                // nothing can write, so it goes to the device before the
+                // handle does. Flushed before the close, and through the
+                // handle that is about to be closed.
+                self.flush_file(victim)?;
                 self.slot(victim)?.close()?;
             }
         }
@@ -670,6 +898,88 @@ impl SafeStorage {
         Ok(true)
     }
 
+    /// Take one write into the buffer, or straight to the device.
+    ///
+    /// The counting half is the caller's: one `write_calls` per call the
+    /// session made, whether that call carried one slice or two.
+    fn accept(&self, file_id: usize, offset: u64, buf: &[u8]) -> anyhow::Result<()> {
+        match self.coalesce.append(file_id, offset, buf) {
+            // Held. The file is still opened for writing, so a buffered byte
+            // creates the file exactly as a written one does: the rule that a
+            // write creates a file and a read does not is what keeps an
+            // unselected file off the disk, and deferring the bytes must not
+            // defer that. See T-013 and T-188.
+            Append::Held(displaced) => {
+                self.ensure_writable(file_id, "write to")?;
+                self.flush_runs(displaced)
+            }
+            Append::PassThrough => self.write_through(file_id, offset, buf),
+        }
+    }
+
+    /// Make sure the file exists and is open for writing, without writing.
+    ///
+    /// A buffered write has to do everything a write does except reach the
+    /// device, and creating the file is one of those things.
+    fn ensure_writable(&self, file_id: usize, what: &str) -> anyhow::Result<()> {
+        let slot = self.slot(file_id)?;
+        if slot.path.as_os_str().is_empty() {
+            anyhow::bail!("file index {file_id} holds no data, so it cannot be {what}");
+        }
+        self.ensure_open(file_id, Intent::Write)?;
+        Ok(())
+    }
+
+    /// One positioned write, counted.
+    fn write_through(&self, file_id: usize, offset: u64, buf: &[u8]) -> anyhow::Result<()> {
+        let started = Instant::now();
+        let outcome = self.with(file_id, Intent::Write, "write to", |file| {
+            pwrite_all(file, offset, buf)
+        });
+        if outcome.is_ok() {
+            self.metrics.add_write(buf.len() as u64, started.elapsed());
+        }
+        outcome
+    }
+
+    /// Put held runs on the device, in the order they were taken.
+    ///
+    /// Every one is attempted even when an earlier one fails, because a run
+    /// left in a buffer that has already been taken out of the coalescer is a
+    /// byte nothing will ever write. The first failure is what the caller
+    /// hears about.
+    fn flush_runs(&self, runs: Vec<Run>) -> anyhow::Result<()> {
+        let mut first: Option<anyhow::Error> = None;
+        for run in runs {
+            if let Err(e) = self.write_through(run.file_id, run.offset, &run.bytes)
+                && first.is_none()
+            {
+                first = Some(e);
+            }
+        }
+        match first {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Push every held run for one file to the device.
+    fn flush_file(&self, file_id: usize) -> anyhow::Result<()> {
+        self.flush_runs(self.coalesce.take_file(file_id))
+    }
+
+    /// Bytes accepted from the session and not yet on the device.
+    ///
+    /// Constraint 3 of T-018 is that nothing reports progress from a byte that
+    /// is still in a buffer. Nothing does: `bit-cli` keeps no resume state, by
+    /// decision 7.4, so the only thing that survives a crash is the payload
+    /// file itself and a byte that never reached it is simply re-fetched. This
+    /// is here so that a future resume cache has the number it would need, and
+    /// so a report can say the buffer was empty at the end.
+    pub fn buffered_bytes(&self) -> u64 {
+        self.coalesce.buffered()
+    }
+
     /// Record something the caller should be told, once.
     fn note(&self, message: String) {
         let mut notes = self.notes.lock().unwrap_or_else(|e| e.into_inner());
@@ -694,6 +1004,9 @@ impl SafeStorage {
     /// of writeback outstanding would otherwise charge them to the next step.
     /// See `TODO/disk-io.md`, T-017.
     pub fn flush_all(&self) -> anyhow::Result<()> {
+        // Held runs first: syncing a handle that has bytes still in a buffer
+        // would report a device that is up to date and leave them behind.
+        self.flush_runs(self.coalesce.take_all())?;
         for (index, slot) in self.files.iter().enumerate() {
             if slot.path.as_os_str().is_empty() {
                 continue;
@@ -767,6 +1080,11 @@ impl TorrentStorage for SafeStorage {
 
     fn pread_exact(&self, file_id: usize, offset: u64, buf: &mut [u8]) -> anyhow::Result<()> {
         let len = buf.len() as u64;
+        // Constraint 1 of T-018, and it is answered before the read rather
+        // than during it. The session reads a piece back to hash it the
+        // moment its last block lands, so this is where a held run meets the
+        // reader that needs it.
+        self.flush_runs(self.coalesce.take_overlapping(file_id, offset, len))?;
         let started = Instant::now();
         let outcome = self.with(file_id, Intent::Read, "read", |file| {
             pread_exact(file, offset, buf)
@@ -786,14 +1104,8 @@ impl TorrentStorage for SafeStorage {
             return Ok(());
         }
         end_read_run();
-        let started = Instant::now();
-        let outcome = self.with(file_id, Intent::Write, "write to", |file| {
-            pwrite_all(file, offset, buf)
-        });
-        if outcome.is_ok() {
-            self.metrics.add_write(buf.len() as u64, started.elapsed());
-        }
-        outcome
+        self.metrics.count_write_call();
+        self.accept(file_id, offset, buf)
     }
 
     fn pwrite_all_vectored(
@@ -818,24 +1130,25 @@ impl TorrentStorage for SafeStorage {
             return Ok(0);
         }
         end_read_run();
-        let started = Instant::now();
-        let outcome = self.with(file_id, Intent::Write, "write to", |file| {
-            let mut at = offset;
-            let mut written = 0;
-            for slice in bufs {
-                if slice.is_empty() {
-                    continue;
-                }
-                pwrite_all(file, at, &slice)?;
-                at += slice.len() as u64;
-                written += slice.len();
+        // One call, however many slices, so `write_calls` counts what the
+        // session asked for and matches what it counted before the buffer
+        // existed.
+        self.metrics.count_write_call();
+        // Through the same buffer as the scalar path, one slice at a time.
+        // The two slices are adjacent by construction, so the second extends
+        // the run the first started and the pair costs one operation rather
+        // than two.
+        let mut at = offset;
+        let mut written = 0;
+        for slice in bufs {
+            if slice.is_empty() {
+                continue;
             }
-            Ok(written)
-        });
-        if let Ok(written) = outcome {
-            self.metrics.add_write(written as u64, started.elapsed());
+            self.accept(file_id, at, &slice)?;
+            at += slice.len() as u64;
+            written += slice.len();
         }
-        outcome
+        Ok(written)
     }
 
     fn remove_file(&self, file_id: usize, _filename: &Path) -> anyhow::Result<()> {
@@ -846,6 +1159,10 @@ impl TorrentStorage for SafeStorage {
         if slot.path.as_os_str().is_empty() {
             return Ok(());
         }
+        // Dropped rather than flushed. The file is about to go, and writing
+        // bytes into something on its way to being deleted is work that can
+        // only fail.
+        drop(self.coalesce.take_file(file_id));
         slot.close()?;
         self.open
             .lock()
@@ -928,6 +1245,12 @@ impl TorrentStorage for SafeStorage {
             let cap = guard.cap;
             std::mem::replace(&mut *guard, OpenSet::new(cap))
         };
+        // The held runs move with the handles they belong to. Left behind,
+        // this instance's `Drop` would try to write them through handles it
+        // has just given away, and the bytes would be lost with nothing
+        // saying so.
+        let coalesce = Coalescer::new();
+        *coalesce.lock() = self.coalesce.take_all();
         Ok(Box::new(Self {
             root: self.root.clone(),
             overwrite: self.overwrite,
@@ -938,6 +1261,7 @@ impl TorrentStorage for SafeStorage {
             open: Mutex::new(open),
             notes: self.notes.clone(),
             metrics: self.metrics.clone(),
+            coalesce,
         }))
     }
 
@@ -1354,6 +1678,7 @@ mod tests {
             open: Mutex::new(OpenSet::new(DEFAULT_MAX_OPEN_FILES)),
             notes: Arc::new(Mutex::new(Vec::new())),
             metrics: Arc::new(StorageMetrics::default()),
+            coalesce: Coalescer::new(),
         }
     }
 
@@ -1378,6 +1703,7 @@ mod tests {
             open: Mutex::new(OpenSet::new(cap)),
             notes: Arc::new(Mutex::new(Vec::new())),
             metrics: Arc::new(StorageMetrics::default()),
+            coalesce: Coalescer::new(),
         };
         storage.files = disk_paths
             .iter()
@@ -1397,11 +1723,15 @@ mod tests {
         assert!(!dir.path().join("b.bin").exists());
 
         storage.pwrite_all(0, 0, b"hello").unwrap();
+        // The file exists from the write, even though the bytes are still
+        // held: creating it is what keeps an unselected file off the disk and
+        // T-018's buffer must not defer that. See T-013 and T-188.
         assert!(dir.path().join("a.bin").exists());
         assert!(
             !dir.path().join("b.bin").exists(),
             "a file nothing touched is a file nothing creates"
         );
+        storage.flush_all().unwrap();
         assert_eq!(std::fs::read(dir.path().join("a.bin")).unwrap(), b"hello");
     }
 
@@ -1439,7 +1769,214 @@ mod tests {
         storage
             .pwrite_all_vectored(0, 0, [IoSlice::new(b"he"), IoSlice::new(b"llo")])
             .unwrap();
+        storage.flush_all().unwrap();
         assert_eq!(std::fs::read(dir.path().join("a.bin")).unwrap(), b"hello");
+    }
+
+    // -----------------------------------------------------------------
+    // Write coalescing, TODO/disk-io.md T-018
+    // -----------------------------------------------------------------
+
+    /// Constraint 1: a read sees a write that has not reached the device.
+    ///
+    /// This is the one the whole change rests on. The session reads every
+    /// piece back to hash it the moment its last block lands, so a buffer a
+    /// read does not consult fails the piece and the download never finishes.
+    #[test]
+    fn a_read_sees_a_write_that_is_still_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["a.bin"], 4);
+
+        storage.pwrite_all(0, 0, b"hello").unwrap();
+        assert_eq!(storage.buffered_bytes(), 5, "the write should be held");
+        assert!(
+            std::fs::read(dir.path().join("a.bin")).unwrap().is_empty(),
+            "the bytes reached the device before anything asked for them"
+        );
+
+        let mut buf = [0u8; 5];
+        storage.pread_exact(0, 0, &mut buf).unwrap();
+        assert_eq!(&buf, b"hello");
+        assert_eq!(
+            storage.buffered_bytes(),
+            0,
+            "the read should have flushed what it overlapped"
+        );
+    }
+
+    /// A read that overlaps nothing leaves the buffer alone.
+    ///
+    /// Flushing every run on every read would make the buffer useless: with
+    /// eight receive paths, one path hashing its piece would push the other
+    /// seven to the device mid-run.
+    #[test]
+    fn a_read_somewhere_else_does_not_flush_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["a.bin", "b.bin"], 4);
+
+        // Something at a known offset to read back, then a held run past it.
+        storage.pwrite_all(0, 0, b"0123456789").unwrap();
+        storage.flush_all().unwrap();
+        storage.pwrite_all(0, 4096, b"held").unwrap();
+        assert_eq!(storage.buffered_bytes(), 4);
+
+        let mut buf = [0u8; 4];
+        storage.pread_exact(0, 0, &mut buf).unwrap();
+        assert_eq!(&buf, b"0123");
+        assert_eq!(
+            storage.buffered_bytes(),
+            4,
+            "a read that touches none of the held bytes flushed them anyway"
+        );
+
+        // Nor does a read of another file.
+        storage.pwrite_all(1, 0, b"other").unwrap();
+        storage.flush_all().unwrap();
+        storage.pwrite_all(0, 4096, b"held").unwrap();
+        let mut other = [0u8; 5];
+        storage.pread_exact(1, 0, &mut other).unwrap();
+        assert_eq!(storage.buffered_bytes(), 4);
+    }
+
+    /// Sequential blocks become one operation, which is the point.
+    #[test]
+    fn a_run_of_blocks_becomes_one_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["a.bin"], 4);
+        let metrics = storage.metrics.clone();
+        let block = vec![7u8; 16 * 1024];
+
+        // A whole region's worth, arriving in 16 KiB blocks as the session
+        // hands them over.
+        let blocks = WRITE_REGION / block.len();
+        for index in 0..blocks {
+            storage
+                .pwrite_all(0, (index * block.len()) as u64, &block)
+                .unwrap();
+        }
+        let snapshot = metrics.read();
+        assert_eq!(
+            snapshot.write_ops, 1,
+            "{blocks} sequential blocks should be one operation"
+        );
+        assert_eq!(snapshot.write_bytes, WRITE_REGION as u64);
+
+        let mut read_back = vec![0u8; WRITE_REGION];
+        storage.pread_exact(0, 0, &mut read_back).unwrap();
+        assert!(read_back.iter().all(|b| *b == 7));
+    }
+
+    /// Interleaved streams get a run each rather than fighting over one.
+    ///
+    /// With N receive paths the writes arrive as N sequential streams at N
+    /// different offsets. One buffer per file would flush on every block,
+    /// which is the shape this exists to avoid.
+    #[test]
+    fn interleaved_streams_do_not_flush_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["a.bin"], 4);
+        let metrics = storage.metrics.clone();
+        const STREAMS: u64 = 4;
+        let block = vec![3u8; 1024];
+
+        // Four streams, a megabyte apart, each advancing one block at a time.
+        for round in 0..8u64 {
+            for stream in 0..STREAMS {
+                let offset = stream * (WRITE_REGION as u64) + round * 1024;
+                storage.pwrite_all(0, offset, &block).unwrap();
+            }
+        }
+        assert_eq!(
+            metrics.read().write_ops,
+            0,
+            "interleaved streams flushed each other"
+        );
+        assert_eq!(storage.buffered_bytes(), STREAMS * 8 * 1024);
+        storage.flush_all().unwrap();
+        assert_eq!(metrics.read().write_ops, STREAMS);
+    }
+
+    /// More streams than there is room for: the oldest goes to the device.
+    #[test]
+    fn a_stream_past_the_cap_displaces_the_oldest() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["a.bin"], 4);
+        let metrics = storage.metrics.clone();
+
+        for stream in 0..(WRITE_RUNS as u64) {
+            storage
+                .pwrite_all(0, stream * (WRITE_REGION as u64), b"x")
+                .unwrap();
+        }
+        assert_eq!(metrics.read().write_ops, 0, "nothing should be full yet");
+
+        storage
+            .pwrite_all(0, (WRITE_RUNS as u64) * (WRITE_REGION as u64), b"x")
+            .unwrap();
+        assert_eq!(
+            metrics.read().write_ops,
+            1,
+            "the ninth stream should have displaced the first"
+        );
+        assert_eq!(storage.buffered_bytes(), WRITE_RUNS as u64);
+    }
+
+    /// A write that lands on bytes already held replaces them.
+    ///
+    /// Rare, and the ordering has to survive it: the held run goes to the
+    /// device first so the later write is still the later write.
+    #[test]
+    fn a_write_over_held_bytes_keeps_the_later_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["a.bin"], 4);
+
+        storage.pwrite_all(0, 0, b"first").unwrap();
+        storage.pwrite_all(0, 0, b"SECOND").unwrap();
+        let mut buf = [0u8; 6];
+        storage.pread_exact(0, 0, &mut buf).unwrap();
+        assert_eq!(&buf, b"SECOND");
+    }
+
+    /// A write larger than the region is already the size this produces.
+    #[test]
+    fn a_write_at_the_region_size_goes_straight_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["a.bin"], 4);
+        let metrics = storage.metrics.clone();
+
+        storage.pwrite_all(0, 0, &vec![1u8; WRITE_REGION]).unwrap();
+        assert_eq!(metrics.read().write_ops, 1);
+        assert_eq!(
+            storage.buffered_bytes(),
+            0,
+            "a full region was copied into a buffer to save nothing"
+        );
+    }
+
+    /// Constraint 2: nothing is left held when the storage goes away.
+    #[test]
+    fn dropping_the_storage_writes_what_it_was_holding() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let storage = storage_at(dir.path(), &["a.bin"], 4);
+            storage.pwrite_all(0, 0, b"held to the end").unwrap();
+            assert_eq!(storage.buffered_bytes(), 15);
+        }
+        assert_eq!(
+            std::fs::read(dir.path().join("a.bin")).unwrap(),
+            b"held to the end"
+        );
+    }
+
+    /// A file being removed drops its held bytes rather than writing them.
+    #[test]
+    fn removing_a_file_discards_what_was_held_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["a.bin"], 4);
+        storage.pwrite_all(0, 0, b"doomed").unwrap();
+        storage.remove_file(0, Path::new("a.bin")).unwrap();
+        assert_eq!(storage.buffered_bytes(), 0);
+        assert!(!dir.path().join("a.bin").exists());
     }
 
     #[test]
@@ -1457,7 +1994,11 @@ mod tests {
                 storage.open_files()
             );
         }
-        // Every file was written, whatever the cap did to the handles.
+        // Every file was written, whatever the cap did to the handles. The
+        // five that were evicted had their held bytes flushed through the
+        // handle that was closing, which is constraint 2 of T-018; the three
+        // still open are flushed here.
+        storage.flush_all().unwrap();
         for name in &names {
             assert_eq!(std::fs::read(dir.path().join(name)).unwrap(), b"x");
         }
@@ -1509,6 +2050,9 @@ mod tests {
             }
         });
 
+        // Through the storage layer, because a write is on the device when
+        // something reads it rather than when it returns. See T-018.
+        storage.flush_all().unwrap();
         let written = std::fs::read(dir.path().join("big.bin")).unwrap();
         assert_eq!(written.len(), 8 * WRITERS * CHUNK);
         for round in 0..8 {
@@ -1604,6 +2148,7 @@ mod tests {
             storage.files[0].is_writable(),
             "a write did not upgrade the handle"
         );
+        storage.flush_all().unwrap();
         assert_eq!(std::fs::read(dir.path().join("a.bin")).unwrap(), b"PAYLOAD");
         // Upgrading replaced the handle rather than adding one.
         assert_eq!(storage.open_files(), 1);

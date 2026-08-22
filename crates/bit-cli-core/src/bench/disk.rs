@@ -538,6 +538,14 @@ fn one_step(
             );
         }
 
+        // Held bytes go to the device before the last point is taken, or the
+        // point undercounts by whatever the write buffer was still holding
+        // and the series does not add up to the payload. `Layout::Shared` and
+        // `Layout::Split` write through `SafeStorage`, which coalesces, so
+        // this is where the last run of a sequential stream lands. See
+        // `TODO/disk-io.md`, T-018.
+        sink.flush()?;
+
         // One last point, once the writers have stopped and everything they
         // did is in the counters.
         //
@@ -717,7 +725,16 @@ mod tests {
             1 << 20,
             "the one point accounts for the whole payload"
         );
-        assert_eq!(sample.requests, 64, "and for every write that made it");
+        // Fewer than the 64 blocks that were handed over, and that is the
+        // measurement rather than a loss: `Layout::Shared` writes through
+        // `SafeStorage`, which coalesces a run of blocks into one operation.
+        // What has to hold is that the point carries every operation that did
+        // reach the device, which the byte count above already says.
+        assert!(
+            (1..=64).contains(&sample.requests),
+            "{} operations for 64 blocks",
+            sample.requests
+        );
     }
 
     #[test]

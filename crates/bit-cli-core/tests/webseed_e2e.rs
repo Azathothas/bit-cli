@@ -2702,11 +2702,22 @@ async fn a_torrent_whose_pieces_straddle_every_boundary_downloads_byte_for_byte(
     assert_eq!(straddling_blocks, 2, "both boundaries fall inside a block");
 
     let counts = run.engine.storage_counts();
+    // `write_calls`, not `write_ops`. The storage layer combines a run of
+    // sequential writes into one device operation, so `write_ops` counts
+    // operations and no longer counts what the session asked for. The fan-out
+    // this test exists for is a property of what the session asked for, and
+    // that is what `write_calls` holds. See `TODO/disk-io.md`, T-018.
     assert_eq!(
-        counts.write_ops,
+        counts.write_calls,
         blocks + straddling_blocks,
-        "{} write operations for {blocks} blocks and {straddling_blocks} straddling ones: a block that spans a boundary has to issue one write per file",
-        counts.write_ops
+        "{} writes for {blocks} blocks and {straddling_blocks} straddling ones: a block that spans a boundary has to issue one write per file",
+        counts.write_calls
+    );
+    assert!(
+        counts.write_ops <= counts.write_calls,
+        "{} operations for {} writes: combining can only ever reduce them",
+        counts.write_ops,
+        counts.write_calls
     );
     assert_eq!(
         counts.write_bytes, layout.total_length,

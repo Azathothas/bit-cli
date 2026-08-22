@@ -727,7 +727,7 @@ Source:      the [T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-
 Category:    disk-io
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      partial
 
 Problem:     The session hands storage one 16 KiB block at a time and storage
              turns each into one positioned write.
@@ -877,6 +877,121 @@ Approach are unchanged. What the numbers add to the Approach is that the
 `--web-seed-connections` count is the multiplier: at one receive path the write
 path costs 468 ms and coalescing would be worth almost nothing, and everything
 this entry is worth appears between one path and eight.
+
+**Built 2026-08-22. The download path is 25% faster and one acceptance clause
+is not met, which is why this is partial rather than done.**
+
+`Coalescer` in `crates/bit-cli-core/src/storage.rs` holds up to `WRITE_RUNS`
+contiguous runs of at most `WRITE_REGION`, one per **active region** rather
+than one per file, exactly as the Approach asks. A write that continues a run
+extends it; a write that continues nothing starts one, displacing the oldest
+when there is no room; a write already the size of a region goes straight
+through, because copying a megabyte to save nothing is not a saving.
+
+The three correctness constraints, and how each is answered:
+
+1. **A read sees a buffered write.** `pread_exact` flushes every run
+   overlapping what it is about to read, **before** reading. Answered by
+   flushing rather than by serving the read out of the buffer, which is the
+   re-entrancy the Approach warns about: the coalescer's lock is never held
+   across I/O, so `pread_exact` taking it, dropping it, and then writing
+   cannot wedge against `pwrite_all` doing the same. That is the anacrolix
+   PR 1074 shape avoided rather than reproduced.
+2. **Everything flushes before the handle goes.** Before a handle is evicted
+   by `--max-open-files`, in `flush_all`, and in a `Drop` that should never
+   have anything to do, because the piece read-back has already taken it. A
+   file being removed **discards** its runs instead: writing bytes into
+   something on its way to being deleted is work that can only fail. And
+   `TorrentStorage::take` moves the held runs with the handles they belong to,
+   or the old instance's `Drop` would write them through handles it had just
+   given away.
+3. **Nothing reports progress from a buffered byte.** Nothing can:
+   `bit-cli` keeps no resume state by decision 7.4, so a byte that never
+   reached the file is simply re-fetched. `SafeStorage::buffered_bytes` is
+   there for the resume cache that would need it.
+
+**The read-back is what makes this safe rather than lucky.** The session reads
+every piece back to hash it the moment its last block lands, so a run never
+holds more than one piece and every held byte is on the device before the piece
+it belongs to is declared complete. Correctness does not rest on anything
+remembering to flush later.
+
+**A second counter came with it, because the first one stopped meaning what it
+said.** `StorageCounts::write_ops` counted writes the session asked for and
+operations that reached the device, which were the same number. They are not
+any more. `write_calls` is the first and `write_ops` is the second, and
+`write_ops / write_calls` is the coalescing factor. The fan-out assertion in
+`a_torrent_whose_pieces_straddle_every_boundary_downloads_byte_for_byte` moved
+to `write_calls`, which is where the property it protects actually lives: a
+block spanning a file boundary still issues one write per file, and runs are
+keyed by file so two files can never be combined.
+
+**What it bought, measured at eight bridges over 512 MiB.**
+`bench/leech-20260822T090848152Z.json` before, `bench/leech-20260822T094440861Z.json`
+after, the same script and parameters minutes apart:
+
+| | before | after | |
+| --- | --- | --- | --- |
+| rate | 405.71 MiB/s | **508.44 MiB/s** | +25.3% |
+| wall | 1,262 ms | 1,007 ms | −20.2% |
+| writing the payload | 5,101 ms, 50.52% of path time | **1,806 ms, 22.42%** | −64.6% |
+| write operations | 32,768 | 21,014 | −35.9% |
+| control, one receive path | 468 ms over 32,768 ops | 204 ms over 10,600 ops | −56.4% |
+
+The ceiling worked out above was about 27% and this landed at 25.3%, so
+removing the write time exposed very little behind it. Writing has gone from
+the largest thing a receive path does to less than a quarter of it.
+
+**The acceptance's first clause is not met, and the fixture is why.**
+`bench disk --block-size 16KiB --layout shared` reaches 670.68 MiB/s at eight
+threads against 1.20 GiB/s at `--block-size 1MiB`, which is 55% and not the
+90% the clause asks for. It cannot reach it: `assignment` gives the shared
+layout `block % threads` as the owner, so at eight threads each thread's next
+write is eight blocks past its last and **nothing is ever contiguous**. The
+buffer coalesces nothing there and pays for the copy.
+
+That is the instrument's shape and not the download's. Measured in one run of
+`scripts/check-disk-contention.ps1`, so the three are comparable to each other,
+`bench/disk-contention-20260822T094609951Z.json`:
+
+| 16 KiB blocks | 1 thread | 8 threads |
+| --- | --- | --- |
+| `shared`, strided, through the buffer | 985.21 MiB/s | 670.68 MiB/s |
+| `handles`, raw, no buffer at all | 1.07 GiB/s | 730.15 MiB/s |
+| `split`, contiguous per thread, through the buffer | 1,016.66 MiB/s | **1.14 GiB/s** |
+
+`split` is the layout whose threads write contiguous ranges, which is what a
+receive path does, and it reaches **1.56 times** the raw unbuffered path at
+eight threads. `shared` pays about 8% against that same raw path for a copy it
+gets nothing back for. So the buffer helps exactly where the writes are
+sequential and costs a little where they are not, and the download is the
+former.
+
+**What would close this.** Either the shared layout stops striding, so
+`bench disk` can show what the download path does, or the clause moves to
+`--layout split` and asks for the number that fixture can produce: 1.14 GiB/s
+against `split` at 1 MiB, which is 1.54 GiB/s at eight threads, so 74% and
+still not 90%. Neither is a change to the write path, and both are decisions
+about what `bench disk` is for, which is [T-017](#t-017-concurrent-receive-paths-contend-on-the-payload-file)'s
+question rather than this one's.
+
+The other two clauses are met. `bench leech` at eight bridges improves and both
+reports are named above, and the whole suite passes:
+
+```powershell
+pwsh -NoProfile -File scripts/gates.ps1
+pwsh -NoProfile -File scripts/interop-roundtrip.ps1
+```
+
+1,113 tests, and three of three cases round trip byte for byte through
+`aria2c` 1.37.0, which is what says no byte moved.
+
+**Nine tests hold the buffer**, in `storage.rs`: a read seeing a held write, a
+read elsewhere leaving it alone, 64 sequential blocks becoming one operation,
+four interleaved streams not flushing each other, a ninth stream displacing the
+oldest, a write over held bytes keeping the later one, a full region going
+straight through, `Drop` writing what it held, and `remove_file` discarding it.
+
 
 
 ### T-177 A piece that spans a file boundary has no adversarial fixture
