@@ -342,6 +342,55 @@ peers were snubbed merely for choking, and fast peers were snubbed after
 is a 503, see [T-005](#t-005-a-source-restricted-mid-run-cannot-be-re-scoped)
 on treating 503 as backpressure.
 
+**Measured before building, 2026-08-22, and it is five times worse than this
+entry says.** `loopback-fileserver --stall-after 65536` against
+`download --web-seed-only`, the defaults otherwise, which are
+`--web-seed-retries 3` and `--web-seed-max-errors 5`:
+
+| `--web-seed-timeout` | `--web-seed-retries` | wall clock | `retries` | `cooldowns` |
+| --- | --- | --- | --- | --- |
+| 5s | 3, the default | **133.28 s** | 15 | 1 |
+| 5s | 1 | 68.59 s | 5 | 1 |
+| 5s | 0 | 40.43 s | 0 | 1 |
+| 2s | 3 | 73.73 s | 15 | 1 |
+
+The Problem says 24,247 ms and says the time goes on "the retry count
+multiplied by the cooldown". **Both halves are wrong.** The cooldown is
+`--web-seed-cooldown`, its default is zero, and it is not waited on at all: a
+source that spends its budget with a zero cooldown is retired rather than
+slept on, which is what [T-137](multi-source.md) decided. What multiplies is
+the **error budget**, and the ladder underneath it:
+
+```
+max_errors * ( (retries + 1) * timeout + backoff ) + a constant
+```
+
+Five requests, each spending four attempts of `--web-seed-timeout` and the
+500 ms, 1 s and 2 s backoffs between them, is 117.5 s of the 133.28. The
+`retries` column is the arithmetic confirmed: 15 is five requests times three.
+
+**A constant near sixteen seconds is left over and no flag moves it.** Against
+the model above the four rows leave 15.4, 16.1, 15.8 and 16.2 seconds, so it
+is not a fraction of anything and not the timeout, the retry count or the
+error budget. That is a second target and it is not the one this entry names.
+Whoever takes this should find out what it is before touching the ladder,
+because it is the whole cost once the ladder is fixed.
+
+**The Approach still stands and gets sharper.** Retiring the source on the
+first request whose attempts all time out takes the ladder from five requests
+to one, which is the 23.5 s the Problem quotes, and it is very likely where
+24,247 ms came from: it is the fix's number rather than the defect's. Getting
+under the Acceptance's "three times `--web-seed-timeout`" needs the retry
+ladder shortened for timeouts as well, and then the sixteen seconds is what is
+left and what decides whether the Acceptance can be met at all.
+
+Reproduce, and it needs no script beyond the one command:
+
+```powershell
+target/release/examples/loopback-fileserver.exe --root <dir> --stall-after 65536
+bit-cli download <torrent> --web-seed <url> --web-seed-only --web-seed-timeout 5s --json
+```
+
 ### T-008 A duplicate block request is fetched twice
 
 Source:      the [T-090](bench.md) `bench leech` measurement

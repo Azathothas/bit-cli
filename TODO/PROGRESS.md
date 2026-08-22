@@ -184,13 +184,21 @@ measurement can still move.
    announces. The decision the entry asks for is whether `trackers` should do
    that and whether the session should.
    Corpus: `torrent/tracker/` for the two-announce shape.
-3. **[T-018](disk-io.md)**, P2, effort S by the look of it: the write path
-   issues one operation per 16 KiB block. `crates/bit-cli-core/src/storage.rs`
-   already has `pwrite_all_vectored`, so the question is why the block path
-   does not reach it.
-4. **[T-007](webseed.md)**, P2. A stalling source takes 24 seconds to give up,
-   which is [T-141](webseed.md)'s neighbour and the one timeout that entry did
-   not bound.
+3. **[T-007](webseed.md)**, P2 and **effort S**, and it is **measured and
+   ready to build**: this session ran the reproduction rather than the entry's
+   arithmetic. A stalling source costs **133.28 s** at `--web-seed-timeout 5s`,
+   not the 24,247 ms the entry records, and the cooldown the Problem blames is
+   not waited on at all. What multiplies is the error budget over the retry
+   ladder, `max_errors * ((retries + 1) * timeout + backoff)`, and **a constant
+   near sixteen seconds that no flag moves**. Two targets, and the entry names
+   only the first. Find out what the sixteen seconds is before touching the
+   ladder, because it is the whole cost once the ladder is fixed.
+4. **[T-018](disk-io.md)**, P2 and **effort M**, and the entry has already
+   bounded what it is worth: writes take about 806 ms of an eight-bridge
+   `bench leech` run's 2,510 ms, so coalescing to 1 MiB is worth at most 18%.
+   The Approach names three correctness constraints and none can be traded, so
+   this is not the small change the neighbouring `pwrite_all_vectored` makes it
+   look like.
 
 Do not start [T-163](peers.md) MSE, [T-102](bep-coverage.md) BEP 55,
 [T-167](bep-coverage.md) BEP 54, [T-016](disk-io.md) fastresume, the send half
