@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use librqbit::api::TorrentIdOrHash;
-use librqbit::http_api_types::PeerStatsFilter;
+use librqbit::http_api_types::{PeerStatsFilter, PeerStatsFilterState};
 use librqbit::limits::LimitsConfig;
 use librqbit::storage::StorageFactoryExt;
 use librqbit::{
@@ -992,13 +992,16 @@ pub struct ResolvedTorrent {
 ///
 /// A peer that sent two gigabytes and then disconnected still belongs in the
 /// accounting, so the default filter (connected peers only) is wrong here.
-/// `librqbit` 9.0.0 exports `PeerStatsFilter` but not the enum its one field
-/// holds, so the value is built through the type's own `Deserialize`, which is
-/// public. `TODO/peers.md` carries the upstream export gap. The literal is
-/// fixed and known to parse, so the fallback is unreachable rather than
-/// silently narrowing the report.
+/// Every peer, including one that took two gigabytes and left.
+///
+/// Built through the filter's own `Deserialize` from a fixed literal until
+/// 2026-08-22, because `librqbit` exported `PeerStatsFilter` and not the enum
+/// its one field holds. The vendored tree exports both. See `TODO/peers.md`,
+/// T-025.
 fn all_peers_filter() -> PeerStatsFilter {
-    serde_json::from_str::<PeerStatsFilter>(r#"{"state":"all"}"#).unwrap_or_default()
+    PeerStatsFilter {
+        state: PeerStatsFilterState::All,
+    }
 }
 
 /// Join a torrent path's components with `/`, on every platform.

@@ -8,7 +8,12 @@ use crate::{AddTorrentOptions, PeerConnectionOptions};
 pub struct OnlyFiles(Vec<usize>);
 pub struct InitialPeers(pub Vec<SocketAddr>);
 
-pub use crate::torrent_state::peer::stats::snapshot::{PeerStatsFilter, PeerStatsSnapshot};
+// `PeerStatsFilterState` is the type of `PeerStatsFilter`'s only field, so a
+// caller that cannot name it cannot build the filter in Rust at all and has to
+// go through `Deserialize` from a literal. See TODO/peers.md T-025.
+pub use crate::torrent_state::peer::stats::snapshot::{
+    PeerStatsFilter, PeerStatsFilterState, PeerStatsSnapshot,
+};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct TorrentAddQueryParams {

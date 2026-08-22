@@ -806,7 +806,7 @@ Source:      `librqbit` 9.0.0 API gap
 Category:    peers
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-22T19:38Z
 
 Problem:     `librqbit` exports `PeerStatsFilter` through `http_api_types` but
              not the enum its one field holds, so the value that asks for every
@@ -819,6 +819,22 @@ Approach:    One line upstream: re-export `PeerStatsFilterState` alongside
              at `engine::all_peers_filter`.
 Acceptance:  `engine::all_peers_filter` constructs the filter with a named
              enum variant and no JSON.
+
+**Closed 2026-08-22, and it was the one line the Approach said it was.**
+`http_api_types` re-exports `PeerStatsFilterState` beside `PeerStatsFilter` in
+the vendored tree, and `all_peers_filter` is
+
+```rust
+PeerStatsFilter {
+    state: PeerStatsFilterState::All,
+}
+```
+
+with no `serde_json`, no literal, and no `unwrap_or_default` whose fallback
+would have quietly narrowed the report to live peers if the literal had ever
+stopped parsing. Worth doing because it is the smallest possible demonstration
+of what owning the fork is for: this sat open as an upstream API gap while the
+fix was one line in a file this repository now ships.
 
 ### T-142 bit-cli peers never joined the swarm it was sampling
 

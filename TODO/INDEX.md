@@ -105,7 +105,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-022](peers.md) | P1 | peers | done | Peer connections churn on IPv6-only swarms |
 | [T-023](peers.md) | P1 | peers | **done** | The listen port is chosen without checking both address families |
 | [T-024](peers.md) | P2 | peers | open | Per-peer choke and unchoke history is not reported |
-| [T-025](peers.md) | P3 | peers | open | PeerStatsFilterState is not exported, so the filter is built by JSON |
+| [T-025](peers.md) | P3 | peers | done | PeerStatsFilterState is not exported, so the filter is built by JSON |
 | [T-142](peers.md) | P1 | peers | **done** | bit-cli peers never joined the swarm it was sampling |
 | [T-138](peers.md) | P2 | peers | **done** | A peer that comes back waits out a backoff that grows by six |
 | [T-163](peers.md) | P2 | peers | open | MSE/PE peer encryption is not implemented |
@@ -237,7 +237,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 159 items: 149 to work through, and 10 deferred to Phase C.
-46 open, 4 partial, 1 blocked, 98 done.
+45 open, 4 partial, 1 blocked, 99 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -493,9 +493,9 @@ sessions earlier.
 | P0 | 0 | 1 | 0 | 11 | 12 |
 | P1 | 1 | 0 | 0 | 53 | 54 |
 | P2 | 23 | 3 | 1 | 32 | 59 |
-| P3 | 22 | 0 | 0 | 2 | 24 |
+| P3 | 21 | 0 | 0 | 3 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **46** | **4** | **1** | **98** | **159** |
+| **All** | **45** | **4** | **1** | **99** | **159** |
 
 `blocked` is one item. [T-167](bep-coverage.md): BEP 54's send side is inert
 without an upstream receive side. It stays here rather than moving, with the
