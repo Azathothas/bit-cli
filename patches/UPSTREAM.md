@@ -12,9 +12,10 @@ How to add one: [`README.md`](README.md).
 ## Nothing yet
 
 As of 2026-08-22T12:05Z the three vendored trees are **byte for byte upstream**
-at the commits [`vendor/upstream.json`](../vendor/upstream.json) records, and
-`patches/rqbit/`, `patches/librqbit-utp/` and
-`patches/librqbit-dualstack-sockets/` are empty.
+at the commits [`vendor/upstream.json`](../vendor/upstream.json) records, so
+there is no patch series at all. `scripts/vendor-diff.ps1` creates
+`patches/<upstream>/` when it has something to put in it, and it has not, so
+those directories do not exist yet.
 
 That is on purpose. The session that vendored them stopped at a green build so
 that the first real patch lands against a tree already proved to compile, test

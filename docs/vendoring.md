@@ -9,8 +9,8 @@ This file says why, and what that costs. How to work with the vendored trees is
 
 ## The reason
 
-Seven entries in `TODO/` were blocked, and every one of them names a seam
-`librqbit` 9.0.0 does not expose, with a file and a line number:
+Nine entries in `TODO/` are held up by a seam `librqbit` 9.0.0 does not
+expose. Seven of them name it with a file and a line number:
 
 | entry | what it needs |
 | --- | --- |
@@ -22,10 +22,15 @@ Seven entries in `TODO/` were blocked, and every one of them names a seam
 | [T-163](../TODO/peers.md) | MSE, which is a wire-level handshake |
 | [T-167](../TODO/bep-coverage.md) | BEP 54 `lt_donthave`, which has no inverse of `on_have` |
 
-None of the seven can move while the dependency is a published tarball. Nor can
-[T-020](../TODO/peers.md), the one open P0: its second defect is a
-`tokio::select!` arm in upstream's accept loop that a failed handshake check
-disables, and no amount of configuration reaches it.
+None of the seven can move while the dependency is a published tarball. The
+other two are the record's two P0 items. [T-020](../TODO/peers.md), open: its
+second defect is a `tokio::select!` arm in upstream's accept loop that a failed
+handshake check disables, and no amount of configuration reaches it.
+[T-040](../TODO/memory.md), partial: nothing reclaims a peer row and nothing
+bounds the sets that hold them.
+
+The full table, and what to do about each, is
+[`patches/TASKS.md`](../patches/TASKS.md).
 
 `TODO/RULES.md` section 5 says nothing here closes as "upstream problem",
 because upstream has no interest in this work and there is nowhere to defer to.
@@ -65,8 +70,21 @@ package that is neither a member nor excluded.
 The vendored crates are **not** workspace members and are not linted or tested
 by `scripts/gates.ps1`. That is deliberate: upstream's warnings are upstream's,
 and `clippy -D warnings` over somebody else's tree would fail this build for a
-lint released after they last touched it. `vendor/rqbit` is its own workspace
-and its own tests are run on purpose, not by default:
+lint released after they last touched it.
+
+**That took a CI failure to get right, and the reason is worth knowing.** Cargo
+passes `--cap-lints allow` to a dependency it resolved from a registry and does
+not pass it to a path dependency. `[patch.crates-io]` turns a registry crate
+into a path dependency, so on the vendoring commit an unused parameter in
+`vendor/librqbit-dualstack-sockets/src/bind_device.rs:27` became an error under
+the workflow-level `RUSTFLAGS: -D warnings` and failed four Windows jobs.
+Nobody here wrote it. `-D warnings` now lives only in the clippy job, scoped to
+`--workspace`, which is what excludes `vendor/`; clippy runs every rustc lint
+as well as its own, so the only thing no longer covered is a warning that
+appears on a platform the clippy job does not run on.
+
+`vendor/rqbit` is its own workspace and its own tests are run on purpose, not
+by default:
 
 ```bash
 cargo test --manifest-path vendor/rqbit/Cargo.toml
@@ -74,9 +92,10 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml
 
 ## What it costs
 
-- **A build compiles thirteen more crates.** The gates went from about 52 s to
-  about 113 s on this machine, most of it the first build after a vendored file
-  changes.
+- **A build compiles thirteen more crates.** The gates took 52.0 s before the
+  vendoring and 113.4 s on the first run after it, which is the cold build of
+  all thirteen. Warm they take 65.9 s. The cost is paid again whenever a
+  vendored file changes, which is what a patch does.
 - **3.5 MB in the repository**, 389 files.
 - **Upstream stops being visible.** Nobody sees a release note for a dependency
   that no longer has a version to update. `scripts/upstream-scan.ps1` is the

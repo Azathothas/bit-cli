@@ -28,8 +28,8 @@ Nine entries are held up by a seam `librqbit` does not expose. Two of them are
 | [T-167](../TODO/bep-coverage.md) | P2 | blocked | no inverse of `on_have` |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 
-That is 2 of the 2 open P0 items, both P1 items that are partial, and both
-blocked entries in the whole record.
+That is both P0 items in the record, the one open and the one partial, both
+partial P1 items, and both blocked entries.
 
 ## 0. Before anything: is 9.0.1 broken for us
 
@@ -44,14 +44,15 @@ this repository is a few kilobytes of payload, so no test adds a `.torrent`
 anywhere near two megabytes. **Establish whether `bit-cli` is exposed before
 building on top of the vendored tree.** A 2 MB `.torrent` is roughly a hundred
 thousand piece hashes, which is a payload of about 1.6 GiB at a 16 KiB piece
-length or far less at a smaller one, and `bit-cli create` can make one.
+length or far less at a smaller one, and `bit-cli create` is what would make
+one. Whether it can do so quickly enough to be a test is itself unmeasured.
 
 If it reproduces, it is a P0 and the first patch. If it does not, say so in the
 entry that records this and move on: an upstream report we could not reproduce
 is still worth writing down, because the next reconciliation will meet it
 again.
 
-## 1. T-020, the open P0, and it is a four line change
+## 1. T-020, the open P0, and it is one match arm
 
 `TODO/peers.md` T-020 already did the work of finding this and the entry is
 worth reading in full before touching anything.
