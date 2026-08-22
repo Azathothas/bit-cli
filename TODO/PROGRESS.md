@@ -22,212 +22,164 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 
 ## State
 
-- **This session:** started 2026-08-22T07:17:07Z, unattended. Working the
-  order below, in order: [T-092](bench.md) the serving side of a synthetic
-  peer in `crates/bit-cli-core/src/bench/swarm.rs` and the case in
-  `scripts/check-swarm.ps1`, then [T-022](peers.md), then [T-007](webseed.md),
-  then [T-018](disk-io.md). Baseline re-measured at the start rather than
-  trusted: gates clean, 1,091 tests, `check-todo` agrees, CI green at
-  **32557742549**.
-- **Last session:** 2026-08-22T04:05:27Z to 07:10Z, 3h 4m, unattended
-  throughout. The
-  whole four-item work order, then three things the work found, two more
-  entries, and the two reviews.
-- **Tests:** 1,091 passing, 0 failing. The baseline at the start was 1,052.
+- **Last session:** 2026-08-22T07:17:07Z to 10:02Z, 2h 44m, unattended
+  throughout. The whole four-item work order, then the two reviews, which found
+  three stale claims and one entry's worth of gap.
+- **Tests:** 1,113 passing, 0 failing. The baseline at the start was 1,091.
 - **Gates:** clean. One command:
 
 ```bash
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** green on all sixteen jobs at run **32557742549**, against commit
-  `6c47829`. Two runs earlier in the session were **red on Clippy and nothing
-  else**, **32555391850** (`519742a`) and **32555846984** (`88676cb`), for the
-  reason under "the toolchain" below; **32556256557** against `081d943` is
-  where that was fixed and every other job in both red runs was green. Two
-  commits carry `[skip ci]` because they change no source, `2f202d2` and
-  `c77e462`, so they have no run of their own.
-- **Entries:** 147 items. 48 open, 7 partial, 2 blocked, 80 done, 10 deferred
-  to Phase C. 80 of 137 workable done, 57 left.
-- **Tree:** 84 Rust files, 48,351 lines of code, 10,816 of comment, measured
+- **CI:** green at run **32566011119**, against commit `bca3d11`, the last run
+  read. **32566533746** was queued for `4ee2948` as the session ended and is
+  not read; read it first. Two commits carry `[skip ci]` because they change no
+  source, `ec82a24` and `f46d4fd`.
+- **Entries:** 148 items. 46 open, 7 partial, 2 blocked, 83 done, 10 deferred
+  to Phase C. 83 of 138 workable done, 55 left.
+- **Tree:** 84 Rust files, 49,649 lines of code, 11,471 of comment, measured
   with `scc --no-cocomo crates/`.
 
 ## What the last session did
 
-The four-item work order, in order, and then three things that came out of it.
+The four-item work order, in order, and then the reviews.
 
 ### The work order
 
-- **[T-020](peers.md)**, the second finding, mitigated and the mechanism
-  measured. **The entry named the wrong cause**: it said the pending
-  handshake-check set was full, and the set is never full because
-  `PENDING_HANDSHAKE_CHECKS` is `usize::MAX`. The cause is the **drain rate**,
-  one entry per accepted connection, because `task_listener`'s second
-  `select!` arm matches only `Some(Ok(..))` and an `Err` disables it until the
-  next accept. Measured one for one: twenty poisoning connections, and the
-  twentieth probe after them was the first to be served. What is carried is
-  `--listener-check <DUR>` on `seed`: it dials this run's own port over
-  loopback, completes a real handshake, and three failures in a row stop the
-  run with `"stopped": "listener_unhealthy"` and **exit 17**.
-- **[T-040](memory.md)**, attributed and bounded, still partial. **The
-  attribution is peer rows**, not wall clock: `librqbit` keeps a row for every
-  peer it has ever accepted and never reclaims one, at **2,891 bytes a row**
-  measured over 2,000 of them at r squared 0.94. At the soak's 228.5
-  completions an hour that is 0.63 MiB/h against the 0.804 measured, so 78
-  percent of the slope. **The entry's own plan was superseded**: two runs at
-  different leech rates would have moved the peer count and the transferred
-  bytes together. What is carried is `--max-rss <SIZE>`, the same shape of
-  backstop as `--max-handles`, exit 16.
-- **[T-064](trackers.md)**, **done**. The divergence from BEP 15 stands and the
-  total it owed is **five attempts**, not three and not six: a UDP announce is
-  two exchanges and a connect that is not answered by its third attempt gives
-  up, so the announce that would spend three more is never sent. The budget for
-  one UDP tracker is `5 * max(--tracker-timeout / 3, 1s)`, fifty seconds at the
-  default and never under five, per tracker rather than per torrent.
-- **[T-100](bep-coverage.md)**, partial, and **the Approach names the wrong
-  half as the reachable one**. It says to start with the bridge; the bridge is
-  the half that cannot be done, because its only counterparty is the session in
-  the same process and `librqbit` 9.0.0 has no BEP 6 at all. Two of three parts
-  landed: `crates/bit-cli-core/src/fast_set.rs` **reproduces the conformance
-  vector exactly**, with aria2's divergent mask implemented rather than
-  described, and `bench swarm` now advertises the bit and reports what a target
-  did with it. `check-swarm.ps1` carries the answer from the wire:
-  `fast_negotiated` 0 on every leech case, recorded and not judged.
+- **[T-092](bench.md)** and **[T-090](bench.md)**, both **done**, and T-090 is
+  a P0. A synthetic peer **serves** now: a bitfield, an unchoke, a `have` per
+  piece it verified and kept, and requests answered out of the packed hold
+  file, with a BEP 6 `reject` where the fast extension was negotiated. Packing
+  had to become reversible for it, and a piece the budget refused is not
+  announced. **A synthetic peer can never put a byte into the target**: its
+  only source is the target, so everything it can announce is something the
+  target already has. Measured: 32, 128 and 512 pieces announced across the
+  three leech cases and the target asked for **none** of them. The target
+  model's other counterparty, serving the other synthetic peers, contradicts
+  the clause `sources_ignored` now proves from the operating system's socket
+  table. Ten cases, `bench/swarm-20260822T074823843Z.json`, verdict pass.
+- **[T-022](peers.md)**, **partial**, and half the decision it asks for was
+  already made upstream. `bit-cli trackers --family` announces once per family
+  a tracker resolves to and reports each separately. **`librqbit` already
+  announces both families to UDP trackers**, at
+  `librqbit-tracker-comms-9.0.0/src/tracker_comms.rs:374-387`; for HTTP it
+  announces once at `:293`, and that is the blocked half.
+  `ClientBuilder::local_address` does **not** pin a family, which is the
+  obvious thing to reach for and is wrong; overriding the resolution is what
+  works.
+- **[T-007](webseed.md)**, **done**. The "constant near sixteen seconds that no
+  flag moves" is the **bridge reconnect backoff**, `bridge.rs:577` and
+  `:701-703`, and `--web-seed-max-errors` moves it: it looked constant because
+  every row of the table held that flag at its default of 5, where 1+2+4+8 is
+  15. A stall is its own failure class now, told from a short body by
+  `is_timeout` rather than by anything in the text. **24,247 ms to 6,108 ms**
+  in the acceptance's own venue, and 133.28 s to 10.11 s in the harsher
+  reproduction.
+- **[T-018](disk-io.md)**, **partial**: built, shipped, measured, one
+  acceptance clause not met. `Coalescer` combines a run of block writes into
+  one operation. **405.71 to 508.44 MiB/s** at eight bridges, wall 1,262 to
+  1,007 ms, writing the payload 5,101 ms to 1,806 ms.
 
 ### What the work found
 
-- **[T-092](bench.md)**'s disk budget clause, **fixed**, and
-  `check-swarm.ps1` passes for the first time. `--disk-budget` bounded the
-  bytes written and not the bytes on disk; held pieces are packed now rather
-  than written at their torrent offset. The two committed swarm records before
-  this one both say `verdict: fail`, so for two sessions that script's exit
-  code could not tell a new failure from the known one.
-- **A defect in `bench swarm` itself.** Every frame went to
-  `Message::deserialize`, which knows none of the five BEP 6 ids, so a target
-  that spoke the fast extension was reported as `ended: "protocol"`, a broken
-  peer. Nothing had noticed because the only target ever pointed at was
-  `librqbit`, which never sends one.
-- **The toolchain, and it cost two red CI runs.** CI installs `stable` on every
-  run and this machine did not: rustc here was 1.97.1 and CI installed 1.98.0,
-  released four days earlier, carrying `clippy::chunks_exact_to_as_chunks`. Every
-  gate was green here and one job was red there. The local toolchain is
-  updated, clippy 1.98 is clean across the workspace, and `gates.ps1` now
-  prints the toolchain and warns when the `stable` it is using is behind.
+- **A defect in `check-swarm.ps1` that had been passing.** A local called
+  `$peers` is the script's own `$Peers` parameter, because PowerShell variable
+  names are case-insensitive, so every case after it built its argument list
+  from 0. `listener_poisoned`'s connect load exited on `--peers cannot be
+  zero`, opened no socket, poisoned nothing, and **the case recorded three
+  nulls and passed**. [RULES.md](RULES.md) section 5 names that exact trap. The
+  case is what let it through, so it records all three exit codes now and fails
+  when any run wrote no report.
+- **The style probe costs a whole `--web-seed-timeout`** before `source_added`
+  is emitted, bounded by `probe.rs:956` at five seconds. It is also the
+  difference between T-007's two tables: the earlier numbers were measured from
+  after the source was added.
+- **`bench disk`'s `shared` layout strides its blocks across threads**, so
+  nothing is ever contiguous and the write buffer coalesces nothing there. That
+  is why T-018's first acceptance clause cannot be met by that fixture, and it
+  is the instrument's shape rather than the download's: `split`, whose threads
+  write contiguous ranges like a receive path does, reaches **1.56 times** the
+  raw unbuffered path at eight threads.
 
 ### What the two reviews found
 
-Five things, and two were older than this session.
+Three claims that had stopped being true, and two of them were made stale by
+this session's own work hours earlier.
 
-- **A citation that pointed at a record which did not carry the number.**
-  T-100 cited a swarm run for `peers_negotiated`, which lives in the per-run
-  `bench swarm` report that `check-swarm.ps1` deletes. `check-swarm.ps1`
-  records `fast_negotiated` and `received` on every leech case now, and the
-  entry cites the run that has them.
-- **A number that two documents disagreed on.** `README.md` said thirteen
-  connections cleared the listener backlog and the committed acceptance says
-  twenty. Thirteen was a scratchpad run whose load had already drained eight of
-  its own connections.
-- **A lint named wrong in three places.** It is
-  `clippy::chunks_exact_to_as_chunks`, checked by making clippy emit it.
-- **A NUL byte in `TODO/trackers.md`**, from an escape interpreted on its way
-  to the file while quoting a tracker's NUL-terminated error message.
-- **Three more in `crates/bit-cli-core/src/torrent/bencode.rs`, since
-  2026-08-21.** `TOLERATED_TRAILING` spelled its five bytes out literally
-  instead of as escapes, so for two sessions no search over `crates/` could see
-  a line of the largest metainfo file in the tree: `grep` calls such a file
-  binary and skips it. Recorded under [T-172](metainfo.md).
+- **T-001's failure matrix** still said the stall case ended after 24,247 ms
+  and explained it as the retry and cooldown machinery. T-007 disproved that
+  reading and the same case ends in 6,108 ms.
+- **T-188** described the straddling-block fan-out as an assertion on
+  `write_ops`, which T-018 moved to `write_calls` when the two counters stopped
+  being one number.
+- **T-178's Blocker** said its no-progress guard should wait for somewhere that
+  batches writes to exist. It exists, and the entry names the function.
 
-One more, found while printing the session's own numbers: **`session-report.ps1`
-reported an hour too many.** `[int]` on a double rounds in PowerShell, so
-`[int](2.65)` is 3 and a 2h 39m session printed "3h 39m", the hour coming from
-the minutes and then printed again beside them. Every session past the half
-hour was wrong and the number goes into this file's state line. `[math]::Floor`
-now, and the same cast was doing the same to `soak.ps1`'s minute count.
-
-Two guards, because finding these by reading is how they were missed.
-`gates.ps1` gains a **`text` gate** over every tracked `.rs`, `.md`, `.ps1`,
-`.toml`, `.yml` and `.jq`, which fails and names the file and the offset, and
-`check-todo.ps1` checks the same over `TODO/` before it reads anything as text.
-Both were checked by injecting a NUL.
-
-### Two more entries, taken after the work order
-
-- **[T-007](webseed.md)**, measured and not built. A stalling source costs
-  **133.28 s** at `--web-seed-timeout 5s`, not the 24,247 ms the entry records,
-  and the cooldown its Problem blames is never waited on. What multiplies is
-  the error budget over the retry ladder, plus **a constant near sixteen
-  seconds that no flag moves**. The entry now carries the table, the model and
-  both targets, and nothing was written on the strength of a mechanism the
-  code does not have.
-- **[T-132](multi-source.md)**, partial. The premise holds and **the
-  workaround the entry proposes does not survive the measurement**. The session
-  cap does bound the bridge, 195.42 MiB/s to 8.41 under an 8 MiB/s cap. The
-  Approach's derivation would bound the peer share only while HTTP takes its
-  whole bucket, and the hybrid run is what happens when it does not: HTTP at
-  1.40 MiB/s against an 8 MiB/s cap because the peer was faster, and the run at
-  35.96 MiB/s. The documentation half is done and the peer-only cap is blocked
-  on `torrent_state/live/mod.rs:1698-1706`.
+And one gap worth an entry, filed as **[T-189](bench.md)**: `docs/schema.md` is
+the versioned contract and the **`bench` reports are not in it at all**. T-018
+added `write_calls` to `bench::report::Disk`, a field every `leech` and `seed`
+report carries, and regenerating the schema produced **no diff** with the test
+green. The same session added seven fields to the `trackers` document and the
+check caught every one, so the mechanism works where it reaches.
 
 ## In progress
 
-Nothing is half-written. Every entry touched is complete, or explicitly
-partial with its blocker named.
+Nothing is half-written. Every entry touched is complete, or explicitly partial
+with its blocker named.
 
 Four things are carried rather than finished:
 
-- **[T-020](peers.md)** stays the only open P0. Both mitigations are backstops.
-  Nothing here drains the queue for a peer that is not us, and
+- **[T-020](peers.md)** stays the only open P0. Both mitigations are backstops,
+  nothing drains the queue for a peer that is not us, and
   `check-close-wait.ps1 -Ceiling 100` still fails.
 - **[T-040](memory.md)** stays partial: attributed and bounded, not fixed.
-  Closing it means `librqbit` reclaiming a peer row.
-- **[T-100](bep-coverage.md)** and **[T-132](multi-source.md)** are partial with
-  the same shape of blocker as [T-102](bep-coverage.md) and
-  [T-167](bep-coverage.md): a seam `librqbit` 9.0.0 does not expose, named with
-  a line number in each.
+- **[T-018](disk-io.md)** is partial on one acceptance clause, and closing it is
+  a decision about what `bench disk` is for rather than a change to the write
+  path.
+- **[T-022](peers.md)**, **[T-100](bep-coverage.md)** and
+  **[T-132](multi-source.md)** are partial with the same shape of blocker as
+  [T-102](bep-coverage.md) and [T-167](bep-coverage.md): a seam `librqbit`
+  9.0.0 does not expose, named with a line number in each.
 
 ## Start here next session
 
-The work order. Re-derived after the last one closed. Every unblocked P0 and P1
-is either done or has its blocker named, so this is ordered by what a
-measurement can still move.
+Re-derived after the last work order closed. [INDEX.md](INDEX.md)'s "How an
+ordering is derived" was read for the four questions it asks; its own list is
+the derivation of 2026-08-21 and is kept as written.
 
-1. **[T-092](bench.md)**, the last clause of [T-090](bench.md) and the only
-   remaining P1 that nothing upstream blocks. **A synthetic peer does not
-   serve**: it keeps its verified pieces, announces nothing, and answers no
-   request, so `bench swarm` is a hundred leeches rather than a swarm and a
-   target that ranks peers by what they uploaded sees nothing. The holding side
-   is built and packed now, so what is left is the serving side.
+1. **Read CI run 32566533746** against `4ee2948`, which was queued as the
+   session ended. Everything before it was green.
+2. **[T-189](bench.md)**, P2, effort S, and it is the only item here that a
+   measurement has already justified rather than estimated. The `bench` reports
+   are outside `docs/schema.md`, and a field went into one this session with
+   the contract check green. `bench disk` needs no fixture and is the one to
+   start with, because the generator already reaches it for `bench_sample`.
+   Corpus: none needed; `crates/bit-cli/src/schema_gen.rs`'s `collect` is the
+   whole surface.
+3. **[T-018](disk-io.md)**, P2, partial, and what is left is **not** the write
+   path. Decide whether `bench disk`'s `shared` layout should stop striding, so
+   the instrument can show what the download path does, or whether the
+   acceptance clause should move to `--layout split`. Either is a decision
+   about [T-017](disk-io.md)'s question. The measurements are all in the entry.
+   Corpus: `TorrentNG/crates/rt-storage/src/io_class.rs:7` for per-class
+   concurrency caps, which is the piece this tree still does not have.
+4. **[T-024](peers.md)**, P2, the choke and unchoke history a peer row does not
+   carry. It is the last of A3.4b that is missing and `bench swarm` can now
+   generate the events to test it against, which it could not before this
+   session.
    Corpus: `vortex/bittorrent/src/peer_comm/peer_connection.rs` for a peer that
-   both leeches and serves on one connection.
-2. **[T-022](peers.md)**, P1, the last open P1 after that. A session bound to
-   `[::]` announces one address, so one family's peers may never learn a
-   reachable one. `bit-cli`'s own tracker client announces one port and lets
-   the tracker take the source address; announcing both families needs two
-   announces. The decision the entry asks for is whether `trackers` should do
-   that and whether the session should.
-   Corpus: `torrent/tracker/` for the two-announce shape.
-3. **[T-007](webseed.md)**, P2 and **effort S**, and it is **measured and
-   ready to build**: this session ran the reproduction rather than the entry's
-   arithmetic. A stalling source costs **133.28 s** at `--web-seed-timeout 5s`,
-   not the 24,247 ms the entry records, and the cooldown the Problem blames is
-   not waited on at all. What multiplies is the error budget over the retry
-   ladder, `max_errors * ((retries + 1) * timeout + backoff)`, and **a constant
-   near sixteen seconds that no flag moves**. Two targets, and the entry names
-   only the first. Find out what the sixteen seconds is before touching the
-   ladder, because it is the whole cost once the ladder is fixed.
-4. **[T-018](disk-io.md)**, P2 and **effort M**, and the entry has already
-   bounded what it is worth: writes take about 806 ms of an eight-bridge
-   `bench leech` run's 2,510 ms, so coalescing to 1 MiB is worth at most 18%.
-   The Approach names three correctness constraints and none can be traded, so
-   this is not the small change the neighbouring `pwrite_all_vectored` makes it
-   look like.
+   tracks both directions.
 
 Do not start [T-163](peers.md) MSE, [T-102](bep-coverage.md) BEP 55,
 [T-167](bep-coverage.md) BEP 54, [T-016](disk-io.md) fastresume, the send half
-of [T-100](bep-coverage.md), or the peer-only cap in
-[T-132](multi-source.md). All six are blocked on `librqbit` seams and all six
-name the blocker with line numbers.
+of [T-100](bep-coverage.md), the peer-only cap in [T-132](multi-source.md), or
+the HTTP half of [T-022](peers.md). All seven are blocked on `librqbit` seams
+and all seven name the blocker with line numbers.
 
 ## Open questions for the operator
 
-None.
+None. Two decisions were taken unattended and are recorded where they belong:
+`bit-cli trackers` announces once per family, under [T-022](peers.md), and a
+stall retires a source on the first request that runs out of time, under
+[T-007](webseed.md) with the trade-off stated.
