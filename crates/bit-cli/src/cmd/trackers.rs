@@ -11,10 +11,10 @@ use std::time::Duration;
 use bit_cli_core::ExitCode;
 use bit_cli_core::error::{Error, Result};
 use bit_cli_core::torrent::Metainfo;
-use bit_cli_core::tracker::{Announce, Client, Event, TrackerResult};
+use bit_cli_core::tracker::{Announce, Client, Event, Family, TrackerResult};
 use serde::Serialize;
 
-use crate::cli::{Global, TrackersArgs};
+use crate::cli::{AnnounceFamily, Global, TrackersArgs};
 use crate::env::Env;
 use crate::output::{Renderer, field, table};
 use crate::source::Kind;
@@ -40,6 +40,9 @@ pub struct TrackersReport {
     pub tracker_count: usize,
     pub responded: usize,
     pub failed: usize,
+    /// Exchanges actually sent, which is more than `tracker_count` when a
+    /// tracker was announced to over both families.
+    pub announces: usize,
     /// The highest seeder count any tracker reported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seeders: Option<u64>,
@@ -48,6 +51,10 @@ pub struct TrackersReport {
     pub leechers: Option<u64>,
     /// Distinct peer addresses across every tracker that answered.
     pub peers: Vec<String>,
+    /// What each address family's announces returned, separately. Empty on a
+    /// scrape, which registers nothing and so needs only one exchange.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub families: Vec<FamilyResult>,
     pub trackers: Vec<TrackerResult>,
 }
 
@@ -98,12 +105,12 @@ pub fn run(
     // no port and no event, so it binds nothing.
     //
     // See `TODO/trackers.md`, T-061.
-    let listener = match args.scrape {
-        true => None,
-        false => Some(bind_announce_port(&args.port)?),
+    let listeners = match args.scrape {
+        true => Vec::new(),
+        false => bind_announce_port(&args.port)?,
     };
-    let announced_port = listener
-        .as_ref()
+    let announced_port = listeners
+        .first()
         .and_then(|socket| socket.local_addr().ok())
         .map(|addr| addr.port())
         .unwrap_or(0);
@@ -151,6 +158,7 @@ pub fn run(
     }
 
     let scrape = args.scrape;
+    let wanted = args.family;
     let withdraw = !args.scrape && !args.no_withdraw;
     let runtime = swarm::runtime()?;
     let (results, withdrawn) = runtime.block_on(async {
@@ -165,14 +173,35 @@ pub fn run(
         // dead tracker cost the whole run.
         let mut work = tokio::task::JoinSet::new();
         for (order, (tier, url)) in tiers.into_iter().enumerate() {
+            // A scrape carries no peer record, so there is nothing for a
+            // second family to register and one exchange answers the question.
+            let families: Vec<Option<Family>> = match scrape {
+                true => vec![None],
+                false => announce_families(&url, wanted),
+            };
             let client = client.clone();
             let request = request.clone();
             work.spawn(async move {
-                let result = match scrape {
-                    true => client.scrape(&url, tier, &request).await,
-                    false => client.announce(&url, tier, &request).await,
-                };
-                (order, result)
+                // One tracker's families go in sequence, not at once, while
+                // the trackers themselves stay concurrent.
+                //
+                // A tracker that keys its peer records by peer id alone keeps
+                // one address per peer, so a second announce replaces the
+                // first. Sent concurrently, which one survives is a race:
+                // measured against `loopback-tracker` keyed that way, one
+                // peer announcing over both families left a single record and
+                // which family it held was whichever announce landed last.
+                // In sequence it is the last family in this list, every time,
+                // and a reader can say which that is. See `TODO/peers.md`,
+                // T-022.
+                let mut out = Vec::with_capacity(families.len());
+                for family in families {
+                    out.push(match scrape {
+                        true => client.scrape(&url, tier, &request).await,
+                        false => client.announce_on(&url, tier, &request, family).await,
+                    });
+                }
+                (order, out)
             });
         }
 
@@ -188,7 +217,7 @@ pub fn run(
         results.sort_by_key(|(order, _)| *order);
         let results: Vec<TrackerResult> = results
             .into_iter()
-            .map(|(_, result)| result)
+            .flat_map(|(_, batch)| batch)
             .collect::<Vec<_>>();
 
         // Withdraw the peer record from every tracker that took it. The
@@ -207,7 +236,11 @@ pub fn run(
                 let stop = stop.clone();
                 let url = result.url.clone();
                 let tier = result.tier;
-                work.spawn(async move { client.announce(&url, tier, &stop).await });
+                // Withdrawn over the family it was registered on. A `stopped`
+                // sent over the other family names a different source address
+                // and leaves the record it meant to remove.
+                let family = result.family;
+                work.spawn(async move { client.announce_on(&url, tier, &stop, family).await });
             }
             while let Some(finished) = work.join_next().await {
                 if let Ok(result) = finished
@@ -219,7 +252,6 @@ pub fn run(
         }
         Ok::<_, Error>((results, withdrawn))
     })?;
-    drop(listener);
 
     let mut peers: Vec<String> = results.iter().flat_map(|r| r.peers.clone()).collect();
     peers.sort();
@@ -231,9 +263,21 @@ pub fn run(
         action: action(args),
         announced_port: (!args.scrape).then_some(announced_port),
         withdrawn: withdraw.then_some(withdrawn),
-        tracker_count: results.len(),
-        responded: results.iter().filter(|r| r.ok).count(),
-        failed: results.iter().filter(|r| !r.ok).count(),
+        // Counted over distinct URLs, not over results. One tracker announced
+        // to over both families is two results and one tracker, and a tracker
+        // that answered on IPv4 and not on IPv6 has responded: reporting it as
+        // one responded and one failed would say there were two of it.
+        tracker_count: distinct_urls(&results).len(),
+        responded: distinct_urls(&results)
+            .iter()
+            .filter(|url| results.iter().any(|r| &&r.url == url && r.ok))
+            .count(),
+        failed: distinct_urls(&results)
+            .iter()
+            .filter(|url| !results.iter().any(|r| &&r.url == url && r.ok))
+            .count(),
+        announces: results.len(),
+        families: by_family(&results),
         seeders: results
             .iter()
             .filter(|r| r.ok)
@@ -247,6 +291,9 @@ pub fn run(
         peers,
         trackers: results,
     };
+    // Held until here, so every announce and every withdrawal named a port
+    // something was listening on.
+    drop(listeners);
 
     for tracker in &report.trackers {
         if let Some(warning) = &tracker.warning {
@@ -270,14 +317,33 @@ pub fn run(
 /// is that somebody else can reach it. Tries each port in the range in turn,
 /// which is what `--port 6881-6889` asks for, and `0` asks the OS.
 ///
-/// Returned rather than leaked: the caller drops it after the withdrawal, so
-/// the listener outlives every announce that named it.
-fn bind_announce_port(values: &[String]) -> Result<std::net::TcpListener> {
+/// **Both families, on the same port.** This command announces once per family
+/// now, and an IPv6 announce naming a port only listening on IPv4 registers
+/// exactly the black hole T-061 added this listener to prevent. The IPv6 bind
+/// is separate rather than dual-stack because `IPV6_V6ONLY` is left on by the
+/// standard library on Windows, which is [T-023](../../TODO/peers.md)'s
+/// lesson. A host with no IPv6 at all keeps the IPv4 listener and announces
+/// over IPv4 only, because `families_of` will not offer a family the tracker
+/// does not resolve to either.
+///
+/// Returned rather than leaked: the caller drops them after the withdrawal, so
+/// the listeners outlive every announce that named them.
+fn bind_announce_port(values: &[String]) -> Result<Vec<std::net::TcpListener>> {
     let range = swarm::port_range(values)?;
     let mut last = None;
     for port in range.clone() {
         match std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)) {
-            Ok(listener) => return Ok(listener),
+            Ok(listener) => {
+                // The port the OS chose, when the caller asked for `0`.
+                let chosen = listener.local_addr().map(|a| a.port()).unwrap_or(port);
+                let mut held = vec![listener];
+                if let Ok(v6) =
+                    std::net::TcpListener::bind((std::net::Ipv6Addr::UNSPECIFIED, chosen))
+                {
+                    held.push(v6);
+                }
+                return Ok(held);
+            }
             Err(e) => last = Some(e),
         }
     }
@@ -291,6 +357,80 @@ fn bind_announce_port(values: &[String]) -> Result<std::net::TcpListener> {
             range.end()
         ),
     ))
+}
+
+/// Which families one tracker gets an announce over.
+///
+/// `--family v4` and `--family v6` are the caller's choice and are taken as
+/// given: a tracker with no address in that family fails the announce and says
+/// so, which is the answer somebody asking for one family wants.
+///
+/// `auto` asks the resolver. Two addresses is two announces, because a tracker
+/// records the source address of the connection and one announce registers one
+/// of this host's addresses. A resolution that fails falls back to a single
+/// announce with no family pinned, so a tracker this command cannot resolve
+/// itself still gets tried the way it always was.
+fn announce_families(url: &str, wanted: AnnounceFamily) -> Vec<Option<Family>> {
+    match wanted {
+        AnnounceFamily::V4 => vec![Some(Family::V4)],
+        AnnounceFamily::V6 => vec![Some(Family::V6)],
+        AnnounceFamily::Auto => match bit_cli_core::tracker::families_of(url) {
+            Ok(families) => families.into_iter().map(Some).collect(),
+            Err(_) => vec![None],
+        },
+    }
+}
+
+/// What each family's announces returned, folded.
+#[derive(Debug, Clone, Serialize)]
+pub struct FamilyResult {
+    /// `v4` or `v6`.
+    pub family: &'static str,
+    /// Announces sent over this family.
+    pub announces: usize,
+    /// How many of them the tracker answered.
+    pub responded: usize,
+    /// Distinct peer addresses this family's announces returned.
+    ///
+    /// The two families are reported apart rather than merged because that is
+    /// the question: a peer list that only ever comes back on one of them is a
+    /// swarm half this host cannot see.
+    pub peers: Vec<String>,
+}
+
+/// The tracker URLs in the results, once each, in the order they first appear.
+fn distinct_urls(results: &[TrackerResult]) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    for result in results {
+        if !out.contains(&result.url.as_str()) {
+            out.push(&result.url);
+        }
+    }
+    out
+}
+
+/// Fold the per-announce results by family, for the families that were pinned.
+fn by_family(results: &[TrackerResult]) -> Vec<FamilyResult> {
+    let mut out = Vec::new();
+    for family in [Family::V4, Family::V6] {
+        let matching: Vec<&TrackerResult> = results
+            .iter()
+            .filter(|result| result.family == Some(family))
+            .collect();
+        if matching.is_empty() {
+            continue;
+        }
+        let mut peers: Vec<String> = matching.iter().flat_map(|r| r.peers.clone()).collect();
+        peers.sort();
+        peers.dedup();
+        out.push(FamilyResult {
+            family: family.as_str(),
+            announces: matching.len(),
+            responded: matching.iter().filter(|r| r.ok).count(),
+            peers,
+        });
+    }
+    out
 }
 
 const fn action(args: &TrackersArgs) -> &'static str {
@@ -389,6 +529,21 @@ fn lines(report: &TrackersReport) -> Vec<String> {
         out.push(field("leechers", leechers));
     }
     out.push(field("peers", report.peers.len()));
+    // Per family, when there was more than one. One family is the same number
+    // twice and saying it twice reads as a second measurement.
+    if report.families.len() > 1 {
+        for family in &report.families {
+            out.push(field(
+                &format!("peers over ip{}", family.family),
+                format!(
+                    "{} from {} of {} announces",
+                    family.peers.len(),
+                    family.responded,
+                    family.announces
+                ),
+            ));
+        }
+    }
 
     let rows: Vec<Vec<String>> = report
         .trackers
@@ -397,6 +552,9 @@ fn lines(report: &TrackersReport) -> Vec<String> {
             vec![
                 t.tier.to_string(),
                 t.url.clone(),
+                t.family
+                    .map(|f| f.as_str().to_string())
+                    .unwrap_or_else(|| "-".into()),
                 match t.ok {
                     true => "ok".to_string(),
                     false => "failed".to_string(),
@@ -419,7 +577,8 @@ fn lines(report: &TrackersReport) -> Vec<String> {
     out.push(String::new());
     out.extend(table(
         &[
-            "TIER", "TRACKER", "STATUS", "RTT", "SEED", "LEECH", "INTERVAL", "PEERS", "REASON",
+            "TIER", "TRACKER", "FAMILY", "STATUS", "RTT", "SEED", "LEECH", "INTERVAL", "PEERS",
+            "REASON",
         ],
         &rows,
     ));
@@ -527,6 +686,8 @@ mod tests {
             peers: vec!["1.2.3.4:1".into()],
             warning: None,
             failure: None,
+            family: Some(Family::V4),
+            endpoint: Some("1.2.3.4:451".into()),
         };
         let mut high = low.clone();
         high.url = "udp://b.example:451".into();
@@ -550,6 +711,8 @@ mod tests {
             tracker_count: 2,
             responded: 2,
             failed: 0,
+            announces: 2,
+            families: by_family(&[low.clone(), high.clone()]),
             seeders: [low.clone(), high.clone()]
                 .iter()
                 .filter_map(|r| r.seeders)

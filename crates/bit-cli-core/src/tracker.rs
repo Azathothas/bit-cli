@@ -147,6 +147,58 @@ pub struct TrackerResult {
     /// transport error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+    /// Which address family this announce went out over, when it was pinned to
+    /// one. Absent when the family was left to the resolver, which is what an
+    /// announce with no family asked for.
+    ///
+    /// This is the whole point of announcing twice. A tracker records the
+    /// source address of the connection it was announced over, so an announce
+    /// that only ever went out over one family registers a peer only reachable
+    /// on that family. See `TODO/peers.md`, T-022.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<Family>,
+    /// The address this announce was actually sent to, once the URL's host was
+    /// resolved and filtered to the family. Absent when nothing was dialled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+}
+
+/// One address family, as an announce is pinned to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Family {
+    V4,
+    V6,
+}
+
+impl Family {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::V4 => "v4",
+            Self::V6 => "v6",
+        }
+    }
+
+    const fn matches(self, addr: &SocketAddr) -> bool {
+        matches!(
+            (self, addr),
+            (Self::V4, SocketAddr::V4(_)) | (Self::V6, SocketAddr::V6(_))
+        )
+    }
+
+    /// The unspecified address to bind a local socket of this family to.
+    const fn unspecified(self) -> SocketAddr {
+        match self {
+            Self::V4 => SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            Self::V6 => SocketAddr::new(std::net::IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        }
+    }
+}
+
+impl std::fmt::Display for Family {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl TrackerResult {
@@ -166,6 +218,8 @@ impl TrackerResult {
             peers: Vec::new(),
             warning: None,
             failure: Some(reason.into()),
+            family: None,
+            endpoint: None,
         }
     }
 }
@@ -187,6 +241,9 @@ pub fn protocol_of(url: &str) -> &'static str {
 /// A tracker client for one run.
 pub struct Client {
     http: reqwest::Client,
+    /// Kept so a family-pinned client can be built with the same settings.
+    user_agent: String,
+    connect_timeout: Duration,
     timeout: Duration,
 }
 
@@ -199,15 +256,40 @@ impl Client {
             .connect_timeout(connect_timeout)
             .build()
             .map_err(|e| Error::network(format!("cannot build an HTTP client: {e}")))?;
-        Ok(Self { http, timeout })
+        Ok(Self {
+            http,
+            user_agent: user_agent.to_string(),
+            connect_timeout,
+            timeout,
+        })
     }
 
-    /// Announce to one tracker.
+    /// Announce to one tracker, letting the resolver pick the address family.
     pub async fn announce(&self, url: &str, tier: usize, request: &Announce) -> TrackerResult {
+        self.announce_on(url, tier, request, None).await
+    }
+
+    /// Announce to one tracker over one address family.
+    ///
+    /// `None` is the old behaviour: resolve the host and use whatever comes
+    /// back first, which on a dual-stack host is whichever family the resolver
+    /// happened to order first and is not a choice anyone made.
+    ///
+    /// A tracker under BEP 3 records the **source address of the connection**,
+    /// so the family an announce goes out over decides which of this host's
+    /// addresses the swarm is told about. Registering both takes two
+    /// announces. See `TODO/peers.md`, T-022.
+    pub async fn announce_on(
+        &self,
+        url: &str,
+        tier: usize,
+        request: &Announce,
+        family: Option<Family>,
+    ) -> TrackerResult {
         let started = Instant::now();
         let outcome = match protocol_of(url) {
-            "udp" => self.udp(url, request, false).await,
-            "http" | "https" => self.http_announce(url, request).await,
+            "udp" => self.udp(url, request, false, family).await,
+            "http" | "https" => self.http_announce(url, request, family).await,
             other => Err(Error::usage(format!(
                 "{url}: `{other}` is not a tracker protocol"
             ))),
@@ -216,10 +298,16 @@ impl Client {
             Ok(mut result) => {
                 result.url = url.to_string();
                 result.tier = tier;
+                result.family = family;
                 result.elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
                 result
             }
-            Err(error) => TrackerResult::failed(url, tier, started.elapsed(), error.to_string()),
+            Err(error) => {
+                let mut result =
+                    TrackerResult::failed(url, tier, started.elapsed(), error.to_string());
+                result.family = family;
+                result
+            }
         }
     }
 
@@ -227,7 +315,7 @@ impl Client {
     pub async fn scrape(&self, url: &str, tier: usize, request: &Announce) -> TrackerResult {
         let started = Instant::now();
         let outcome = match protocol_of(url) {
-            "udp" => self.udp(url, request, true).await,
+            "udp" => self.udp(url, request, true, None).await,
             "http" | "https" => match scrape_url(url) {
                 Some(scrape) => self.http_scrape(&scrape, request).await,
                 None => Err(Error::usage(format!(
@@ -249,10 +337,26 @@ impl Client {
         }
     }
 
-    async fn http_announce(&self, url: &str, request: &Announce) -> Result<TrackerResult> {
+    async fn http_announce(
+        &self,
+        url: &str,
+        request: &Announce,
+        family: Option<Family>,
+    ) -> Result<TrackerResult> {
         let full = format!("{}{}", url, announce_query(url, request));
-        let response = self
-            .http
+        // A client pinned to one family, or the shared one when no family was
+        // asked for. Pinning is a fresh client because the override is a
+        // property of the builder; that costs about a millisecond and this is
+        // a diagnostic that announces twice per tracker, not a session.
+        let pinned = match family {
+            None => None,
+            Some(family) => Some(self.pinned_http(url, family)?),
+        };
+        let http = pinned
+            .as_ref()
+            .map(|(client, _)| client)
+            .unwrap_or(&self.http);
+        let response = http
             .get(&full)
             .send()
             .await
@@ -264,11 +368,39 @@ impl Client {
             .map_err(|e| Error::network(format!("{url}: body was cut short: {e}")))?;
         let mut result = parse_http_response(&body)?;
         result.http_status = Some(status.as_u16());
+        result.endpoint = pinned.map(|(_, endpoint)| endpoint);
         if !status.is_success() && result.failure.is_none() {
             result.ok = false;
             result.failure = Some(format!("HTTP {status}"));
         }
         Ok(result)
+    }
+
+    /// An HTTP client that will only ever reach this tracker over one family.
+    ///
+    /// `ClientBuilder::local_address` does **not** do this. `hyper-util` binds
+    /// the local address only when it already matches the destination's family
+    /// and falls through to the unspecified address of the destination's own
+    /// family otherwise, so setting `0.0.0.0` still connects over IPv6. The
+    /// mechanism that does work is overriding the resolution: the host is
+    /// resolved here, filtered to the family, and handed to the builder, so
+    /// there is no address of the other family for it to choose.
+    fn pinned_http(&self, url: &str, family: Family) -> Result<(reqwest::Client, String)> {
+        let (host, port) = http_authority(url)?;
+        let addrs = resolve_family(&host, port, family, url)?;
+        let endpoint = addrs
+            .iter()
+            .map(|a| a.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let client = reqwest::Client::builder()
+            .user_agent(self.user_agent.clone())
+            .timeout(self.timeout)
+            .connect_timeout(self.connect_timeout)
+            .resolve_to_addrs(&host, &addrs)
+            .build()
+            .map_err(|e| Error::network(format!("{url}: cannot build an HTTP client: {e}")))?;
+        Ok((client, endpoint))
     }
 
     async fn http_scrape(&self, url: &str, request: &Announce) -> Result<TrackerResult> {
@@ -299,11 +431,20 @@ impl Client {
     }
 
     /// One BEP 15 exchange: connect, then announce or scrape.
-    async fn udp(&self, url: &str, request: &Announce, scrape: bool) -> Result<TrackerResult> {
-        let target = udp_target(url)?;
+    async fn udp(
+        &self,
+        url: &str,
+        request: &Announce,
+        scrape: bool,
+        family: Option<Family>,
+    ) -> Result<TrackerResult> {
+        let target = udp_target(url, family)?;
+        // The local socket is bound in the destination's family either way.
+        // With a family asked for, `udp_target` has already made sure the
+        // destination is in it.
         let bind: SocketAddr = match target.is_ipv4() {
-            true => (Ipv4Addr::UNSPECIFIED, 0).into(),
-            false => (Ipv6Addr::UNSPECIFIED, 0).into(),
+            true => Family::V4.unspecified(),
+            false => Family::V6.unspecified(),
         };
         let socket = UdpSocket::bind(bind)
             .await
@@ -342,10 +483,12 @@ impl Client {
         let reply = self
             .udp_exchange(&socket, url, &payload, action, transaction)
             .await?;
-        match scrape {
-            true => parse_udp_scrape(&reply),
-            false => parse_udp_announce(&reply),
-        }
+        let mut result = match scrape {
+            true => parse_udp_scrape(&reply)?,
+            false => parse_udp_announce(&reply)?,
+        };
+        result.endpoint = Some(target.to_string());
+        Ok(result)
     }
 
     /// Send one UDP request and read the matching reply.
@@ -481,6 +624,8 @@ pub fn parse_http_response(body: &[u8]) -> Result<TrackerResult> {
         peers: Vec::new(),
         warning: value.get("warning message").and_then(Value::as_text),
         failure: value.get("failure reason").and_then(Value::as_text),
+        family: None,
+        endpoint: None,
     };
     if result.failure.is_some() {
         result.ok = false;
@@ -546,6 +691,8 @@ pub fn parse_scrape_response(body: &[u8], info_hash: &[u8; 20]) -> Result<Tracke
         peers: Vec::new(),
         warning: None,
         failure: None,
+        family: None,
+        endpoint: None,
     })
 }
 
@@ -590,7 +737,7 @@ fn parse_peers(value: &Value, ipv6: bool) -> Vec<String> {
 }
 
 /// The `host:port` a `udp://` tracker URL points at.
-fn udp_target(url: &str) -> Result<SocketAddr> {
+fn udp_target(url: &str, family: Option<Family>) -> Result<SocketAddr> {
     let rest = url
         .trim()
         .strip_prefix("udp://")
@@ -598,9 +745,128 @@ fn udp_target(url: &str) -> Result<SocketAddr> {
     let authority = rest.split(['/', '?']).next().unwrap_or(rest);
     let mut resolved = std::net::ToSocketAddrs::to_socket_addrs(&authority)
         .map_err(|e| Error::network(format!("{url}: cannot resolve {authority}: {e}")))?;
-    resolved
-        .next()
-        .ok_or_else(|| Error::network(format!("{url}: {authority} resolved to no address")))
+    match family {
+        // What this used to do, always: take whatever the resolver put first.
+        // On a dual-stack host that is not a choice, it is an ordering.
+        None => resolved
+            .next()
+            .ok_or_else(|| Error::network(format!("{url}: {authority} resolved to no address"))),
+        Some(family) => resolved.find(|addr| family.matches(addr)).ok_or_else(|| {
+            Error::network(format!(
+                "{url}: {authority} has no IP{family} address to announce over"
+            ))
+        }),
+    }
+}
+
+/// Which address families a tracker URL resolves to, in a stable order.
+///
+/// This is what decides how many announces a tracker gets. A host with both an
+/// A and an AAAA record is two announces, because a tracker records the source
+/// address of the connection and one announce registers one of this host's
+/// addresses. A host with one is one, and a host that resolves to nothing is
+/// the error the caller reports.
+pub fn families_of(url: &str) -> Result<Vec<Family>> {
+    let (host, port) = match protocol_of(url) {
+        "udp" => {
+            let rest = url
+                .trim()
+                .strip_prefix("udp://")
+                .ok_or_else(|| Error::usage(format!("{url} is not a udp:// URL")))?;
+            let authority = rest.split(['/', '?']).next().unwrap_or(rest);
+            match authority.rsplit_once(':') {
+                Some((host, port)) => (
+                    host.trim_matches(['[', ']']).to_string(),
+                    port.parse()
+                        .map_err(|_| Error::usage(format!("{url}: `{port}` is not a port")))?,
+                ),
+                None => {
+                    return Err(Error::usage(format!(
+                        "{url}: a udp:// tracker needs a port"
+                    )));
+                }
+            }
+        }
+        "http" | "https" => http_authority(url)?,
+        other => {
+            return Err(Error::usage(format!(
+                "{url}: `{other}` is not a tracker protocol"
+            )));
+        }
+    };
+    let mut families: Vec<Family> =
+        std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port))
+            .map_err(|e| Error::network(format!("{url}: cannot resolve {host}: {e}")))?
+            .map(|addr| match addr {
+                SocketAddr::V4(_) => Family::V4,
+                SocketAddr::V6(_) => Family::V6,
+            })
+            .collect();
+    families.sort();
+    families.dedup();
+    match families.is_empty() {
+        true => Err(Error::network(format!(
+            "{url}: {host} resolved to no address"
+        ))),
+        false => Ok(families),
+    }
+}
+
+/// The host and port of an HTTP tracker URL, for resolving it by hand.
+///
+/// Written out rather than pulled from a URL crate because this file already
+/// parses these URLs by hand everywhere else, and the shape it has to handle
+/// is the same one `protocol_of` and `scrape_url` handle.
+fn http_authority(url: &str) -> Result<(String, u16)> {
+    let trimmed = url.trim();
+    let (scheme, rest) = match trimmed.split_once("://") {
+        Some(pair) => pair,
+        None => return Err(Error::usage(format!("{url} is not an http:// URL"))),
+    };
+    let default_port = match scheme.to_ascii_lowercase().as_str() {
+        "http" => 80,
+        "https" => 443,
+        other => return Err(Error::usage(format!("{url}: `{other}` is not HTTP"))),
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    // Userinfo is legal in a URL and is not part of the host.
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    // A bracketed IPv6 literal carries colons of its own, so the port split
+    // has to happen after the bracket rather than at the last colon.
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (host, tail) = rest
+            .split_once(']')
+            .ok_or_else(|| Error::usage(format!("{url}: unclosed [ in the host")))?;
+        let port = match tail.strip_prefix(':') {
+            Some(port) => port
+                .parse()
+                .map_err(|_| Error::usage(format!("{url}: `{port}` is not a port")))?,
+            None => default_port,
+        };
+        return Ok((host.to_string(), port));
+    }
+    match authority.rsplit_once(':') {
+        Some((host, port)) => Ok((
+            host.to_string(),
+            port.parse()
+                .map_err(|_| Error::usage(format!("{url}: `{port}` is not a port")))?,
+        )),
+        None => Ok((authority.to_string(), default_port)),
+    }
+}
+
+/// Resolve a host to every address it has in one family.
+fn resolve_family(host: &str, port: u16, family: Family, url: &str) -> Result<Vec<SocketAddr>> {
+    let addrs: Vec<SocketAddr> = std::net::ToSocketAddrs::to_socket_addrs(&(host, port))
+        .map_err(|e| Error::network(format!("{url}: cannot resolve {host}: {e}")))?
+        .filter(|addr| family.matches(addr))
+        .collect();
+    match addrs.is_empty() {
+        true => Err(Error::network(format!(
+            "{url}: {host} has no IP{family} address to announce over"
+        ))),
+        false => Ok(addrs),
+    }
 }
 
 fn connect_request(transaction: u32) -> Vec<u8> {
@@ -678,6 +944,8 @@ pub fn parse_udp_announce(reply: &[u8]) -> Result<TrackerResult> {
         peers,
         warning: None,
         failure: None,
+        family: None,
+        endpoint: None,
     })
 }
 
@@ -708,6 +976,8 @@ pub fn parse_udp_scrape(reply: &[u8]) -> Result<TrackerResult> {
         peers: Vec::new(),
         warning: None,
         failure: None,
+        family: None,
+        endpoint: None,
     })
 }
 
@@ -1032,9 +1302,87 @@ mod tests {
 
     #[test]
     fn a_udp_url_resolves_to_its_authority() {
-        let addr = udp_target("udp://127.0.0.1:451/announce").unwrap();
+        let addr = udp_target("udp://127.0.0.1:451/announce", None).unwrap();
         assert_eq!(addr.to_string(), "127.0.0.1:451");
-        assert!(udp_target("http://t.example/announce").is_err());
+        assert!(udp_target("http://t.example/announce", None).is_err());
+    }
+
+    /// A family that was asked for and is not there is an error naming it,
+    /// not a silent fallback to the other one.
+    ///
+    /// Falling back would be the worst answer available: the caller asked to
+    /// announce over one family, and announcing over the other registers an
+    /// address they did not ask to publish and reports it as if they had.
+    #[test]
+    fn a_udp_url_with_no_address_in_the_family_is_refused() {
+        let v4 = udp_target("udp://127.0.0.1:451/announce", Some(Family::V4)).unwrap();
+        assert_eq!(v4.to_string(), "127.0.0.1:451");
+        let err = udp_target("udp://127.0.0.1:451/announce", Some(Family::V6)).unwrap_err();
+        assert!(
+            err.to_string().contains("IPv6"),
+            "the error should name the family: {err}"
+        );
+        let v6 = udp_target("udp://[::1]:451/announce", Some(Family::V6)).unwrap();
+        assert_eq!(v6.to_string(), "[::1]:451");
+    }
+
+    #[test]
+    fn an_http_url_splits_into_a_host_and_a_port() {
+        assert_eq!(
+            http_authority("http://t.example/announce").unwrap(),
+            ("t.example".to_string(), 80)
+        );
+        assert_eq!(
+            http_authority("https://t.example/announce").unwrap(),
+            ("t.example".to_string(), 443)
+        );
+        assert_eq!(
+            http_authority("http://t.example:6969/announce?x=1").unwrap(),
+            ("t.example".to_string(), 6969)
+        );
+        // Userinfo is not the host.
+        assert_eq!(
+            http_authority("http://user:pw@t.example:8080/a").unwrap(),
+            ("t.example".to_string(), 8080)
+        );
+        assert!(http_authority("udp://t.example:451").is_err());
+    }
+
+    /// An IPv6 literal carries colons of its own, so the port cannot be split
+    /// off at the last one.
+    #[test]
+    fn a_bracketed_ipv6_host_keeps_its_colons() {
+        assert_eq!(
+            http_authority("http://[::1]:6969/announce").unwrap(),
+            ("::1".to_string(), 6969)
+        );
+        assert_eq!(
+            http_authority("http://[2001:db8::1]/announce").unwrap(),
+            ("2001:db8::1".to_string(), 80)
+        );
+        assert!(http_authority("http://[::1:6969/announce").is_err());
+    }
+
+    /// Literals need no resolver, so this says the same thing on every host.
+    #[test]
+    fn a_literal_address_resolves_to_its_own_family_only() {
+        assert_eq!(
+            families_of("udp://127.0.0.1:451/announce").unwrap(),
+            vec![Family::V4]
+        );
+        assert_eq!(
+            families_of("udp://[::1]:451/announce").unwrap(),
+            vec![Family::V6]
+        );
+        assert_eq!(
+            families_of("http://127.0.0.1:6969/announce").unwrap(),
+            vec![Family::V4]
+        );
+        assert_eq!(
+            families_of("http://[::1]:6969/announce").unwrap(),
+            vec![Family::V6]
+        );
+        assert!(families_of("wss://t.example/announce").is_err());
     }
 
     #[test]

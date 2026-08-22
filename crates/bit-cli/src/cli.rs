@@ -1007,6 +1007,26 @@ pub struct TrackersArgs {
     /// register a peer that is gone by the time anyone dials it.
     #[arg(long)]
     pub no_withdraw: bool,
+
+    /// Which address family to announce over.
+    ///
+    /// A tracker records the source address of the connection it was
+    /// announced over, so one announce registers one of this host's addresses.
+    /// `auto` announces once per family the tracker resolves to and reports
+    /// each separately, which is what says whether both are reachable.
+    #[arg(long, value_name = "FAMILY", default_value = "auto")]
+    pub family: AnnounceFamily,
+}
+
+/// `--family` for `bit-cli trackers`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AnnounceFamily {
+    /// One announce per family the tracker has an address in.
+    Auto,
+    /// IPv4 only.
+    V4,
+    /// IPv6 only.
+    V6,
 }
 
 /// `bit-cli webseed`.

@@ -1122,6 +1122,23 @@ can dial, and leaves it registered for the tracker's interval, is worse than
 no answer. `--port` chooses the port or the range, and `--no-withdraw` leaves
 the record in place.
 
+A tracker records the source address of the connection it was announced over,
+so **one announce registers one of this host's addresses**. `--family auto`,
+the default, announces once per address family the tracker resolves to and
+reports each separately under `families`, with the endpoint each one reached.
+`--family v4` and `--family v6` send one. The port is bound on both families,
+because an IPv6 announce naming a port listening only on IPv4 registers the
+same black hole the listener above exists to prevent.
+
+```bash
+bit-cli trackers album.torrent --family v6 --json
+```
+
+Whether a tracker **keeps** both addresses is the tracker's choice: one keyed
+by peer id alone holds the last announce and drops the other, which is what
+BEP 7's separate peer lists exist to fix. Announcing over both is what tells
+it; `families` in the report is what says what came back.
+
 A `download` run announces the same three events a client should:
 `started` when the torrent goes live, `completed` the moment it finishes, and
 `stopped` when the run ends. The last two come from `bit-cli` rather than from
@@ -1523,7 +1540,7 @@ not there, and the entry that closes it is named.
 | --- | --- | --- | --- |
 | 3 | The BitTorrent protocol | inherited | the session; `tracker.rs:9` for the announce half |
 | 5 | DHT | inherited | `--no-dht` reaches `enable_dht`, `swarm.rs:160` |
-| 7 | IPv6 tracker extension | yes | `peers6` at `tracker.rs:493`, 18 bytes per entry |
+| 7 | IPv6 tracker extension | yes | `peers6` read at `tracker.rs`; `trackers --family` announces once per family |
 | 9 | Metadata from peers | inherited | magnets resolve through the session |
 | 10 | Extension protocol | yes | `webseed/bridge.rs:84` `MSGID_EXTENDED`, `:888` `extended_handshake`, `:102` `OUR_EXTENSIONS` |
 | 11 | PEX | inherited | no `bit-cli` code; `--no-pex` warns that it cannot turn it off, [T-181](TODO/cli-surface.md) |

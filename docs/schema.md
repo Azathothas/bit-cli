@@ -469,8 +469,13 @@ From `bit-cli trackers <TORRENT> --tracker <URL> --json`.
 | --- | --- |
 | `action` | string |
 | `announced_port` | integer |
+| `announces` | integer |
 | `bit_cli_version` | string |
 | `failed` | integer |
+| `families[].announces` | integer |
+| `families[].family` | string |
+| `families[].peers[]` | string |
+| `families[].responded` | integer |
 | `generated_at` | string |
 | `info_hash` | string |
 | `kind` | string |
@@ -483,7 +488,9 @@ From `bit-cli trackers <TORRENT> --tracker <URL> --json`.
 | `tracker_count` | integer |
 | `trackers[].completed` | integer |
 | `trackers[].elapsed_ms` | integer |
+| `trackers[].endpoint` | string |
 | `trackers[].failure` | string |
+| `trackers[].family` | string |
 | `trackers[].http_status` | integer |
 | `trackers[].interval_s` | integer |
 | `trackers[].leechers` | integer |

@@ -496,7 +496,7 @@ Source:      https://github.com/ikatson/rqbit/issues/537 (open)
 Category:    peers
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      partial
 
 Problem:     A session bound to `[::]` announces one address to the tracker.
              On a dual-stack host that means IPv4 peers may never learn a
@@ -511,6 +511,128 @@ Approach:    `bit-cli`'s own tracker client (`crates/bit-cli-core/src/tracker.rs
              trackers` should do that, and whether the session should too.
 Acceptance:  `bit-cli trackers <TORRENT> --json` on a dual-stack host reports
              the peers each family's announce returned, separately.
+
+**The decision the Approach asks for, taken 2026-08-22 in an unattended
+session.** `bit-cli trackers` announces once per family. It is a diagnostic
+whose whole job is to report what a tracker said, and "which of my addresses
+did this tracker take" is the question this entry is about. The session is a
+separate answer and is below.
+
+**Half of the Approach's premise is wrong, and the pinned dependency is where
+to read it.** "Announcing both families needs two announces, one over each.
+Decide whether the session should too" reads as though the session announces
+once. For **UDP trackers it already announces twice**:
+`librqbit-tracker-comms-9.0.0/src/tracker_comms.rs:374-387` resolves the first
+IPv4 and the first IPv6 address into `UdpTrackerResolveResult::Two(v4, v6)` and
+fires both with `tokio::join!`. For **HTTP trackers it announces once**:
+`tracker_comms.rs:293` is a single `reqwest` GET and the family is whatever the
+connector picks. So the session half is already done for UDP and is blocked on
+`librqbit` for HTTP, at that line. That is the pinned dependency `bit-cli`
+actually runs rather than a corpus tree, so it is evidence about `bit-cli`.
+
+**What `bit-cli trackers` did before this, which was worse than either.**
+`udp_target` took `to_socket_addrs().next()`, the first address the resolver
+happened to return. On a dual-stack host that is not a choice, it is an
+ordering, and it can differ between two runs against the same tracker.
+
+**Built.** `Client::announce_on` takes a family, `announce` keeps the old
+behaviour by passing `None`, and `bit-cli trackers` grows `--family` with
+`auto`, `v4` and `v6`. `auto` resolves the tracker and announces once per
+family it has an address in.
+
+- **UDP** filters the resolution to the family and binds the local socket to
+  match.
+- **HTTP** overrides the resolution. `ClientBuilder::local_address` does **not**
+  pin a family, which is worth recording because it is the obvious thing to
+  reach for: `hyper-util-0.1.20/src/client/legacy/connect/http.rs:794-820`
+  binds the local address only when it already matches the destination's family
+  and otherwise falls through to the unspecified address **of the
+  destination's own family**, so setting `0.0.0.0` still connects over IPv6.
+  `resolve_to_addrs`, with the host resolved and filtered here, is what works,
+  because then there is no address of the other family left to choose.
+- The announced port is bound on **both** families now. It was IPv4 only, and
+  an IPv6 announce naming a port listening only on IPv4 registers exactly the
+  black hole [T-061](trackers.md) added that listener to prevent. Two separate
+  listeners rather than one dual-stack socket, for
+  [T-023](#t-023-the-listen-port-is-chosen-without-checking-both-address-families)'s
+  reason.
+- `stopped` goes out over the family the announce that succeeded used. Sent
+  over the other one it names a different source address and leaves the record
+  it meant to remove.
+
+**One tracker's two announces go in sequence, and finding out why is the
+measurement worth keeping.** They were concurrent first. `loopback-tracker`
+keyed its peer records by peer id alone, as a plain BEP 3 tracker does, so the
+second announce **overwrote** the first and one peer announcing over both
+families ended up with a single record. Which family survived was whichever
+announce landed last, measured at `127.0.0.1:7100` with no `[::1]:7100`:
+
+```
+one peer announces over both families on port 7100 and stays
+a second peer asks what the swarm holds:
+  peers: 127.0.0.1:7100
+  count: 1
+```
+
+So two announces is what it takes to **tell** a tracker about both addresses,
+and whether it **keeps** both is the tracker's choice. That is the whole reason
+BEP 7 exists. `loopback-tracker` keys by `(peer id, family)` now, which is what
+a tracker holding BEP 7's peer lists does, and it answers with `peers6` beside
+`peers`. The same measurement then reads:
+
+```
+  peers: 127.0.0.1:7100, [::1]:7100
+  count: 2
+```
+
+That is the entry's Problem, gone: one host, both addresses registered, and an
+IPv4 peer learns a reachable one. Sequencing the two announces also makes the
+outcome deterministic against the other kind of tracker, where the last family
+in the list wins every time instead of a race deciding it.
+
+**What the two families return is usually the same list, and reporting them
+apart is still right.** Measured against the fixture: a peer announcing over
+both is told about the same two peers either way, because what the family
+decides is what the tracker records **about the announcer**, not what it hands
+back. Trackers that answer only same-family peers are common enough that the
+report should be able to show it, and this is what shows it.
+
+Acceptance, run 2026-08-22 against `loopback-tracker` bound on `127.0.0.1` and
+`[::1]` at one port, announcing to `http://localhost:<port>/announce` so both
+families resolve:
+
+```
+=== auto (exit 0) ===
+trackers=1 announces=2 responded=1 failed=0
+  family v4: announces=1 responded=1
+  family v6: announces=1 responded=1
+  http://localhost:53414/announce family=v4 endpoint=127.0.0.1:53414 ok=True
+  http://localhost:53414/announce family=v6 endpoint=[::1]:53414 ok=True
+```
+
+and the tracker's own log, which is the other side of it:
+
+```
+08:08:54.895Z announce ... from=127.0.0.1 family=ipv4 port=6881 event=started
+08:08:54.907Z announce ... from=::1       family=ipv6 port=6881 event=started
+08:08:54.917Z announce ... from=127.0.0.1 family=ipv4 port=6881 event=stopped
+08:08:54.930Z announce ... from=::1       family=ipv6 port=6881 event=stopped
+```
+
+`--family v4` and `--family v6` each send one announce and name the endpoint,
+and a family a tracker has no address in fails with the family named rather
+than falling back to the other one, which would publish an address the caller
+did not ask to publish.
+
+**Still open, and why this is partial rather than done.** The session's HTTP
+tracker announces are `librqbit`'s and go out over one family, at
+`librqbit-tracker-comms-9.0.0/src/tracker_comms.rs:293`. Unblocking it means a
+`reqwest` client per family inside `TrackerComms`, which is upstream's to make:
+the type owns its client, takes it as an argument to `TrackerComms::start`, and
+exposes no seam for a second one. `bit-cli seed` and `bit-cli download`
+therefore still register one address with an HTTP tracker on a dual-stack host.
+UDP trackers are already both, and `bit-cli trackers` is now the command that
+can say which.
 
 ### T-023 The listen port is chosen without checking both address families
 
