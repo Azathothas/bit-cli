@@ -1558,9 +1558,7 @@ dependencies = [
 
 [[package]]
 name = "librqbit"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10003b9b157ef1d8352b4ff2e2025fa1544453d40539741779ee918028aba75b"
+version = "9.0.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1622,9 +1620,7 @@ dependencies = [
 
 [[package]]
 name = "librqbit-bencode"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff5c836d4b7913716440645c1745a7550336b40c37a25ec4a190f435d1762767"
+version = "9.0.1"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -1639,9 +1635,7 @@ dependencies = [
 
 [[package]]
 name = "librqbit-buffers"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37de5100d446a7b34ec0a0172cb48173166eaa551f3c24ef50f77feaab49ca98"
+version = "9.0.1"
 dependencies = [
  "bytes",
  "librqbit-clone-to-owned",
@@ -1651,18 +1645,14 @@ dependencies = [
 
 [[package]]
 name = "librqbit-clone-to-owned"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "218f258f5c8eb65e4824a443f7f32fe7ebfe41794dbd52f826dfc7fc1a8c60ad"
+version = "9.0.1"
 dependencies = [
  "bytes",
 ]
 
 [[package]]
 name = "librqbit-core"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86797e72306ef669bddd876f0818c76280635b88850b9d1d6eb436955c8b3823"
+version = "9.0.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1690,9 +1680,7 @@ dependencies = [
 
 [[package]]
 name = "librqbit-dht"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f968073bcbc6543bd7510af1c7b84d5d2a876cb284a2a4008b315e17028af96"
+version = "9.0.1"
 dependencies = [
  "anyhow",
  "backon",
@@ -1722,8 +1710,6 @@ dependencies = [
 [[package]]
 name = "librqbit-dualstack-sockets"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7189f1ff66ca75055137a38b062ba7df9691d071b7172e5090997c62eb4b4de"
 dependencies = [
  "axum",
  "backon",
@@ -1738,9 +1724,7 @@ dependencies = [
 
 [[package]]
 name = "librqbit-lsd"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcd5c0645b514ca0042ce16a11722bf5c5f8ef4ab2586c264b91995a1aa61a63"
+version = "9.0.1"
 dependencies = [
  "anyhow",
  "atoi",
@@ -1758,9 +1742,7 @@ dependencies = [
 
 [[package]]
 name = "librqbit-peer-protocol"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6eefb0695ac21556dec7810f4225906d44233392a4ff71f5bd172dfd1bf3e62c"
+version = "9.0.1"
 dependencies = [
  "anyhow",
  "bitvec",
@@ -1779,9 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "librqbit-sha1-wrapper"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "867d9a29342a0163cab26f9d4fe532b121c51eb40278c83fa3367f24067f3452"
+version = "9.0.1"
 dependencies = [
  "assert_cfg",
  "aws-lc-rs",
@@ -1789,9 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "librqbit-tracker-comms"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2959a278745484c763810be667096e2263764cb8cab08b45b3f928146666d2c5"
+version = "9.0.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1818,9 +1796,7 @@ dependencies = [
 
 [[package]]
 name = "librqbit-upnp"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6147aa52dc13c6e55385de06e942c37602dbec4f490e449315625748655adcc9"
+version = "9.0.1"
 dependencies = [
  "anyhow",
  "bstr",
@@ -1841,8 +1817,6 @@ dependencies = [
 [[package]]
 name = "librqbit-utp"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f3bfdc73944bc76cab24d5690a98816770040a654c449edf5ff2b9ba22626aa"
 dependencies = [
  "bitvec",
  "dontfrag",

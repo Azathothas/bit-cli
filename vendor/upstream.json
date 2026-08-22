@@ -1,0 +1,87 @@
+{
+  "comment": [
+    "Every upstream this repository vendors, and the exact commit each tree was",
+    "taken from. scripts/vendor-sync.ps1 reads this to fetch a pristine copy, to",
+    "three-way merge a new release onto our tree, and to write back the new base.",
+    "scripts/vendor-diff.ps1 reads it to regenerate the patch series.",
+    "",
+    "`base` is the commit our tree was last reconciled against. It is not",
+    "necessarily what the tree contains: the tree is ours and may carry patches.",
+    "That is the whole point of recording it. See patches/README.md."
+  ],
+  "schema_version": 1,
+  "upstreams": [
+    {
+      "name": "rqbit",
+      "repository": "https://github.com/ikatson/rqbit",
+      "directory": "vendor/rqbit",
+      "ref": "v9.0.1",
+      "base": "a499d2f243d124e144aef137afe7cb304a6e3f36",
+      "vendored_at": "2026-08-22T11:38:00Z",
+      "exclude": [
+        ".git",
+        "desktop",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "GEMINI.md",
+        "AI_POLICY.md",
+        ".vscode"
+      ],
+      "exclude_reason": {
+        "desktop": "A Tauri application this tree never builds and depends on nothing here. 1.6 MB of the 4.4 MB upstream ships.",
+        "CLAUDE.md": "Third-party agent instructions. A file by this name anywhere under a repository is read as instructions by the tools working in it, so an upstream's copy must not land in ours. Same for AGENTS.md, GEMINI.md and AI_POLICY.md.",
+        "AGENTS.md": "See CLAUDE.md.",
+        "GEMINI.md": "See CLAUDE.md.",
+        "AI_POLICY.md": "See CLAUDE.md.",
+        ".vscode": "Upstream's editor settings, and this repository's own .gitignore has a `.vscode/` rule, so the files would land on disk and never be committed. A vendored tree that differs between a fresh clone and this machine makes every later merge report them as newly added. Excluded rather than un-ignored: nothing here needs somebody else's editor config."
+      },
+      "crates": {
+        "librqbit": "crates/librqbit",
+        "librqbit-bencode": "crates/bencode",
+        "librqbit-buffers": "crates/buffers",
+        "librqbit-clone-to-owned": "crates/clone_to_owned",
+        "librqbit-core": "crates/librqbit_core",
+        "librqbit-dht": "crates/dht",
+        "librqbit-lsd": "crates/librqbit_lsd",
+        "librqbit-peer-protocol": "crates/peer_binary_protocol",
+        "librqbit-sha1-wrapper": "crates/sha1w",
+        "librqbit-tracker-comms": "crates/tracker_comms",
+        "librqbit-upnp": "crates/upnp"
+      },
+      "not_patched": {
+        "rqbit": "crates/rqbit is upstream's own binary. Vendored so the workspace builds and its tests run, never depended on.",
+        "librqbit-upnp-serve": "crates/upnp-serve is behind a feature this tree does not enable."
+      }
+    },
+    {
+      "name": "librqbit-utp",
+      "repository": "https://github.com/ikatson/librqbit-utp",
+      "directory": "vendor/librqbit-utp",
+      "ref": "c26f57b2debbe35ed0ace1ad419de529f7a5bf95",
+      "base": "c26f57b2debbe35ed0ace1ad419de529f7a5bf95",
+      "vendored_at": "2026-08-22T11:38:00Z",
+      "ref_reason": "Pinned by commit, not by tag. The repository's newest tag is v0.4.0 and the version this tree builds against is 0.7.0, so no tag names it. The commit is the default branch head whose Cargo.toml reads 0.7.0.",
+      "exclude": [
+        ".git"
+      ],
+      "crates": {
+        "librqbit-utp": "."
+      }
+    },
+    {
+      "name": "librqbit-dualstack-sockets",
+      "repository": "https://github.com/ikatson/librqbit-dualstack-sockets",
+      "directory": "vendor/librqbit-dualstack-sockets",
+      "ref": "e2f221ca745c25c7790abb593ed260ce5a499fa1",
+      "base": "e2f221ca745c25c7790abb593ed260ce5a499fa1",
+      "vendored_at": "2026-08-22T11:38:00Z",
+      "ref_reason": "Pinned by commit. The repository carries no tags at all, and the default branch head is version 0.7.0, which is what this tree builds against.",
+      "exclude": [
+        ".git"
+      ],
+      "crates": {
+        "librqbit-dualstack-sockets": "."
+      }
+    }
+  ]
+}

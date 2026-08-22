@@ -14,6 +14,14 @@ Two dependencies are worth calling out by name.
 Copyright 2021 Igor Katson. Distributing a `bit-cli` binary means distributing
 the Apache-2.0 text below and any NOTICE content upstream provides.
 
+Since 2026-08-22 they are **vendored** under `vendor/`, not fetched from
+crates.io, and `librqbit-utp` and `librqbit-dualstack-sockets` with them. The
+licence is unchanged and so is the obligation: Apache-2.0 permits modification
+provided the changed files are marked as changed and the licence and any NOTICE
+travel with the distribution. `patches/UPSTREAM.md` is the record of what this
+repository changed and it is what marks them. `vendor/upstream.json` names the
+exact upstream commit each tree came from. See `docs/vendoring.md`.
+
 **`intermodal`** is not a dependency and is credited anyway. It is CC0-1.0, a
 public domain dedication that requires no attribution. Torrent creation and
 linting, the size parsing, the aligned table output, and the pattern of
@@ -929,7 +937,7 @@ limitations under the License.
 
 ## Apache License 2.0
 
-Used by `aws-lc-sys 0.41.0`, `librqbit-bencode 9.0.0`, `librqbit-buffers 9.0.0`, `librqbit-clone-to-owned 9.0.0`, `librqbit-core 9.0.0`, `librqbit-dht 9.0.0`, `librqbit-dualstack-sockets 0.7.0`, `librqbit-lsd 9.0.0`, `librqbit-peer-protocol 9.0.0`, `librqbit-sha1-wrapper 9.0.0`, `librqbit-tracker-comms 9.0.0`, `librqbit-upnp 9.0.0`, `librqbit-utp 0.7.0`, `librqbit 9.0.0`, `ryu 1.0.23`, `sync_wrapper 1.0.2`
+Used by `librqbit-dualstack-sockets 0.7.0`, `librqbit-utp 0.7.0`, `librqbit-bencode 9.0.1`, `librqbit-buffers 9.0.1`, `librqbit-clone-to-owned 9.0.1`, `librqbit-dht 9.0.1`, `librqbit 9.0.1`, `librqbit-core 9.0.1`, `librqbit-lsd 9.0.1`, `librqbit-peer-protocol 9.0.1`, `librqbit-sha1-wrapper 9.0.1`, `librqbit-tracker-comms 9.0.1`, `librqbit-upnp 9.0.1`, `aws-lc-sys 0.41.0`, `ryu 1.0.23`, `sync_wrapper 1.0.2`
 
 ```
 Apache License

@@ -14,6 +14,14 @@ Two dependencies are worth calling out by name.
 Copyright 2021 Igor Katson. Distributing a `bit-cli` binary means distributing
 the Apache-2.0 text below and any NOTICE content upstream provides.
 
+Since 2026-08-22 they are **vendored** under `vendor/`, not fetched from
+crates.io, and `librqbit-utp` and `librqbit-dualstack-sockets` with them. The
+licence is unchanged and so is the obligation: Apache-2.0 permits modification
+provided the changed files are marked as changed and the licence and any NOTICE
+travel with the distribution. `patches/UPSTREAM.md` is the record of what this
+repository changed and it is what marks them. `vendor/upstream.json` names the
+exact upstream commit each tree came from. See `docs/vendoring.md`.
+
 **`intermodal`** is not a dependency and is credited anyway. It is CC0-1.0, a
 public domain dedication that requires no attribution. Torrent creation and
 linting, the size parsing, the aligned table output, and the pattern of

@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
 members = ["crates/bit-cli", "crates/bit-cli-core"]
+# The vendored upstreams are their own workspaces and are reached through
+# [patch.crates-io] below, not as members. Without this, cargo walks up from
+# vendor/librqbit-utp/Cargo.toml, finds this workspace, and refuses to build a
+# package that names no workspace of its own. See docs/vendoring.md.
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,10 +29,10 @@ clap_mangen = "0.2.32"
 globset = "0.4.19"
 hdrhistogram = { version = "7.5.5", default-features = false }
 ignore = "0.4.24"
-librqbit = { version = "9.0.0", default-features = false, features = ["rust-tls", "http-api-client"] }
-librqbit-bencode = "9.0.0"
-librqbit-core = { version = "9.0.0", default-features = false }
-librqbit-peer-protocol = { version = "9.0.0", default-features = false }
+librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls", "http-api-client"] }
+librqbit-bencode = "9.0.1"
+librqbit-core = { version = "9.0.1", default-features = false }
+librqbit-peer-protocol = { version = "9.0.1", default-features = false }
 md-5 = "0.10.6"
 percent-encoding = "2.3.2"
 quick-xml = { version = "0.41.0", features = ["serialize"] }
@@ -48,6 +53,33 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json", "fm
 url = "2.5.8"
 walkdir = "2.5.0"
 webpki-roots = "1.0.8"
+
+# Every crate of the three upstreams this repository vendors, redirected at the
+# source rather than at the dependency edge.
+#
+# [patch.crates-io] and not a path dependency, because only four of these are
+# named directly and the rest arrive transitively: a path dependency would
+# redirect the four and leave cargo resolving the other nine from crates.io,
+# so the build would hold two copies of librqbit-core and the types would not
+# be the same types.
+#
+# The trees are under vendor/, pinned in vendor/upstream.json, and reconciled
+# with a new upstream release by scripts/vendor-sync.ps1. What we changed and
+# why is patches/UPSTREAM.md. Why this is vendored at all is docs/vendoring.md.
+[patch.crates-io]
+librqbit = { path = "vendor/rqbit/crates/librqbit" }
+librqbit-bencode = { path = "vendor/rqbit/crates/bencode" }
+librqbit-buffers = { path = "vendor/rqbit/crates/buffers" }
+librqbit-clone-to-owned = { path = "vendor/rqbit/crates/clone_to_owned" }
+librqbit-core = { path = "vendor/rqbit/crates/librqbit_core" }
+librqbit-dht = { path = "vendor/rqbit/crates/dht" }
+librqbit-lsd = { path = "vendor/rqbit/crates/librqbit_lsd" }
+librqbit-peer-protocol = { path = "vendor/rqbit/crates/peer_binary_protocol" }
+librqbit-sha1-wrapper = { path = "vendor/rqbit/crates/sha1w" }
+librqbit-tracker-comms = { path = "vendor/rqbit/crates/tracker_comms" }
+librqbit-upnp = { path = "vendor/rqbit/crates/upnp" }
+librqbit-utp = { path = "vendor/librqbit-utp" }
+librqbit-dualstack-sockets = { path = "vendor/librqbit-dualstack-sockets" }
 
 [profile.release]
 opt-level = 3
