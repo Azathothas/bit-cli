@@ -1093,6 +1093,41 @@ A `download` run announces the same three events a client should:
 the session, carrying the session's own peer id and port so the tracker
 updates one record, and `--json` reports them under `announced`.
 
+### What a UDP tracker that does not answer costs
+
+BEP 15 says to retry at `15 * 2^n` seconds for `n` from 0 to 8, which is nine
+attempts and up to 62 minutes before giving up. **`bit-cli` does not do that,
+on purpose.** A foreground diagnostic that can take an hour to say "this
+tracker is down" has not answered the question the caller asked. What it does
+instead is **three attempts inside `--tracker-timeout`**, one attempt being
+`max(--tracker-timeout / 3, 1s)`.
+
+The one second floor is why `--tracker-timeout 1s` and `--tracker-timeout 3s`
+cost the same three seconds. Below three seconds the flag buys nothing.
+
+The total is not one number, because a UDP announce is two exchanges, connect
+then announce, and either can be the one that dies. Measured:
+
+| what happens | attempts | at `--tracker-timeout 6s` |
+| --- | --- | --- |
+| nothing answers, so the announce is never sent | 3 | 6.06 s |
+| connect answered at once, announce dead | 3 | 6.06 s |
+| connect answered on its third attempt, announce dead | 5 | 10.10 s |
+
+**Five attempts is the worst case there is**, so the budget for one UDP tracker
+is `5 * max(--tracker-timeout / 3, 1s)`: **fifty seconds** at the default
+`--tracker-timeout` of 30 seconds, and never under five. Six attempts cannot
+happen, because a connect that is not answered by its third gives up and the
+announce that would spend three more is never sent.
+
+Every tracker is asked at once rather than tier by tier, so that budget is per
+tracker and not per torrent: a torrent with twelve dead UDP trackers still
+answers in fifty seconds.
+
+```bash
+pwsh scripts/check-udp-retry.ps1
+```
+
 ## Sampling a swarm
 
 ```bash
@@ -1459,7 +1494,7 @@ not there, and the entry that closes it is named.
 | 11 | PEX | inherited | no `bit-cli` code; `--no-pex` warns that it cannot turn it off, [T-181](TODO/cli-surface.md) |
 | 12 | Multitracker metadata | yes | `tracker.rs:115` tiers; `create`, `edit`, `trackers` |
 | 14 | Local service discovery | inherited | `--no-lsd` reaches `enable_lsd`, `swarm.rs:161` |
-| 15 | UDP tracker protocol | yes | `tracker.rs:25`, `:301`, `:643` |
+| 15 | UDP tracker protocol | yes | `tracker.rs:25`, `:301`, `:643`. The retry ladder diverges on purpose: three attempts inside `--tracker-timeout` rather than `15 * 2^n`, [above](#what-a-udp-tracker-that-does-not-answer-costs) |
 | 17 | HTTP seeding, Hoffman style | yes | `webseed/fetch.rs`; the style is keyed by the metainfo list a URL came from, and probed for a `--web-seed` given on the command line |
 | 19 | HTTP seeding, GetRight style | yes | `webseed/composition.rs`, the headline feature |
 | 20 | Peer id conventions | yes | `webseed/bridge.rs` handshake |

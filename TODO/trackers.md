@@ -190,7 +190,7 @@ Source:      BEP 15
 Category:    trackers
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-22
 
 Problem:     BEP 15 specifies retrying at `15 * 2^n` seconds for n from 0 to 8.
              `bit-cli`'s UDP client makes three attempts inside the configured
@@ -202,6 +202,70 @@ Relevance:   The spec backoff takes up to 62 minutes to give up, which is
 Approach:    Keep the behaviour, document it in `docs/`, and make the attempt
              count configurable if a caller ever needs the spec timing.
 Acceptance:  `docs/` states the retry policy and why it differs from BEP 15.
+
+**Done, 2026-08-22, and the total the corpus note asked for is not the number
+anyone would have written down.**
+
+The Acceptance says `docs/`. That directory holds a generated schema, the
+short-flag table, and a retired TUI mapping, and nothing a reader goes to for
+behaviour; the user-facing documentation is `README.md`. The policy is under
+[**What a UDP tracker that does not answer costs**](../README.md#what-a-udp-tracker-that-does-not-answer-costs),
+and the BEP 15 row of the protocol table links to it, so a reader arriving from
+either direction lands on the same paragraph.
+
+**The behaviour is unchanged and the divergence stands.** Three attempts inside
+`--tracker-timeout`, one attempt being `max(timeout / 3, 1s)`
+(`tracker.rs:364`), against BEP 15's nine attempts at `15 * 2^n` and up to 62
+minutes. The reasoning in Relevance is the reasoning: an hour to say "this
+tracker is down" has not answered the question a foreground diagnostic was
+asked.
+
+**The total is five attempts, not three and not six.** A UDP announce is two
+exchanges, connect then announce, and which one dies decides the cost.
+`bench/udp-retry-20260822T052822784Z.json`:
+
+| what happens | attempts | at `--tracker-timeout 6s` |
+| --- | --- | --- |
+| nothing answers | 3 | 6.06 s |
+| connect answered at once, announce dead | 3 | 6.06 s |
+| connect answered on its third attempt, announce dead | 5 | 10.10 s |
+
+Six cannot happen: a connect that is not answered by its third attempt gives
+up, so the announce that would spend three more is never sent. So the budget
+for one UDP tracker is `5 * max(--tracker-timeout / 3, 1s)`, which is **fifty
+seconds** at the default 30 second timeout and never under five. Trackers are
+asked concurrently (`cmd/trackers.rs:166`, a `JoinSet`), so that is per tracker
+and not per torrent.
+
+The one second floor is worth stating on its own: `--tracker-timeout 1s` and
+`--tracker-timeout 3s` both cost three seconds, so below three the flag buys
+nothing. Measured at both.
+
+```powershell
+pwsh -NoProfile -File scripts/check-udp-retry.ps1
+```
+
+Three cases at three timeouts, judged against the attempt count rather than
+recorded. It fails on either side of the budget: over it the budget is not the
+budget, and under it an attempt was skipped, which is the same defect read the
+other way round.
+
+**What is not done here**, because it is not this entry's: the Approach also
+offered to make the attempt count configurable "if a caller ever needs the spec
+timing". Nobody has, `--tracker-timeout` already moves the whole ladder, and a
+flag with no caller is a flag to maintain. If one appears it is a new entry.
+
+**Connection id expiry**, which the corpus note below says this entry should
+mention, cannot bite and here is why, so nobody re-derives it. `Client::udp`
+(`tracker.rs:302`) opens a socket, connects, announces, and returns, once per
+announce. **Nothing caches a connection id**, so there is no id to go stale:
+the `download` path's three announces, `started`, `completed` and `stopped`,
+are three separate connects however far apart they fall. What that costs is one
+extra round trip per announce, which is the trade this shape makes and the
+right one for a tool with no session to hang a cache off. A future change that
+caches an id inherits the whole problem the corpus note describes, including
+anacrolix's one-minute reissue rule and the tracker that answers
+`"Connection ID missmatch. "`, and must not be made without it.
 
 ### T-065 Scrape is only implemented for the BEP 48 URL convention
 

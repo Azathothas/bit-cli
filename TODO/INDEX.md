@@ -131,7 +131,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-061](trackers.md) | P1 | trackers | **done** | bit-cli trackers announces a fixed port |
 | [T-062](trackers.md) | P1 | trackers | **done** | Announce timing has no started, completed, or stopped events |
 | [T-063](trackers.md) | P3 | trackers | open | Tracker tiers are announced in parallel rather than in order |
-| [T-064](trackers.md) | P2 | trackers | open | UDP tracker retry does not follow the BEP 15 backoff |
+| [T-064](trackers.md) | P2 | trackers | **done** | UDP tracker retry does not follow the BEP 15 backoff |
 | [T-065](trackers.md) | P3 | trackers | open | Scrape is only implemented for the BEP 48 URL convention |
 | [T-180](trackers.md) | P2 | trackers | open | A negative left in a tracker exchange has no decided handling |
 | [T-070](windows.md) | P1 | windows | **done** | A downloaded executable cannot be run until the process exits |
@@ -225,7 +225,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 147 items: 137 to work through, and 10 deferred to Phase C.
-51 open, 5 partial, 2 blocked, 79 done.
+50 open, 5 partial, 2 blocked, 80 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -471,7 +471,7 @@ squared of 0.73, which is a trend. In both cases the first reading was of the
 fixture rather than of the thing. That is the same lesson T-032 and T-141 wrote
 down, arrived at twice more.
 
-Counted from the rows above on 2026-08-22T01:40Z, not carried forward. The
+Counted from the rows above on 2026-08-22T05:30Z, not carried forward. The
 previous revision of this table totalled 141 against 146 rows and put `done` at
 63 against a prose count of 74, so it had stopped describing the list some
 sessions earlier.
@@ -480,10 +480,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 | 11 |
 | P1 | 3 | 1 | 0 | 47 | 51 |
-| P2 | 25 | 2 | 2 | 22 | 51 |
+| P2 | 24 | 2 | 2 | 23 | 51 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **51** | **5** | **2** | **79** | **147** |
+| **All** | **50** | **5** | **2** | **80** | **147** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4
