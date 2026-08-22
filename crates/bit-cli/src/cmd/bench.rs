@@ -3190,7 +3190,16 @@ mod tests {
                 .any(|name| name == "extension-protocol"),
             "{probe}"
         );
-        assert_eq!(peer["extended"]["client"], "bit-cli 0.1.0", "{probe}");
+        // Built from the crate version rather than written out. What this
+        // asserts is that the probe reads the extended handshake's `v` string
+        // back, not which release it happens to be: as a literal it broke on
+        // the bump to 0.2.0, which is a version change reported as a protocol
+        // failure. See `docs/vendoring.md` on the version story.
+        assert_eq!(
+            peer["extended"]["client"],
+            format!("bit-cli {}", env!("CARGO_PKG_VERSION")),
+            "{probe}"
+        );
         assert_eq!(peer["pieces_advertised"], 2, "{probe}");
         assert!(
             peer["messages"]

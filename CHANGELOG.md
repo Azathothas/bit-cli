@@ -4,6 +4,19 @@ Notable changes, newest first. Versions follow [semantic
 versioning](https://semver.org/spec/v2.0.0.html), and the released version is
 driven from the git tag.
 
+## 0.2.0, unreleased
+
+Since `1b0117e3fe77`.
+
+### Vendored upstreams
+
+The binary is built from these trees, not from crates.io. See
+`docs/vendoring.md`.
+
+- `rqbit` at `v9.0.1`, commit `a499d2f243d1`, from https://github.com/ikatson/rqbit
+- `librqbit-utp` at `c26f57b2debbe35ed0ace1ad419de529f7a5bf95`, commit `c26f57b2debb`, from https://github.com/ikatson/librqbit-utp
+- `librqbit-dualstack-sockets` at `e2f221ca745c25c7790abb593ed260ce5a499fa1`, commit `e2f221ca745c`, from https://github.com/ikatson/librqbit-dualstack-sockets
+
 ## 0.1.0, unreleased
 
 First release. `bit-cli` started as a fork of

@@ -8,7 +8,7 @@ members = ["crates/bit-cli", "crates/bit-cli-core"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -17,7 +17,7 @@ homepage = "https://github.com/Azathothas/bit-cli"
 authors = ["Azathothas <AjamX101@gmail.com>"]
 
 [workspace.dependencies]
-bit-cli-core = { path = "crates/bit-cli-core", version = "0.1.0" }
+bit-cli-core = { path = "crates/bit-cli-core", version = "0.2.0" }
 
 anyhow = "1.0.103"
 bytes = "1.11.1"
