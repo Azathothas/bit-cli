@@ -23,8 +23,8 @@ Every entry, one line each: [INDEX.md](INDEX.md).
 ## State
 
 - **Last session:** started 2026-08-22T04:05:27Z, unattended throughout. The
-  whole four-item work order, then three things the work found, one more entry,
-  and the two reviews.
+  whole four-item work order, then three things the work found, two more
+  entries, and the two reviews.
 - **Tests:** 1,091 passing, 0 failing. The baseline at the start was 1,052.
 - **Gates:** clean. One command:
 
@@ -135,8 +135,15 @@ Two guards, because finding these by reading is how they were missed.
 `check-todo.ps1` checks the same over `TODO/` before it reads anything as text.
 Both were checked by injecting a NUL.
 
-### One more entry, taken after the work order
+### Two more entries, taken after the work order
 
+- **[T-007](webseed.md)**, measured and not built. A stalling source costs
+  **133.28 s** at `--web-seed-timeout 5s`, not the 24,247 ms the entry records,
+  and the cooldown its Problem blames is never waited on. What multiplies is
+  the error budget over the retry ladder, plus **a constant near sixteen
+  seconds that no flag moves**. The entry now carries the table, the model and
+  both targets, and nothing was written on the strength of a mechanism the
+  code does not have.
 - **[T-132](multi-source.md)**, partial. The premise holds and **the
   workaround the entry proposes does not survive the measurement**. The session
   cap does bound the bridge, 195.42 MiB/s to 8.41 under an 8 MiB/s cap. The
