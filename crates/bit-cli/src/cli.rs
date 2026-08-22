@@ -744,6 +744,10 @@ pub struct LimitArgs {
     #[arg(long, value_name = "RATE")]
     pub max_overall_upload_rate: Option<String>,
 
+    /// Download rate cap for swarm peers, not for attached HTTP sources.
+    #[arg(long, value_name = "RATE")]
+    pub max_peer_rate: Option<String>,
+
     /// Peer connections per torrent.
     #[arg(long, value_name = "N")]
     pub max_peers: Option<usize>,

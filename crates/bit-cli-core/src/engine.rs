@@ -94,6 +94,19 @@ pub struct EngineOptions {
     pub download_rate: Option<u64>,
     /// Upload rate cap in bytes per second, across the whole session.
     pub upload_rate: Option<u64>,
+    /// Download rate cap in bytes per second for **swarm peers only**.
+    ///
+    /// [`Self::download_rate`] bounds everything the session pulls in, and an
+    /// HTTP source reaches the session as a peer over loopback, so it bounds
+    /// that too. This one skips the bridge this process runs, by peer id
+    /// prefix, so the swarm can be capped while an HTTP mirror is capped
+    /// separately by `--web-seed-speed-limit` or not at all. See
+    /// `TODO/multi-source.md`, T-132.
+    ///
+    /// There is no upload counterpart. The bridge is a seed: it never sends
+    /// `Interested` and never requests, so nothing is uploaded to it and the
+    /// upload caps already reach peers alone.
+    pub peer_download_rate: Option<u64>,
     /// Trackers added to every torrent in this run.
     pub extra_trackers: Vec<String>,
     /// Restrict to IPv4.
@@ -127,6 +140,7 @@ impl Default for EngineOptions {
             max_peers: None,
             download_rate: None,
             upload_rate: None,
+            peer_download_rate: None,
             extra_trackers: Vec::new(),
             ipv4_only: false,
             client_name: Some(format!("bit-cli {}", crate::VERSION)),
@@ -377,6 +391,22 @@ impl Engine {
                     options.download_directory.display().to_string(),
                 )
             })?;
+        // The swarm-only download cap, and the one peer it does not apply
+        // to. Set here rather than in `SessionOptions` because `LimitsConfig`
+        // is a two-field serialized type in `librqbit` and this is a third
+        // limiter beside it; `Limits` takes it through a setter, the same way
+        // `set_rates` reaches the other two.
+        //
+        // The exemption is registered whether or not a cap is set, because it
+        // costs nothing when the peer limiter is off and forgetting it later
+        // would make the flag quietly wrong.
+        session
+            .ratelimits
+            .set_exempt_peer_prefixes(vec![*crate::webseed::bridge::PEER_ID_PREFIX]);
+        session
+            .ratelimits
+            .set_peer_download_bps(rate_to_bps(options.peer_download_rate));
+
         let api = Api::new(session.clone(), None);
         let listen_addr = session.listen_addr();
         if listen_addr.is_none() {

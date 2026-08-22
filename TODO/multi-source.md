@@ -404,7 +404,7 @@ says so in the report's `notes`.
 Category:    performance
 Priority:    P1
 Effort:      M
-Status:      partial
+Status:      **done**, 2026-08-22T17:55Z
 
 Problem:     `--max-download-rate` goes into the session's `LimitsConfig`, and
              HTTP sources reach the session as peers over loopback, so a
@@ -491,6 +491,89 @@ a split is a scheduling outcome and [RULES.md](RULES.md) section 5 says a
 fixture must not assert one. `hybrid_webseed_cap` is judged in both directions:
 HTTP stays under its cap, and the run as a whole does not. If that second
 assertion ever fails, a peer cap has appeared and this entry is closeable.
+
+---
+
+**Closed 2026-08-22 in the vendored tree.** The section above ends by naming
+what would unblock it: "`prepare_for_download` taking the peer it is
+throttling". That is what was built.
+
+**`--max-peer-rate RATE`.** A download cap that bounds swarm peers and not an
+HTTP source this process attached. `librqbit`'s `Limits` grows a second
+download limiter beside the total, plus a list of peer id prefixes it does not
+apply to; `bit-cli` registers its own bridge's prefix, `-BCws01-`, whether or
+not a cap is set. `prepare_for_download_from` charges the total for everyone
+and the peer limiter for everyone else.
+
+**A prefix rather than an address**, because the bridge dials in from an
+ephemeral port and reconnects on a new one, so there is no stable address to
+name. A prefix rather than a whole id, because it generates a fresh id per
+connection and only the first eight bytes say who it is.
+
+**There is no upload counterpart and that is not an oversight.** The bridge is
+a seed: it sends `Bitfield` and `Unchoke` and answers `Request`, and never
+sends `Interested` and never requests. Nothing is ever uploaded to it, so
+`--max-upload-rate` and `--max-overall-upload-rate` already reach peers alone.
+
+**The first attempt did not work, and what it found is now
+[T-210](peers.md).** The exemption matched nothing, because `librqbit` filed
+every **incoming** peer under this session's own peer id:
+`manage_peer_incoming` handed the handshake it had just built to send to
+`on_handshake` instead of the one it read. The bridge dials in, so it was
+exactly the case that took the wrong path. That is a P1 of its own, fixed, with
+its own entry.
+
+**Measured**, `scripts/check-rate-scope.ps1`, ten phases,
+`bench/rate-scope-20260822T175543220Z.json`:
+
+| phase | total | HTTP | peers |
+| --- | --- | --- | --- |
+| `http_ceiling` | 167.32 MiB/s | 167.32 | 0 |
+| `http_session_cap` | 8.39 MiB/s | 8.39 | 0 |
+| `http_webseed_cap` | 8.21 MiB/s | 8.21 | 0 |
+| **`http_peer_cap`** | **151.84 MiB/s** | **151.84** | 0 |
+| `peer_ceiling` | 259.11 MiB/s | 0 | 259.11 |
+| **`peer_peer_cap`** | **8.42 MiB/s** | 0 | **8.42** |
+| `hybrid_ceiling` | 228.16 MiB/s | 185.38 | 42.78 |
+| `hybrid_webseed_cap` | 301.89 MiB/s | 11.79 | 290.09 |
+| `hybrid_session_cap` | 8.35 MiB/s | 3.91 | 4.43 |
+| **`hybrid_both_caps`** | 27.57 MiB/s | **18.31** | **9.26** |
+
+```powershell
+pwsh -NoProfile -File scripts/check-rate-scope.ps1
+```
+
+`http_peer_cap` is the row the whole entry turns on, and it is judged in the
+direction that would be a defect: an 8 MiB/s peer cap must **not** hold an
+attached HTTP source, and it ran at 151.84 MiB/s. Before [T-210](peers.md) it
+ran at 8.40 MiB/s, which is the cap.
+
+**The acceptance is not taken literally, and the reason is a rule this
+repository adopted after the acceptance was written.** It asks for "peer bytes
+within 10% of 10 MiB/s and HTTP bytes within 10% of 50 MiB/s". The upper half
+is a cap and is judged. The lower half asks each source to be **at** its cap,
+which is a scheduling outcome: the picker decides how much each source is asked
+for, and [RULES.md](RULES.md) section 5 forbids a fixture asserting one. It is
+arranged instead, which is what that rule says to do: `peer_peer_cap` and
+`http_peer_cap` each make one source the only supplier, so "the cap binds
+peers" and "the cap does not bind HTTP" are invariants rather than races.
+`hybrid_both_caps` then shows both caps in one run and one report, each side
+under its own, which is the rest of what the acceptance asked for.
+
+**A cap is now judged as rate plus burst over the run's own length**, and that
+fixed a latent flake rather than loosening anything. `governor`'s
+`Quota::per_second(n)` refills n a second and holds n, so a run of t seconds
+may pass `n * t + n` bytes: 16% over at four seconds and 2% over at sixty. The
+old plain-rate ceiling passed `hybrid_webseed_cap` at 1.12 MiB/s on one run and
+would have failed the same limiter at 11.79 MiB/s on the next, because how long
+that phase lasts is decided by the uncapped peer. The entry's "over sixty
+seconds" was asking for the same thing by making the burst small; this says it
+without needing the run to last that long. `-PayloadMiB` lengthens the window
+for anyone who wants both.
+
+**What is still true from the section above.** A session cap still bounds
+everything including HTTP, which is what `--max-overall-download-rate` means,
+and `README.md`'s table still describes it.
 
 ### T-133 Two torrents holding the same file cannot share its bytes
 

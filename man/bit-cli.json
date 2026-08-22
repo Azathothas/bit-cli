@@ -343,6 +343,12 @@
           "value_name": "RATE"
         },
         {
+          "description": "Download rate cap for swarm peers, not for attached HTTP sources",
+          "name": "--max-peer-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
           "description": "Peer connections per torrent",
           "name": "--max-peers",
           "type": "string",
@@ -731,6 +737,12 @@
         {
           "description": "Upload rate cap across the whole run",
           "name": "--max-overall-upload-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Download rate cap for swarm peers, not for attached HTTP sources",
+          "name": "--max-peer-rate",
           "type": "string",
           "value_name": "RATE"
         },
@@ -2399,6 +2411,12 @@
           "value_name": "RATE"
         },
         {
+          "description": "Download rate cap for swarm peers, not for attached HTTP sources",
+          "name": "--max-peer-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
           "description": "Peer connections per torrent",
           "name": "--max-peers",
           "type": "string",
@@ -2887,6 +2905,12 @@
           "value_name": "RATE"
         },
         {
+          "description": "Download rate cap for swarm peers, not for attached HTTP sources",
+          "name": "--max-peer-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
           "description": "Peer connections per torrent",
           "name": "--max-peers",
           "type": "string",
@@ -3204,6 +3228,12 @@
         {
           "description": "Upload rate cap across the whole run",
           "name": "--max-overall-upload-rate",
+          "type": "string",
+          "value_name": "RATE"
+        },
+        {
+          "description": "Download rate cap for swarm peers, not for attached HTTP sources",
+          "name": "--max-peer-rate",
           "type": "string",
           "value_name": "RATE"
         },

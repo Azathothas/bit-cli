@@ -293,6 +293,10 @@ impl SessionSetup<'_> {
                 &self.limits.max_overall_upload_rate,
                 "max-overall-upload-rate",
             )?,
+            // Peers only. The session cap above reaches an attached HTTP
+            // source too, because the source arrives as a peer over loopback;
+            // this one skips it. See `TODO/multi-source.md`, T-132.
+            peer_download_rate: rate_flag(&self.limits.max_peer_rate, "max-peer-rate")?,
             extra_trackers: Vec::new(),
             ipv4_only: false,
             client_name: Some(format!("bit-cli {}", bit_cli_core::VERSION)),

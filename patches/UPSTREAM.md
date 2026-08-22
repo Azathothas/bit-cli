@@ -102,10 +102,10 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/peer_connection.rs
              vendor/rqbit/crates/librqbit/src/peer_info_reader/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0003-crates-librqbit-src-peer_connection.rs.patch
-             patches/rqbit/0004-crates-librqbit-src-peer_info_reader-mod.rs.patch
-             patches/rqbit/0006-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0008-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0004-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0005-crates-librqbit-src-peer_info_reader-mod.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0009-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0010-package-lock.json.patch
+             patches/rqbit/0011-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -245,7 +245,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```
 Unblocks:    T-020, TODO/peers.md, the record's only open P0
 Files:       vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0005-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0006-crates-librqbit-src-session.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T14:37Z
 ```
@@ -316,8 +316,8 @@ open since before this repository existed, and the change is one match arm.
 Unblocks:    T-040, TODO/memory.md, the record's other P0
 Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0006-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0007-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0008-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T15:30Z
 ```
@@ -389,8 +389,8 @@ open, and reported as exactly this: RSS climbing in a long-lived server.
 Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0005-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0009-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0006-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0010-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T17:26Z
 ```
@@ -480,3 +480,142 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 open, and the UDP path in the same file is the shape to point at: this makes
 the HTTP one match it. Until it is offered this section says so rather than
 claiming otherwise.
+---
+
+## librqbit: an incoming peer is recorded under our own peer id
+
+```
+Unblocks:    T-210, TODO/peers.md, and T-132 could not work without it
+Files:       vendor/rqbit/crates/librqbit/src/peer_connection.rs
+             patches/rqbit/0004-crates-librqbit-src-peer_connection.rs.patch
+Upstream:    not offered yet, and it should be
+Added:       2026-08-22T17:55Z
+```
+
+`manage_peer_incoming` builds the handshake it is about to send, writes it, and
+then hands **that** handshake to `on_handshake` and asks **it** whether the
+extension protocol is supported:
+
+```rust
+let handshake = Handshake::new(self.info_hash, self.peer_id);
+let hlen = handshake.serialize_unchecked_len(&mut *write_buf);
+// ... written to the peer ...
+let handshake_supports_extended = handshake.supports_extended();
+self.handler.on_handshake(handshake, incoming.kind)
+```
+
+Both answers are about this session rather than about the peer. Two things
+follow:
+
+- **Every incoming peer is filed under our own peer id.** `on_handshake` calls
+  `set_peer_live`, which records `handshake.peer_id`, so anything asking who a
+  peer is gets ourselves.
+- **Every incoming peer is assumed to speak BEP 10.** `Handshake::new` always
+  sets the extension bit, so `handshake_supports_extended` is unconditionally
+  true for an incoming connection whatever the peer said.
+
+`manage_peer_outgoing`, forty lines below, reads the peer's handshake off the
+wire and uses that for both. The two paths disagreeing is what says this is a
+slip rather than a design.
+
+The change uses `incoming.handshake`, which is the peer's, already read by the
+session's accept path and already validated eight lines above for a wrong info
+hash and for a self-connection. The handshake being sent is renamed `ours`, so
+neither can be reached for by accident again.
+
+**Why it has to be here.** `manage_peer_incoming` is a method on
+`PeerConnection`, the handshake never leaves it, and no option, callback or
+trait a dependent crate can implement reaches either line.
+
+**How it was measured.** By a rate limit that did not limit.
+`scripts/check-rate-scope.ps1`'s `http_peer_cap` phase caps swarm peers and
+attaches an HTTP source, which reaches the session as an **incoming** peer over
+loopback and is exempt from that cap by its peer id prefix:
+
+| | before | after |
+| --- | --- | --- |
+| HTTP under an 8 MiB/s peer cap | **8.40 MiB/s**, the cap | **151.84 MiB/s** |
+
+The exemption matched nothing before, because the id it was matching against
+was ours. `bench/rate-scope-20260822T175543220Z.json`.
+
+**Offer it upstream.** Three lines, a defect in their code, and the outgoing
+path beside it is the argument for the change.
+
+---
+
+## librqbit: a download limit that some peers do not pass through
+
+```
+Unblocks:    T-132, TODO/multi-source.md
+Files:       vendor/rqbit/crates/librqbit/src/limits.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
+             patches/rqbit/0003-crates-librqbit-src-limits.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-torrent_state-live-mod.rs.patch
+Upstream:    not offered yet
+Added:       2026-08-22T17:55Z
+```
+
+`Limits` had two limiters, a total up and a total down, and `LimitsConfig` has
+exactly two fields. Nothing was scoped to a peer, so a cap that excludes one
+peer could not be expressed. That is a problem for any client that also feeds
+the session from a source of its own: `bit-cli` bridges each HTTP web seed in
+as an ordinary peer over loopback, so every download cap reached it too and
+there was no way to cap the swarm alone.
+
+The change adds a third limiter and a way to skip it:
+
+- `Limits::peer_down`, a second download limit, off unless set. `down` still
+  bounds everything, which is what a total does.
+- `Limits::exempt`, a list of peer id prefixes `peer_down` does not apply to.
+  A prefix rather than a whole id because a client's own bridge generates a
+  fresh id per connection and only the first eight bytes identify it; a prefix
+  rather than an address because that bridge dials in from an ephemeral port
+  and reconnects on a new one.
+- `prepare_for_download_from(peer_id, len)` charges `down` for everyone and
+  `peer_down` for everyone not exempt. The old `prepare_for_download` stays.
+- `PeerHandler` carries the peer's id in a `OnceLock`, set in `on_handshake`,
+  which is the first point an outgoing peer's id is known. The chunk requester
+  cannot run before the handshake, so it is always set by the time it is read.
+
+**Set through a setter rather than through `LimitsConfig`.** `LimitsConfig` is
+`Serialize`, `Deserialize` and constructed as a struct literal in four places
+across two repositories, so a third field would break each of them for a value
+that is set at runtime anyway, next to `set_download_bps`.
+
+**There is no upload counterpart and that is deliberate.** A source bridged
+into a session is a seed: it sends `Bitfield` and `Unchoke`, answers `Request`,
+and never sends `Interested` and never requests. Nothing is uploaded to it, so
+the upload limits already reach peers alone. The doc comment on `peer_down`
+says so, because the asymmetry is the first thing a reader will ask about.
+
+**Why it has to be here.** `Limits` is `librqbit`'s, both limiter calls are
+inside a private method of a private type, and `LimitsConfig` has no field a
+caller could use to say "not this peer". `bit-cli` cannot cap its swarm without
+capping its own HTTP sources by any configuration.
+
+**How it was measured.** `scripts/check-rate-scope.ps1`, ten phases against one
+payload, one mirror and one seeder, `bench/rate-scope-20260822T175543220Z.json`:
+
+| phase | total | HTTP | peers |
+| --- | --- | --- | --- |
+| `http_peer_cap` | 151.84 MiB/s | 151.84 | 0 |
+| `peer_ceiling` | 259.11 MiB/s | 0 | 259.11 |
+| `peer_peer_cap` | 8.42 MiB/s | 0 | 8.42 |
+| `hybrid_both_caps` | 27.57 MiB/s | 18.31 | 9.26 |
+
+Each assertion is arranged so it is an invariant rather than a race: one source
+is the only supplier in the two rows that matter. `peer_ceiling` exists so
+`peer_peer_cap` means something, because a cap that holds on a slow peer has
+measured nothing.
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+```
+
+**Not offered upstream yet, and it is the one patch here that may not belong
+upstream as written.** The other four are defects in upstream's code. This is a
+feature, and a maintainer may want the exemption expressed differently, for
+example as a per-connection `LimitsConfig` rather than as a list of peer id
+prefixes on the session. It is worth offering as a question rather than as a
+patch.

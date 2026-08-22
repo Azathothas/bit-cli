@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**11 entries: 3 done, 3 partial, 2 blocked, 3 open.** Every one of them was
+**11 entries: 4 done, 2 partial, 2 blocked, 3 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
 record.**
 
@@ -27,7 +27,7 @@ record.**
 | [T-020](../TODO/peers.md) | **P0** | **done** | a `tokio::select!` arm in upstream's accept loop |
 | [T-040](../TODO/memory.md) | **P0** | partial | **bounded.** Only the six hour soak is left |
 | [T-022](../TODO/peers.md) | P1 | **done** | an HTTP tracker announce per address family |
-| [T-132](../TODO/multi-source.md) | P1 | partial | peer identity on `TorrentStorage` |
+| [T-132](../TODO/multi-source.md) | P1 | **done** | a download limit that skips one peer |
 | [T-016](../TODO/disk-io.md) | P2 | blocked | a resume cache without session persistence |
 | [T-100](../TODO/bep-coverage.md) | P2 | partial | the send half of an extension message |
 | [T-163](../TODO/peers.md) | P2 | open | MSE, a wire-level handshake |
@@ -35,9 +35,9 @@ record.**
 | [T-195](../TODO/peers.md) | P2 | open | the read side of T-194, at 262,104 pieces |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 
-Eight are not done, and one of those is not waiting on a seam at all:
+Seven are not done, and one of those is not waiting on a seam at all:
 [T-040](../TODO/memory.md) is bounded and waiting on a six hour measurement.
-The other seven are sections 3, 4 and 5, in that order.
+The other six are sections 3, 4 and 5, in that order.
 
 **Before reconciling anything**, read `README.md` under "Upstream is not
 automatically right". A new release is a proposal, not an authority, and a hunk
@@ -239,9 +239,23 @@ old code picked was the resolver's order rather than a choice.
 `scripts/check-tracker-family.ps1` is the acceptance and its `literal_host`
 case is the control that says it can fail.
 
-Then [T-132](../TODO/multi-source.md), [T-100](../TODO/bep-coverage.md),
-[T-167](../TODO/bep-coverage.md) and [T-102](../TODO/bep-coverage.md). Each
-entry names its seam with a line number and none of them needs re-deriving.
+**[T-132](../TODO/multi-source.md) is done.** The row above used to say it was
+waiting on "peer identity on `TorrentStorage`", which was never what the entry
+said: the entry named `prepare_for_download` taking the peer it is throttling.
+`Limits` carries a second download limiter and a list of peer id prefixes it
+skips, `bit-cli` grows `--max-peer-rate`, and its own bridge is registered as
+exempt. An 8 MiB/s peer cap holds the swarm to **8.42 MiB/s** and lets an
+attached HTTP source run at **151.84 MiB/s**.
+
+That took a defect out with it. The exemption matched nothing at first because
+`librqbit` filed every **incoming** peer under this session's own peer id,
+handing `on_handshake` the handshake it had just built to send instead of the
+one it read. That is [T-210](../TODO/peers.md), P1, done, and the bridge dials
+in, so it was exactly the case that took the wrong path.
+
+Then [T-100](../TODO/bep-coverage.md), [T-167](../TODO/bep-coverage.md) and
+[T-102](../TODO/bep-coverage.md). Each entry names its seam with a line number
+and none of them needs re-deriving.
 
 ## Returning to ordinary work
 

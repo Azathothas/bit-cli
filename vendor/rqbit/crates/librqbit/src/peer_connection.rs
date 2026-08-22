@@ -174,8 +174,8 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
         );
 
         let mut write_buf = Box::new([0u8; MAX_MSG_LEN]);
-        let handshake = Handshake::new(self.info_hash, self.peer_id);
-        let hlen = handshake.serialize_unchecked_len(&mut *write_buf);
+        let ours = Handshake::new(self.info_hash, self.peer_id);
+        let hlen = ours.serialize_unchecked_len(&mut *write_buf);
         with_timeout(
             "writing handshake",
             rwtimeout,
@@ -186,10 +186,16 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
         )
         .await?;
 
-        let handshake_supports_extended = handshake.supports_extended();
+        // The peer's handshake, not ours. Both of these read `handshake` until
+        // 2026-08-22, which was the one just built to send, so every incoming
+        // peer was recorded under this session's own peer id and was assumed
+        // to speak BEP 10 because `Handshake::new` always sets that bit. The
+        // outgoing path a few lines below reads the peer's, which is what says
+        // this was a slip rather than a design. See TODO/peers.md T-210.
+        let handshake_supports_extended = incoming.handshake.supports_extended();
 
         self.handler
-            .on_handshake(handshake, incoming.kind)
+            .on_handshake(incoming.handshake, incoming.kind)
             .map_err(Error::Anyhow)?;
 
         self.manage_peer(ManagePeerArgs {

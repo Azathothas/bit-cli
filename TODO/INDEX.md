@@ -114,6 +114,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-166](peers.md) | P1 | peers | **done** | BEP 10 extension ids are not proven to map in both directions |
 | [T-194](peers.md) | P0 | peers | **done** | A torrent past 131,960 pieces cannot be served or fetched at all |
 | [T-195](peers.md) | P2 | peers | open | The read side caps the same message at 262,104 pieces |
+| [T-210](peers.md) | P1 | peers | done | An incoming peer is recorded under this session's own peer id |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
 | [T-032](performance.md) | P1 | performance | **done** | The piece selector strategy is not implemented |
@@ -213,7 +214,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
 | [T-130](multi-source.md) | P1 | webseed | **done** | A source cannot be told which statuses are worth retrying |
 | [T-131](multi-source.md) | P1 | bench | **done** | The loopback file server cannot simulate a signed URL |
-| [T-132](multi-source.md) | P1 | performance | partial | The swarm cannot be rate limited separately from HTTP sources |
+| [T-132](multi-source.md) | P1 | performance | done | The swarm cannot be rate limited separately from HTTP sources |
 | [T-133](multi-source.md) | P1 | webseed | **done** | Two torrents holding the same file cannot share its bytes |
 | [T-134](multi-source.md) | P2 | bep | open | v1 and v2 info hashes are not reconciled |
 | [T-135](multi-source.md) | P2 | performance | open | Source selection cannot be steered by method or by priority at run time |
@@ -235,8 +236,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-158 items: 148 to work through, and 10 deferred to Phase C.
-48 open, 5 partial, 2 blocked, 93 done.
+159 items: 149 to work through, and 10 deferred to Phase C.
+48 open, 4 partial, 2 blocked, 95 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -490,11 +491,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 1 | 0 | 11 | 12 |
-| P1 | 1 | 1 | 0 | 51 | 53 |
+| P1 | 1 | 0 | 0 | 53 | 54 |
 | P2 | 25 | 3 | 2 | 29 | 59 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **48** | **5** | **2** | **93** | **158** |
+| **All** | **48** | **4** | **2** | **95** | **159** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

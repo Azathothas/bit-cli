@@ -1517,3 +1517,56 @@ clients raise the piece length as the payload grows, so this is reachable but
 uncommon. `bit-cli create` refuses to build one above 100,000 pieces without
 `--allow piece-count`, which is not a fix and does not help a torrent somebody
 else made.
+
+---
+
+### T-210 An incoming peer is recorded under this session's own peer id
+
+Source:      found closing [T-132](multi-source.md), 2026-08-22
+Category:    peers
+Priority:    P1
+Effort:      S
+Status:      **done**, 2026-08-22T17:55Z
+
+Problem:     `manage_peer_incoming` builds the handshake it is about to send,
+             writes it, and then hands **that** handshake to
+             `on_handshake` and asks **it** whether extended messages are
+             supported. Both answers are about this session rather than about
+             the peer. The outgoing path a few lines below reads the peer's
+             handshake off the wire and uses that, which is what says this is
+             a slip rather than a design.
+Relevance:   Two things follow, and the second is a wire behaviour. Every
+             incoming peer is recorded under our own peer id, so anything
+             asking "who is this peer" gets ourselves. And
+             `Handshake::new` always sets the BEP 10 extension bit, so every
+             incoming peer is assumed to speak the extension protocol whether
+             or not it said so.
+Approach:    Use `incoming.handshake`, which is the peer's, already read and
+             already validated for info hash and self-connection eight lines
+             above.
+Acceptance:  A peer-scoped rate limit keyed on the peer id reaches an outgoing
+             peer and not an exempt incoming one, which is
+             `scripts/check-rate-scope.ps1`'s `http_peer_cap` row.
+
+**Found by a limiter that did not limit.** [T-132](multi-source.md) needed the
+session's download limit to skip one peer, identified by its peer id prefix.
+The exemption matched nothing, and the reason was that the peer id every
+incoming peer was filed under was this session's own. `bit-cli`'s web seed
+bridge dials **in**, so it was exactly the case that took the wrong path.
+
+The fix is three lines in
+`vendor/rqbit/crates/librqbit/src/peer_connection.rs`: the handshake built to
+send is named `ours`, and the peer's handshake is what reaches
+`supports_extended` and `on_handshake`.
+
+**How it is held.** `scripts/check-rate-scope.ps1`'s `http_peer_cap` phase caps
+peers and attaches an HTTP source. Before, the source was capped with them at
+**8.40 MiB/s**, because its identity was ours; after, it runs at
+**151.84 MiB/s** against the same cap. `bench/rate-scope-20260822T175543220Z.json`.
+
+**The second half is not directly measured here and is not left silent.**
+Nothing in this repository speaks the extension protocol badly enough to notice
+being sent an extended message it did not ask for, and building a peer that
+refuses BEP 10 to prove it is [T-166](#t-166-bep-10-extension-ids-are-not-proven-to-map-in-both-directions)'s
+shape of work rather than this one's. What is certain from reading is that the
+bit came from a constructor rather than from the wire.

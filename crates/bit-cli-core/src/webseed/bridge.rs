@@ -45,7 +45,7 @@ use crate::webseed::fetch::{FetchError, Fetcher};
 ///
 /// It has to differ from the session's own id, or the session drops the
 /// connection as a self-connect.
-const PEER_ID_PREFIX: &[u8; 8] = b"-BCws01-";
+pub(crate) const PEER_ID_PREFIX: &[u8; 8] = b"-BCws01-";
 
 /// Serialized keep-alive: a bare zero length prefix.
 const KEEP_ALIVE: [u8; 4] = [0, 0, 0, 0];

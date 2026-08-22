@@ -131,6 +131,7 @@ Effects: `idempotent`.
 | `--max-upload-rate <RATE>`, `-u` | string |  |  | Upload rate cap, per torrent |
 | `--max-overall-download-rate <RATE>` | string |  |  | Download rate cap across the whole run |
 | `--max-overall-upload-rate <RATE>` | string |  |  | Upload rate cap across the whole run |
+| `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |
@@ -214,6 +215,7 @@ Effects: `read_only`.
 | `--max-upload-rate <RATE>`, `-u` | string |  |  | Upload rate cap, per torrent |
 | `--max-overall-download-rate <RATE>` | string |  |  | Download rate cap across the whole run |
 | `--max-overall-upload-rate <RATE>` | string |  |  | Upload rate cap across the whole run |
+| `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |
@@ -554,6 +556,7 @@ Effects: `read_only`.
 | `--max-upload-rate <RATE>`, `-u` | string |  |  | Upload rate cap, per torrent |
 | `--max-overall-download-rate <RATE>` | string |  |  | Download rate cap across the whole run |
 | `--max-overall-upload-rate <RATE>` | string |  |  | Upload rate cap across the whole run |
+| `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |
@@ -643,6 +646,7 @@ Effects: `non_idempotent`.
 | `--max-upload-rate <RATE>`, `-u` | string |  |  | Upload rate cap, per torrent |
 | `--max-overall-download-rate <RATE>` | string |  |  | Download rate cap across the whole run |
 | `--max-overall-upload-rate <RATE>` | string |  |  | Upload rate cap across the whole run |
+| `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |
@@ -700,6 +704,7 @@ Effects: `non_idempotent`.
 | `--max-upload-rate <RATE>`, `-u` | string |  |  | Upload rate cap, per torrent |
 | `--max-overall-download-rate <RATE>` | string |  |  | Download rate cap across the whole run |
 | `--max-overall-upload-rate <RATE>` | string |  |  | Upload rate cap across the whole run |
+| `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |

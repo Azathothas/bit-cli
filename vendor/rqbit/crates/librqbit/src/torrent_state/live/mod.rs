@@ -485,6 +485,7 @@ impl TorrentStateLive {
             first_message_received: AtomicBool::new(false),
             cancel_token: self.cancellation_token.child_token(),
             client_name_and_version: self.shared.client_name_and_version().to_owned(),
+            peer_id: Default::default(),
         };
         let _token_guard = handler.cancel_token.clone().drop_guard();
         let options = PeerConnectionOptions {
@@ -559,6 +560,7 @@ impl TorrentStateLive {
             first_message_received: AtomicBool::new(false),
             cancel_token: state.cancellation_token.child_token(),
             client_name_and_version: state.shared.client_name_and_version().to_owned(),
+            peer_id: Default::default(),
         };
         let _token_guard = handler.cancel_token.clone().drop_guard();
 
@@ -1041,6 +1043,16 @@ struct PeerHandler {
     incoming: bool,
     tx: PeerTx,
 
+    // Set once, in on_handshake, which is the first point it is known for an
+    // outgoing peer. Read by the chunk requester, which cannot run before the
+    // handshake, so it is always set by the time it is asked for.
+    //
+    // It is here so the session's peer download limit can skip a peer whose
+    // id says it is not a swarm peer at all: a client bridging a source of its
+    // own into the session dials in as an ordinary peer, and capping the swarm
+    // has to be able to leave that alone. See limits.rs.
+    peer_id: std::sync::OnceLock<Id20>,
+
     first_message_received: AtomicBool,
 
     cancel_token: CancellationToken,
@@ -1148,6 +1160,7 @@ impl PeerConnectionHandler for &'_ PeerHandler {
     }
 
     fn on_handshake(&self, handshake: Handshake, ckind: ConnectionKind) -> anyhow::Result<()> {
+        let _ = self.peer_id.set(handshake.peer_id);
         self.state.set_peer_live(self.addr, handshake, ckind);
         Ok(())
     }
@@ -1712,15 +1725,20 @@ impl PeerHandler {
 
                 aframe!(self.wait_for_request_slot()).await;
 
+                let peer_id = self.peer_id.get();
+
                 self.state
                     .ratelimits
-                    .prepare_for_download(NonZeroU32::new(request.length).unwrap())
+                    .prepare_for_download_from(peer_id, NonZeroU32::new(request.length).unwrap())
                     .await?;
 
                 if let Some(session) = self.state.torrent().session.upgrade() {
                     session
                         .ratelimits
-                        .prepare_for_download(NonZeroU32::new(request.length).unwrap())
+                        .prepare_for_download_from(
+                            peer_id,
+                            NonZeroU32::new(request.length).unwrap(),
+                        )
                         .await?;
                 }
 

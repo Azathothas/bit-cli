@@ -11,20 +11,39 @@
 # top-level fields of `bit-cli download --json`, so a run with both kinds of
 # source says which cap bit which one without inference.
 #
-# Six phases against one payload, one mirror, and one seeder:
+# Ten phases against one payload, one mirror, and one seeder:
 #
 #   http_ceiling          HTTP only, uncapped. What the mirror can do.
-#   http_session_cap      HTTP only, --max-overall-download-rate. This is
+#   http_session_cap      HTTP only, --max-overall-download-rate. This was
 #                         T-132's premise: a session cap bounds HTTP too.
 #   http_webseed_cap      HTTP only, --web-seed-speed-limit. The per-source
 #                         bucket, which is T-035 and already closed.
+#   http_peer_cap         HTTP only, --max-peer-rate. **Must exceed it.** The
+#                         bridge is not a swarm peer, so the swarm cap does
+#                         not reach it. This is the decisive row.
+#   peer_ceiling          Peers only, uncapped. What the seeder can do, and
+#                         what says the row below measured something.
+#   peer_peer_cap         Peers only, --max-peer-rate. Must hold.
 #   hybrid_ceiling        Both sources, uncapped. Recorded, not judged: the
 #                         split between them is a scheduling outcome.
 #   hybrid_webseed_cap    Both sources, --web-seed-speed-limit only. HTTP is
-#                         bounded and the run is not, which is the whole of
-#                         T-132 in one row: nothing caps peers.
+#                         bounded and the run is not, because nothing was
+#                         asked to bound the peer.
 #   hybrid_session_cap    Both sources, --max-overall-download-rate. The total
 #                         is bounded and neither side is bounded on its own.
+#   hybrid_both_caps      Both sources, --max-peer-rate and
+#                         --web-seed-speed-limit at different rates. Each side
+#                         stays under its own, in one run and one report.
+#
+# **What is deliberately not judged, and why the entry's acceptance is not
+# taken literally.** T-132 asks for "peer bytes within 10% of 10 MiB/s and HTTP
+# bytes within 10% of 50 MiB/s". The upper half of that is a cap and is judged.
+# The lower half asks each source to be *at* its cap, which is a scheduling
+# outcome: the picker decides how much each source is asked for, and TODO/
+# RULES.md section 5 says a fixture must not assert one. It is arranged instead,
+# which is what that rule says to do: http_peer_cap and peer_peer_cap each make
+# one source the only supplier, so "the cap binds peers" and "the cap does not
+# bind HTTP" are invariants rather than races.
 #
 # What is judged and what is only recorded matters here. A cap is an invariant
 # and is judged. A split between two sources racing each other is not: TODO/
@@ -44,6 +63,10 @@
 [CmdletBinding()]
 param(
     [string]$Rate = "8MiB/s",
+    # The web seed cap in the two-cap phase. Different from -Rate on purpose:
+    # one report has to show each side held to its own number, and two equal
+    # numbers cannot show which cap did which.
+    [string]$WebSeedRate = "24MiB/s",
     [int]$PayloadMiB = 128,
     # Fraction a capped run may exceed its cap by. A limiter that lets a burst
     # through and then pauses is still a limiter.
@@ -114,7 +137,9 @@ foreach ($required in @($bitCli, $fileserver)) {
 }
 
 $rateBytes = ConvertFrom-Size $Rate
+$webSeedRateBytes = ConvertFrom-Size $WebSeedRate
 if ($rateBytes -lt 1) { Exit-With 2 "-Rate has to be positive." }
+if ($webSeedRateBytes -lt 1) { Exit-With 2 "-WebSeedRate has to be positive." }
 
 if (-not [System.IO.Path]::IsPathRooted($Root)) { $Root = Join-Path $repo $Root }
 if (Test-Path $Root) { Remove-Item -Recurse -Force $Root -ErrorAction SilentlyContinue }
@@ -211,7 +236,7 @@ Write-Step "  seeder at $peer"
 
 $commands = [System.Collections.ArrayList]::new()
 
-function Invoke-Phase([string]$label, [bool]$withPeer, [string[]]$extra) {
+function Invoke-Phase([string]$label, [bool]$withPeer, [bool]$withHttp, [string[]]$extra) {
     $outDir = Join-Path $Root "out-$label"
     if (Test-Path $outDir) { Remove-Item -Recurse -Force $outDir -ErrorAction SilentlyContinue }
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -219,9 +244,10 @@ function Invoke-Phase([string]$label, [bool]$withPeer, [string[]]$extra) {
 
     $arguments = @(
         "download", $torrent, "--dir", $outDir,
-        "--no-torrent-web-seed", "--web-seed", $webSeed,
+        "--no-torrent-web-seed",
         "--no-dht", "--no-lsd", "--no-tracker", "--port", "0", "--json"
     )
+    if ($withHttp) { $arguments += @("--web-seed", $webSeed) }
     if ($withPeer) { $arguments += @("--peer", $peer) }
     $arguments += $extra
     [void]$commands.Add("bit-cli $($arguments -join ' ')")
@@ -258,19 +284,40 @@ function Invoke-Phase([string]$label, [bool]$withPeer, [string[]]$extra) {
 }
 
 $ceiling = [Math]::Max(1, [int64]($rateBytes * (1 + $Tolerance)))
+$webCeiling = [Math]::Max(1, [int64]($webSeedRateBytes * (1 + $Tolerance)))
+
+# What a token bucket is allowed to have passed, as a rate, over a run of a
+# given length.
+#
+# A bucket is a rate **and a burst**, not a rate alone. `governor`'s
+# `Quota::per_second(n)` refills n per second and holds n, so a run of t
+# seconds may legitimately pass `n * t + n` bytes. Amortised that is
+# `n + n / t`, which is 16% over on a four second run and 2% over on a sixty
+# second one. Judging the plain rate would fail a limiter that is working
+# because the run it bounded was short, and the entry's acceptance says "over
+# sixty seconds" for this reason. This says the same thing without needing the
+# run to last that long.
+function Get-Allowance([double]$rate, [int64]$elapsedMs) {
+    $seconds = [Math]::Max(0.001, $elapsedMs / 1000.0)
+    [int64](($rate * (1 + $Tolerance)) + ($rate / $seconds))
+}
 $phases = @()
 $failures = [System.Collections.ArrayList]::new()
 
 foreach ($spec in @(
-        @{ label = "http_ceiling"; peer = $false; extra = @() },
-        @{ label = "http_session_cap"; peer = $false; extra = @("--max-overall-download-rate", $Rate) },
-        @{ label = "http_webseed_cap"; peer = $false; extra = @("--web-seed-speed-limit", $Rate) },
-        @{ label = "hybrid_ceiling"; peer = $true; extra = @() },
-        @{ label = "hybrid_webseed_cap"; peer = $true; extra = @("--web-seed-speed-limit", $Rate) },
-        @{ label = "hybrid_session_cap"; peer = $true; extra = @("--max-overall-download-rate", $Rate) }
+        @{ label = "http_ceiling"; peer = $false; http = $true; extra = @() },
+        @{ label = "http_session_cap"; peer = $false; http = $true; extra = @("--max-overall-download-rate", $Rate) },
+        @{ label = "http_webseed_cap"; peer = $false; http = $true; extra = @("--web-seed-speed-limit", $Rate) },
+        @{ label = "http_peer_cap"; peer = $false; http = $true; extra = @("--max-peer-rate", $Rate) },
+        @{ label = "peer_ceiling"; peer = $true; http = $false; extra = @() },
+        @{ label = "peer_peer_cap"; peer = $true; http = $false; extra = @("--max-peer-rate", $Rate) },
+        @{ label = "hybrid_ceiling"; peer = $true; http = $true; extra = @() },
+        @{ label = "hybrid_webseed_cap"; peer = $true; http = $true; extra = @("--web-seed-speed-limit", $Rate) },
+        @{ label = "hybrid_session_cap"; peer = $true; http = $true; extra = @("--max-overall-download-rate", $Rate) },
+        @{ label = "hybrid_both_caps"; peer = $true; http = $true; extra = @("--max-peer-rate", $Rate, "--web-seed-speed-limit", $WebSeedRate) }
     )) {
     Write-Step "phase $($spec.label)"
-    $run = Invoke-Phase $spec.label $spec.peer $spec.extra
+    $run = Invoke-Phase $spec.label $spec.peer $spec.http $spec.extra
     Write-Step ("  {0} total, {1} http, {2} peers" -f `
             $run.rate_human, (Format-Rate $run.web_seed_rate), (Format-Rate $run.peer_rate))
     $phases += $run
@@ -288,26 +335,55 @@ $by = @{}
 foreach ($phase in $phases) { $by[$phase.phase] = $phase }
 
 # Judged: a cap is an invariant.
-if ($by["http_session_cap"].rate -gt $ceiling) {
+if ($by["http_session_cap"].rate -gt (Get-Allowance $rateBytes $by["http_session_cap"].elapsed_ms)) {
     [void]$failures.Add("the session cap let HTTP run at $(Format-Rate $by['http_session_cap'].rate) against $Rate")
 }
-if ($by["http_webseed_cap"].rate -gt $ceiling) {
+if ($by["http_webseed_cap"].rate -gt (Get-Allowance $rateBytes $by["http_webseed_cap"].elapsed_ms)) {
     [void]$failures.Add("the web seed cap let HTTP run at $(Format-Rate $by['http_webseed_cap'].rate) against $Rate")
 }
-if ($by["hybrid_session_cap"].rate -gt $ceiling) {
+if ($by["hybrid_session_cap"].rate -gt (Get-Allowance $rateBytes $by["hybrid_session_cap"].elapsed_ms)) {
     [void]$failures.Add("the session cap let the run reach $(Format-Rate $by['hybrid_session_cap'].rate) against $Rate")
 }
-if ($by["hybrid_webseed_cap"].web_seed_rate -gt $ceiling) {
+if ($by["hybrid_webseed_cap"].web_seed_rate -gt (Get-Allowance $rateBytes $by["hybrid_webseed_cap"].elapsed_ms)) {
     [void]$failures.Add("the web seed cap let HTTP reach $(Format-Rate $by['hybrid_webseed_cap'].web_seed_rate) against $Rate in the hybrid run")
 }
 # Judged the other way: with only the web seed cap set, the run has to exceed
-# it, because nothing bounds the peer. If this ever fails, a peer cap has
-# appeared and T-132 is closeable.
+# it, because nothing was asked to bound the peer in that phase. If this ever
+# fails, either the peer got nothing or a cap is reaching further than it was
+# told to.
 if ($by["hybrid_webseed_cap"].rate -le $ceiling) {
     [void]$failures.Add("the hybrid run stayed under the web seed cap with nothing capping the peer, so this measured nothing")
 }
-# Not judged: the split in the hybrid phases. Two sources racing is a
-# scheduling outcome.
+
+# --------------------------------------------------------------------------
+# The peer cap, arranged so each assertion is an invariant
+# --------------------------------------------------------------------------
+
+# It binds peers.
+if ($by["peer_peer_cap"].rate -gt (Get-Allowance $rateBytes $by["peer_peer_cap"].elapsed_ms)) {
+    [void]$failures.Add("the peer cap let the swarm run at $(Format-Rate $by['peer_peer_cap'].rate) against $Rate")
+}
+# And the seeder could have exceeded it, so the line above measured a cap
+# rather than a slow peer.
+if ($by["peer_ceiling"].rate -le $ceiling) {
+    [void]$failures.Add("the uncapped peer run only reached $(Format-Rate $by['peer_ceiling'].rate), at or under $Rate, so capping it measured nothing")
+}
+# It does not bind an attached HTTP source. This is the row the whole entry
+# turns on: the bridge dials in as an ordinary peer, and a swarm cap that
+# reached it would be the defect T-132 describes.
+if ($by["http_peer_cap"].rate -le $ceiling) {
+    [void]$failures.Add("the peer cap held HTTP to $(Format-Rate $by['http_peer_cap'].rate), at or under $Rate, so it is still capping the bridge")
+}
+# Both caps in one run, each side under its own.
+if ($by["hybrid_both_caps"].peer_rate -gt (Get-Allowance $rateBytes $by["hybrid_both_caps"].elapsed_ms)) {
+    [void]$failures.Add("with both caps set the peers ran at $(Format-Rate $by['hybrid_both_caps'].peer_rate) against $Rate")
+}
+if ($by["hybrid_both_caps"].web_seed_rate -gt (Get-Allowance $webSeedRateBytes $by["hybrid_both_caps"].elapsed_ms)) {
+    [void]$failures.Add("with both caps set HTTP ran at $(Format-Rate $by['hybrid_both_caps'].web_seed_rate) against $WebSeedRate")
+}
+
+# Not judged: the split in the hybrid phases, and whether either source
+# reached its own cap. Two sources racing is a scheduling outcome.
 
 $verdict = if ($failures.Count -eq 0) { "pass" } else { "fail" }
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")
@@ -321,11 +397,13 @@ $reportPath = Join-Path $ReportDir "rate-scope-$stamp.json"
         os      = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
     }
     parameters     = [ordered]@{
-        rate        = $Rate
-        rate_bytes  = $rateBytes
-        payload_mib = $PayloadMiB
-        tolerance   = $Tolerance
-        profile     = $Profile
+        rate                 = $Rate
+        rate_bytes           = $rateBytes
+        web_seed_rate        = $WebSeedRate
+        web_seed_rate_bytes  = $webSeedRateBytes
+        payload_mib          = $PayloadMiB
+        tolerance            = $Tolerance
+        profile              = $Profile
     }
     phases         = @($phases)
     commands       = @($commands)
@@ -334,8 +412,12 @@ $reportPath = Join-Path $ReportDir "rate-scope-$stamp.json"
     notes          = @(
         "from_peers and from_web_seeds are top-level fields of the download report, so the split is read rather than inferred.",
         "The caps are judged and the splits are recorded. Two sources racing each other is a scheduling outcome, and a fixture that asserts one is asserting something it does not control.",
-        "hybrid_webseed_cap is judged in both directions: HTTP must stay under the cap, and the run as a whole must not, because nothing bounds the peer. The second is T-132 in one row.",
-        "Rates come from the wall clock and the bytes the report says landed, never from the report's own mean, so a limiter is not measured by the thing it limits."
+        "hybrid_webseed_cap is judged in both directions: HTTP must stay under the cap, and the run as a whole must not, because nothing was asked to bound the peer there.",
+        "http_peer_cap is the row T-132 turns on. The web seed bridge dials into the session as an ordinary peer, so a swarm cap that reached it would be the defect. It must exceed the cap.",
+        "peer_ceiling exists so peer_peer_cap means something: a cap that holds because the peer was slow has measured nothing.",
+        "The entry's acceptance asks for each source to be within 10% of its cap. The upper half is a cap and is judged; the lower half is a scheduling outcome and is arranged rather than asserted, per TODO/RULES.md section 5.",
+        "Rates come from the wall clock and the bytes the report says landed, never from the report's own mean, so a limiter is not measured by the thing it limits.",
+        "A cap is judged as rate plus burst over the run's own length, because a token bucket is a rate and a burst. governor holds one second of quota, which is 16% over on a four second run and 2% over on a sixty second one."
     )
 } | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8NoBOM
 
