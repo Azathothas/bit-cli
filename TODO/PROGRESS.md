@@ -39,15 +39,17 @@ item unblocks, and says when to stop: when no entry in its table is still
 waiting on a seam, the work order goes back to being derived from
 [INDEX.md](INDEX.md)'s four questions and the vendored trees become maintenance.
 
-The trees are **byte for byte upstream** today. Nothing has been patched yet, on
-purpose, so the first real patch lands against a tree already proved to compile,
-test and ship.
+The trees carry **one patch**, recorded in
+[`patches/UPSTREAM.md`](../patches/UPSTREAM.md), and it unblocks nothing: it
+silences a warning in upstream's own code that CI turns into an error. It is
+there because it was the first exercise of the whole workflow, and everything
+else the fork exists to do is still ahead.
 
 ## State
 
-- **Last session:** 2026-08-22T10:30:26Z to 12:15Z, unattended at the start and
-  redirected twice by the operator mid-session. Four bit-cli entries, then the
-  vendoring.
+- **Last session:** 2026-08-22T10:30:26Z to 12:52Z, unattended at the start and
+  redirected four times by the operator mid-session. Three of the four
+  work-order entries, then the vendoring, then the tooling around it.
 - **Tests:** 1,116 passing, 0 failing. The baseline at the start was 1,113.
 - **Gates:** clean. One command:
 
@@ -55,10 +57,11 @@ test and ship.
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** green, at run **32572672382** against commit `4a1a9dc`, which is the
-  tip. Read the CI note under "What went wrong and was fixed" before trusting an
-  older run: the vendoring commit `1b0117e` went **red** on four Windows jobs
-  and the fix is in `.github/workflows/ci.yml`.
+- **CI:** green, all sixteen jobs, at run **32573162888** against commit
+  `e1b96ef`. The one commit after it, `0efc17f`, carries `[skip ci]` because it
+  changes no source. Two runs before it went **red** and both are worth reading
+  about under "What went wrong and was fixed": `1b0117e` on four Windows jobs
+  and `bb878ce` on the third party notices.
 - **Entries:** 152 items. 47 open, 6 partial, 2 blocked, 87 done, 10 deferred
   to Phase C. 87 of 142 workable done, 55 left.
 - **Tree:** 84 Rust files, 49,845 lines of code, 11,608 of comment, measured
@@ -115,6 +118,36 @@ pwsh -NoProfile -File scripts/gates.ps1
   instructions, and a file with one of those names anywhere under a repository
   is read as instructions by the tools working in it.
 
+### The tooling around the fork
+
+Six scripts and five documents, and every one was proved by being run rather
+than by being read.
+
+- **`vendor-status`** answers in a few seconds whether the fork is healthy:
+  what each upstream is pinned to, whether a newer release exists, how far
+  behind the base is, whether the patch series matches the trees, whether every
+  patch has a section in the record, and whether the version, the changelog and
+  the pins agree.
+- **`upstream-scan`** fetches **everything** each upstream has, 614 items for
+  rqbit against the 262 issues and 346 pull requests the corpus recorded, and
+  ranks them. The vocabulary is derived from `INDEX.md`, from the titles of
+  entries that are still open, partial or blocked, so it cannot go stale.
+  73 need attention and 167 are worth a look.
+- **`vendor-sync`** three-way merges a new release onto our tree using the
+  recorded base as the common ancestor, and refuses to advance that base while
+  anything conflicts.
+- **`vendor-diff`** regenerates the patch series from the tree.
+- **`release`** moves the version and writes the changelog section that names
+  the upstream commit each tree was built from.
+- **`check-prompts`** checks that every path and script a kickoff prompt names
+  still resolves. The prompts live on the `references` branch, so a commit that
+  renames a script never touches them.
+
+Three kickoff prompts are on that branch at `reference/PROMPT-SAMPLEs/`: one for
+ordinary work, one for the vendored trees, one for a one-off with blanks to
+fill. `RULES.md` section 3 said the kickoff was never written to a file, which
+stopped being true, and now says what they are instead.
+
 ### What the tooling found by being run
 
 - **`upstream-scan` earned itself on the first run.** It found
@@ -134,12 +167,22 @@ pwsh -NoProfile -File scripts/gates.ps1
 
 ### What went wrong and was fixed
 
-- **CI went red on the vendoring commit**, `1b0117e`, on four Windows jobs.
+- **CI went red twice.** The second was the third party notices on `bb878ce`:
+  they were regenerated before the version moved rather than after, so they
+  still said 0.1.0. `release.ps1` prints that step beside the lockfile now,
+  because a version bump has three things following it and CI fails on each
+  separately.
+- **The first was the vendoring commit**, `1b0117e`, on four Windows jobs.
   Cargo passes `--cap-lints allow` to a registry dependency and **not** to a
   path dependency, so `[patch.crates-io]` made upstream's warnings ours: an
   unused parameter in `vendor/librqbit-dualstack-sockets/src/bind_device.rs:27`
-  became an error under the workflow-level `RUSTFLAGS: -D warnings`. That flag
-  now lives only in the clippy job, scoped to `--workspace`.
+  became an error under the workflow-level `RUSTFLAGS: -D warnings`.
+  Dropping the flag was tried and **reverted on the operator's instruction**,
+  and the reason is the right one: development happens on Windows, so CI is the
+  only place a warning on another platform is ever seen, and a build that does
+  not fail on one cannot catch sloppy work. The warning is patched instead, and
+  it became the first entry in `patches/UPSTREAM.md` and the first exercise of
+  the whole patch workflow.
 - **The version bump broke one test**, which asserted the extended handshake's
   client string as the literal `bit-cli 0.1.0`. A version change reported as a
   protocol failure. It builds the string from the crate version now.
