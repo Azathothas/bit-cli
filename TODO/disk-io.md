@@ -1131,13 +1131,21 @@ piece 1: 1,986,560 ->                            122
 piece 2:   926,880 ->  56 whole blocks + 9,376  =  57
                                           blocks  301
         both boundaries fall inside a block        +2
-                                     write_ops    303
+                                   write_calls    303
 ```
 
-`assert_eq!(counts.write_ops, blocks + straddling_blocks)`. A payload written
+`assert_eq!(counts.write_calls, blocks + straddling_blocks)`. A payload written
 without the split would report 301, and a whole piece landing in one file would
 report fewer still. `write_bytes` is asserted equal to the payload length, so
 nothing is written twice.
+
+It was `write_ops` until 2026-08-22, when the two stopped being one number.
+[T-018](#t-018-the-write-path-issues-one-operation-per-16-kib-block) combines a
+run of sequential writes into one device operation, so `write_ops` counts
+operations and `write_calls` counts what the session asked for. This fan-out is
+a property of what the session asked for, so it moved to the counter that still
+holds it; combining can never merge across files, because a run is keyed by
+file.
 
 **`--select-file` and a boundary piece is a real gap and it is not this entry.**
 `FluxDown/native/engine/src/bt_partfile.rs` documents the case: the bytes of an

@@ -484,7 +484,18 @@ pub struct Disk {
     pub read_ops: u64,
     pub read_bytes: Size,
     pub read_time: Millis,
+    /// Positioned writes that reached the device.
     pub write_ops: u64,
+    /// Writes the session asked for, before a run of them was combined into
+    /// one. `write_ops` divided by this is the coalescing factor, and against
+    /// `write_time` it is what says whether small blocks are still costing an
+    /// operation each. See `TODO/disk-io.md`, T-018.
+    ///
+    /// Always written, even at zero, so the document shape does not depend on
+    /// whether a run wrote anything. `#[serde(default)]` is what lets a report
+    /// taken before this existed still read back.
+    #[serde(default)]
+    pub write_calls: u64,
     pub write_bytes: Size,
     pub write_time: Millis,
 }

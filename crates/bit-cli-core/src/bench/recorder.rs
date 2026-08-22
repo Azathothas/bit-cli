@@ -446,12 +446,14 @@ impl Recorder {
         state.disk.read_bytes = Size(state.disk.read_bytes.0 + disk.read_bytes.0);
         state.disk.read_time = Millis(state.disk.read_time.0 + disk.read_time.0);
         state.disk.write_ops += disk.write_ops;
+        state.disk.write_calls += disk.write_calls;
         state.disk.write_bytes = Size(state.disk.write_bytes.0 + disk.write_bytes.0);
         state.disk.write_time = Millis(state.disk.write_time.0 + disk.write_time.0);
         state.disk_interval.read_ops += disk.read_ops;
         state.disk_interval.read_bytes = Size(state.disk_interval.read_bytes.0 + disk.read_bytes.0);
         state.disk_interval.read_time = Millis(state.disk_interval.read_time.0 + disk.read_time.0);
         state.disk_interval.write_ops += disk.write_ops;
+        state.disk_interval.write_calls += disk.write_calls;
         state.disk_interval.write_bytes =
             Size(state.disk_interval.write_bytes.0 + disk.write_bytes.0);
         state.disk_interval.write_time =

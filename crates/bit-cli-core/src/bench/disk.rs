@@ -610,6 +610,7 @@ fn one_step(
                     read_bytes: Size(delta.read_bytes),
                     read_time: Millis(delta.read_nanos / 1_000_000),
                     write_ops: 0,
+                    write_calls: 0,
                     write_bytes: Size(0),
                     write_time: Millis(0),
                 }),

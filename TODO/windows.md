@@ -555,8 +555,10 @@ Blocker:     Not blocked, but not worth building alone. It shares its whole
              mechanism with [T-018](disk-io.md), which is about the write path
              issuing one operation per 16 KiB block, and anything that batches
              or coalesces writes there is the natural place to put a
-             no-progress guard. Do them together or this is a wrapper for one
-             `if`.
+             no-progress guard. **That place now exists**: T-018 built
+             `Coalescer` on 2026-08-22 and every write to the device goes
+             through `SafeStorage::write_through`, which is one function and
+             is where the guard belongs.
 Acceptance:  A test double whose write returns `Ok(0)` causes the run to fail
              with a named error inside a bounded time rather than hanging, and
              the error says which file and offset. Windows only, so the test is

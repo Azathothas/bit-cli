@@ -278,15 +278,18 @@ modes, on the same payload:
 
 | Case | What the server did | Outcome |
 | --- | --- | --- |
-| stall | sent 64 KiB of a response, then stopped without closing | ended after 24,247 ms, exit 1 |
+| stall | sent 64 KiB of a response, then stopped without closing | ended after 24,247 ms, exit 1, and **6,108 ms since 2026-08-22** |
 | 416 | answered every ranged request with `416` | ended after 1,077 ms, exit 1 |
 
 Both end, which is the requirement. The 416 case ends in about a second, which
-is right. The stall case takes 24 seconds with `--web-seed-timeout 5s`, which
-is the per-request timeout multiplied by the retry and cooldown machinery
-rather than a bug, but 24 seconds to notice a dead mirror is longer than it
-should be. Recorded as its own item:
-[T-007](#t-007-a-stalling-source-takes-24-seconds-to-give-up).
+is right. The stall case took 24 seconds with `--web-seed-timeout 5s`, which
+was read as the per-request timeout multiplied by the retry and cooldown
+machinery rather than a bug, but 24 seconds to notice a dead mirror is longer
+than it should be. Recorded as its own item:
+[T-007](#t-007-a-stalling-source-takes-24-seconds-to-give-up), which closed it
+on 2026-08-22 and disproved the reading above on the way: the cooldown is never
+waited on, and what multiplied was the error budget and the bridge reconnect
+backoff. The same case in the same script ends in **6,108 ms** now.
 
 ## What was not done
 

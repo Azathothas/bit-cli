@@ -323,6 +323,53 @@ $LASTEXITCODE = 14
 The same run at `--fail-under 1MiB/s` prints `333.33 MiB/s observed: met` and
 exits 0.
 
+### T-189 The bench reports are not in the schema contract
+
+Source:      found doing T-018's review, 2026-08-22
+Category:    bench
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `docs/schema.md` documents every `--json` document and every
+             `--jsonl` event, and `schema_gen` fails the build when a field
+             appears that the file does not carry. The `bench` reports are not
+             among them. `bench leech`, `bench seed`, `bench webseed`,
+             `bench disk` and `bench swarm` each write a large JSON report and
+             none of their fields is in the contract; the only `bench` entry
+             is the `bench_sample` event from `bench disk --jsonl`.
+Relevance:   The file's own rule is that "a versioned contract nobody has
+             written down is not a contract". These reports are exactly what a
+             regression harness reads, `--baseline` parses one back, and
+             `scripts/check-swarm.ps1` and `scripts/bench-leech.ps1` select
+             fields out of them by name. A field renamed in one of them breaks
+             a consumer and nothing fails.
+Approach:    `schema_gen::collect` runs every command and reads what it wrote.
+             The `bench` subcommands are missing from that list because they
+             need a target: `webseed` needs a source, `leech` and `swarm` need
+             something to talk to, `seed` needs a payload. `bench disk` needs
+             none of those and is the one to start with, because it already
+             produces the `bench_sample` event the file does carry, so the
+             generator can reach it. The rest need the loopback fixtures the
+             `check-*` scripts already stand up, which is why this is S rather
+             than XS: the work is deciding whether `schema_gen` may start a
+             fixture, not writing the rows.
+Acceptance:  `docs/schema.md` carries a section for at least the `bench disk`
+             report, `every_produced_kind_and_event_is_documented` covers it,
+             and adding a field to that report fails the build until the file
+             is regenerated.
+
+**How it was found, which is the argument for the priority.**
+[T-018](disk-io.md) added `write_calls` to `bench::report::Disk`, a field every
+`bench leech` and `bench seed` report now carries. `BIT_CLI_UPDATE_SCHEMA=1`
+produced **no diff at all**, and the schema test passed. A new field in a
+document consumers parse went in with the contract check green, which is the
+one thing that check exists to prevent.
+
+The same session added seven fields to the `trackers` document and the schema
+test caught every one, so the mechanism works where it reaches. It just does
+not reach here.
+
 ### T-091 Bench reports do not capture their environment
 
 Source:      the operator's brief

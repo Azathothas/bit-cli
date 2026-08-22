@@ -153,6 +153,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-090](bench.md) | P0 | bench | done | bit-cli bench is not implemented |
 | [T-091](bench.md) | P0 | bench | **done** | Bench reports do not capture their environment |
 | [T-092](bench.md) | P1 | bench | done | bench swarm has no synthetic load generator |
+| [T-189](bench.md) | P2 | bench | open | The bench reports are not in the schema contract |
 | [T-093](bench.md) | P2 | bench | **done** | --baseline comparison is not implemented |
 | [T-094](bench.md) | P2 | bench | open | Trace output has no measured cost |
 | [T-148](bench.md) | P2 | bench | **done** | The peer probe test asserted an exit code inside its own retry loop |
@@ -224,8 +225,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-147 items: 137 to work through, and 10 deferred to Phase C.
-45 open, 7 partial, 2 blocked, 83 done.
+148 items: 138 to work through, and 10 deferred to Phase C.
+46 open, 7 partial, 2 blocked, 83 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -480,10 +481,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 1 | 0 | 9 | 11 |
 | P1 | 1 | 2 | 0 | 48 | 51 |
-| P2 | 21 | 4 | 2 | 24 | 51 |
+| P2 | 22 | 4 | 2 | 24 | 52 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **45** | **7** | **2** | **83** | **147** |
+| **All** | **46** | **7** | **2** | **83** | **148** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

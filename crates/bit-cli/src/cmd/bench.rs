@@ -1627,6 +1627,7 @@ async fn drive_seed(
             read_bytes: Size(disk.read_bytes),
             read_time: Millis(disk.read_nanos / 1_000_000),
             write_ops: disk.write_ops,
+            write_calls: disk.write_calls,
             write_bytes: Size(disk.write_bytes),
             write_time: Millis(disk.write_nanos / 1_000_000),
         });
@@ -1827,6 +1828,7 @@ async fn drive_leech(
             read_bytes: Size(disk.read_bytes),
             read_time: Millis(disk.read_nanos / 1_000_000),
             write_ops: disk.write_ops,
+            write_calls: disk.write_calls,
             write_bytes: Size(disk.write_bytes),
             write_time: Millis(disk.write_nanos / 1_000_000),
         });
@@ -1888,6 +1890,7 @@ async fn drive_leech(
         read_bytes: Size(disk.read_bytes),
         read_time: Millis(disk.read_nanos / 1_000_000),
         write_ops: disk.write_ops,
+        write_calls: disk.write_calls,
         write_bytes: Size(disk.write_bytes),
         write_time: Millis(disk.write_nanos / 1_000_000),
     });
