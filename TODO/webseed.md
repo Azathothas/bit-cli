@@ -369,20 +369,102 @@ Five requests, each spending four attempts of `--web-seed-timeout` and the
 500 ms, 1 s and 2 s backoffs between them, is 117.5 s of the 133.28. The
 `retries` column is the arithmetic confirmed: 15 is five requests times three.
 
-**A constant near sixteen seconds is left over and no flag moves it.** Against
-the model above the four rows leave 15.4, 16.1, 15.8 and 16.2 seconds, so it
-is not a fraction of anything and not the timeout, the retry count or the
-error budget. That is a second target and it is not the one this entry names.
-Whoever takes this should find out what it is before touching the ladder,
-because it is the whole cost once the ladder is fixed.
+**A constant near sixteen seconds is left over.** Against the model above the
+four rows leave 15.4, 16.1, 15.8 and 16.2 seconds, so it is not a fraction of
+anything and not the timeout, the retry count or the error budget. That was
+read as "no flag moves it", and one does.
+
+**The sixteen seconds, named 2026-08-22. It is not a constant and a flag does
+move it.** It is the **bridge's reconnect backoff**. A request that spends its
+retries raises `BridgeError::Stalled`, and unless the source's error budget is
+spent the bridge sleeps and dials again: `crates/bit-cli-core/src/webseed/bridge.rs:577`
+starts the delay at `RECONNECT_BASE`, one second, and
+`crates/bit-cli-core/src/webseed/bridge.rs:701-703` sleeps it and doubles it
+toward `RECONNECT_MAX`, thirty. At `--web-seed-max-errors 5` there are four
+reconnects before the fifth failure retires the source, and **1 + 2 + 4 + 8 is
+15 seconds**.
+
+It looked like a constant because **every row of the table above holds
+`--web-seed-max-errors` at its default of 5**, which is the one flag it depends
+on. Moving it moves the residue exactly: at `--web-seed-max-errors` of 1, 2 and
+3 the same reproduction leaves 0, 1 and 3 seconds.
+
+**A second cost the entry never saw, because it happens before the source
+exists.** `resolve_auto_styles` asks a command-line HTTP source whether it
+speaks BEP 17 or BEP 19 before the bridge is built, and against a stalling
+mirror that probe waits out its whole budget. It is bounded by
+`crates/bit-cli-core/src/webseed/probe.rs:956`, `STYLE_PROBE_BUDGET`, five
+seconds, and by the caller's own timeouts under that. Measured as the gap
+between `metadata_resolved` and `source_added`:
+
+| `--web-seed-timeout` | probe |
+| --- | --- |
+| 20s | 5.00 s |
+| 8s | 5.00 s |
+| 5s | 5.00 s |
+| 2s | 2.00 s |
+| 1s | 1.00 s |
+
+So it is `min(--web-seed-timeout, 5s)` here, capped and never worse than five.
+**This is also the difference between the two tables.** Re-running the four
+rows above end to end gives 138.10, 73.69, 45.43 and 75.59 against their
+133.28, 68.59, 40.43 and 73.73, and the four differences are 4.82, 5.10, 5.00
+and 1.86: the probe, at five seconds for the three `5s` rows and two for the
+`2s` one. The earlier numbers measured from after the source was added.
+
+**The whole cost, and it fits nine runs.**
+
+```
+wall = min(timeout, 5s)                        the style probe, once
+     + max_errors * (retries + 1) * timeout    every attempt
+     + max_errors * inner_backoff(retries)     500ms, 1s, 2s within one request
+     + outer_backoff(max_errors)               1s, 2s, 4s, 8s between requests
+```
+
+`inner_backoff` is `fetch.rs`'s ladder, which restarts at 500 ms for every
+request; `outer_backoff` is the bridge's, which does not restart until the
+source succeeds. Predicted against measured, `--stall-after 65536` on a 4 MiB
+payload:
+
+| timeout | retries | max errors | requests | predicted | measured |
+| --- | --- | --- | --- | --- | --- |
+| 5s | 3 | 5 | 21 | 137.5 s | **138.10 s** |
+| 5s | 1 | 5 | 11 | 72.5 s | **73.69 s** |
+| 5s | 0 | 5 | 6 | 45.0 s | **45.43 s** |
+| 2s | 3 | 5 | 21 | 74.5 s | **75.59 s** |
+| 5s | 0 | 3 | 4 | 23.0 s | **23.21 s** |
+| 5s | 0 | 2 | 3 | 16.0 s | **16.17 s** |
+| 5s | 0 | 1 | 2 | 10.0 s | **10.09 s** |
+| 5s | 2 | 1 | 4 | 22.0 s | **22.20 s** |
+| 20s | 0 | 1 | 2 | 25.0 s | **25.21 s** |
+
+The request count is exactly `max_errors * (retries + 1) + 1`, and the `+ 1` is
+the probe. The residue is under 1.2 s on every row and is process start plus
+metadata.
+
+**What that means for the Approach, which still stands.** Retiring the source
+on the first request whose attempts all time out takes `max_errors` to 1, which
+removes the outer backoff entirely, because there is no second request to back
+off before. What is left is `min(timeout, 5s) + (retries + 1) * timeout +
+inner_backoff(retries)`, and at the defaults that is 5 + 20 + 3.5 = **28.5 s**,
+still over the Acceptance's three times `--web-seed-timeout`. Suppressing the
+retry ladder for an attempt that timed out as well takes it to 5 + 5 = **10 s**,
+which is inside 15 s and meets the Acceptance with room. So both halves are
+needed and the entry was right that the second one decides it.
+
+Two things to get right while building it, both from the corpus above. A stall
+is not a 503 and not a reject, so the counter has to be consecutive **timeouts**
+and nothing else, which means reading `reqwest::Error::is_timeout` at the body
+read rather than the failure class: a stalled body surfaces today as
+`Transient { status: Some(200) }` with the text `body was cut short: error
+decoding response body`, which is indistinguishable from a short body by class
+alone. And any successful block resets the counter, or a mirror that is merely
+slow gets retired for one bad request.
 
 **The Approach still stands and gets sharper.** Retiring the source on the
 first request whose attempts all time out takes the ladder from five requests
 to one, which is the 23.5 s the Problem quotes, and it is very likely where
-24,247 ms came from: it is the fix's number rather than the defect's. Getting
-under the Acceptance's "three times `--web-seed-timeout`" needs the retry
-ladder shortened for timeouts as well, and then the sixteen seconds is what is
-left and what decides whether the Acceptance can be met at all.
+24,247 ms came from: it is the fix's number rather than the defect's.
 
 Reproduce, and it needs no script beyond the one command:
 
