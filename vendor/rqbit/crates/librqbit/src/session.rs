@@ -70,7 +70,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{Instrument, debug, debug_span, error, info, trace, warn};
-use tracker_comms::{TrackerComms, UdpTrackerClient};
+use tracker_comms::{ReqwestClientFactory, TrackerComms, UdpTrackerClient};
 
 pub const SUPPORTED_SCHEMES: [&str; 3] = ["http:", "https:", "magnet:"];
 
@@ -118,6 +118,11 @@ pub struct Session {
     dht: Option<Dht>,
     pub(crate) connector: Arc<StreamConnector>,
     reqwest_client: reqwest::Client,
+    // Rebuilds `reqwest_client` with the resolution pinned to one address
+    // family, which is what lets one HTTP tracker be told about both of ours.
+    // `None` behind a proxy: the proxy resolves, so there is nothing to pin.
+    // See TODO/peers.md T-022 and tracker_comms::ReqwestClientFactory.
+    reqwest_client_factory: Option<ReqwestClientFactory>,
     udp_tracker_client: UdpTrackerClient,
     disable_trackers: bool,
 
@@ -724,6 +729,34 @@ impl Session {
                     .context("error building HTTP(S) client")?
             };
 
+            // The same configuration again, as a factory, so `tracker_comms`
+            // can build one client per address family and announce to an HTTP
+            // tracker over both. A built client cannot be reconfigured and
+            // `local_address` does not pin a family, so the resolution has to
+            // be overridden, and that needs a builder. Kept next to the client
+            // above deliberately: two ways of configuring the same thing that
+            // sit apart are two things to remember.
+            //
+            // `None` behind a proxy. The proxy does the resolving and the
+            // local family is not ours to choose, so the split would announce
+            // the same address twice.
+            let reqwest_client_factory: Option<ReqwestClientFactory> = if proxy_url.is_some() {
+                None
+            } else {
+                let user_agent = client_name_and_version.clone();
+                #[cfg(not(windows))]
+                let bind_device = opts.bind_device_name.clone();
+                Some(Arc::new(move || {
+                    #[allow(unused_mut)]
+                    let mut b = reqwest::Client::builder();
+                    #[cfg(not(windows))]
+                    if let Some(bd) = bind_device.as_ref() {
+                        b = b.interface(bd);
+                    }
+                    b.user_agent(&user_agent)
+                }))
+            };
+
             let stream_connector = Arc::new(
                 StreamConnector::new(StreamConnectorArgs {
                     enable_tcp: opts.connect.as_ref().map(|c| c.enable_tcp).unwrap_or(true),
@@ -793,6 +826,7 @@ impl Session {
                 listen_addr: listen_result.as_ref().map(|l| l.addr),
                 default_storage_factory: opts.default_storage_factory,
                 reqwest_client,
+                reqwest_client_factory,
                 connector: stream_connector,
                 root_span: opts.root_span,
                 stats: Arc::new(SessionStats::new()),
@@ -1591,6 +1625,7 @@ impl Session {
             force_tracker_interval,
             self.announce_port().unwrap_or(4240),
             self.reqwest_client.clone(),
+            self.reqwest_client_factory.clone(),
             self.udp_tracker_client.clone(),
         );
 

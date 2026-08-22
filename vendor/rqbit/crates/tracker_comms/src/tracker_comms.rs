@@ -35,6 +35,7 @@ pub struct TrackerComms {
     // This MUST be set as trackers don't work with 0 port.
     announce_port: u16,
     reqwest_client: reqwest::Client,
+    reqwest_client_factory: Option<ReqwestClientFactory>,
     key: u32,
 }
 
@@ -96,16 +97,53 @@ impl std::fmt::Debug for SupportedTracker {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum UdpTrackerResolveResult {
+/// The first address a tracker's host has in each family.
+///
+/// Named for UDP until 2026-08-22 and used only there. It is the HTTP path's
+/// too now: what it answers, which of our addresses can a tracker be told
+/// about, has nothing to do with the scheme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrackerResolveResult {
     One(SocketAddr),
     Two(SocketAddrV4, SocketAddrV6),
 }
 
-async fn udp_tracker_to_socket_addrs(
+/// Rebuilds a `reqwest` client configured the way the session configured its
+/// own.
+///
+/// Announcing to one HTTP tracker over both address families needs one client
+/// per family: the family is decided when the host is resolved, and a built
+/// `reqwest::Client` cannot be reconfigured afterwards.
+/// `ClientBuilder::local_address` does not pin one either, because hyper-util
+/// binds the local address only when it already matches the destination's
+/// family and otherwise falls through to the unspecified address of the
+/// destination's own family. Overriding the resolution per family does pin it,
+/// and that needs a builder.
+///
+/// A factory rather than a second client, so the proxy, the bound interface
+/// and the user agent are configured in one place and cannot drift apart.
+/// `None` disables the split and is what a session behind a proxy passes:
+/// the proxy resolves, so there is no local family left to choose.
+pub type ReqwestClientFactory = Arc<dyn Fn() -> reqwest::ClientBuilder + Send + Sync>;
+
+/// One HTTP announce target: a client, and the family it is pinned to.
+struct HttpAnnouncer {
+    /// `None` when nothing is pinned, which is one announce over whichever
+    /// family the connector picks.
+    family: Option<&'static str>,
+    client: reqwest::Client,
+}
+
+impl HttpAnnouncer {
+    fn family_name(&self) -> &'static str {
+        self.family.unwrap_or("any")
+    }
+}
+
+async fn tracker_to_socket_addrs(
     host: url::Host<&str>,
     port: u16,
-) -> anyhow::Result<UdpTrackerResolveResult> {
+) -> anyhow::Result<TrackerResolveResult> {
     let res = match host {
         url::Host::Domain(name) => {
             // Use the first IPv4 and the first IPv6 addresses only.
@@ -123,16 +161,16 @@ async fn udp_tracker_to_socket_addrs(
                 }
             }
             let res = match (v4, v6) {
-                (Some(v4), Some(v6)) => UdpTrackerResolveResult::Two(v4, v6),
-                (Some(v4), None) => UdpTrackerResolveResult::One(v4.into()),
-                (None, Some(v6)) => UdpTrackerResolveResult::One(v6.into()),
+                (Some(v4), Some(v6)) => TrackerResolveResult::Two(v4, v6),
+                (Some(v4), None) => TrackerResolveResult::One(v4.into()),
+                (None, Some(v6)) => TrackerResolveResult::One(v6.into()),
                 _ => anyhow::bail!("zero addresses returned looking up {name}"),
             };
             trace!(?res, "resolved");
             res
         }
-        url::Host::Ipv4(addr) => UdpTrackerResolveResult::One((addr, port).into()),
-        url::Host::Ipv6(addr) => UdpTrackerResolveResult::One((addr, port).into()),
+        url::Host::Ipv4(addr) => TrackerResolveResult::One((addr, port).into()),
+        url::Host::Ipv6(addr) => TrackerResolveResult::One((addr, port).into()),
     };
     Ok(res)
 }
@@ -148,6 +186,7 @@ impl TrackerComms {
         force_interval: Option<Duration>,
         announce_port: u16,
         reqwest_client: reqwest::Client,
+        reqwest_client_factory: Option<ReqwestClientFactory>,
         udp_client: UdpTrackerClient,
     ) -> Option<BoxStream<'static, SocketAddr>> {
         let trackers = trackers
@@ -180,6 +219,7 @@ impl TrackerComms {
                 tx,
                 announce_port,
                 reqwest_client,
+                reqwest_client_factory,
                 key: rand::random(),
             });
             let mut futures = FuturesUnordered::new();
@@ -235,12 +275,130 @@ impl TrackerComms {
         }
     }
 
+    /// The tracker's first address in each family, or `None` when the host is
+    /// a literal address or does not resolve right now.
+    ///
+    /// A failure here is not fatal and is not retried: it means one announce
+    /// over whatever the connector picks, which is what this always did. The
+    /// next round resolves again.
+    async fn resolve_http_tracker(&self, tracker_url: &Url) -> Option<TrackerResolveResult> {
+        let host = tracker_url.host()?;
+        let port = tracker_url.port_or_known_default()?;
+        match tracker_to_socket_addrs(host, port).await {
+            Ok(res) => Some(res),
+            Err(e) => {
+                debug!("error resolving tracker: {e:#}");
+                None
+            }
+        }
+    }
+
+    /// One client per address family when the tracker has an address in both
+    /// and the session gave us a way to build them, otherwise the session's
+    /// own client and one announce, which is the previous behaviour.
+    fn http_announcers(
+        &self,
+        tracker_url: &Url,
+        resolved: Option<TrackerResolveResult>,
+    ) -> Vec<HttpAnnouncer> {
+        let single = || {
+            vec![HttpAnnouncer {
+                family: None,
+                client: self.reqwest_client.clone(),
+            }]
+        };
+        let (Some(factory), Some(TrackerResolveResult::Two(v4, v6))) =
+            (self.reqwest_client_factory.as_ref(), resolved)
+        else {
+            return single();
+        };
+        // The override is keyed by name, so there is nothing to override when
+        // the URL already names an address.
+        let Some(url::Host::Domain(host)) = tracker_url.host() else {
+            return single();
+        };
+        let build = |addr: SocketAddr| factory().resolve_to_addrs(host, &[addr]).build();
+        match (build(v4.into()), build(v6.into())) {
+            (Ok(v4_client), Ok(v6_client)) => vec![
+                HttpAnnouncer {
+                    family: Some("v4"),
+                    client: v4_client,
+                },
+                HttpAnnouncer {
+                    family: Some("v6"),
+                    client: v6_client,
+                },
+            ],
+            (v4_result, v6_result) => {
+                let err = v4_result.err().or(v6_result.err());
+                debug!("error building a client per address family, announcing once: {err:?}");
+                single()
+            }
+        }
+    }
+
+    /// Announce to one tracker once per address family, in sequence.
+    ///
+    /// In sequence rather than concurrently, deliberately. A tracker that keys
+    /// its peer records by peer id alone, which is all BEP 3 asks for, keeps
+    /// whichever announce it saw last, so two concurrent announces make which
+    /// of our addresses it holds a race between them. In sequence the answer
+    /// is the same every run. A tracker that implements BEP 7 keeps both
+    /// either way.
+    ///
+    /// The interval is the first one that came back and the error is the last,
+    /// so one family being unreachable does not stop the other announcing.
+    async fn tracker_one_request_http_each(
+        &self,
+        tracker_url: &Url,
+        event: Option<tracker_comms_http::TrackerRequestEvent>,
+        announcers: &[HttpAnnouncer],
+    ) -> anyhow::Result<Duration> {
+        let mut interval: Option<Duration> = None;
+        let mut last_error: Option<anyhow::Error> = None;
+        for announcer in announcers {
+            let family = announcer.family_name();
+            match self
+                .tracker_one_request_http(tracker_url, event, &announcer.client)
+                .instrument(trace_span!("http request", family))
+                .await
+            {
+                Ok(this) => {
+                    interval.get_or_insert(this);
+                }
+                Err(e) => {
+                    debug!(family, "error announcing: {e:#}");
+                    last_error = Some(e);
+                }
+            }
+        }
+        match (interval, last_error) {
+            (Some(interval), _) => Ok(interval),
+            (None, Some(e)) => Err(e),
+            (None, None) => bail!("no HTTP announce targets for {tracker_url}"),
+        }
+    }
+
     async fn task_single_tracker_monitor_http(&self, tracker_url: Url) -> anyhow::Result<()> {
         trace!(url=%tracker_url, "starting monitor");
         let mut event = Some(tracker_comms_http::TrackerRequestEvent::Started);
+        let mut resolved: Option<TrackerResolveResult> = None;
+        let mut announcers: Vec<HttpAnnouncer> = Vec::new();
 
         loop {
-            let interval = (|| self.tracker_one_request_http(&tracker_url, event))
+            // Resolved every round rather than once, so a tracker that gains
+            // an AAAA record is announced to over both families from the next
+            // announce rather than from the next restart. One lookup per
+            // announce interval costs nothing beside the request it precedes.
+            let next = self.resolve_http_tracker(&tracker_url).await;
+            if announcers.is_empty() || (next.is_some() && next != resolved) {
+                announcers = self.http_announcers(&tracker_url, next);
+                resolved = next;
+            }
+
+            let interval = (|| {
+                self.tracker_one_request_http_each(&tracker_url, event, &announcers)
+            })
                 .retry(
                     ExponentialBuilder::new()
                         .without_max_times()
@@ -264,6 +422,7 @@ impl TrackerComms {
         &self,
         tracker_url: &Url,
         event: Option<tracker_comms_http::TrackerRequestEvent>,
+        client: &reqwest::Client,
     ) -> anyhow::Result<Duration> {
         let stats = self.stats.get();
         let request = tracker_comms_http::TrackerRequest {
@@ -290,7 +449,7 @@ impl TrackerComms {
         }
         url.set_query(Some(&queries));
 
-        let response: reqwest::Response = self.reqwest_client.get(url).send().await?;
+        let response: reqwest::Response = client.get(url).send().await?;
         if !response.status().is_success() {
             anyhow::bail!("tracker responded with {:?}", response.status());
         }
@@ -332,7 +491,7 @@ impl TrackerComms {
         );
 
         let mut sleep_interval: Option<Duration> = None;
-        let mut prev_addrs: Option<UdpTrackerResolveResult> = None;
+        let mut prev_addrs: Option<TrackerResolveResult> = None;
         loop {
             if let Some(i) = sleep_interval {
                 trace!(interval=?sleep_interval, "sleeping");
@@ -341,7 +500,7 @@ impl TrackerComms {
 
             // This should retry forever until the addrs are resolved.
             let addrs = (async || {
-                udp_tracker_to_socket_addrs(host.clone(), port)
+                tracker_to_socket_addrs(host.clone(), port)
                     .instrument(trace_span!("resolve", ?host))
                     .await
                     .or_else(|err| prev_addrs.ok_or(err))
@@ -359,7 +518,7 @@ impl TrackerComms {
             prev_addrs = Some(addrs);
 
             match addrs {
-                UdpTrackerResolveResult::One(addr) => {
+                TrackerResolveResult::One(addr) => {
                     match self
                         .tracker_one_request_udp(addr, &client)
                         .instrument(trace_span!("udp request", ?addr))
@@ -371,7 +530,7 @@ impl TrackerComms {
                         }
                     }
                 }
-                UdpTrackerResolveResult::Two(v4, v6) => {
+                TrackerResolveResult::Two(v4, v6) => {
                     let (r4, r6) = tokio::join!(
                         self.tracker_one_request_udp(v4.into(), &client)
                             .instrument(trace_span!("udp request", addr=?v4)),

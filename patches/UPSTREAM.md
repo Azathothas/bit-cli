@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0009-package-lock.json.patch
+             patches/rqbit/0010-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -381,3 +381,102 @@ own acceptance and has not been run since the change.
 
 **Offer it upstream.** It is [rqbit#525](https://github.com/ikatson/rqbit/issues/525),
 open, and reported as exactly this: RSS climbing in a long-lived server.
+---
+
+## librqbit: an HTTP tracker is told about one of our two addresses
+
+```
+Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
+Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
+             vendor/rqbit/crates/librqbit/src/session.rs
+             patches/rqbit/0005-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0009-crates-tracker_comms-src-tracker_comms.rs.patch
+Upstream:    not offered yet, and it should be
+Added:       2026-08-22T17:26Z
+```
+
+A UDP tracker is announced to once per address family. `tracker_comms.rs`
+resolves the host, keeps the first IPv4 and the first IPv6 address, and fires
+both. An HTTP tracker got one announce, over whichever family the connector
+picked, and a tracker records the source address of the connection it was
+announced over. So a dual-stack seeder registered one of its two addresses and
+peers on the other family learned nothing reachable, connected, failed, and
+retried.
+
+The change gives the HTTP path the same two announces:
+
+- `UdpTrackerResolveResult` and `udp_tracker_to_socket_addrs` are
+  `TrackerResolveResult` and `tracker_to_socket_addrs`. Same code, same
+  behaviour: which of our addresses a tracker can be told about has nothing to
+  do with the scheme, and the HTTP path calls it now.
+- `TrackerComms` takes a `ReqwestClientFactory` beside the client it already
+  took. A built `reqwest::Client` cannot be reconfigured, so a second one has
+  to be built, and building it from the session's own builder is what keeps
+  the proxy, the bound interface and the user agent from drifting apart.
+- `task_single_tracker_monitor_http` resolves the tracker each round and holds
+  one client per family, each with `resolve_to_addrs` pinning that family. It
+  rebuilds them only when the resolution changes, so a tracker that gains an
+  AAAA record is announced to over both families from the next announce rather
+  than from the next restart.
+- The two announces go **in sequence**. A tracker that keys its peer records
+  by peer id alone, which is all BEP 3 asks for, keeps whichever announce it
+  saw last, so concurrent announces make which of our addresses it holds a
+  race. T-022 measured that against the fixture before it keyed by
+  `(peer id, family)`.
+- Every path that cannot pin a family falls back to the session's client and
+  one announce, which is exactly the previous behaviour: a URL naming an
+  address, a host that resolves in one family, a resolution that fails, a
+  client that will not build, and a session behind a proxy. `librqbit` passes
+  `None` for the factory when a proxy is configured, because then the proxy
+  resolves and the local family is not ours to choose.
+
+**`ClientBuilder::local_address` is the obvious thing to reach for and it does
+not work.** `hyper-util` binds the local address only when it already matches
+the destination's family, and otherwise falls through to the unspecified
+address of the destination's own family, so an announce from a client with
+`0.0.0.0` set still goes out over IPv6. T-022 recorded that at
+`hyper-util-0.1.20/src/client/legacy/connect/http.rs:794-820` when
+`bit-cli trackers` hit the same wall. Overriding the resolution is what pins it.
+
+**Why it has to be here.** `TrackerComms` owns its `reqwest::Client`, takes it
+as an argument to `TrackerComms::start`, and exposes no seam for a second one.
+`task_single_tracker_monitor_http` is a private method and the send site is
+inside it. Nothing about any of it is reachable from a dependent crate: there
+is no option, no builder and no trait a caller can implement differently, and
+`bit-cli` cannot make a session register both of its addresses with an HTTP
+tracker by any configuration.
+
+**How it was measured.** `loopback-tracker` bound on `127.0.0.1` and `[::1]` at
+one port, keying peer records by `(peer id, family)` and logging the source
+address of every announce. One `bit-cli seed`, DHT, LSD and PEX off, announcing
+to that tracker under two names.
+
+| case | tracker URL | before | after |
+| --- | --- | --- | --- |
+| `dual_host` | `http://localhost:<port>/announce` | **ipv6 only**, from `::1` | **ipv4 from 127.0.0.1 and ipv6 from ::1** |
+| `literal_host` | `http://127.0.0.1:<port>/announce` | ipv4, from `127.0.0.1` | ipv4, from `127.0.0.1` |
+
+```bash
+pwsh -NoProfile -File scripts/check-tracker-family.ps1
+```
+
+`bench/tracker-family-20260822T172231576Z.json` is the before, taken with the
+two files stashed and the tree rebuilt, and
+`bench/tracker-family-20260822T172549738Z.json` is the after.
+
+**`literal_host` is the control and it is the point of having two cases.** It
+takes the fallback path, which is the old code, so it announces once and must
+keep announcing once. A check that reported two families there would be
+reporting that something announces twice regardless, which measures nothing.
+The before run is what says the check can fail: it names `ipv6` alone, which is
+the resolver's order rather than a choice, and an IPv4-only peer reading that
+tracker got nothing it could dial.
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+```
+
+**Offer it upstream.** It is [rqbit#537](https://github.com/ikatson/rqbit/issues/537),
+open, and the UDP path in the same file is the shape to point at: this makes
+the HTTP one match it. Until it is offered this section says so rather than
+claiming otherwise.

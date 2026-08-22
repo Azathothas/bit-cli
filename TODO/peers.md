@@ -581,7 +581,7 @@ Source:      https://github.com/ikatson/rqbit/issues/537 (open)
 Category:    peers
 Priority:    P1
 Effort:      M
-Status:      partial
+Status:      **done**, 2026-08-22T17:26Z
 
 Problem:     A session bound to `[::]` announces one address to the tracker.
              On a dual-stack host that means IPv4 peers may never learn a
@@ -709,15 +709,50 @@ and a family a tracker has no address in fails with the family named rather
 than falling back to the other one, which would publish an address the caller
 did not ask to publish.
 
-**Still open, and why this is partial rather than done.** The session's HTTP
-tracker announces are `librqbit`'s and go out over one family, at
-`librqbit-tracker-comms-9.0.0/src/tracker_comms.rs:293`. Unblocking it means a
-`reqwest` client per family inside `TrackerComms`, which is upstream's to make:
-the type owns its client, takes it as an argument to `TrackerComms::start`, and
-exposes no seam for a second one. `bit-cli seed` and `bit-cli download`
-therefore still register one address with an HTTP tracker on a dual-stack host.
-UDP trackers are already both, and `bit-cli trackers` is now the command that
-can say which.
+**Closed 2026-08-22 in the vendored tree, which is what the paragraph below
+said would be needed.** It said the session's half was "upstream's to make".
+The trees were vendored the same day, so it was made here.
+
+`vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs` now resolves an HTTP
+tracker the same way it already resolved a UDP one, keeps a `reqwest` client
+per address family with the resolution pinned, and announces once over each in
+sequence. `librqbit`'s session hands it a factory that rebuilds the session's
+own client, so the proxy, the bound interface and the user agent are configured
+in one place; behind a proxy it hands `None` and nothing changes, because the
+proxy resolves and the local family is not ours to choose.
+[`patches/UPSTREAM.md`](../patches/UPSTREAM.md) carries the full section.
+
+**Measured, one `bit-cli seed` against `loopback-tracker` on both loopback
+addresses at one port.** The tracker logs the source address of every announce,
+which is the thing a tracker actually records about a peer:
+
+| case | tracker URL | before | after |
+| --- | --- | --- | --- |
+| `dual_host` | `http://localhost:<port>/announce` | **ipv6 only**, from `::1` | **ipv4 from 127.0.0.1 and ipv6 from ::1** |
+| `literal_host` | `http://127.0.0.1:<port>/announce` | ipv4, from `127.0.0.1` | ipv4, from `127.0.0.1` |
+
+```bash
+pwsh -NoProfile -File scripts/check-tracker-family.ps1
+```
+
+`bench/tracker-family-20260822T172231576Z.json` is the before, taken with the
+two vendored files stashed and the tree rebuilt, and
+`bench/tracker-family-20260822T172549738Z.json` is the after.
+
+**Which family the old code picked was not a choice.** The before run says
+`ipv6`, and nothing in `bit-cli` asked for that: it is the order the resolver
+returned addresses in. An IPv4-only peer reading that tracker got no address it
+could dial, which is this entry's Problem exactly.
+
+**`literal_host` is the control and it has to keep passing.** A URL naming an
+address has no resolution to override, so that case takes the fallback path,
+which is the old code, and one announce there is correct. A check that reported
+two families for both cases would be reporting that something announces twice
+regardless.
+
+**What is still one announce, deliberately.** A tracker whose host resolves in
+one family only, a tracker named by address, and a session behind a proxy. Each
+falls back to the client the session built, so none of them is a new path.
 
 ### T-023 The listen port is chosen without checking both address families
 

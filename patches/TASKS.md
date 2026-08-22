@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**11 entries: 2 done, 4 partial, 2 blocked, 3 open.** Every one of them was
+**11 entries: 3 done, 3 partial, 2 blocked, 3 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
 record.**
 
@@ -26,7 +26,7 @@ record.**
 | [T-194](../TODO/peers.md) | **P0** | **done** | a bitfield that does not fit one message buffer |
 | [T-020](../TODO/peers.md) | **P0** | **done** | a `tokio::select!` arm in upstream's accept loop |
 | [T-040](../TODO/memory.md) | **P0** | partial | **bounded.** Only the six hour soak is left |
-| [T-022](../TODO/peers.md) | P1 | partial | an HTTP tracker announce per address family |
+| [T-022](../TODO/peers.md) | P1 | **done** | an HTTP tracker announce per address family |
 | [T-132](../TODO/multi-source.md) | P1 | partial | peer identity on `TorrentStorage` |
 | [T-016](../TODO/disk-io.md) | P2 | blocked | a resume cache without session persistence |
 | [T-100](../TODO/bep-coverage.md) | P2 | partial | the send half of an extension message |
@@ -35,9 +35,9 @@ record.**
 | [T-195](../TODO/peers.md) | P2 | open | the read side of T-194, at 262,104 pieces |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 
-Nine are not done, and one of those is not waiting on a seam at all:
+Eight are not done, and one of those is not waiting on a seam at all:
 [T-040](../TODO/memory.md) is bounded and waiting on a six hour measurement.
-The other eight are sections 3, 4 and 5, in that order.
+The other seven are sections 3, 4 and 5, in that order.
 
 **Before reconciling anything**, read `README.md` under "Upstream is not
 automatically right". A new release is a proposal, not an authority, and a hunk
@@ -228,12 +228,20 @@ persistence from auto-restore removes the conflict without touching 7.4.
 
 ## 5. The rest, in the order the entries already argue for
 
-[T-022](../TODO/peers.md) HTTP announce per family, at
-`vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs:293`, where UDP already
-announces to both at `:374-387`. Then [T-132](../TODO/multi-source.md),
-[T-100](../TODO/bep-coverage.md), [T-167](../TODO/bep-coverage.md) and
-[T-102](../TODO/bep-coverage.md). Each entry names its seam with a line number
-and none of them needs re-deriving.
+**[T-022](../TODO/peers.md) is done.** An HTTP tracker was told about one of
+this host's two addresses while a UDP tracker in the same file was told about
+both. `task_single_tracker_monitor_http` in
+`vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs` holds a `reqwest`
+client per family now, pinned by overriding the resolution, and announces once
+over each in sequence. Measured against `loopback-tracker` on both loopback
+addresses at one port: **ipv6 alone before, both after**, and which family the
+old code picked was the resolver's order rather than a choice.
+`scripts/check-tracker-family.ps1` is the acceptance and its `literal_host`
+case is the control that says it can fail.
+
+Then [T-132](../TODO/multi-source.md), [T-100](../TODO/bep-coverage.md),
+[T-167](../TODO/bep-coverage.md) and [T-102](../TODO/bep-coverage.md). Each
+entry names its seam with a line number and none of them needs re-deriving.
 
 ## Returning to ordinary work
 
