@@ -90,7 +90,27 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 6. Read the CI run the push started. A push that leaves CI red without an entry
    naming why is not finished. A push carrying only documentation should carry
    `-NoCi` and then there is no run to read.
-7. Print the kickoff prompt in chat only, in a code block. Section 3 says what
+7. **Print the session summary in chat, as a Markdown table**, brief enough to
+   read at a glance and no longer than the numbers need. It is the operator's
+   view of the session and it is chat only: `PROGRESS.md` is the record and
+   this is the receipt. `scripts/session-report.ps1` produces every figure in
+   it, so nothing here is counted by hand.
+
+   The rows that always appear, because they are the ones asked for:
+
+   | row | from |
+   | --- | --- |
+   | Elapsed | the start instant on `PROGRESS.md`'s state line, to now |
+   | Commits | `git log` over the session's range |
+   | Entries | done out of workable, and what closed or advanced |
+   | LOC this session | files changed, lines added and removed |
+   | LOC in tree | `scc --no-cocomo crates/` |
+   | Tests | the gates' count, and what it was at the start |
+   | CI | the run id and the commit it covers |
+
+   Anything the session found that a table cannot hold goes under it in a
+   sentence or two, not in the table.
+8. Print the kickoff prompt in chat only, in a code block. Section 3 says what
    it must contain.
 
 ## 3. The kickoff prompt
@@ -122,6 +142,10 @@ the point: the prompt is a pointer, and the record is the record.
 `PROGRESS.md` has to hold up its end. Section 2 step 2 says what it must carry,
 and the template at the top of the file says it again where a session will
 see it.
+
+The kickoff is the last thing printed, after the summary table in section 2
+step 7. Two things go to chat at the end of a session and only two: the table,
+which is the receipt, and this, which is the pointer.
 
 ## 4. Git
 
