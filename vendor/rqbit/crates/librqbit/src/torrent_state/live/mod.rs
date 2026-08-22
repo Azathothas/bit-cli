@@ -1120,9 +1120,15 @@ impl PeerConnectionHandler for &'_ PeerHandler {
         Ok(())
     }
 
-    fn serialize_bitfield_message_to_buf(&self, buf: &mut [u8]) -> anyhow::Result<usize> {
+    fn serialize_bitfield_message_to_buf(&self, buf: &mut Vec<u8>) -> anyhow::Result<usize> {
         let g = self.state.lock_read("serialize_bitfield_message_to_buf");
-        let msg = Message::Bitfield(ByteBuf(g.get_chunks()?.get_have_pieces().as_bytes()));
+        let bitfield = g.get_chunks()?.get_have_pieces().as_bytes();
+        // Only this side knows the piece count, so this is where the buffer is
+        // sized. A torrent with more than (MAX_MSG_LEN - 5) * 8 pieces used to
+        // fail here with "not enough space in buffer", which dropped every
+        // connection before a single piece could be served.
+        buf.resize(Message::bitfield_message_len(bitfield.len()), 0);
+        let msg = Message::Bitfield(ByteBuf(bitfield));
         let len = msg.serialize(buf, &Default::default)?;
         trace!("sending: {:?}, length={}", &msg, len);
         Ok(len)

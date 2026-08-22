@@ -90,6 +90,40 @@ function Test-Excluded([string]$Relative, [string[]]$Exclude) {
     $false
 }
 
+# Paths a `.gitignore` **inside the tree** ignores, which is upstream saying
+# they are generated rather than source. Building the vendored workspace leaves
+# `target/`, `node_modules/` and `crates/librqbit/webui/dist/` behind, and a
+# fresh clone of the base has none of them.
+#
+# The rule is "ignored by a .gitignore inside the tree" rather than "ignored"
+# flat, and the difference is the whole point here: Get-Swallowed below has to
+# keep reporting a file that this repository's own root .gitignore would eat,
+# which is the `.vscode/` case, while a file upstream's own .gitignore names is
+# not vendored at all and must never reach it. Same function in
+# scripts/vendor-diff.ps1. See TODO/cli-surface.md, T-197.
+function Get-TreeIgnored([string]$Root, [System.Collections.Generic.List[string]]$Relatives) {
+    $ignored = [System.Collections.Generic.HashSet[string]]::new()
+    if ($Relatives.Count -eq 0) { return $ignored }
+    $prefix = $Root.Replace([char]92, [char]47).TrimEnd('/')
+    # Not $input: inside a function that is the automatic pipeline enumerator.
+    $stdinText = ($Relatives | ForEach-Object { "$prefix/$_" }) -join "`n"
+    $lines = $stdinText | & git check-ignore -v --no-index --stdin 2>$null
+    if ($LASTEXITCODE -gt 1) { return $ignored }
+    foreach ($line in @($lines)) {
+        $text = ([string]$line).Replace([char]92, [char]47)
+        # "<source>:<line>:<pattern>\t<path>"
+        $tab = $text.IndexOf("`t")
+        if ($tab -lt 0) { continue }
+        $source = $text.Substring(0, $tab)
+        $path = $text.Substring($tab + 1)
+        if (-not $source.StartsWith("$prefix/")) { continue }
+        if ($path.StartsWith("$prefix/")) {
+            [void]$ignored.Add($path.Substring($prefix.Length + 1))
+        }
+    }
+    $ignored
+}
+
 # Every vendored file of a tree, repository-relative, forward slashes.
 function Get-TreeFiles([string]$Root, [string[]]$Exclude) {
     $files = [System.Collections.Generic.List[string]]::new()
@@ -100,7 +134,11 @@ function Get-TreeFiles([string]$Root, [string[]]$Exclude) {
         if (Test-Excluded $relative $Exclude) { continue }
         $files.Add($relative)
     }
-    $files
+    $ignored = Get-TreeIgnored $Root $files
+    if ($ignored.Count -eq 0) { return $files }
+    $kept = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in $files) { if (-not $ignored.Contains($f)) { $kept.Add($f) } }
+    $kept
 }
 
 # A pristine checkout of one upstream at one ref, cached under .tmp/.

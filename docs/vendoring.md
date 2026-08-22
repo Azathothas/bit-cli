@@ -87,11 +87,17 @@ first entry in that file is exactly this warning, and it is what proved the
 whole patch workflow.
 
 `vendor/rqbit` is its own workspace and its own tests are run on purpose, not
-by default:
+by default. `--target-dir` keeps 7.2 GB of build output out of a tree that is
+supposed to hold nothing but somebody else's source:
 
 ```bash
-cargo test --manifest-path vendor/rqbit/Cargo.toml
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
+
+Upstream's workspace listed `desktop/src-tauri` as a member, and `desktop/` is
+one of the four things this repository deliberately does not vendor, so that
+command could not load the workspace at all until the member was removed. It is
+the second entry in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
 
 ## What it costs
 

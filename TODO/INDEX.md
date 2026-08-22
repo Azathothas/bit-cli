@@ -112,6 +112,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-164](peers.md) | P2 | peers | partial | A peer that sends garbage keeps its connection slot |
 | [T-165](peers.md) | P2 | peers | open | The peer's reqq is ignored, so the queue depth is a fixed 128 |
 | [T-166](peers.md) | P1 | peers | **done** | BEP 10 extension ids are not proven to map in both directions |
+| [T-194](peers.md) | P0 | peers | **done** | A torrent past 131,960 pieces cannot be served or fetched at all |
+| [T-195](peers.md) | P2 | peers | open | The read side caps the same message at 262,104 pieces |
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
 | [T-032](performance.md) | P1 | performance | **done** | The piece selector strategy is not implemented |
@@ -201,6 +203,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-185](cli-surface.md) | P1 | cli | **done** | --exclude-file on its own selects nothing and downloads everything |
 | [T-186](cli-surface.md) | P3 | cli | **done** | seed --data and verify --data resolve the payload differently |
 | [T-193](cli-surface.md) | P2 | cli | done | A citation written short was never checked at all |
+| [T-196](cli-surface.md) | P2 | cli | open | A magnet that never resolves hangs download with no diagnostic |
+| [T-197](cli-surface.md) | P1 | cli | **done** | Running upstream's tests filled the patch series with 14,964 patches |
 | [T-182](cli-surface.md) | P1 | ci | **done** | A macOS test asserted an invariant across two kernel subsystems |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
@@ -229,8 +233,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-152 items: 142 to work through, and 10 deferred to Phase C.
-47 open, 6 partial, 2 blocked, 87 done.
+156 items: 146 to work through, and 10 deferred to Phase C.
+49 open, 6 partial, 2 blocked, 89 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -483,12 +487,12 @@ sessions earlier.
 
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
-| P0 | 1 | 1 | 0 | 9 | 11 |
-| P1 | 1 | 2 | 0 | 48 | 51 |
-| P2 | 23 | 3 | 2 | 28 | 56 |
+| P0 | 1 | 1 | 0 | 10 | 12 |
+| P1 | 1 | 2 | 0 | 49 | 52 |
+| P2 | 25 | 3 | 2 | 28 | 58 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **47** | **6** | **2** | **87** | **152** |
+| **All** | **49** | **6** | **2** | **89** | **156** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

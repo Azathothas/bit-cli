@@ -36,7 +36,11 @@ use crate::{
 pub trait PeerConnectionHandler {
     fn on_connected(&self, _connection_time: Duration) {}
     fn should_send_bitfield(&self) -> bool;
-    fn serialize_bitfield_message_to_buf(&self, buf: &mut [u8]) -> anyhow::Result<usize>;
+    /// Serialize our bitfield into `buf`, resizing it as needed, and return
+    /// its length. `buf` is owned by the caller and is not the shared
+    /// fixed-size message buffer: a bitfield is one bit per piece, so only the
+    /// implementor knows how large it has to be.
+    fn serialize_bitfield_message_to_buf(&self, buf: &mut Vec<u8>) -> anyhow::Result<usize>;
     fn on_handshake(&self, handshake: Handshake, ckind: ConnectionKind) -> anyhow::Result<()>;
     fn on_extended_handshake(
         &self,
@@ -319,14 +323,20 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
                 .unwrap_or_else(|| Duration::from_secs(120));
 
             if self.handler.should_send_bitfield() {
+                // Not write_buf: that one is MAX_MSG_LEN, which bounds every
+                // message whose size the protocol bounds. A bitfield is one
+                // bit per piece and is bounded by the torrent instead, so it
+                // gets a buffer sized for this torrent. It is written once per
+                // connection and dropped here.
+                let mut bitfield_buf = Vec::new();
                 let len = self
                     .handler
-                    .serialize_bitfield_message_to_buf(&mut *write_buf)
+                    .serialize_bitfield_message_to_buf(&mut bitfield_buf)
                     .map_err(Error::Anyhow)?;
                 with_timeout(
                     "writing bitfield",
                     rwtimeout,
-                    write.write_all(&write_buf[..len]).map_err(Error::Write),
+                    write.write_all(&bitfield_buf[..len]).map_err(Error::Write),
                 )
                 .await?;
                 trace!("sent bitfield");

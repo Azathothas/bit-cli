@@ -25,7 +25,10 @@ const PREAMBLE_LEN: usize = INTEGER_LEN + MSGID_LEN;
 const PIECE_MESSAGE_PREAMBLE_LEN: usize = PREAMBLE_LEN + INTEGER_LEN * 2;
 pub const PIECE_MESSAGE_DEFAULT_LEN: usize = PIECE_MESSAGE_PREAMBLE_LEN + CHUNK_SIZE as usize;
 
-// extended message ut_metadata request is the largest known message.
+// The ut_metadata data message is the largest message whose length the
+// protocol bounds. The bitfield is NOT bounded by this: it carries one bit per
+// piece, so its length is a property of the torrent. Size a bitfield buffer
+// with Message::bitfield_message_len instead.
 const MAX_MSG_LEN_LEN_JUST_IN_CASE_EXTRA: usize = 64;
 pub const MAX_MSG_LEN: usize = PREAMBLE_LEN
     + 1
@@ -250,6 +253,17 @@ impl From<std::io::Error> for SerializeError {
 }
 
 impl Message<'_> {
+    /// The exact number of bytes [`Message::serialize`] needs to write a
+    /// bitfield message carrying `bitfield_len` bytes of bitfield.
+    ///
+    /// Every other message fits in [`MAX_MSG_LEN`]. This one does not: a
+    /// bitfield is one bit per piece, so a torrent with more than
+    /// `(MAX_MSG_LEN - PREAMBLE_LEN) * 8` pieces produces a message that a
+    /// fixed buffer cannot hold. The caller sizes its buffer with this.
+    pub const fn bitfield_message_len(bitfield_len: usize) -> usize {
+        PREAMBLE_LEN + bitfield_len
+    }
+
     pub fn serialize(
         &self,
         out: &mut [u8],
@@ -793,6 +807,40 @@ mod tests {
                 assert_eq!(slen, len);
                 assert_eq!(buf[..len], tmp[..len]);
             }
+        }
+    }
+
+    // A bitfield carries one bit per piece, so unlike every other message its
+    // length is a property of the torrent. It is the one message that does not
+    // fit in MAX_MSG_LEN, and a buffer of that size refuses to hold it just
+    // past 131,960 pieces.
+    #[test]
+    fn test_bitfield_larger_than_max_msg_len() {
+        const PIECES: usize = 131_961;
+        let bitfield = vec![0xffu8; PIECES.div_ceil(8)];
+        let msg = Message::Bitfield(ByteBuf(&bitfield));
+
+        let needed = Message::bitfield_message_len(bitfield.len());
+        assert!(
+            needed > MAX_MSG_LEN,
+            "this test is pointless unless {needed} exceeds {MAX_MSG_LEN}"
+        );
+
+        let mut fixed = vec![0u8; MAX_MSG_LEN];
+        assert!(matches!(
+            msg.serialize(&mut fixed, &|| Default::default()),
+            Err(SerializeError::NoSpaceInBuffer)
+        ));
+
+        let mut sized = vec![0u8; needed];
+        let len = msg.serialize(&mut sized, &|| Default::default()).unwrap();
+        assert_eq!(len, needed);
+
+        let (de, dlen) = Message::deserialize(&sized[..len], &[]).unwrap();
+        assert_eq!(dlen, len);
+        match de {
+            Message::Bitfield(b) => assert_eq!(b.as_ref(), &bitfield[..]),
+            other => panic!("expected a bitfield, got {other:?}"),
         }
     }
 }

@@ -1271,3 +1271,129 @@ than the real one. The lesson is the one [RULES.md](RULES.md) already carries
 from T-032 and T-141: the first reading was of the fixture rather than of the
 thing. The fixture is now the part of this test worth reading twice.
 
+
+### T-194 A torrent past 131,960 pieces cannot be served or fetched at all
+
+Source:      [rqbit#637](https://github.com/ikatson/rqbit/issues/637), item 0 of
+             `patches/TASKS.md`, measured 2026-08-22
+Category:    peers
+Priority:    **P0**
+Effort:      M
+Status:      **done**, 2026-08-22T13:52Z, with a residual ceiling in
+             [T-195](peers.md)
+
+Problem:     `Message::Bitfield` is serialized into the fixed per connection
+             write buffer, which is `MAX_MSG_LEN` bytes. A bitfield is one bit
+             per piece, so its length is a property of the torrent and not of
+             the protocol. Past 131,960 pieces it does not fit, `serialize`
+             returns `NoSpaceInBuffer`, and the connection is dropped before a
+             single piece is served. Both directions fail: a seeder cannot
+             answer, and a leecher fetching metadata for such a torrent by
+             magnet never resolves it.
+Relevance:   This is not a slowdown. A torrent past the threshold does not
+             work at all, in either role, against any peer. Nothing in
+             `bit-cli` reported it as anything: the seeder logged
+             `error managing peer: not enough space in buffer` at DEBUG and
+             carried on, and the leecher waited.
+Approach:    Stop routing the bitfield through the shared fixed buffer. The
+             handler sizes its own buffer, because only it knows the piece
+             count. `Message::bitfield_message_len` is the one thing the
+             protocol crate has to expose for it.
+Acceptance:  A torrent above the old threshold resolves by magnet from a local
+             seeder and its file is created.
+
+**Where the number comes from.** `MAX_MSG_LEN` is 16,500 bytes, built in
+`peer_binary_protocol/src/lib.rs` for a `ut_metadata` data message: a 16,384
+byte chunk plus its bencode header plus 64 bytes of slack. A bitfield message
+is `5 + ceil(pieces / 8)` bytes, so it fits while `ceil(pieces / 8) <= 16,495`,
+which is 131,960 pieces. The comment above the constant said the `ut_metadata`
+request was "the largest known message", and that was the whole mistake.
+
+**Measured, and it is exact to one piece.** Every case is a torrent of 1 KiB
+pieces, seeded on loopback with trackers and DHT off, fetched by magnet by a
+second process given only `--peer 127.0.0.1:<port>`:
+
+| pieces | `.torrent` | bitfield | before | after |
+| --- | --- | --- | --- | --- |
+| 131,952 | 2,639,179 B | 16,499 B | resolves | resolves |
+| **131,960** | 2,639,339 B | **16,500 B** | **resolves** | resolves |
+| **131,961** | 2,639,359 B | **16,501 B** | **no space in buffer** | resolves |
+| 131,968 | 2,639,499 B | 16,501 B | no space in buffer | resolves |
+| 163,840 | 3,276,939 B | 20,485 B | no space in buffer | resolves |
+
+The two middle rows are one piece apart and 16,500 is `MAX_MSG_LEN` exactly.
+
+**The `.torrent` size is a red herring, and that matters for the upstream
+report.** rqbit#637 is titled "rqbit faill to add torrent larger than 2MB" and
+has an empty body. Both 2.64 MB torrents in the table above are "larger than
+2MB" and one of them works, so the size of the file is not the variable. The
+piece count is. A 2 GiB payload at 16 KiB pieces makes a 2,621,581 byte
+`.torrent` with 131,072 pieces, and that one seeds, verifies and downloads
+fine. Whether the upstream report is this defect cannot be established from an
+empty issue body; it is the same neighbourhood and the same order of magnitude,
+and that is as far as the evidence goes.
+
+**Adding is not what fails.** `bit-cli create`, `info`, `verify` and `seed` all
+handle a 3.13 MiB `.torrent` with no trouble, and `create` builds one from
+160 MiB of payload in 0.195 s. Item 0 of `patches/TASKS.md` asked whether
+`bit-cli` could make such a fixture quickly enough to test with, and it can.
+What fails is the wire.
+
+**The fix**, in `patches/UPSTREAM.md` under "librqbit: a bitfield larger than
+MAX_MSG_LEN cannot be sent":
+
+- `PeerConnectionHandler::serialize_bitfield_message_to_buf` takes a
+  `&mut Vec<u8>` rather than a `&mut [u8]`, so the implementor sizes it.
+- The send site uses a buffer of its own rather than the shared `write_buf`,
+  allocated once per connection and dropped after the bitfield is written.
+- `Message::bitfield_message_len` is the exact length `serialize` needs.
+
+```
+$ pwsh -NoProfile -File scripts/check-bitfield.ps1
+bitfield: 163840 pieces, 3276939 B torrent, metadata resolved, file created
+bitfield: ok
+```
+
+Upstream's own tests still pass, 139 of them, and the new one is
+`test_bitfield_larger_than_max_msg_len` in `peer_binary_protocol`.
+
+### T-195 The read side caps the same message at 262,104 pieces
+
+Source:      measured while closing [T-194](peers.md), 2026-08-22
+Category:    peers
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `ReadBuf` is a ring buffer of `BUFLEN`, 32,768 bytes, in
+             `vendor/rqbit/crates/librqbit/src/read_buf.rs:12`. A message that
+             cannot fit in it fails with `read buffer is full`. For a bitfield
+             that is `5 + ceil(pieces / 8) <= 32,768`, which is 262,104 pieces.
+Relevance:   [T-194](peers.md)
+             moved the send side off a fixed buffer entirely, so this is now
+             the binding limit and the two halves agree on it. It is twice what
+             it was and it is still a limit.
+Approach:    Not attempted. The ring buffer needs an overflow path for a
+             message larger than itself, and `read_message` holds an unsafe
+             reborrow with a miri test around it, so this is a larger change to
+             somebody else's code than the send side was. Growing `BUFLEN`
+             moves the number without removing it.
+Acceptance:  A torrent above 262,104 pieces resolves by magnet from a local
+             seeder.
+
+**Measured, and exact to one piece**, same harness as T-194, after the T-194
+fix:
+
+| pieces | `.torrent` | bitfield | result |
+| --- | --- | --- | --- |
+| **262,104** | 5,242,219 B | **32,768 B** | resolves |
+| **262,105** | 5,242,239 B | **32,769 B** | `read buffer is full. need_additional_bytes=1` |
+
+32,768 is `BUFLEN` exactly, and the client says how far over it is: one byte.
+
+**What this costs in practice.** A torrent needs more than 262,104 pieces to
+hit it, which is a 4 GiB payload at 16 KiB pieces and 1 TiB at 4 MiB. Real
+clients raise the piece length as the payload grows, so this is reachable but
+uncommon. `bit-cli create` refuses to build one above 100,000 pieces without
+`--allow piece-count`, which is not a fix and does not help a torrent somebody
+else made.

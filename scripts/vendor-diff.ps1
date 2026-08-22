@@ -49,6 +49,47 @@ function Test-Excluded([string]$Relative, [string[]]$Exclude) {
     $false
 }
 
+# Paths a `.gitignore` **inside the tree** ignores, which is upstream saying
+# they are generated rather than source. Building the vendored workspace leaves
+# `target/`, `node_modules/` and `crates/librqbit/webui/dist/` behind, none of
+# which was ever vendored and none of which can be a local change: a fresh
+# clone of the base has none of them.
+#
+# Derived rather than listed, because upstream already wrote it down. It is not
+# in upstream.json's exclude list either, because that list is what this
+# repository decided not to vendor and this is not a decision.
+#
+# The rule has to be "ignored by a .gitignore inside the tree" rather than
+# "ignored" flat: a file this repository's own root .gitignore would swallow is
+# exactly what scripts/vendor-sync.ps1 has to keep reporting, which is the
+# `.vscode/` case docs/vendoring.md describes.
+#
+# Without this the walk hashed 7.2 GB across 9,894 files and produced 14,964
+# patches, and the script looked hung. See TODO/cli-surface.md, T-197.
+function Get-TreeIgnored([string]$Root, [System.Collections.Generic.List[string]]$Relatives) {
+    $ignored = [System.Collections.Generic.HashSet[string]]::new()
+    if ($Relatives.Count -eq 0) { return $ignored }
+    $prefix = $Root.Replace([char]92, [char]47).TrimEnd('/')
+    # Not $input: inside a function that is the automatic pipeline enumerator,
+    # and assigning to it silently breaks the pipe. Same trap as $args.
+    $stdinText = ($Relatives | ForEach-Object { "$prefix/$_" }) -join "`n"
+    $lines = $stdinText | & git check-ignore -v --no-index --stdin 2>$null
+    if ($LASTEXITCODE -gt 1) { return $ignored }
+    foreach ($line in @($lines)) {
+        $text = ([string]$line).Replace([char]92, [char]47)
+        # "<source>:<line>:<pattern>\t<path>"
+        $tab = $text.IndexOf("`t")
+        if ($tab -lt 0) { continue }
+        $source = $text.Substring(0, $tab)
+        $path = $text.Substring($tab + 1)
+        if (-not $source.StartsWith("$prefix/")) { continue }
+        if ($path.StartsWith("$prefix/")) {
+            [void]$ignored.Add($path.Substring($prefix.Length + 1))
+        }
+    }
+    $ignored
+}
+
 function Get-TreeFiles([string]$Root, [string[]]$Exclude) {
     $files = [System.Collections.Generic.List[string]]::new()
     if (-not (Test-Path $Root)) { return $files }
@@ -58,7 +99,11 @@ function Get-TreeFiles([string]$Root, [string[]]$Exclude) {
         if (Test-Excluded $relative $Exclude) { continue }
         $files.Add($relative)
     }
-    $files
+    $ignored = Get-TreeIgnored $Root $files
+    if ($ignored.Count -eq 0) { return $files }
+    $kept = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in $files) { if (-not $ignored.Contains($f)) { $kept.Add($f) } }
+    $kept
 }
 
 $stale = $false

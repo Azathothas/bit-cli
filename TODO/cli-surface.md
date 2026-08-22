@@ -2264,3 +2264,93 @@ than once, a name shorter than ten characters or without an underscore, and a
 citation into `reference/`, which is checked for range only as before. It
 catches the drift that comes from editing this tree, which is the drift this
 repository produces.
+
+### T-196 A magnet that never resolves hangs download with no diagnostic
+
+Source:      cost a measurement while proving [T-194](peers.md), 2026-08-22
+Category:    cli-surface
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `bit-cli download <magnet>` bounds metadata resolution by
+             `--init-timeout` only when a file selection forces it to resolve
+             first. Without `--select-file` or `--exclude-file` it calls
+             `engine.add` instead, which resolves with no bound at all, and
+             the `wait_until_initialized_within` that would have applied
+             `--init-timeout` is on the next line and never reached.
+Relevance:   The comment beside the bounded branch already says why the bound
+             is there: "a magnet that never resolves used to hang the run
+             rather than report why". That is still true of the other branch,
+             which is the one an ordinary invocation takes.
+Approach:    Bound the unbounded branch by the same `--init-timeout`, and
+             report the same timeout error with `phase: resolving_metadata`.
+             The bounded branch already builds that error, so this is moving
+             it rather than writing it.
+Acceptance:  A magnet with one peer that cannot serve it exits non-zero within
+             `--init-timeout` and names the phase, rather than running until
+             something else kills it.
+
+**How it was found.** A magnet download against a local seeder that could not
+send its bitfield ran for **ten minutes** and was killed by the harness, not by
+`bit-cli`. `--init-timeout` was not passed, but it would have made no
+difference: that invocation had no file selection, so it took the branch with
+no bound. The defect it was hiding was [T-194](peers.md), and the ten minutes
+bought nothing: the seeder had already logged the reason in the first second.
+
+Both halves of the inconsistency are in one function, about fifty lines apart.
+
+### T-197 Running upstream's tests filled the patch series with 14,964 patches
+
+Source:      found by running the command `patches/README.md` gives, 2026-08-22
+Category:    cli-surface
+Priority:    P1
+Effort:      S
+Status:      **done**, 2026-08-22T14:20Z
+
+Problem:     `scripts/vendor-diff.ps1` and `scripts/vendor-sync.ps1` walked a
+             vendored tree with `Get-ChildItem -Recurse -Force` and treated
+             every file they found as vendored source. Building that tree
+             leaves `target/`, `node_modules/` and
+             `crates/librqbit/webui/dist/` in it. `vendor-diff` then hashed
+             7.2 GB across 9,894 files and wrote **14,964 patches**, having
+             looked hung for seven and a half minutes first.
+Relevance:   The command that produces those directories is the one
+             `patches/README.md` step 5 tells a session to run, so this is
+             reachable by following the instructions exactly. And a 14,964
+             patch series is not a series: `vendor-status` would have reported
+             the fork healthy while the record of what this repository changed
+             was mostly somebody else's build output.
+Approach:    Skip a path that a `.gitignore` **inside the vendored tree**
+             ignores. That is upstream saying the file is generated, and it is
+             derived rather than listed, so a new build directory needs nothing
+             remembered. The qualifier matters: `vendor-sync`'s `Get-Swallowed`
+             has to keep reporting a file that this repository's **own root**
+             `.gitignore` would eat, which is the `.vscode/` case
+             `docs/vendoring.md` describes, so filtering on "ignored" flat
+             would have deleted a check while fixing a bug.
+Acceptance:  `vendor-diff.ps1` writes the patches for the tree's real changes
+             and nothing else, with a build directory present.
+
+**Measured, on the tree that had one:**
+
+| | before | after |
+| --- | --- | --- |
+| patches written | 14,964 | 7 |
+| wall clock | 7 m 33 s | 6.1 s |
+
+The seven are the two changes recorded in
+[`patches/UPSTREAM.md`](../patches/UPSTREAM.md) and the two lockfiles that
+follow the second one.
+
+**The other half of the fix is not to make the mess.**
+`patches/README.md` and `docs/vendoring.md` now give the command with
+`--target-dir target/vendor-rqbit`, so cargo writes its build output outside a
+tree that is supposed to hold nothing but somebody else's source. The scripts
+had to be fixed anyway: a session that forgets the flag, or a `cargo build`
+that generates the web UI, must not be able to poison the series.
+
+**What this cost before it was found.** Twelve minutes of a session, and the
+first sign of it was `vendor-diff.ps1` producing no output at all, which reads
+as a hang rather than as work. It was found by checking what the script was
+walking, not by waiting longer.

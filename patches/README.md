@@ -73,8 +73,16 @@ pwsh -NoProfile -File scripts/gates.ps1
    first entry in `UPSTREAM.md` is exactly that case.
 
 ```bash
-cargo test --manifest-path vendor/rqbit/Cargo.toml
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
+
+   **`--target-dir` is not optional.** Without it cargo writes its build output
+   to `vendor/rqbit/target`, which is 7.2 GB and 9,894 files inside a tree this
+   repository treats as somebody else's source. Git ignores it, because
+   upstream's own `.gitignore` has `/target`, so nothing catches it: the next
+   `vendor-diff.ps1` walks and hashes all of it and looks hung. The scripts
+   skip a top-level `target/` now, and the directory still should not be there.
+   See [`TODO/cli-surface.md`](../TODO/cli-surface.md), T-197.
 
 ## Taking a new upstream release
 
