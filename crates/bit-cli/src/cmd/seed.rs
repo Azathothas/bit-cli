@@ -106,6 +106,7 @@ pub fn run(
         seed_time: swarm::optional_duration(&args.limits.seed_time, "seed-time")?,
         exit_when_idle: swarm::optional_duration(&args.exit_when_idle, "exit-when-idle")?,
         max_handles: args.limits.max_handles,
+        max_rss: swarm::size_flag(&args.limits.max_rss, "max-rss")?,
         // Filled in once the session is live, because the probe needs the
         // port it bound and the info hash it settled on.
         listener: None,

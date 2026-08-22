@@ -37,13 +37,19 @@ written.
 - **Memory: reproduced, quantified, linear.** 0.804 MiB an hour under `steady`,
   r squared 0.73 over 525 samples, and the last three hours give the same
   slope. Not a settling curve.
-- **Open, on attribution rather than on wall clock.** What the byte is charged
-  to is not yet separable, because completions ran at a constant rate for the
-  whole run. The next measurement is two two-hour runs at different leech
-  rates, not another six-hour one.
+- **Attribution: answered, 2026-08-22, and not by the run this entry called
+  for.** Most of the byte is the peer row `librqbit` keeps for every peer it
+  has ever accepted and never reclaims. **2,891 bytes a row**, measured over
+  2,000 rows at r squared 0.94, which at the soak's 228.5 completions an hour
+  is 0.63 MiB an hour against the measured 0.804. See
+  [the 2026-08-22 section](#session-of-2026-08-22-the-slope-is-peer-rows).
+- **Open, on bounding it.** Nothing in this tree can free a peer row. What is
+  carried here is `--max-rss`, the same shape of backstop as
+  [T-020](peers.md)'s `--max-handles`.
 
 The evidence and the fits are in
-[the 2026-08-21 section](#session-of-2026-08-21-the-question-is-answered-and-the-answer-is-linear).
+[the 2026-08-21 section](#session-of-2026-08-21-the-question-is-answered-and-the-answer-is-linear)
+and [the 2026-08-22 one](#session-of-2026-08-22-the-slope-is-peer-rows).
 
 ---
 
@@ -332,7 +338,12 @@ number in the `steady` run is the load.
 
 **The next measurement is not a longer run.** It is two shorter ones at
 different leech rates, because that is the only thing that separates per-hour
-from per-download:
+from per-download. **Superseded on 2026-08-22 by a third way that needs
+neither**, and the pair below was never run; see
+[the 2026-08-22 section](#session-of-2026-08-22-the-slope-is-peer-rows). Moving
+the leech rate moves the peer count and the transferred bytes together, so it
+would have separated per-hour from per-download and left per-download
+ambiguous:
 
 ```powershell
 pwsh -NoProfile -File scripts/soak.ps1 -Minutes 120 -Workload steady -PayloadMiB 16 -Leechers 1 -Root .tmp/soak-rate1
@@ -368,6 +379,102 @@ Reproduce the analysis from the committed CSVs:
 ```powershell
 pwsh -NoProfile -Command "Import-Csv bench/soak-20260821T012428252Z.csv | Where-Object { $_.iso -match '^\d{4}-' } | Measure-Object -Property rss_bytes -Minimum -Maximum -Average"
 ```
+
+## Session of 2026-08-22: the slope is peer rows
+
+The open question was attribution: 0.804 MiB an hour and 3.6 KiB per completed
+leech fit the same points equally well, because completions ran at a constant
+228.5 an hour for the whole soak. The entry's plan was two runs at different
+leech rates. **A third measurement settles it and needs neither**, because it
+moves the peer count with the wall clock held almost still.
+
+**The candidate came out of [T-020](peers.md).** `librqbit` records a peer for
+every completed handshake and never reclaims the row: 24 handshakes from
+loopback left 24 rows, all in `not needed`, with `live` and `dead` both zero.
+A leech cycle is a completed handshake, so the soak was accumulating one row
+per completion.
+
+`scripts/check-peer-rows.ps1` drives `loopback-churn` in steps against one
+seeder and reads RSS and the row count out of the seeder's own `progress`
+events. No payload moves, no tracker announces, and the handshake is for the
+info hash the seeder holds, so a peer row is the only thing each connection
+leaves behind.
+
+```powershell
+pwsh -NoProfile -File scripts/check-peer-rows.ps1
+```
+
+`bench/peer-rows-20260822T051423181Z.json`, 2,000 connections in steps of 200,
+about three and a half minutes end to end:
+
+| connections | peer rows | rss | handles |
+| --- | --- | --- | --- |
+| 0 | 0 | 11.91 MiB | 188 |
+| 200 | 200 | 13.97 MiB | 212 |
+| 600 | 600 | 15.07 MiB | 212 |
+| 1000 | 1000 | 15.74 MiB | 216 |
+| 1400 | 1400 | 17.03 MiB | 216 |
+| 2000 | 2000 | 18.11 MiB | 216 |
+| after 60 s of nothing | 2000 | 18.65 MiB | 216 |
+
+**One row per connection, exactly, and nothing gives it back.** `peers_seen`
+tracks the row count one for one at every step, and a minute of silence at the
+end returns none of the memory, so this is retained rather than allocator
+churn.
+
+**2,890.8 bytes a peer row**, least squares over the eleven points, r squared
+0.944, intercept 13.03 MiB. A pilot run of the same script an hour earlier gave
+2,906.7, so the number is stable to half a percent.
+
+### What that accounts for
+
+The soak completed 228.5 leech cycles an hour. At 2,891 bytes a row that is
+**0.63 MiB an hour against the 0.804 measured**, so peer rows are 78 percent of
+the slope. Read off sub-ranges rather than the whole fit and the row cost is
+2,327 bytes from 400 to 2,000, 2,478 from 1,000 to 2,000, and 3,250 across the
+whole range, against the 3,689 bytes a completion the soak implies: 63 to 88
+percent, whichever way it is cut. The first two hundred rows cost more than the
+rest, which is the allocator finding its size rather than a bigger row.
+
+Two things stop this being a closed identity, and both are worth saying:
+
+- A soak leecher's row is not this row. It transferred 16 MiB, so it carries
+  counters and a client string this one never sets, and it is the larger of the
+  two. That pushes the accounted fraction up rather than down.
+- One leech cycle is one handshake only if the leecher never reconnects. The
+  soak did not record that, so 228.5 rows an hour is a floor.
+
+So: **the slope is peer rows, to within the precision either measurement has.**
+Not a timer, not the announce path, and not the sampler.
+
+### What is carried here: `--max-rss <SIZE>`
+
+Off by default, on `seed` and `download`, and the same shape as
+[T-020](peers.md)'s `--max-handles` for the same reason: nothing in this tree
+can free a peer row, so what it can do is bound the growth and make it loud.
+Sampled once per `--report-interval`, from the same reading the handle ceiling
+uses so the two cannot report different instants. Over it, the run stops with
+`"stopped": "rss_ceiling"` and exit 16.
+
+```
+$ bit-cli seed t.torrent --dir . --port 0 --stop-after 15s --max-rss 1MiB --json
+exit=16
+  "stopped": "rss_ceiling",
+```
+
+Handles are checked before memory when both are set, because a process out of
+descriptors has already stopped working and one over a memory line is still
+serving. The acceptance is the last two cases of `check-peer-rows.ps1`: a
+ceiling any process is over stops on the first sample, and a ceiling nothing is
+near reaches the run's own deadline instead, which is what proves the first
+stopped for the ceiling.
+
+Status stays **partial**. The growth is attributed and bounded, and it is not
+fixed: closing it means `librqbit` reclaiming a peer row that will not be used
+again, which is upstream. The corpus has the shape of the answer in
+`aria2_rust/aria2-core/src/engine/bt_peer_storage/constants.rs:4`, where
+`MAX_PEER_LIST_SIZE` is 512 and `MAX_DROPPED_PEERS` is 50: aria2 bounds both
+lists and evicts, rather than keeping every peer it has ever met.
 
 ### One harness defect this run found: T-157
 

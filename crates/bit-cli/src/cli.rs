@@ -789,6 +789,21 @@ pub struct LimitArgs {
     #[arg(long, value_name = "N")]
     pub max_handles: Option<u64>,
 
+    /// Stop when the process holds more than this much resident memory. Off by
+    /// default.
+    ///
+    /// The other backstop, for the growth beside the handles. A seeder under
+    /// load grows about 0.8 MiB an hour, and TODO/memory.md T-040 attributes
+    /// most of it to the peer row librqbit keeps for every peer it has ever
+    /// accepted and never reclaims: 2,907 bytes a row, measured over 2,000 of
+    /// them, retained after a minute of no traffic. Nothing here frees one, so
+    /// a supervised deployment sets this and gets a loud exit 16 and a restart.
+    ///
+    /// Read `cost` in a healthy run's report for a baseline before picking a
+    /// number: a seeder with nothing connected sits near 12 MiB.
+    #[arg(long, value_name = "SIZE")]
+    pub max_rss: Option<String>,
+
     /// Stop seeding at this ratio. 0 means do not seed.
     #[arg(long, value_name = "RATIO")]
     pub seed_ratio: Option<f64>,

@@ -11,7 +11,7 @@
 # `not needed`, with `live` and `dead` both zero. If that row is what the slope
 # is made of, RSS is linear in the peer count and the intercept is the seeder.
 #
-# `loopback-churn --handshake` is the driver: it connects, completes a BEP 3
+# `loopback-churn` is the driver: it connects, completes a BEP 3
 # handshake, and closes, with no payload and no tracker, so a peer row is the
 # only thing each connection leaves behind. RSS and the row count both come
 # out of the seeder's own `progress` events, because sampling from outside
@@ -19,18 +19,30 @@
 #
 # Usage:
 #   pwsh scripts/check-peer-rows.ps1
-#   pwsh scripts/check-peer-rows.ps1 -Step 4000 -Steps 10
+#   pwsh scripts/check-peer-rows.ps1 -Step 500 -Steps 20
+#
+# The default reaches 2,000 rows in steps of 200, which is the same order as
+# the 398 the soak in T-040 reached in 1.76 hours. Going much higher measures
+# something else: every `progress` event serialises the whole peer list, so a
+# run holding tens of thousands of rows is paying for the reporting as well as
+# for the rows, and that is a regime the soak never entered.
+#
+# It also carries the acceptance for `--max-rss`, which is the backstop this
+# growth gets until a peer row can be reclaimed: a ceiling any process is over
+# must stop the run with exit 16 and `"stopped": "rss_ceiling"`, and one
+# nothing is near must not.
 #
 # Exits 0 when the run completed and wrote its record, 1 when the fit says the
-# candidate is wrong, and 2 when the check could not run. The record goes to
+# candidate is wrong or the ceiling did not behave, and 2 when the check could
+# not run. The record goes to
 # bench/peer-rows-<timestamp>.json.
 #
 # See TODO/memory.md, T-040, and TODO/peers.md, T-020.
 
 [CmdletBinding()]
 param(
-    [int]$Step = 2000,
-    [int]$Steps = 8,
+    [int]$Step = 200,
+    [int]$Steps = 10,
     [int]$Concurrency = 16,
     [int]$PayloadMiB = 2,
     [string]$Root = ".tmp/peerrows",
@@ -110,7 +122,7 @@ $err = Join-Path $Root "seed.err"
 $script:Seeder = Start-Process -FilePath $bitCli -ArgumentList @(
     "--jsonl", "seed", $torrent, "--dir", $serve, "--port", "0",
     "--no-tracker", "--no-dht", "--no-lsd", "--stop-after", "3600s",
-    "--report-interval", "2s"
+    "--report-interval", "5s"
 ) -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
 
 $addr = $null
@@ -145,7 +157,7 @@ function Get-Sample {
 }
 
 # One sample after the seeder has settled and before any peer has touched it.
-Start-Sleep -Seconds 4
+Start-Sleep -Seconds 12
 $baseline = Get-Sample
 if (-not $baseline) { Exit-With 2 "the seeder wrote no progress event" }
 Write-Step ("baseline: rss {0:N2} MiB, handles {1}, rows {2}" -f ($baseline.rss_bytes / 1MB), $baseline.handles, $baseline.rows)
@@ -162,19 +174,26 @@ $total = 0
 for ($k = 1; $k -le $Steps; $k++) {
     if ($script:Seeder.HasExited) { Exit-With 2 "the seeder exited during step $k" }
     $churnOut = Join-Path $Root "churn$k.out"
+    # Handshaking is loopback-churn's default and there is no --handshake to
+    # ask for it. Passing one is an unknown argument and exit 2, which is how
+    # this script first measured a seeder nothing had connected to.
     $proc = Start-Process -FilePath $churn -ArgumentList @(
         "--peer", $target, "--info-hash", $infoHash, "--connections", "$Step",
-        "--concurrency", "$Concurrency", "--handshake"
+        "--concurrency", "$Concurrency"
     ) -PassThru -NoNewWindow -RedirectStandardOutput $churnOut `
         -RedirectStandardError (Join-Path $Root "churn$k.err")
     if (-not $proc.WaitForExit(600000)) {
         try { $proc.Kill() } catch { }
         Exit-With 2 "loopback-churn did not finish step $k"
     }
+    if ($proc.ExitCode -ne 0) {
+        Exit-With 2 "loopback-churn exited $($proc.ExitCode) on step ${k}: $(Get-Content (Join-Path $Root "churn$k.err") -Raw)"
+    }
     $total += $Step
-    # Two report intervals, so the sample read below is one the seeder took
-    # after the last connection closed rather than during the burst.
-    Start-Sleep -Seconds 5
+    # Two report intervals and a margin, so the sample read below is one the
+    # seeder took after the last connection closed rather than during the
+    # burst.
+    Start-Sleep -Seconds 12
     $sample = Get-Sample
     $rows += [pscustomobject][ordered]@{
         connections = $total
@@ -187,7 +206,51 @@ for ($k = 1; $k -le $Steps; $k++) {
             $total, $sample.rows, ($sample.rss_bytes / 1MB), $sample.handles)
 }
 
+# One more sample after a minute of nothing, so a rise that is transient
+# allocation can be told from one that is retained. Rows that are held cost
+# what they cost; a number that falls away was the reporting.
+Write-Step "settling for 60s with no traffic"
+Start-Sleep -Seconds 60
+$settled = Get-Sample
+Write-Step ("settled:  rows {0,6}  rss {1,7:N2} MiB  handles {2}" -f `
+        $settled.rows, ($settled.rss_bytes / 1MB), $settled.handles)
+
 Stop-Background
+
+# ---------------------------------------------------------------------------
+# The backstop: --max-rss
+# ---------------------------------------------------------------------------
+#
+# Nothing here frees a peer row, so what is carried is a bound. Two runs: a
+# ceiling under any real process, which must stop on the first sample, and one
+# nothing is near, which must reach its own deadline instead. The second is
+# what proves the first stopped for the ceiling rather than for anything else.
+
+function Invoke-Ceiling([string]$name, [string]$ceiling) {
+    $so = Join-Path $Root "$name.out"
+    $se = Join-Path $Root "$name.err"
+    $proc = Start-Process -FilePath $bitCli -ArgumentList @(
+        "--json", "seed", $torrent, "--dir", $serve, "--port", "0",
+        "--no-tracker", "--no-dht", "--no-lsd", "--stop-after", "15s",
+        "--report-interval", "1s", "--max-rss", $ceiling
+    ) -PassThru -NoNewWindow -RedirectStandardOutput $so -RedirectStandardError $se
+    if (-not $proc.WaitForExit(120000)) { try { $proc.Kill() } catch { }; return $null }
+    $report = $null
+    try { $report = Get-Content $so -Raw | ConvertFrom-Json } catch { }
+    [pscustomobject]@{ exit_code = $proc.ExitCode; stopped = $report.stopped; rss = $report.process.rss_bytes }
+}
+
+Write-Step "case ceiling (--max-rss 1MiB, which any real process is over)"
+$over = Invoke-Ceiling "ceiling_over" "1MiB"
+Write-Step "case headroom (--max-rss 4GiB, which nothing is near)"
+$under = Invoke-Ceiling "ceiling_under" "4GiB"
+
+$ceilingFailures = @()
+if ($over.exit_code -ne 16) { $ceilingFailures += "--max-rss 1MiB exited $($over.exit_code), expected 16" }
+if ($over.stopped -ne "rss_ceiling") { $ceilingFailures += "--max-rss 1MiB stopped=$($over.stopped), expected rss_ceiling" }
+if ($under.exit_code -ne 9) { $ceilingFailures += "--max-rss 4GiB exited $($under.exit_code), expected 9" }
+if ($under.stopped -ne "deadline") { $ceilingFailures += "--max-rss 4GiB stopped=$($under.stopped), expected deadline" }
+foreach ($failure in $ceilingFailures) { [Console]::Error.WriteLine("check-peer-rows: $failure") }
 
 # Least squares of rss against peer rows. The slope is what one peer costs and
 # the intercept is the seeder without any.
@@ -217,7 +280,10 @@ $soakCompletionsPerHour = 228.5
 $impliedBytesPerPeer = $soakSlopeBytesPerHour / $soakCompletionsPerHour
 
 $rowsHeld = ($rows | Select-Object -Last 1).peer_rows
-$verdict = if ($rowsHeld -lt ($Step * $Steps * 0.9)) {
+$verdict = if ($ceilingFailures.Count -gt 0) {
+    "rejected: --max-rss did not behave"
+}
+elseif ($rowsHeld -lt ($Step * $Steps * 0.9)) {
     "rejected: the session did not keep a row per handshake"
 }
 elseif ($slope -le 0) {
@@ -242,6 +308,17 @@ $reportPath = Join-Path $ReportDir "peer-rows-$stamp.json"
         payload_mib = $PayloadMiB
     }
     samples        = @($rows)
+    settled        = [ordered]@{
+        peer_rows = $settled.rows
+        rss_bytes = $settled.rss_bytes
+        handles   = $settled.handles
+    }
+    ceiling        = [ordered]@{
+        over_exit      = $over.exit_code
+        over_stopped   = $over.stopped
+        under_exit     = $under.exit_code
+        under_stopped  = $under.stopped
+    }
     fit            = [ordered]@{
         bytes_per_peer_row = [math]::Round($slope, 1)
         intercept_bytes    = [math]::Round($intercept, 0)
@@ -256,7 +333,8 @@ $reportPath = Join-Path $ReportDir "peer-rows-$stamp.json"
     notes          = @(
         "loopback-churn --handshake leaves a peer row and nothing else: no payload moves, no tracker announces, and the handshake is for the info hash the seeder holds.",
         "RSS and the row count are the seeder's own, read out of its progress events. A sampler outside the process measures a different thing and cannot read the row count at all.",
-        "The comparison against T-040 is arithmetic on that entry's recorded numbers, not a second soak. What it answers is whether a peer row is the right size to be the slope."
+        "The comparison against T-040 is arithmetic on that entry's recorded numbers, not a second soak. What it answers is whether a peer row is the right size to be the slope.",
+        "The settled sample is a minute of no traffic at the end. RSS that falls back was the reporting rather than the rows."
     )
 } | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8NoBOM
 

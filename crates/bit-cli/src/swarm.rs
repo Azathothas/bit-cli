@@ -57,6 +57,14 @@ pub fn rate_flag(value: &Option<String>, flag: &str) -> Result<Option<u64>> {
         .map_err(|e| Error::usage(format!("--{flag}: {e}")).with("value", text.clone()))
 }
 
+/// Parse a size flag, naming the flag when it is wrong.
+pub fn size_flag(value: &Option<String>, flag: &str) -> Result<Option<u64>> {
+    let Some(text) = value else { return Ok(None) };
+    bit_cli_core::units::parse_size(text)
+        .map(Some)
+        .map_err(|e| Error::usage(format!("--{flag}: {e}")).with("value", text.clone()))
+}
+
 /// Parse a `--port` value, which is either `N` or `START-END`.
 pub fn port_range(values: &[String]) -> Result<std::ops::RangeInclusive<u16>> {
     if values.is_empty() {
@@ -1000,6 +1008,15 @@ pub struct StopConditions {
     /// restart instead of a process that quietly runs the machine out of
     /// descriptors.
     pub max_handles: Option<u64>,
+    /// Stop when the process holds more than this much resident memory.
+    ///
+    /// The same shape as [`Self::max_handles`] and for the neighbouring
+    /// defect. A seeder grows about 0.8 MiB an hour under load, and
+    /// `TODO/memory.md` T-040 attributes most of that to the peer row
+    /// `librqbit` keeps for every peer it has ever accepted and never
+    /// reclaims: measured at 2,907 bytes a row over 2,000 of them. Nothing
+    /// here frees one. What this does is bound the growth.
+    pub max_rss: Option<u64>,
     /// Stop when this run's own listener has stopped answering.
     ///
     /// The other half of T-020, and the half no ceiling catches. The same
@@ -1253,6 +1270,8 @@ pub enum Stopped {
     Failed,
     /// `--max-handles` was exceeded.
     HandleCeiling,
+    /// `--max-rss` was exceeded.
+    RssCeiling,
     /// `--listener-check` found this run's own listener no longer answering.
     ListenerUnhealthy,
 }
@@ -1271,6 +1290,7 @@ impl Stopped {
             Self::Interrupted => "interrupted",
             Self::Failed => "failed",
             Self::HandleCeiling => "handle_ceiling",
+            Self::RssCeiling => "rss_ceiling",
             Self::ListenerUnhealthy => "listener_unhealthy",
         }
     }
@@ -1287,7 +1307,7 @@ impl Stopped {
             // Not a threshold the caller set on the payload, and not a
             // timeout. The run hit a resource ceiling, which is the same
             // shape of failure as running out of them.
-            Self::HandleCeiling => E::ResourceCeiling,
+            Self::HandleCeiling | Self::RssCeiling => E::ResourceCeiling,
             // Nothing about the process or the port says this, which is why
             // it gets a code rather than folding into `Generic`.
             Self::ListenerUnhealthy => E::ListenerUnhealthy,
@@ -1428,12 +1448,17 @@ impl Progress {
         {
             return Some(Stopped::Idle);
         }
-        // Sampled here rather than on its own timer, so the ceiling costs one
-        // reading per report interval and nothing between them.
-        if let Some(ceiling) = stop.max_handles
-            && bit_cli_core::sysinfo::Process::sample().open_handles > ceiling
-        {
-            return Some(Stopped::HandleCeiling);
+        // Sampled here rather than on its own timer, so the ceilings cost one
+        // reading per report interval and nothing between them. One reading
+        // for both, because two would report two different instants.
+        if stop.max_handles.is_some() || stop.max_rss.is_some() {
+            let process = bit_cli_core::sysinfo::Process::sample();
+            if stop.max_handles.is_some_and(|c| process.open_handles > c) {
+                return Some(Stopped::HandleCeiling);
+            }
+            if stop.max_rss.is_some_and(|c| process.rss_bytes > c) {
+                return Some(Stopped::RssCeiling);
+            }
         }
         // Read here rather than acted on by the probe task itself, so the run
         // stops the same way every other stop condition stops it: on a tick,
@@ -2107,6 +2132,46 @@ udp://cli.example:80
             ..Default::default()
         };
         assert_eq!(progress.should_stop(&snap, &stop, false), None);
+    }
+
+    #[test]
+    fn an_rss_ceiling_the_process_is_already_over_stops_the_run() {
+        let progress = Progress::new(1, vec![10]);
+        let stop = StopConditions {
+            max_rss: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            progress.should_stop(&snapshot(0, 10), &stop, false),
+            Some(Stopped::RssCeiling)
+        );
+    }
+
+    #[test]
+    fn an_rss_ceiling_nothing_is_near_does_not_stop_the_run() {
+        let progress = Progress::new(1, vec![10]);
+        let stop = StopConditions {
+            max_rss: Some(u64::MAX),
+            ..Default::default()
+        };
+        assert_eq!(progress.should_stop(&snapshot(0, 10), &stop, false), None);
+    }
+
+    #[test]
+    fn the_handle_ceiling_is_reported_before_the_memory_one() {
+        // Both from one sample, and both crossed. Handles come first because
+        // a process out of descriptors has already stopped working, where one
+        // over a memory line is still serving.
+        let progress = Progress::new(1, vec![10]);
+        let stop = StopConditions {
+            max_handles: Some(0),
+            max_rss: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            progress.should_stop(&snapshot(0, 10), &stop, false),
+            Some(Stopped::HandleCeiling)
+        );
     }
 
     #[test]

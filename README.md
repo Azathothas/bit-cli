@@ -909,6 +909,27 @@ depends on the deployment; read `cost` in a healthy run's report for a
 baseline. The numbers, the reproduction, and what closing it upstream would
 take are in `TODO/peers.md` under T-020.
 
+Memory has the same shape and the same backstop:
+
+```bash
+bit-cli seed release.torrent --seed-time 7d --max-rss 512MiB
+```
+
+A seeder under load grows about 0.8 MiB an hour, and most of that is one thing:
+`librqbit` records a peer for every completed handshake and never reclaims the
+row. Measured at **2,891 bytes a row over 2,000 rows**, retained after a minute
+of no traffic, which at the soak's completion rate is 0.63 MiB of the 0.804.
+Nothing here frees a row. `--max-rss` stops the run with
+`"stopped": "rss_ceiling"` and exit 16 instead. A seeder with nothing connected
+sits near 12 MiB, so pick a number from `cost` in a healthy report rather than
+from this paragraph.
+
+```bash
+pwsh scripts/check-peer-rows.ps1
+```
+
+The write-up is in `TODO/memory.md` under T-040.
+
 One thing that was in reach is fixed. `librqbit`'s accept loop panics when its
 pending handshake-check set fills and one of those checks fails, and the panic
 kills the listener while the process keeps running and keeps reporting itself
