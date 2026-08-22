@@ -102,10 +102,10 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/peer_connection.rs
              vendor/rqbit/crates/librqbit/src/peer_info_reader/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0004-crates-librqbit-src-peer_connection.rs.patch
-             patches/rqbit/0005-crates-librqbit-src-peer_info_reader-mod.rs.patch
-             patches/rqbit/0008-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0010-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0005-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0006-crates-librqbit-src-peer_info_reader-mod.rs.patch
+             patches/rqbit/0010-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0012-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0012-package-lock.json.patch
+             patches/rqbit/0015-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -245,7 +245,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```
 Unblocks:    T-020, TODO/peers.md, the record's only open P0
 Files:       vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0007-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0008-crates-librqbit-src-session.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T14:37Z
 ```
@@ -316,8 +316,8 @@ open since before this repository existed, and the change is one match arm.
 Unblocks:    T-040, TODO/memory.md, the record's other P0
 Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0008-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0009-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0010-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0011-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T15:30Z
 ```
@@ -389,8 +389,8 @@ open, and reported as exactly this: RSS climbing in a long-lived server.
 Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0007-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0011-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0008-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0014-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T17:26Z
 ```
@@ -487,7 +487,7 @@ claiming otherwise.
 ```
 Unblocks:    T-210, TODO/peers.md, and T-132 could not work without it
 Files:       vendor/rqbit/crates/librqbit/src/peer_connection.rs
-             patches/rqbit/0004-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0005-crates-librqbit-src-peer_connection.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T17:55Z
 ```
@@ -550,8 +550,8 @@ path beside it is the argument for the change.
 Unblocks:    T-132, TODO/multi-source.md
 Files:       vendor/rqbit/crates/librqbit/src/limits.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0003-crates-librqbit-src-limits.rs.patch
-             patches/rqbit/0008-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0004-crates-librqbit-src-limits.rs.patch
+             patches/rqbit/0010-crates-librqbit-src-torrent_state-live-mod.rs.patch
 Upstream:    not offered yet
 Added:       2026-08-22T17:55Z
 ```
@@ -727,3 +727,80 @@ drop one". T-195 records that and nothing in this repository needs it.
 **Offer it upstream.** It is a defect in their code with a one line
 reproduction, and the trait method's default means no implementor of theirs has
 to change.
+---
+
+## librqbit: a resume cache cannot exist without a session store
+
+```
+Unblocks:    T-016, TODO/disk-io.md, which was blocked on exactly this
+Files:       vendor/rqbit/crates/librqbit/src/lib.rs
+             vendor/rqbit/crates/librqbit/src/session.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/initializing.rs
+             vendor/rqbit/crates/rqbit/src/main.rs, which builds the struct
+             patches/rqbit/0003-crates-librqbit-src-lib.rs.patch
+             patches/rqbit/0008-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0009-crates-librqbit-src-torrent_state-initializing.rs.patch
+             patches/rqbit/0013-crates-rqbit-src-main.rs.patch
+Upstream:    not offered yet, and the first two thirds of it should be
+Added:       2026-08-22T19:28Z
+```
+
+`SessionOptions::fastresume` exists and does nothing unless `persistence` is
+also set. `persistence_factory` reads it inside a macro that only the two
+persistence arms reach; the `None` arm returns `NonPersistentBitVFactory`
+whatever `fastresume` says. So the only way to have a resume cache is to turn
+on a store that writes a record of every torrent in the session.
+
+Those are different things. A resume cache is derived data: delete it and the
+next run recomputes it, slowly, and is otherwise identical. A session store is
+state: delete it and the session forgets what it was doing. `bit-cli` is a
+one-shot foreground tool that keeps no state by decision, and re-hashing the
+payload on every invocation costs eight minutes on a 40 GiB seed.
+
+The change is a seam, not a policy:
+
+- `SessionOptions::bitv_factory: Option<Arc<dyn BitVFactory>>`. Used wherever
+  the session would otherwise use `NonPersistentBitVFactory`, so it changes
+  nothing for a caller that leaves it unset or that already has persistence
+  and `fastresume` on.
+- `bitv` and `bitv_factory` are public modules, and `BitV`, `BoxBitV`,
+  `DiskBackedBitV`, `BitVFactory`, `NonPersistentBitVFactory` and `BF` are
+  re-exported. A caller supplying a factory has to be able to name the trait,
+  return a `BitV` from it, and reach the disk-backed implementation rather than
+  write a third one.
+- `validate_fastresume` clears by the key `check` loaded with. It cleared by
+  `shared.id`, a torrent id, while everything around it used the info hash, so
+  a factory keyed by hash could not resolve it and a cache found to be corrupt
+  was never removed. That third one is a defect rather than a seam.
+
+**Nothing about the validation changed and none of it needed to.** `librqbit`
+already checks the bitfield's length against the torrent, re-hashes at least
+one claimed piece per file plus a random sample of the rest, and throws the
+whole thing away and clears the cache on a single failure. That is the part
+that makes a resume cache safe and it was already written.
+
+**Why it has to be here.** `persistence_factory` is a nested function inside
+`Session::new_with_opts`, the modules were private, and `SessionOptions` had no
+field to put a factory in. There is no option, builder or trait a dependent
+crate could reach any of it through, which is why T-016 sat blocked on a
+decision it was not really about.
+
+**How it was measured.** `scripts/check-fastresume.ps1`, one 512 MiB payload of
+1 MiB pieces, five `bit-cli seed --announce-only` runs:
+
+| run | `--fastresume` | elapsed | reports complete |
+| --- | --- | --- | --- |
+| `cold` | yes, empty cache | 2.38 s | yes |
+| `warm` | yes | **2.06 s** | yes |
+| `stale`, one byte rewritten | yes | 2.38 s | **no** |
+| `refresh` | yes | 2.05 s | no |
+| `no_flag` | no | 2.37 s | no |
+
+The clock says the check was skipped and the `complete` column says the cache
+was right: `warm` claims the whole payload without hashing it, and `stale`
+refuses the cache, hashes again, and finds the one piece that changed. A run
+that trusted a stale cache would have announced a piece it does not have.
+
+**Offer the first two thirds upstream.** The `bitv_factory` seam and the module
+exports are a feature a maintainer may want shaped differently, and the
+`validate_fastresume` key is a defect worth sending on its own.

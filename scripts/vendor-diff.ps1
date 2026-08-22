@@ -221,6 +221,69 @@ foreach ($up in $selected) {
     Say "$($up.name): wrote $($written.Count) patch(es) to $seriesDir"
 }
 
+
+# ---------------------------------------------------------------------------
+# The citations in UPSTREAM.md follow the numbering
+# ---------------------------------------------------------------------------
+#
+# Every patch is named `NNNN-<path>.patch` and the number is its position in
+# the series, so adding one file renumbers every file after it. `UPSTREAM.md`
+# names each patch under `Files:`, and those names then all point at nothing.
+#
+# That happened three times in one session on 2026-08-22 and cost a `record`
+# gate failure each time, with eleven dead paths on the last of them. The
+# number is derived, so keeping the citations pointing at it is derived work
+# too, and it belongs here rather than in somebody's memory.
+#
+# Rewritten by suffix: `0009-crates-librqbit-src-limits.rs.patch` and
+# `0004-crates-librqbit-src-limits.rs.patch` are the same patch at different
+# positions, so the part after the number is the identity. A citation whose
+# suffix names no patch on disk is left alone, because that is a real dead
+# path and `check-todo.ps1` should keep reporting it.
+
+function Update-PatchCitations {
+    # Not `$doc`: that is `upstream.json` in the enclosing scope, and a local
+    # of the same name shadows it. TODO/RULES.md section 5 has this exact
+    # hazard written down and it was walked into anyway.
+    $record = Join-Path $repo "patches/UPSTREAM.md"
+    if (-not (Test-Path $record)) { return 0 }
+
+    $bySuffix = @{}
+    foreach ($upstream in $doc.upstreams) {
+        $dir = Join-Path $repo "patches/$($upstream.name)"
+        if (-not (Test-Path $dir)) { continue }
+        foreach ($file in Get-ChildItem -Path $dir -Filter *.patch -File) {
+            if ($file.Name -match '^(\d{4})-(.+)$') {
+                $bySuffix["$($upstream.name)/$($Matches[2])"] = "$($upstream.name)/$($file.Name)"
+            }
+        }
+    }
+    if ($bySuffix.Count -eq 0) { return 0 }
+
+    $text = [System.IO.File]::ReadAllText($record)
+    $moved = 0
+    $updated = [regex]::Replace($text, 'patches/([A-Za-z0-9._-]+)/(\d{4})-([A-Za-z0-9._-]+\.patch)', {
+            param($m)
+            $key = "$($m.Groups[1].Value)/$($m.Groups[3].Value)"
+            if (-not $bySuffix.ContainsKey($key)) { return $m.Value }
+            $want = "patches/$($bySuffix[$key])"
+            if ($want -ne $m.Value) { $script:CitationsMoved++ }
+            $want
+        })
+    if ($updated -ne $text) {
+        [System.IO.File]::WriteAllText($record, $updated)
+    }
+    return $script:CitationsMoved
+}
+
+$script:CitationsMoved = 0
+if (-not $Check) {
+    $moved = Update-PatchCitations
+    if ($moved -gt 0) {
+        Say "UPSTREAM.md: $moved patch citation(s) renumbered"
+    }
+}
+
 if ($stale) {
     Write-Host ""
     Write-Host "Regenerate with: pwsh scripts/vendor-diff.ps1"

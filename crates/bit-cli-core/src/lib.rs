@@ -19,6 +19,7 @@ pub mod listener;
 pub mod metalink;
 pub mod paths;
 pub mod piece_order;
+pub mod resume;
 pub mod span;
 pub mod storage;
 pub mod sysinfo;

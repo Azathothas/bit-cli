@@ -117,6 +117,14 @@ pub struct EngineOptions {
     pub allocation: crate::alloc::Allocation,
     /// How many payload files stay open at once. Zero means the default.
     pub max_open_files: usize,
+    /// Where a resume cache lives, when one is wanted.
+    ///
+    /// `None` disables it, which is the default and the previous behaviour:
+    /// every add re-hashes the whole payload. `Some` supplies a `BitVFactory`
+    /// to the session, which is what `librqbit`'s `fastresume` needs and what
+    /// it could only get from a session persistence store before the vendored
+    /// tree took one here. See [`crate::resume`] and `TODO/disk-io.md` T-016.
+    pub resume_cache: Option<PathBuf>,
     /// Peer addresses this run refuses, as inclusive ranges.
     ///
     /// The session checks these before it reads an incoming handshake and
@@ -141,6 +149,7 @@ impl Default for EngineOptions {
             download_rate: None,
             upload_rate: None,
             peer_download_rate: None,
+            resume_cache: None,
             extra_trackers: Vec::new(),
             ipv4_only: false,
             client_name: Some(format!("bit-cli {}", crate::VERSION)),
@@ -315,6 +324,11 @@ pub type Handle = Arc<ManagedTorrent>;
 /// The session, for the length of one invocation.
 pub struct Engine {
     session: Arc<Session>,
+    /// The resume cache this session was given, when it was given one. Held so
+    /// a caller can describe a payload to it before adding the torrent, which
+    /// is the only point at which anything knows what the payload should look
+    /// like. See [`Self::expect_resume`].
+    resume: Option<Arc<crate::resume::FileResumeCache>>,
     api: Api,
     listen_addr: Option<SocketAddr>,
     warnings: Vec<String>,
@@ -340,6 +354,15 @@ impl Engine {
             None => resolve_listen_addr(&options.listen_ports),
         };
         let mut warnings = Vec::new();
+        // Built before the session, because the session takes it by argument.
+        // The blocking spawner is the one `DiskBackedBitV` flushes through and
+        // is sized the way the session sizes its own.
+        let resume = options.resume_cache.as_ref().map(|root| {
+            std::sync::Arc::new(crate::resume::FileResumeCache::new(
+                root.clone(),
+                librqbit::spawn_utils::BlockingSpawner::new(8),
+            ))
+        });
         warnings.extend(listen_warning);
 
         let trackers = options
@@ -376,6 +399,13 @@ impl Engine {
                 download_bps: rate_to_bps(options.download_rate),
                 upload_bps: rate_to_bps(options.upload_rate),
             },
+            // `fastresume` on its own does nothing: `librqbit` only reads it
+            // where a persistence store already exists. What makes it work
+            // here is the factory below, which is a resume cache and no more.
+            fastresume: resume.is_some(),
+            bitv_factory: resume
+                .clone()
+                .map(|r| r as std::sync::Arc<dyn librqbit::BitVFactory>),
             trackers,
             peer_limit: options.max_peers,
             ipv4_only: options.ipv4_only,
@@ -419,6 +449,7 @@ impl Engine {
         Ok(Self {
             session,
             api,
+            resume,
             listen_addr,
             warnings,
             download_directory: options.download_directory.clone(),
@@ -475,6 +506,24 @@ impl Engine {
     /// Where a web seed bridge should dial to reach this session.
     pub fn bridge_target(&self) -> Option<SocketAddr> {
         self.listen_addr.map(loopback_target)
+    }
+
+    /// Tell the resume cache what the payload for `info_hash` should look
+    /// like, before the torrent is added.
+    ///
+    /// A no-op when no cache was configured. It has to happen before the add,
+    /// because the session loads the cached bitfield during the add and this
+    /// is the only thing that knows what the payload was supposed to be. A
+    /// hash nobody described is never served from the cache.
+    pub fn expect_resume(&self, info_hash: &str, fingerprint: crate::resume::Fingerprint) {
+        if let Some(cache) = self.resume.as_ref() {
+            cache.expect(info_hash, fingerprint);
+        }
+    }
+
+    /// Where the resume cache is, when there is one.
+    pub fn resume_root(&self) -> Option<&std::path::Path> {
+        self.resume.as_ref().map(|c| c.root())
     }
 
     /// The underlying session, for the few callers that need it.

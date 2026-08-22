@@ -86,6 +86,11 @@ impl TorrentStateInitializing {
     async fn validate_fastresume(
         &self,
         bitv_factory: &dyn BitVFactory,
+        // The same key `check` loaded with. It cleared by `shared.id`, a
+        // torrent id, while everything around it uses the info hash, so a
+        // factory keyed by hash could not resolve it and a cache found to be
+        // corrupt was never removed. See TODO/disk-io.md T-016.
+        id: TorrentIdOrHash,
         have_pieces: Option<Box<dyn BitV>>,
     ) -> Option<Box<dyn BitV>> {
         let hp = have_pieces?;
@@ -176,7 +181,7 @@ impl TorrentStateInitializing {
                 info_hash = ?self.shared.info_hash,
                 "data corrupted, ignoring fastresume data"
             );
-            if let Err(e) = bitv_factory.clear(self.shared.id.into()).await {
+            if let Err(e) = bitv_factory.clear(id).await {
                 warn!(id=?self.shared.id, info_hash = ?self.shared.info_hash, "error clearing bitfield: {e:#}");
             }
             self.checked_bytes.store(0, Ordering::Relaxed);
@@ -207,7 +212,9 @@ impl TorrentStateInitializing {
                 .context("error loading have_pieces")?
         };
 
-        let have_pieces = self.validate_fastresume(&*bitv_factory, have_pieces).await;
+        let have_pieces = self
+            .validate_fastresume(&*bitv_factory, id, have_pieces)
+            .await;
 
         let have_pieces = match have_pieces {
             Some(h) => h,

@@ -5,7 +5,7 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/crates/librqbit/src/session.rs b/crates/librqbit/src/session.rs
-index 75071b9..a1173b9 100644
+index 75071b9..eb0ac33 100644
 --- a/crates/librqbit/src/session.rs
 +++ b/crates/librqbit/src/session.rs
 @@ -70,7 +70,7 @@ use serde::{Deserialize, Serialize};
@@ -29,7 +29,70 @@ index 75071b9..a1173b9 100644
      udp_tracker_client: UdpTrackerClient,
      disable_trackers: bool,
  
-@@ -724,6 +729,34 @@ impl Session {
+@@ -430,6 +435,21 @@ pub struct SessionOptions {
+     /// Enable fastresume, to restore state quickly after restart.
+     pub fastresume: bool,
+ 
++    /// Where a resume bitfield is loaded from and stored to.
++    ///
++    /// `fastresume` above only takes effect when `persistence` is set, because
++    /// the persistence store is the only thing that was ever a `BitVFactory`.
++    /// That ties a resume cache, which is derived data anything can recompute,
++    /// to a record of every torrent in the session, which is not. A caller
++    /// that wants the first without the second supplies one here.
++    ///
++    /// Used wherever the session would otherwise use
++    /// `NonPersistentBitVFactory`, so it changes nothing for a caller that
++    /// leaves it unset or that already has persistence and `fastresume` on.
++    ///
++    /// See TODO/disk-io.md T-016.
++    pub bitv_factory: Option<Arc<dyn BitVFactory>>,
++
+     /// Turn on to dump session contents into a file periodically, so that on next start
+     /// all remembered torrents will continue where they left off.
+     pub persistence: Option<SessionPersistenceConfig>,
+@@ -488,6 +508,7 @@ impl Default for SessionOptions {
+             bind_device_name: None,
+             disable_trackers: false,
+             fastresume: false,
++            bitv_factory: None,
+             persistence: None,
+             peer_id: None,
+             listen: None,
+@@ -645,12 +666,22 @@ impl Session {
+                 Option<Arc<dyn SessionPersistenceStore>>,
+                 Arc<dyn BitVFactory>,
+             )> {
++                // What to use when nothing else supplies a bitfield store.
++                // The caller's own factory if it gave one, which is what lets
++                // a resume cache exist without session persistence.
++                fn fallback(opts: &SessionOptions) -> Arc<dyn BitVFactory> {
++                    match opts.bitv_factory.as_ref() {
++                        Some(f) => f.clone(),
++                        None => Arc::new(NonPersistentBitVFactory {}),
++                    }
++                }
++
+                 macro_rules! make_result {
+                     ($store:expr) => {
+                         if opts.fastresume {
+                             Ok((Some($store.clone()), $store))
+                         } else {
+-                            Ok((Some($store), Arc::new(NonPersistentBitVFactory {})))
++                            Ok((Some($store), fallback(opts)))
+                         }
+                     };
+                 }
+@@ -676,7 +707,7 @@ impl Session {
+                         let p = Arc::new(PostgresSessionStorage::new(connection_string).await?);
+                         make_result!(p)
+                     }
+-                    None => Ok((None, Arc::new(NonPersistentBitVFactory {}))),
++                    None => Ok((None, fallback(opts))),
+                 }
+             }
+ 
+@@ -724,6 +755,34 @@ impl Session {
                      .context("error building HTTP(S) client")?
              };
  
@@ -64,7 +127,7 @@ index 75071b9..a1173b9 100644
              let stream_connector = Arc::new(
                  StreamConnector::new(StreamConnectorArgs {
                      enable_tcp: opts.connect.as_ref().map(|c| c.enable_tcp).unwrap_or(true),
-@@ -793,6 +826,7 @@ impl Session {
+@@ -793,6 +852,7 @@ impl Session {
                  listen_addr: listen_result.as_ref().map(|l| l.addr),
                  default_storage_factory: opts.default_storage_factory,
                  reqwest_client,
@@ -72,7 +135,7 @@ index 75071b9..a1173b9 100644
                  connector: stream_connector,
                  root_span: opts.root_span,
                  stats: Arc::new(SessionStats::new()),
-@@ -1002,10 +1036,25 @@ impl Session {
+@@ -1002,10 +1062,25 @@ impl Session {
                          }
                      }
                  },
@@ -102,7 +165,7 @@ index 75071b9..a1173b9 100644
                      }
                  },
              }
-@@ -1576,6 +1625,7 @@ impl Session {
+@@ -1576,6 +1651,7 @@ impl Session {
              force_tracker_interval,
              self.announce_port().unwrap_or(4240),
              self.reqwest_client.clone(),

@@ -92,7 +92,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-013](disk-io.md) | P2 | disk-io | **done** | Selecting a subset of files still creates all of them |
 | [T-014](disk-io.md) | P2 | disk-io | **done** | Adding a torrent can fail with "File exists (os error 17)" |
 | [T-015](disk-io.md) | P1 | disk-io | **done** | Hash checking can hang at 0 percent |
-| [T-016](disk-io.md) | P2 | disk-io | blocked | fastresume is not used when adding a torrent |
+| [T-016](disk-io.md) | P2 | disk-io | done | fastresume is not used when adding a torrent |
 | [T-017](disk-io.md) | P1 | disk-io | **done** | Concurrent receive paths contend on the payload file |
 | [T-018](disk-io.md) | P2 | disk-io | done | The write path issues one operation per 16 KiB block |
 | [T-192](disk-io.md) | P2 | disk-io | open | What the write buffer is worth depends on what is above it |
@@ -237,7 +237,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 159 items: 149 to work through, and 10 deferred to Phase C.
-46 open, 4 partial, 2 blocked, 97 done.
+46 open, 4 partial, 1 blocked, 98 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -492,16 +492,19 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 1 | 0 | 11 | 12 |
 | P1 | 1 | 0 | 0 | 53 | 54 |
-| P2 | 23 | 3 | 2 | 31 | 59 |
+| P2 | 23 | 3 | 1 | 32 | 59 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **46** | **4** | **2** | **97** | **159** |
+| **All** | **46** | **4** | **1** | **98** | **159** |
 
-`blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
-`librqbit` 9.0.0 without turning on the session persistence that decision 7.4
-puts in Phase C. [T-167](bep-coverage.md): BEP 54's send side is inert without
-an upstream receive side. Both stay here rather than moving, with the upstream
-lines that block them and what would unblock them.
+`blocked` is one item. [T-167](bep-coverage.md): BEP 54's send side is inert
+without an upstream receive side. It stays here rather than moving, with the
+upstream line that blocks it and what would unblock it.
+
+It was two until 2026-08-22. [T-016](disk-io.md) was blocked on a resume cache
+being impossible without the session persistence decision 7.4 puts in Phase C,
+and the vendored tree takes a `BitVFactory` now, so the cache exists and no
+session state is written. That is what vendoring is for.
 
 A third entry carries a blocker without being counted here.
 [T-164](peers.md) is `partial` rather than `blocked` because one of its three
@@ -710,8 +713,8 @@ problem. Three are blocked on `librqbit` seams and one on a design decision:
   entry, and the smaller is twenty lines.
 - **[T-163](peers.md)** MSE, **[T-102](bep-coverage.md)** BEP 55: the
   `PeerConnectionHandler` seam, named in both.
-- **[T-016](disk-io.md)** fastresume, blocked on `AddTorrentOptions` carrying
-  no way to skip the hash check.
+- **[T-016](disk-io.md)** fastresume, which was blocked on `librqbit` offering
+  no way to keep a bitfield without a session store, and is **done**.
 
 ### What this ordering changed
 
@@ -851,7 +854,7 @@ ten is what a source is trusted with and what a torrent is allowed to say.
    [T-012](disk-io.md), [T-013](disk-io.md), [T-014](disk-io.md), and
    [T-015](disk-io.md) are **done**, and so are the two Windows items that
    depended on the same storage, [T-070](windows.md) and
-   [T-076](windows.md). [T-016](disk-io.md) is blocked upstream.
+   [T-076](windows.md). [T-016](disk-io.md) was blocked upstream and is done.
 
    One change closed most of them: a payload file opens when it is first
    touched, a read opens for reading only and does not create it, and a write

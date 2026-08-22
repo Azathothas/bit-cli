@@ -573,6 +573,8 @@ Effects: `read_only`.
 | `--on-piece-verified <COMMAND>` | string |  |  | Run this command after every verified piece. High frequency |
 | `--data <PATH>` | string |  |  | Where the payload already lives. Defaults to --dir |
 | `--verify <MODE>` | string | `full`, `quick`, `none` | `full` | Hash-check before announcing |
+| `--fastresume` | boolean |  | `false` | Reuse the previous run's hash check when the payload has not changed |
+| `--fastresume-dir <DIR>` | string |  |  | Where the resume cache lives. Default: .bit-cli-resume beside the data |
 | `--superseed` | boolean |  | `false` | BEP 16 superseeding for initial distribution |
 | `--announce-only` | boolean |  | `false` | Announce, report the tracker response, do not serve |
 | `--port <PORT>` | array |  |  | Listen port, or a range as START-END |

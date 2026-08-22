@@ -43,8 +43,16 @@ mod stat_gen;
 
 pub mod api;
 mod api_error;
-mod bitv;
-mod bitv_factory;
+// Public so that a dependent crate can supply its own.
+//
+// `SessionOptions::bitv_factory` takes one, and a caller that supplies a
+// factory has to be able to name the trait, return a `BitV` from it, and reach
+// the disk-backed implementation rather than write a third. Private until
+// 2026-08-22, which meant the only way to have a resume cache was to turn on
+// the session persistence store and take a record of every torrent with it.
+// See TODO/disk-io.md T-016.
+pub mod bitv;
+pub mod bitv_factory;
 mod chunk_tracker;
 mod create_torrent_file;
 mod dht_utils;
@@ -90,6 +98,8 @@ pub use create_torrent_file::{CreateTorrentOptions, CreateTorrentResult, create_
 pub use dht;
 pub use librqbit_core::spawn_utils::spawn as librqbit_spawn;
 pub use listen::{ListenerMode, ListenerOptions};
+pub use bitv::{BitV, BoxBitV, DiskBackedBitV};
+pub use bitv_factory::{BitVFactory, NonPersistentBitVFactory};
 pub use peer_connection::PeerConnectionOptions;
 pub use session::{
     AddTorrent, AddTorrentOptions, AddTorrentResponse, DhtSessionConfig, ListOnlyResponse,
@@ -100,7 +110,9 @@ pub use torrent_state::{
     ManagedTorrent, ManagedTorrentShared, ManagedTorrentState, TorrentMetadata, TorrentStats,
     TorrentStatsState,
 };
-pub use type_aliases::FileInfos;
+// `BF` is in `BitVFactory`'s signature, so a crate implementing that trait has
+// to be able to name it. See TODO/disk-io.md T-016.
+pub use type_aliases::{BF, FileInfos};
 
 pub use buffers::*;
 pub use clone_to_owned::CloneToOwned;

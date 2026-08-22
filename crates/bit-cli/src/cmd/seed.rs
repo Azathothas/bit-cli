@@ -174,6 +174,19 @@ pub fn run(
         .as_ref()
         .map_or_else(|| base.clone(), |r| r.path.clone());
     let payload_root = root.as_ref().map(|r| r.path.display().to_string());
+    // The resume cache, and where it lives.
+    //
+    // Beside the payload by default, so moving or deleting the data takes the
+    // cache with it and nothing is left behind in a shared directory keyed by
+    // a hash nobody can trace back. `--fastresume-dir` overrides it for a
+    // caller who wants one place for many torrents. See `TODO/disk-io.md`,
+    // T-016.
+    if args.fastresume {
+        engine_options.resume_cache = Some(match &args.fastresume_dir {
+            Some(dir) => env.resolve(dir),
+            None => directory.join(bit_cli_core::resume::DEFAULT_DIR_NAME),
+        });
+    }
     // The place this payload could have been and was not, kept for the warning
     // a seeder holding nothing gets. See `TODO/cli-surface.md`, T-186.
     let other_root = root.as_ref().and_then(|r| r.other.clone());
@@ -267,6 +280,28 @@ pub fn run(
             upload_rate: torrent_upload_rate,
             ..Default::default()
         };
+        // What the payload should look like, recorded before the add,
+        // because the session loads the cached bitfield during the add. A
+        // torrent with no metadata yet, which is a magnet, has nothing to
+        // describe and is never served from the cache.
+        if let (Some(meta), Some(dir)) = (meta.as_ref(), root.as_ref()) {
+            let layout = meta.layout();
+            let files: Vec<(String, u64)> = layout
+                .files
+                .iter()
+                .map(|f| (f.path.join("/"), f.length))
+                .collect();
+            let pieces = layout.total_length.div_ceil(u64::from(layout.piece_length));
+            engine.expect_resume(
+                &meta.info_hash().hex(),
+                bit_cli_core::resume::Fingerprint::of(
+                    &dir.path,
+                    &files,
+                    layout.total_length,
+                    pieces.try_into().unwrap_or(u32::MAX),
+                ),
+            );
+        }
         let handle = engine.add(&source, &add).await?;
         renderer.event(
             env,

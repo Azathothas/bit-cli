@@ -1377,10 +1377,18 @@ pub struct SeedArgs {
     ///
     /// `full` is what happens today whatever this says: the session hash-checks
     /// the whole payload on add and offers no way to skip it. `quick` and
-    /// `none` are accepted, warn, and do the same thing. See `TODO/disk-io.md`,
-    /// T-016.
+    /// `none` are accepted, warn, and do the same thing. `--fastresume` is the
+    /// flag that skips the check. See `TODO/disk-io.md`, T-016.
     #[arg(long, value_name = "MODE", default_value = "full")]
     pub verify: SeedVerify,
+
+    /// Reuse the previous run's hash check when the payload has not changed.
+    #[arg(long)]
+    pub fastresume: bool,
+
+    /// Where the resume cache lives. Default: .bit-cli-resume beside the data.
+    #[arg(long, value_name = "DIR")]
+    pub fastresume_dir: Option<PathBuf>,
 
     /// BEP 16 superseeding for initial distribution.
     #[arg(long)]

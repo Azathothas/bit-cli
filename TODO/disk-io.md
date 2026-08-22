@@ -421,7 +421,7 @@ Source:      https://github.com/ikatson/rqbit/issues/349 (open)
 Category:    disk-io
 Priority:    P2
 Effort:      M
-Status:      open, blocked
+Status:      **done**, 2026-08-22T19:28Z
 
 Problem:     A cached bitfield at `.cache/rqbit/{infohash}.bitv` is not read
              when a torrent is added, so every add re-hashes the whole payload.
@@ -502,6 +502,81 @@ Until one of those exists this cannot be built without contradicting 7.4, so it
 stays open here rather than moving to `phase-c.md`: the cache itself is derived
 data that can be recomputed, which is not what 7.4 is about, and the thing
 blocking it is an upstream API rather than a decision.
+
+## Closed 2026-08-22, and it was option 1
+
+The section above lists three things that would unblock this and puts "an
+upstream `SessionOptions` that takes a `BitVFactory` directly" first. The trees
+were vendored the same day, so that is what was built.
+
+**`bit-cli seed --fastresume`**, with `--fastresume-dir` to move the cache.
+`SessionOptions::bitv_factory` takes a factory, used wherever the session would
+otherwise refuse to keep a bitfield, and
+[`crates/bit-cli-core/src/resume.rs`](../crates/bit-cli-core/src/resume.rs) is
+that factory. Nothing about session persistence is turned on and no session
+state is written, so decision 7.4 is untouched.
+
+**Where the cache lives**, which the Acceptance asks to be documented:
+`<data>/.bit-cli-resume/<info hash>.bitv`, beside a `.meta` sidecar.
+`--fastresume-dir` overrides the root. Beside the payload by default so moving
+or deleting the data takes the cache with it.
+
+**How a stale cache is caught**, three layers, cheapest first:
+
+1. **The sidecar**, ours: every file's length and modification time, the total
+   length and the piece count. One `stat` per file, and any disagreement means
+   the cache is not offered and is deleted.
+2. **The length check**, `librqbit`'s: a bitfield of the wrong size for this
+   torrent is refused.
+3. **The sample**, `librqbit`'s: at least one claimed piece per file plus a
+   random sample of the rest are re-hashed, and one failure discards the lot.
+
+Layers 2 and 3 already existed and are what make this safe at all. Layer 1 is
+ours because the other two are probabilistic about the middle of a large file.
+
+**Measured**, `scripts/check-fastresume.ps1`, one 512 MiB payload of 1 MiB
+pieces, five runs, `bench/fastresume-20260822T192324469Z.json`:
+
+| run | `--fastresume` | elapsed | reports complete |
+| --- | --- | --- | --- |
+| `cold`, empty cache | yes | 2.38 s | yes |
+| `warm` | yes | **2.06 s** | yes |
+| `stale`, one byte rewritten | yes | 2.38 s | **no** |
+| `refresh` | yes | 2.05 s | no |
+| `no_flag` | no | 2.37 s | no |
+
+```bash
+pwsh -NoProfile -File scripts/check-fastresume.ps1
+```
+
+The clock says the check was skipped and the `complete` column says the cache
+was right. `stale` is the case the whole entry rests on: it refuses the cache,
+hashes again, and finds the one piece that changed. A run that trusted it would
+have announced a piece it does not hold, and the peer on the other end would be
+what found out.
+
+**The premise about what hashing costs was wrong, and the correction belongs
+here.** "The cost, measured" above reads 6,087 ms for a 512 MiB seed and infers
+"roughly 85 MiB/s of hashing" and eight minutes for 40 GiB. Most of those six
+seconds was `--exit-when-idle 1s` waiting for a peer that never came. Measured
+against `--announce-only`, which stops as soon as the torrent is live, the same
+payload costs **0.32 s** of hashing, which is about **1.6 GiB/s**. So 40 GiB is
+about **25 seconds**, not eight minutes. The flag is still worth having and its
+value is a quarter of a minute per invocation rather than eight, and the entry
+should not go on claiming the larger number.
+
+**Why the timing is judged as a difference and not a ratio.** Most of each run
+is a fixed two second settle, so two runs that differ only in whether they
+hashed differ by exactly the hashing. A ratio over the whole run is 1.16 for a
+check that was skipped entirely, which says nothing.
+
+**Seeding only, deliberately.** `bit-cli download` does not take the flag. The
+sidecar keys on modification time, which is correct for a payload nothing is
+writing, and a download writes its payload continuously: every run would find
+its own cache stale. Resuming a partial download needs invalidation of a
+different shape and is not built. `--verify` still says what it does and still
+warns for `quick` and `none`, because the session still offers no way to skip
+the check other than this.
 
 ## What ships in the meantime
 

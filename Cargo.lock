@@ -326,6 +326,7 @@ name = "bit-cli-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "chrono",
  "globset",

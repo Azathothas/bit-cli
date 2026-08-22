@@ -2523,6 +2523,19 @@
         },
         {
           "default": "false",
+          "description": "Reuse the previous run's hash check when the payload has not changed",
+          "name": "--fastresume",
+          "type": "boolean"
+        },
+        {
+          "description": "Where the resume cache lives. Default: .bit-cli-resume beside the data",
+          "name": "--fastresume-dir",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "DIR"
+        },
+        {
+          "default": "false",
           "description": "BEP 16 superseeding for initial distribution",
           "name": "--superseed",
           "type": "boolean"

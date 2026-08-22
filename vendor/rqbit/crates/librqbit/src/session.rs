@@ -435,6 +435,21 @@ pub struct SessionOptions {
     /// Enable fastresume, to restore state quickly after restart.
     pub fastresume: bool,
 
+    /// Where a resume bitfield is loaded from and stored to.
+    ///
+    /// `fastresume` above only takes effect when `persistence` is set, because
+    /// the persistence store is the only thing that was ever a `BitVFactory`.
+    /// That ties a resume cache, which is derived data anything can recompute,
+    /// to a record of every torrent in the session, which is not. A caller
+    /// that wants the first without the second supplies one here.
+    ///
+    /// Used wherever the session would otherwise use
+    /// `NonPersistentBitVFactory`, so it changes nothing for a caller that
+    /// leaves it unset or that already has persistence and `fastresume` on.
+    ///
+    /// See TODO/disk-io.md T-016.
+    pub bitv_factory: Option<Arc<dyn BitVFactory>>,
+
     /// Turn on to dump session contents into a file periodically, so that on next start
     /// all remembered torrents will continue where they left off.
     pub persistence: Option<SessionPersistenceConfig>,
@@ -493,6 +508,7 @@ impl Default for SessionOptions {
             bind_device_name: None,
             disable_trackers: false,
             fastresume: false,
+            bitv_factory: None,
             persistence: None,
             peer_id: None,
             listen: None,
@@ -650,12 +666,22 @@ impl Session {
                 Option<Arc<dyn SessionPersistenceStore>>,
                 Arc<dyn BitVFactory>,
             )> {
+                // What to use when nothing else supplies a bitfield store.
+                // The caller's own factory if it gave one, which is what lets
+                // a resume cache exist without session persistence.
+                fn fallback(opts: &SessionOptions) -> Arc<dyn BitVFactory> {
+                    match opts.bitv_factory.as_ref() {
+                        Some(f) => f.clone(),
+                        None => Arc::new(NonPersistentBitVFactory {}),
+                    }
+                }
+
                 macro_rules! make_result {
                     ($store:expr) => {
                         if opts.fastresume {
                             Ok((Some($store.clone()), $store))
                         } else {
-                            Ok((Some($store), Arc::new(NonPersistentBitVFactory {})))
+                            Ok((Some($store), fallback(opts)))
                         }
                     };
                 }
@@ -681,7 +707,7 @@ impl Session {
                         let p = Arc::new(PostgresSessionStorage::new(connection_string).await?);
                         make_result!(p)
                     }
-                    None => Ok((None, Arc::new(NonPersistentBitVFactory {}))),
+                    None => Ok((None, fallback(opts))),
                 }
             }
 

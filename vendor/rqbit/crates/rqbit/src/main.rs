@@ -645,6 +645,9 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
         dht,
         // This will be overridden by "server start" below if needed.
         persistence: None,
+        // The server keeps a resume cache through its persistence store, so
+        // it needs no factory of its own. See TODO/disk-io.md T-016.
+        bitv_factory: None,
         peer_id: None,
         listen,
         connect: Some(ConnectionOptions {

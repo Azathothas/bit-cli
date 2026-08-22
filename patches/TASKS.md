@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**11 entries: 5 done, 2 partial, 2 blocked, 2 open.** Every one of them was
+**11 entries: 6 done, 2 partial, 1 blocked, 2 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
 record.**
 
@@ -28,16 +28,16 @@ record.**
 | [T-040](../TODO/memory.md) | **P0** | partial | **bounded.** Only the six hour soak is left |
 | [T-022](../TODO/peers.md) | P1 | **done** | an HTTP tracker announce per address family |
 | [T-132](../TODO/multi-source.md) | P1 | **done** | a download limit that skips one peer |
-| [T-016](../TODO/disk-io.md) | P2 | blocked | a resume cache without session persistence |
+| [T-016](../TODO/disk-io.md) | P2 | **done** | a resume cache without session persistence |
 | [T-100](../TODO/bep-coverage.md) | P2 | partial | the send half of an extension message |
 | [T-163](../TODO/peers.md) | P2 | open | MSE, a wire-level handshake |
 | [T-167](../TODO/bep-coverage.md) | P2 | blocked | no inverse of `on_have` |
 | [T-195](../TODO/peers.md) | P2 | **done** | the read side of T-194, at 262,104 pieces |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 
-Six are not done, and one of those is not waiting on a seam at all:
+Five are not done, and one of those is not waiting on a seam at all:
 [T-040](../TODO/memory.md) is bounded and waiting on a six hour measurement.
-The other five are sections 3, 4 and 5, in that order.
+The other four are sections 3, 4 and 5, in that order.
 
 **Before reconciling anything**, read `README.md` under "Upstream is not
 automatically right". A new release is a proposal, not an authority, and a hunk

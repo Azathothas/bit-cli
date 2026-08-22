@@ -1076,7 +1076,7 @@ A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-`
 .SH NAME
 bit\-cli\-seed \- Seed existing data in the foreground
 .SH SYNOPSIS
-\fBbit\-cli\-seed\fR [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-on\-complete\fR] [\fB\-\-on\-error\fR] [\fB\-\-on\-piece\-verified\fR] [\fB\-\-data\fR] [\fB\-\-verify\fR] [\fB\-\-superseed\fR] [\fB\-\-announce\-only\fR] [\fB\-\-port\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-pex\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-report\-interval\fR] [\fB\-\-exit\-when\-idle\fR] [\fB\-\-listener\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-seed\fR [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-on\-complete\fR] [\fB\-\-on\-error\fR] [\fB\-\-on\-piece\-verified\fR] [\fB\-\-data\fR] [\fB\-\-verify\fR] [\fB\-\-fastresume\fR] [\fB\-\-fastresume\-dir\fR] [\fB\-\-superseed\fR] [\fB\-\-announce\-only\fR] [\fB\-\-port\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-pex\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-report\-interval\fR] [\fB\-\-exit\-when\-idle\fR] [\fB\-\-listener\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Seed existing data in the foreground
 .SH OPTIONS
@@ -1195,7 +1195,7 @@ Where the payload already lives. Defaults to \-\-dir
 \fB\-\-verify\fR \fI<MODE>\fR [default: full]
 Hash\-check before announcing.
 
-`full` is what happens today whatever this says: the session hash\-checks the whole payload on add and offers no way to skip it. `quick` and `none` are accepted, warn, and do the same thing. See `TODO/disk\-io.md`, T\-016.
+`full` is what happens today whatever this says: the session hash\-checks the whole payload on add and offers no way to skip it. `quick` and `none` are accepted, warn, and do the same thing. `\-\-fastresume` is the flag that skips the check. See `TODO/disk\-io.md`, T\-016.
 .br
 
 .br
@@ -1208,6 +1208,12 @@ quick
 .IP \(bu 2
 none
 .RE
+.TP
+\fB\-\-fastresume\fR
+Reuse the previous run\*(Aqs hash check when the payload has not changed
+.TP
+\fB\-\-fastresume\-dir\fR \fI<DIR>\fR
+Where the resume cache lives. Default: .bit\-cli\-resume beside the data
 .TP
 \fB\-\-superseed\fR
 BEP 16 superseeding for initial distribution
