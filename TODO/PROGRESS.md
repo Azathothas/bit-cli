@@ -34,8 +34,9 @@ pwsh -NoProfile -File scripts/gates.ps1
 ```
 
 - **CI:** green on every push this session, last read at run
-  **32566533746** against commit `4ee2948`. Three commits carry `[skip ci]`
-  because they change no source: `ec82a24`, `f46d4fd` and `47a6cea`.
+  **32567387663** against commit `74c1a08`, which is the tip. Three commits
+  carry `[skip ci]` because they change no source: `ec82a24`, `f46d4fd` and
+  `47a6cea`.
 - **Entries:** 149 items. 47 open, 7 partial, 2 blocked, 83 done, 10 deferred
   to Phase C. 83 of 139 workable done, 56 left.
 - **Tree:** 84 Rust files, 49,649 lines of code, 11,471 of comment, measured
@@ -165,8 +166,8 @@ Re-derived after the last work order closed. [INDEX.md](INDEX.md)'s "How an
 ordering is derived" was read for the four questions it asks; its own list is
 the derivation of 2026-08-21 and is kept as written.
 
-1. **Read the CI run the last push started.** Everything before it was green,
-   last read at 32566533746.
+1. Nothing to read first. Every push last session was green, the last at
+   **32567387663** against the tip, `74c1a08`.
 2. **[T-190](disk-io.md)**, P2, effort S. One comment and one behaviour
    disagree about where somebody else's bytes are written, and the evidence
    that the behaviour is right is already in the entry. Read what
