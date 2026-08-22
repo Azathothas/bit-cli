@@ -202,7 +202,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
 | [T-130](multi-source.md) | P1 | webseed | **done** | A source cannot be told which statuses are worth retrying |
 | [T-131](multi-source.md) | P1 | bench | **done** | The loopback file server cannot simulate a signed URL |
-| [T-132](multi-source.md) | P1 | performance | open | The swarm cannot be rate limited separately from HTTP sources |
+| [T-132](multi-source.md) | P1 | performance | partial | The swarm cannot be rate limited separately from HTTP sources |
 | [T-133](multi-source.md) | P1 | webseed | **done** | Two torrents holding the same file cannot share its bytes |
 | [T-134](multi-source.md) | P2 | bep | open | v1 and v2 info hashes are not reconciled |
 | [T-135](multi-source.md) | P2 | performance | open | Source selection cannot be steered by method or by priority at run time |
@@ -225,7 +225,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 147 items: 137 to work through, and 10 deferred to Phase C.
-49 open, 6 partial, 2 blocked, 80 done.
+48 open, 7 partial, 2 blocked, 80 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -479,11 +479,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 1 | 2 | 0 | 8 | 11 |
-| P1 | 3 | 1 | 0 | 47 | 51 |
+| P1 | 2 | 2 | 0 | 47 | 51 |
 | P2 | 23 | 3 | 2 | 23 | 51 |
 | P3 | 22 | 0 | 0 | 2 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **49** | **6** | **2** | **80** | **147** |
+| **All** | **48** | **7** | **2** | **80** | **147** |
 
 `blocked` is two items. [T-016](disk-io.md): a resume cache cannot be built on
 `librqbit` 9.0.0 without turning on the session persistence that decision 7.4

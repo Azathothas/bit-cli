@@ -974,6 +974,41 @@ entry to the backlog it is measuring.
 pwsh scripts/check-listener.ps1
 ```
 
+## Capping one source and not the other
+
+Four rate flags, and they do not divide the way the names suggest.
+
+| flag | what it bounds |
+| --- | --- |
+| `--max-overall-download-rate` | the whole session, **peers and HTTP together** |
+| `--max-download-rate` | one torrent, peers and HTTP together |
+| `--web-seed-speed-limit` | HTTP sources only, per source |
+| nothing | peers only |
+
+The last row is the gap. An HTTP source reaches the session as a peer over
+loopback, so every cap that can reach a peer reaches the mirror as well.
+Measured on a 128 MiB payload with an 8 MiB/s cap:
+
+| what was capped | total | HTTP | peers |
+| --- | --- | --- | --- |
+| nothing, HTTP only | 195.42 MiB/s | 195.42 | 0 |
+| `--max-overall-download-rate` | 8.41 MiB/s | 8.41 | 0 |
+| `--web-seed-speed-limit` | 8.23 MiB/s | 8.23 | 0 |
+| nothing, peer and HTTP | 354.57 MiB/s | 138.50 | 216.07 |
+| `--web-seed-speed-limit`, peer and HTTP | **35.96 MiB/s** | 1.40 | 34.55 |
+| `--max-overall-download-rate`, peer and HTTP | 8.27 MiB/s | 4.14 | 4.14 |
+
+The fifth row is the one to read. Capping the mirror does not cap the run: the
+peer picked up the work and the whole thing went four times faster than the cap
+that was set. If a run has to stay under a number, cap the session.
+
+```bash
+pwsh scripts/check-rate-scope.ps1
+```
+
+`TODO/multi-source.md` under T-132 has why a peer-only cap is not there and
+what upstream would have to expose for it to be.
+
 ## Downloading through an outage
 
 A download whose peers all go away recovers when they come back, but not

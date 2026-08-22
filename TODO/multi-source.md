@@ -404,7 +404,7 @@ says so in the report's `notes`.
 Category:    performance
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      partial
 
 Problem:     `--max-download-rate` goes into the session's `LimitsConfig`, and
              HTTP sources reach the session as peers over loopback, so a
@@ -432,6 +432,65 @@ Acceptance:  A hybrid run with `--max-peer-rate 10MiB/s --web-seed-speed-limit
              50MiB/s` reports peer bytes within 10% of 10 MiB/s and HTTP bytes
              within 10% of 50 MiB/s over sixty seconds, both from the same
              report, plus the same run with each cap alone.
+
+**Partial, 2026-08-22. The premise holds, the workaround does not, and the
+documentation half is done.**
+
+The Approach says to measure before committing, and names
+[T-031](performance.md) as the first question. That is stale: T-031 closed, the
+session cap is enforced. The question worth asking instead is whether the
+session cap reaches the bridge, which is the sentence the Problem asserts.
+
+`bench/rate-scope-20260822T061715516Z.json`, one 128 MiB payload, one mirror,
+one seeder, an 8 MiB/s cap:
+
+| phase | total | HTTP | peers |
+| --- | --- | --- | --- |
+| `http_ceiling` | 195.42 MiB/s | 195.42 | 0 |
+| `http_session_cap` | **8.41 MiB/s** | 8.41 | 0 |
+| `http_webseed_cap` | 8.23 MiB/s | 8.23 | 0 |
+| `hybrid_ceiling` | 354.57 MiB/s | 138.50 | 216.07 |
+| `hybrid_webseed_cap` | **35.96 MiB/s** | 1.40 | 34.55 |
+| `hybrid_session_cap` | 8.27 MiB/s | 4.14 | 4.14 |
+
+```powershell
+pwsh -NoProfile -File scripts/check-rate-scope.ps1
+```
+
+**The premise is right.** `--max-overall-download-rate 8MiB/s` takes HTTP from
+195 MiB/s to 8.41, so the session limiter does bound the bridge, and there is
+no cap that reaches peers without also reaching HTTP.
+
+**Why, with a line number.** `librqbit`'s download limiter is acquired in the
+peer's own request loop, once per outgoing `Request`, against the torrent's
+limiter and then the session's: `torrent_state/live/mod.rs:1698-1706`. The
+bridge is a peer the session requests blocks from, so its requests pass through
+the same two calls. `LimitsConfig` has exactly two fields, `upload_bps` and
+`download_bps` (`limits.rs:11`), and nothing anywhere is scoped to a peer or a
+connection. **That is the blocker**: a cap that excludes one peer cannot be
+expressed. What would unblock it is `prepare_for_download` taking the peer it
+is throttling, or a `LimitsConfig` on the connection.
+
+**The workaround in the Approach does not survive the measurement.** It
+proposes setting the session cap to the sum of a peer cap and a web seed cap
+and holding each side to its own bucket, so peers get the session cap minus
+what HTTP took. That bounds the peer share only while HTTP is taking its whole
+bucket, and `hybrid_webseed_cap` is what happens when it is not: HTTP ran at
+**1.40 MiB/s against an 8 MiB/s cap** because the peer was faster and the
+picker gave HTTP little to do, and the run reached 35.96 MiB/s. Under that
+arrangement peers would have been handed the whole unused remainder. A
+`--max-peer-rate` that holds only when the mirror is saturated is a flag that
+lies in the common case, so it is not built.
+
+**What is done: the asymmetry is documented**, which is what the Relevance line
+says is missing. `README.md` has the table above under
+[Capping one source and not the other](../README.md#capping-one-source-and-not-the-other),
+and `scripts/check-rate-scope.ps1` is the acceptance that keeps it true. The
+caps in it are judged and the splits between two sources are recorded, because
+a split is a scheduling outcome and [RULES.md](RULES.md) section 5 says a
+fixture must not assert one. `hybrid_webseed_cap` is judged in both directions:
+HTTP stays under its cap, and the run as a whole does not. If that second
+assertion ever fails, a peer cap has appeared and this entry is closeable.
 
 ### T-133 Two torrents holding the same file cannot share its bytes
 

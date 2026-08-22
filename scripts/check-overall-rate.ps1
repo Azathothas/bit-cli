@@ -17,8 +17,13 @@
 # reaches the session as a peer, so the session limiter is what bounds it, and
 # [T-132](../TODO/multi-source.md) is that `--max-overall-*` and
 # `--web-seed-speed-limit` therefore interact. Measuring the cap over HTTP
-# sources is the case that interaction is about, and phase 3 below measures
-# both flags together rather than assuming they compose.
+# sources is the case that interaction is about.
+#
+# **It does not measure the two flags together.** An earlier revision of this
+# header said phase 3 did, and phase 3 is `--max-download-rate`, the
+# per-torrent cap. `--web-seed-speed-limit` appears in no phase here. Composing
+# the two is [T-132](../TODO/multi-source.md)'s and belongs with the rest of
+# that entry rather than bolted on here.
 #
 # Usage:
 #   pwsh scripts/check-overall-rate.ps1
