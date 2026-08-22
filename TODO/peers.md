@@ -11,7 +11,7 @@ Source:      https://github.com/ikatson/rqbit/issues/311 (open)
 Category:    peers
 Priority:    P0
 Effort:      L
-Status:      open
+Status:      **done**, 2026-08-22T14:47Z
 
 Problem:     After about two days as a service, a reporter saw 20,000 sockets
              in CLOSE_WAIT and FIN_WAIT, which degraded TCP for the whole
@@ -267,6 +267,91 @@ not us, `scripts/check-close-wait.ps1 -Ceiling 100` still fails, and the fix is
 still the accept loop draining its pending set to empty. What has changed is
 that the outage is now loud: a supervisor gets exit 17 instead of a process
 that reports a ratio and serves nobody.
+
+**Closed 2026-08-22T14:47Z, by one match arm in the vendored tree.**
+
+The mechanism the section above names is the whole defect, and the fix is what
+that section says it would be. `task_listener`'s second `select!` arm matched
+`Some(Ok((live, checked)))`. A `select!` arm whose pattern fails is disabled
+for the rest of that call, so a handshake check resolving to `Err` left the
+loop waiting on `l.accept()` alone. The arm now binds the whole result and
+handles it inside, so no outcome can disable it. `patches/UPSTREAM.md` under
+"librqbit: one failed handshake check stops the accept loop draining" carries
+the diff and the reason.
+
+**This entry's own acceptance, as written, and it had never passed:**
+
+```
+$ pwsh -NoProfile -File scripts/check-close-wait.ps1 -Ceiling 100
+
+mode         completed failed CW during CW after CW drained handles    listening panicked ok
+handshake         2000      0         0        0          0 188 -> 226 yes       no       yes
+no-handshake      2000      0         0        0          0 188 -> 194 yes       no       yes
+
+verdict: both modes ended under 100 stuck sockets with the listener alive
+```
+
+Against what the same command measured before, in the table at the top of this
+entry:
+
+| | before | after |
+| --- | --- | --- |
+| `no-handshake`, CLOSE_WAIT while the churn ran | 986 | **0** |
+| `no-handshake`, CLOSE_WAIT after a 30 s settle | 986 | **0** |
+| `no-handshake`, handles | 188 to 1210 | **188 to 194** |
+| 4,000 connections, CLOSE_WAIT | 2,053 | not reproduced |
+
+`bench/close-wait-20260822T144628230Z.json` is the run.
+
+**And the outage, which was the worse half.** The stranding stopped the target
+serving anything at all, for any info hash, while it went on reporting itself
+as seeding.
+
+```
+$ pwsh -NoProfile -File scripts/check-listener.ps1
+   1 connections cleared a 20 connection backlog
+verdict: pass
+```
+
+| | before | after |
+| --- | --- | --- |
+| connections to clear a 20 connection backlog | 20 | **1** |
+| probes / failed under the same load | 6 / 3 | **13 / 0** |
+| the seeder under that load | exit 17, `listener_unhealthy` | still serving |
+
+`bench/listener-20260822T144737688Z.json`.
+
+**Three of `check-listener.ps1`'s four cases asserted the defect**, so they are
+inverted rather than deleted and now hold the fix: `poisoned`, which required
+exit 17, is `survives_load` and requires the run to carry on with the listener
+healthy; `recovery` required more than one connection to clear the backlog and
+now requires exactly one. `check-swarm.ps1`'s `listener_poisoned` case carried
+`judged: false` because this entry was open, and is judged now. Both changes
+mean the defect cannot come back unnoticed, which is what the cases are for.
+
+**What that costs, said plainly.** The old `poisoned` case was the only
+end-to-end proof that `--listener-check` can stop a real run with exit 17, and
+there is no longer a way to poison a listener to produce one. The decision
+behind the exit is covered by three unit tests in `crates/bit-cli/src/swarm.rs`:
+`one_unanswered_probe_does_not_stop_a_seeder`,
+`three_unanswered_probes_in_a_row_stop_the_run`, and
+`an_answered_probe_clears_the_run_of_failures_before_it`. What is no longer
+covered anywhere is the wiring between a real seeder's probe and a real exit.
+
+**The two backstops carried here stay, and one of them needs its reasoning
+rewritten.** `--max-handles` and `--listener-check` are both still off by
+default and both still do what they did. But the threshold of three was
+**derived from the drain rate**: "one failure means a backlog of at least one,
+which a real peer clears for itself by arriving; three means the backlog
+outlived three connections". There is no backlog now, so that derivation is
+gone. Three is still the right number for a different reason, which is that a
+single probe can time out on a loaded machine without the listener being
+unreachable, and it is no longer measured. Said here rather than left as a
+number whose stated justification no longer holds.
+
+**What is not fixed.** A peer row is still kept for every completed handshake
+and never reclaimed, which the section above notes and which belongs to
+[T-040](memory.md). The `handshake` mode's 188 to 226 handles is that, not this.
 
 ### T-021 A temporary network drop stops the download permanently
 

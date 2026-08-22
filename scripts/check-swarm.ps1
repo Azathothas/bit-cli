@@ -30,8 +30,10 @@
 #                     The operating system's socket table says the run
 #                     connected to the target and to nothing else.
 #   listener_poisoned Leech, then the connect load, then leech again, against
-#                     one seeder. Recorded and not judged: it is T-020, which
-#                     is open.
+#                     one seeder. The second leech must be served. The name is
+#                     historical: this load did poison the listener until
+#                     T-020 was fixed on 2026-08-22, and the case now holds
+#                     the fix rather than recording the defect.
 #   no_target         No target argument at all. Refused.
 #   dead_target       A port nothing is listening on. Exit 6, and the report
 #                     says every peer was refused rather than reporting a rate
@@ -41,10 +43,10 @@
 # necessary, and both were found by running this script rather than by reading
 # it. The target's port is read from the target's own output, never chosen
 # here, because a port this script picked could already be in use and dialling
-# it would measure whatever else was listening. And the connect load leaves
-# the target unable to complete a handshake at all, so a case that reuses the
-# seeder before it measures that instead of itself. The second one is T-020
-# and `listener_poisoned` is where it is measured on purpose.
+# it would measure whatever else was listening. And the connect load used to
+# leave the target unable to complete a handshake at all, so a case that reused
+# the seeder before it measured that instead of itself. The second one is T-020,
+# fixed on 2026-08-22, and `listener_poisoned` is where it is held on purpose.
 #
 # Usage:
 #   pwsh scripts/check-swarm.ps1
@@ -159,12 +161,12 @@ $pieceCount = [math]::Ceiling($payloadLength / (256 * 1024))
 # reported zero peers handshaked, which read as a defect in `bench swarm` and
 # is not one: the connect load leaves the target unable to complete a
 # handshake for any info hash, including the one it is serving. That is T-020
-# and it now has a case of its own, `listener_poisoned`. Until it is fixed, a
-# case that shares a seeder with the one before it is measuring the previous
-# case.
+# and it now has a case of its own, `listener_poisoned`. It is fixed, and the
+# per-case seeder stays: a case that shares a seeder with the one before it can
+# still measure the previous case's leftovers, and the isolation costs little.
 $script:SeederIndex = 0
 
-function Start-Seeder {
+function Start-Seeder([string[]]$extra = @()) {
     Stop-Background
     $script:SeederIndex++
     $tag = "seed-$($script:SeederIndex)"
@@ -173,10 +175,10 @@ function Start-Seeder {
     # Port zero, and the port comes back out of the seeder's own event stream.
     # A port this script picked could already be in use, and dialling it would
     # measure whatever else was listening.
-    $script:Seeder = Start-Process -FilePath $bitCli -ArgumentList @(
+    $script:Seeder = Start-Process -FilePath $bitCli -ArgumentList (@(
         "--jsonl", "seed", $torrent, "--dir", $serve, "--port", "0",
         "--no-tracker", "--no-dht", "--no-lsd", "--stop-after", "600s"
-    ) -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
+    ) + $extra) -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
 
     $addr = $null
     for ($attempt = 0; $attempt -lt 150; $attempt++) {
@@ -446,7 +448,19 @@ $cases += [pscustomobject][ordered]@{
 # the configuration surface actually has.
 
 Write-Step "case sources_ignored (discovery on in a config file, a second seeder to find)"
-$target = Start-Seeder
+# Throttled, and that is what makes this case measurable at all. It reads the
+# operating system's socket table while the run is connected, and on loopback
+# an 8 MiB payload is served in about 90 ms, which is shorter than one
+# Get-NetTCPConnection call. Capping the target's upload stretches the transfer
+# past the run's own --duration, so the window is the duration rather than
+# however fast this machine happens to be.
+#
+# It used to work by accident. The load was the connect load, whose peers held
+# their connections "for the whole duration" only because the target could not
+# answer them: that was T-020, and fixing it dropped this case from six samples
+# to one and from 42 sightings to zero. A case that needs the target broken is
+# not a case.
+$target = Start-Seeder @("--max-overall-upload-rate", "512KiB")
 
 $decoyOut = Join-Path $Root "decoy.out"
 $decoyErr = Join-Path $Root "decoy.err"
@@ -498,13 +512,12 @@ if ($cfgShown) {
 }
 if (-not $cfgRead) { Add-Failure "sources_ignored" "the config file at $cfg was not read, so the case measured nothing" }
 
-# The connect load, because its peers hold their connections for the whole
-# duration and a leech peer against an 8 MiB payload is gone before the socket
-# table can be sampled.
+# The leech load against the throttled target above, so the peers stay
+# connected for the run's whole duration and there is something to sample.
 $sourcesReport = Join-Path $Root "sources_ignored.json"
 $sourcesDir = New-CaseDir "sources_ignored"
 $swarmProc = Start-Process -FilePath $bitCli -ArgumentList @(
-    "--config", $cfg, "bench", "swarm", $target, "--peers", "8", "--torrents", "1",
+    "--config", $cfg, "bench", "swarm", $target, "--for", $torrent, "--peers", "8",
     "--disk-budget", "64MiB", "--duration", "6s", "--warmup", "500ms",
     "--connect-timeout", "3s", "--dir", $sourcesDir,
     "--report", $sourcesReport, "--format", "json"
@@ -535,7 +548,6 @@ if ($sockets) {
         # from whatever this loop last measured. See RULES.md section 5.
         $decoyLive = @(Get-NetTCPConnection -OwningProcess $script:Decoy.Id -State Established -ErrorAction SilentlyContinue).Count
         if ($decoyLive -gt $decoyPeak) { $decoyPeak = $decoyLive }
-        Start-Sleep -Milliseconds 50
     }
 }
 $swarmProc.WaitForExit(60000) | Out-Null
@@ -639,12 +651,22 @@ $poisoned = $null
 if ($beforeSwarm -and $afterSwarm) {
     $poisoned = ($beforeSwarm.peers_handshaked -eq 1 -and $afterSwarm.peers_handshaked -eq 0)
     if ($poisoned) {
-        Write-Step "  T-020 reproduced: the target still accepts TCP and no longer handshakes"
+        Write-Step "  the target still accepts TCP and no longer handshakes"
     }
+}
+# Judged since 2026-08-22, where it carried judged: false for as long as T-020
+# was open. The accept loop drained one queued handshake check per connection
+# it accepted, so this load left the target accepting TCP and answering no
+# handshake for any info hash, including the one it was serving. It is fixed in
+# the vendored tree, so the same load must now leave the target still serving.
+# The case keeps its name: TODO/bench.md and TODO/peers.md cite runs recorded
+# under it, and those runs happened.
+if ($null -ne $poisoned -and $poisoned) {
+    Add-Failure "listener_poisoned" "the target served a peer before the load and none after it, so the accept loop is draining one entry per accept again. That is T-020."
 }
 $cases += [pscustomobject][ordered]@{
     case                = "listener_poisoned"
-    judged              = $false
+    judged              = $true
     todo                = "T-020"
     before_exit         = $poisonBefore.exit_code
     load_exit           = $poisonLoad.exit_code
@@ -738,8 +760,8 @@ $reportPath = Join-Path $ReportDir "swarm-$stamp.json"
         "The target's port comes out of the target's own event stream. A port this script picked could already be in use, and dialling it would measure whatever else was listening; that happened while this was written and looked exactly like a defect in bench swarm.",
         "In connect mode the target does not have the generated torrents, so zero bytes served is the correct result and any byte would mean an info hash collided with something real.",
         "In leech mode every peer is an independent leecher, so the payload arrives once per peer, and it is held on disk once between them.",
-        "Every case but no_target and dead_target starts its own seeder. The connect load leaves the target unable to complete a handshake for any info hash, so a case sharing a seeder with the one before it measures the previous case. That is T-020, and listener_poisoned is where it is measured rather than tripped over.",
-        "listener_poisoned carries judged: false. T-020 is open and recorded, and an acceptance script does not fail the build for a defect that already has an entry.",
+        "Every case but no_target and dead_target starts its own seeder. The connect load used to leave the target unable to complete a handshake for any info hash, so a case sharing a seeder with the one before it measured the previous case. That was T-020, now fixed, and listener_poisoned is where it is held rather than tripped over.",
+        "listener_poisoned is judged since 2026-08-22. It carried judged: false while T-020 was open; the accept loop is fixed in the vendored tree and the case now fails the build if the target stops serving after the load.",
         "fast_negotiated is the target's answer to a BEP 6 offer every synthetic peer makes. Recorded rather than judged: librqbit 9.0.0 has no BEP 6, so zero is expected, and the entry that owns the number is TODO/bep-coverage.md T-100.",
         "A synthetic peer announces every piece it verified and kept and answers requests for those pieces. peers_asked is zero against a seeder and that is the only result that load can produce: a synthetic peer holds only what the target served it, so it can never offer the target a piece the target is missing. What the serving side changes is what the target sees, and pieces_announced is the number that says it happened.",
         "sources_ignored reads the operating system's socket table rather than the report, because the report is the tool's own claim about itself. It is judged only on Windows, where Get-NetTCPConnection is; on any other platform it records judged: false."

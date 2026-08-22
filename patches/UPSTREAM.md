@@ -104,8 +104,8 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0003-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0004-crates-librqbit-src-peer_info_reader-mod.rs.patch
-             patches/rqbit/0005-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0006-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0006-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0007-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0007-package-lock.json.patch
+             patches/rqbit/0008-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -237,3 +237,73 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```
 
 139 passed, 0 failed, 6 ignored, across thirteen crates.
+
+---
+
+## librqbit: one failed handshake check stops the accept loop draining
+
+```
+Unblocks:    T-020, TODO/peers.md, the record's only open P0
+Files:       vendor/rqbit/crates/librqbit/src/session.rs
+             patches/rqbit/0005-crates-librqbit-src-session.rs.patch
+Upstream:    not offered yet, and it should be
+Added:       2026-08-22T14:37Z
+```
+
+`task_listener` is a `tokio::select!` over two arms: accept a connection, or
+take a finished handshake check off `futs`. The second arm was
+
+```rust
+Some(Ok((live, checked))) = futs.next(), if !futs.is_empty() => { ... }
+```
+
+A `select!` arm whose **pattern fails** is disabled for the rest of that
+`select!` call. A handshake check that resolves to `Err`, which is what a peer
+that connects and closes without handshaking produces, fails `Some(Ok(..))`.
+The arm goes away and the loop waits on `l.accept()` alone, which on an idle
+seeder is forever. Nothing in `futs` is polled until the next connection
+arrives, so the queue drained **one entry per accepted connection**.
+
+A check that resolves to `Ok` matched, ended the iteration, and cost no accept,
+which is why this was invisible under ordinary traffic and why a busy seeder
+cleared itself.
+
+The arm now matches `Some(result)` and handles the error inside, so the pattern
+cannot fail. The error was already logged by the `map_err` on the future where
+it is pushed, so the `Err` case does nothing but let the loop come round.
+
+**What it cost, which is more than a socket count.** While the queue was
+backed up the seeder accepted TCP and completed **no handshake for any info
+hash, including one it was serving**, and went on reporting itself as seeding.
+A supervisor watching the process, the port or the log saw nothing. T-020
+measured it one for one: twenty connections that closed without handshaking,
+then single peers one at a time, and the twentieth peer got a handshake while
+the nineteen before it got nothing.
+
+**Why it has to be here.** `task_listener` is a private method on `Session`
+and the `select!` is inside it. There is no option, no callback and no trait
+between a caller and that loop. `bit-cli` already sets
+`max_pending_incoming_handshake_checks` to `usize::MAX`, which removed a panic
+that was the same entry's first defect, and T-020 records that the cap has
+nothing to do with this one: "a reader who fixed the cap would have fixed
+nothing."
+
+**How it was measured.**
+
+```bash
+pwsh -NoProfile -File scripts/check-listener.ps1
+```
+
+| case | before | after |
+| --- | --- | --- |
+| `recovery`, connections to clear a 20 connection backlog | 20 | **1** |
+| the same load, probes / failed | 6 / 3 | **13 / 0** |
+| the seeder | stopped, exit 17, `listener_unhealthy` | still serving |
+
+Three of that script's four cases asserted the defect, so they are inverted
+rather than deleted and now hold the fix. `check-swarm.ps1`'s
+`listener_poisoned` case carried `judged: false` for as long as T-020 was open,
+and is judged now.
+
+**Offer it upstream.** It is [rqbit#311](https://github.com/ikatson/rqbit/issues/311),
+open since before this repository existed, and the change is one match arm.

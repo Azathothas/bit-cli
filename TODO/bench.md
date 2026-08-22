@@ -915,6 +915,46 @@ Exit 0, ten cases, no failures: `bench/swarm-20260822T074823843Z.json`.
 `sources_ignored` is the whole-run reading of "refuses to load-test a host it
 was not explicitly pointed at".
 
+**Two of these cases were resting on a defect, 2026-08-22.** [T-020](peers.md)
+closed, and closing it broke both.
+
+`listener_poisoned` is judged now. It carried `judged: false` for as long as
+T-020 was open, which the paragraph above ends on, and the exemption comes off
+with the entry. The same three runs against one seeder now read:
+
+| step | connected | handshaked | bytes |
+| --- | --- | --- | --- |
+| leech before the load | 1 | 1 | 8,388,608 |
+| the 100 connection load | 100 | 0 | 0 |
+| leech after the load | 1 | **1** | **8,388,608** |
+
+against 1, 0 and 0 bytes for that last row in
+`bench/swarm-20260821T063418798Z.json`. The case fails the build if the target
+stops serving after the load. `bench/swarm-20260822T145312435Z.json`.
+
+`sources_ignored` had to be rebuilt, and the reason is worth keeping. It reads
+the operating system's socket table while the run is connected, and it used the
+**connect** load because, in the comment it carried, "its peers hold their
+connections for the whole duration". They did, but only because the target
+could not answer them: that was T-020. With the accept loop draining, the
+target closes an unknown info hash immediately, the run has nothing left to do,
+and it exits. Measured: **53 ms** for the connect load and 111 ms for a leech,
+where one `Get-NetTCPConnection` call is longer than either. The case went from
+6 samples and 42 sightings to **1 and 0**, and failed on its own premise, which
+is the one thing it was written to do rather than pass quietly.
+
+The window is now made rather than borrowed: the seeder for that case runs with
+`--max-overall-upload-rate 512KiB`, so an 8 MiB payload outlasts the run's own
+`--duration 6s`, and the load is the leech load. 6 samples, 48 sightings, and
+the only remote endpoint is the target. `--duration` is a ceiling and not a
+floor, which is why pacing the client with `--target-rate` did not work: the
+load still finished in 87 ms, inside its own warmup, and said so.
+
+**The general point, and it is not only about this script.** An acceptance
+that needs the system under test to be slow is measuring the defect, not the
+behaviour. This one did for two sessions without anybody noticing, because it
+passed.
+
 ### T-093 --baseline comparison is not implemented
 
 Source:      the operator's brief

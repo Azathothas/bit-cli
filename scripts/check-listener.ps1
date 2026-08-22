@@ -10,21 +10,31 @@
 #
 # `--listener-check` is what says so. Four cases:
 #
-#   healthy   A seeder nobody has poisoned. Every probe is answered, the run
-#             is not stopped, and the probes leave nothing in `peer_detail`:
-#             a probe completes a real handshake, so the session keeps a peer
-#             row for it, and those rows are this process talking to itself.
-#   poisoned  The same seeder, then `bench swarm --peers N --torrents 1`,
-#             which is the load that leaves the backlog. The run must stop
-#             with `"stopped": "listener_unhealthy"` and exit 17.
-#   off       No `--listener-check`. The same poison, and the run carries on
-#             to its own `--stop-after`, which is exit 9 and
-#             `"stopped": "deadline"`. This is what proves the flag is what
-#             stopped the run in `poisoned` rather than the poison stopping it
-#             on its own.
-#   recovery  How many incoming connections it takes to clear the backlog the
-#             load left. This is the derivation for the threshold of three,
-#             measured rather than argued.
+#   healthy       A seeder nobody has poisoned. Every probe is answered, the
+#                 run is not stopped, and the probes leave nothing in
+#                 `peer_detail`: a probe completes a real handshake, so the
+#                 session keeps a peer row for it, and those rows are this
+#                 process talking to itself.
+#   survives_load The same seeder, then `bench swarm --peers N --torrents 1`,
+#                 which is the load that used to leave the backlog. The run
+#                 must NOT stop, and the listener must report itself healthy
+#                 with zero consecutive failures.
+#   off           No `--listener-check`, same load, and the run carries on to
+#                 its own `--stop-after`, which is exit 9 and
+#                 `"stopped": "deadline"`. It shows the load does not stop a
+#                 run by itself, with the probe out of the picture entirely.
+#   recovery      How many incoming connections it takes to clear whatever the
+#                 load left. One: the first peer after the load is served.
+#
+# Three of those four asserted the opposite until 2026-08-22, because the
+# accept loop drained one queued handshake check per connection it accepted and
+# this script was written to characterise that. The fix is in the vendored
+# tree; the cases are inverted rather than deleted, so the defect cannot come
+# back unnoticed. What the old `poisoned` case uniquely proved, that
+# `--listener-check` can stop a real run with exit 17, is not reachable from a
+# healthy listener any more; the threshold logic behind it is covered by
+# `three_unanswered_probes_in_a_row_stop_the_run` and its two neighbours in
+# `crates/bit-cli/src/swarm.rs`.
 #
 # Usage:
 #   pwsh scripts/check-listener.ps1
@@ -208,7 +218,11 @@ function Add-Failure([string]$name, [string]$message) {
 # ---------------------------------------------------------------------------
 
 Write-Step "case healthy (--listener-check $Interval, no load)"
-Start-Seeder @("--listener-check", $Interval) "90s" | Out-Null
+# 240s, not 90s: this seeder is reused by the case below, whose load runs for
+# about 85 seconds and which then has to find it still alive. At 90s the
+# deadline fired first and the seeder looked like it had been stopped by the
+# load.
+Start-Seeder @("--listener-check", $Interval) "240s" | Out-Null
 
 # Three answered probes is the same number the stop condition needs to see
 # fail, so this is the exact counterpart of the case below.
@@ -250,48 +264,52 @@ $cases += [pscustomobject][ordered]@{
 # poisoned: the same seeder, and the load that leaves the backlog
 # ---------------------------------------------------------------------------
 
-Write-Step "case poisoned ($Poison connections for a torrent the seeder does not have)"
+Write-Step "case survives_load ($Poison connections for a torrent the seeder does not have)"
 $load = Invoke-Poison "poison"
-$exited = $script:Seeder.WaitForExit(90000)
-$poisonExit = if ($exited) { $script:Seeder.ExitCode } else { $null }
-if (-not $exited) {
-    Add-Failure "poisoned" "the seeder did not stop within 90s of the load; --listener-check did not see the outage"
-    Stop-Background
-}
+# The seeder must NOT stop. Until 2026-08-22 this same load poisoned the
+# listener and the case asserted exit 17: the accept loop drained one queued
+# handshake check per connection it accepted, so twenty checks that resolved to
+# an error cost the next twenty peers their handshake. That is fixed in the
+# vendored tree, patches/UPSTREAM.md under "librqbit: one failed handshake
+# check stops the accept loop draining", and the case is inverted rather than
+# deleted: it is now what stops the defect coming back.
+$stoppedEarly = $script:Seeder.WaitForExit(20000)
+$loadExit = if ($stoppedEarly) { $script:Seeder.ExitCode } else { $null }
 $final = $null
 foreach ($line in (Get-Content $script:SeedOut -ErrorAction SilentlyContinue)) {
     try { $event = $line | ConvertFrom-Json } catch { continue }
     if ($event.stopped) { $final = $event }
 }
-if ($exited) {
-    if ($poisonExit -ne 17) {
-        Add-Failure "poisoned" "exited $poisonExit, expected 17. stderr: $(Get-Content $script:SeedErr -Raw)"
-    }
-    if (-not $final) {
-        Add-Failure "poisoned" "the seeder wrote no report"
-    }
-    elseif ($final.stopped -ne "listener_unhealthy") {
-        Add-Failure "poisoned" "stopped=$($final.stopped), expected listener_unhealthy"
-    }
-    elseif ($final.listener.consecutive_failures -lt 3) {
-        Add-Failure "poisoned" "stopped after $($final.listener.consecutive_failures) consecutive failures, expected at least 3"
-    }
+$afterLoad = (Get-Progress) | Select-Object -Last 1
+if ($stoppedEarly) {
+    Add-Failure "survives_load" "the seeder stopped with $loadExit ($($final.stopped)) after $Poison connections that closed without handshaking; the accept loop is not draining"
+}
+elseif (-not $afterLoad.listener.healthy) {
+    Add-Failure "survives_load" "the listener reported itself unhealthy after the load: $($afterLoad.listener | ConvertTo-Json -Compress)"
+}
+elseif ($afterLoad.listener.consecutive_failures -ne 0) {
+    Add-Failure "survives_load" "$($afterLoad.listener.consecutive_failures) consecutive probe failures after the load, expected 0"
+}
+if ($load.swarm.peers_connected -lt $Poison) {
+    Add-Failure "survives_load" "only $($load.swarm.peers_connected) of $Poison connections landed, so the case measured less than it says"
 }
 $cases += [pscustomobject][ordered]@{
-    case                 = "poisoned"
+    case                 = "survives_load"
     load_connected       = $load.swarm.peers_connected
     load_handshaked      = $load.swarm.peers_handshaked
-    exit_code            = $poisonExit
+    stopped_early        = $stoppedEarly
+    exit_code            = $loadExit
     stopped              = $final.stopped
-    probes               = $final.listener.probes
-    failed               = $final.listener.failed
-    consecutive_failures = $final.listener.consecutive_failures
-    last_failure         = $final.listener.last_failure
+    probes               = $afterLoad.listener.probes
+    failed               = $afterLoad.listener.failed
+    consecutive_failures = $afterLoad.listener.consecutive_failures
+    last_rtt_ms          = $afterLoad.listener.last_rtt_ms
+    still_running        = (-not $script:Seeder.HasExited)
 }
 Stop-Background
 
 # ---------------------------------------------------------------------------
-# off: the flag is what stopped the run, not the load
+# off: the load does not stop a run by itself, with no probe in the picture
 # ---------------------------------------------------------------------------
 
 Write-Step "case off (no --listener-check, same load)"
@@ -337,12 +355,13 @@ Stop-Background
 # than asserted in prose. No `--listener-check` here: the probe would clear the
 # backlog itself and this case is about what a real peer meets.
 #
-# `librqbit`'s accept loop drains its pending set through a `select!` arm whose
-# pattern is `Some(Ok(..))`. A check that resolves to an error fails that
-# pattern, which disables the arm for the rest of that `select!` call, so the
-# loop cannot come round again until `accept` fires. One queued error therefore
-# costs one incoming connection. A check that succeeds matches, so it ends an
-# iteration without needing one.
+# `librqbit`'s accept loop used to drain its pending set through a `select!`
+# arm whose pattern was `Some(Ok(..))`. A check that resolved to an error failed
+# that pattern, which disabled the arm for the rest of that `select!` call, so
+# the loop could not come round again until `accept` fired: one queued error
+# cost one incoming connection, and this case measured $Poison of them costing
+# $Poison. The vendored tree matches every outcome now, so the expected answer
+# here is one.
 
 Write-Step "case recovery (how many connections clear a $Poison connection backlog)"
 Start-Seeder @() "300s" | Out-Null
@@ -375,11 +394,17 @@ for ($k = 1; $k -le $ceiling; $k++) {
     if ($script:Seeder.HasExited) { break }
     if ((Invoke-Probe $k) -ge 1) { $recovered = $k; break }
 }
-if ($recovered -eq 1) {
-    Add-Failure "recovery" "the load left no backlog at all, so nothing here was measured"
-}
-elseif ($recovered -lt 0) {
+# One is the pass. Before the accept loop was fixed this read the other way
+# round: a backlog of $Poison took $Poison connections to clear, one each, and
+# `$recovered -eq 1` meant the load had not landed and the case had measured
+# nothing. Now the first peer after the load gets served, so anything above one
+# is the drain rate regressing. The load landing is checked separately in
+# survives_load, so a 1 here cannot be a load that never arrived.
+if ($recovered -lt 0) {
     Add-Failure "recovery" "$ceiling connections did not clear a $Poison connection backlog"
+}
+elseif ($recovered -gt 1) {
+    Add-Failure "recovery" "the first peer after the load was not served; it took $recovered connections, so the accept loop is draining one entry per accept again"
 }
 Write-Step "  $recovered connections cleared a $Poison connection backlog"
 $cases += [pscustomobject][ordered]@{
@@ -420,7 +445,8 @@ $reportPath = Join-Path $ReportDir "listener-$stamp.json"
         "The probe completes a real handshake for a torrent the seeder holds rather than an unknown one. An unknown info hash is cheaper, and it is the wrong measurement: it resolves to an error inside the session, which adds an entry to the same backlog it is measuring. A completed handshake takes one off instead.",
         "That costs one peer row per probe, which librqbit keeps in a terminal state and never reclaims. The reported peer list drops them by the port the probe dialled from, which is the mechanism the web seed bridge already uses.",
         "Three failures in a row is derived, not picked. The accept loop clears one queued check per connection it accepts, so one failure means a backlog a real peer would have cleared by arriving, and three means the backlog outlived three connections.",
-        "The off case exists because poisoned on its own does not prove the flag did anything: the load could have stopped the run by itself.",
+        "survives_load and recovery asserted the opposite until 2026-08-22. The accept loop drained one queued handshake check per accepted connection, so twenty connections that closed before handshaking cost the next twenty peers their handshake. Fixed in the vendored tree; see patches/UPSTREAM.md and TODO/peers.md T-020.",
+        "The off case keeps the probe out of the picture entirely, so the load is shown not to stop a run on its own.",
         "recovery runs without the flag on purpose. The probe clears one queued check per answered handshake, so a seeder being probed is a seeder being repaired, and this case is about what a peer that is not us meets."
     )
 } | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8NoBOM

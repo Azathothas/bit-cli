@@ -1002,10 +1002,25 @@ impl Session {
                         }
                     }
                 },
-                Some(Ok((live, checked))) = futs.next(), if !futs.is_empty() => {
-                    let (addr, kind) = (checked.addr, checked.kind);
-                    if let Err(e) = live.add_incoming_peer(checked) {
-                        warn!(?addr, ?kind, "error handing over incoming connection: {e:#}");
+                // Not `Some(Ok(..))`. A `select!` branch whose pattern fails is
+                // disabled for the rest of that call, so one handshake check
+                // resolving to Err left this loop waiting on `l.accept()`
+                // alone, which on an idle seeder is forever. Nothing in `futs`
+                // was polled until the next connection arrived, so the queue
+                // drained one entry per accepted connection and a peer that
+                // closed before handshaking cost the next real peer its
+                // handshake. Measured one for one: after twenty poisoned
+                // connections the twentieth peer got through and the nineteen
+                // before it got nothing.
+                //
+                // Matching every outcome keeps the branch enabled. The error
+                // is already logged by the map_err on the future above.
+                result = futs.next(), if !futs.is_empty() => {
+                    if let Some(Ok((live, checked))) = result {
+                        let (addr, kind) = (checked.addr, checked.kind);
+                        if let Err(e) = live.add_incoming_peer(checked) {
+                            warn!(?addr, ?kind, "error handing over incoming connection: {e:#}");
+                        }
                     }
                 },
             }

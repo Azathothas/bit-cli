@@ -461,9 +461,14 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   condition between the stages. [T-179](webseed.md)'s acceptance is the worked
   example, and it is the fourth entry on this line.
 - **An acceptance script that measures an open defect must not fail the build
-  for that defect alone.** `scripts/check-close-wait.ps1` is the pattern, and
-  `scripts/check-swarm.ps1`'s `listener_poisoned` case follows it with
-  `judged: false`.
+  for that defect alone.** `scripts/check-close-wait.ps1` is the pattern: its
+  `-Ceiling` records the count without judging it unless a number is passed.
+  `scripts/check-swarm.ps1`'s `listener_poisoned` case followed it with
+  `judged: false` until [T-020](peers.md) closed on 2026-08-22, and is judged
+  now. **The other half of the rule is that the exemption comes off when the
+  entry does**, and that it is the entry closing which pays for it: three of
+  `scripts/check-listener.ps1`'s four cases asserted T-020's defect and were
+  inverted to hold the fix rather than deleted.
 - **Filter test output for `^test \S+ \.\.\. FAILED`**, not for the summary
   line, or a flake's name is lost.
 - Real public mirrors are allowed: `fosstorrents.com`,
