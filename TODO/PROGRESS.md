@@ -51,8 +51,12 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-23T01:53:05Z, unattended, 3h 44m. It was
-  ended on the operator's word rather than by running out of work.
+- **Last session:** 2026-08-23T01:53:05Z, unattended, and it ran to 05:39Z. It
+  was ended on the operator's word rather than by running out of work, which is
+  why the soak below is cut short. The duration is not restated here: it is
+  derived from the instant above by `scripts/session-report.ps1`, and a
+  duration written down while a session is still running is a number that
+  disagrees with the report ten minutes later.
 - **Tests:** 1,166 passing, 0 failing. 1,131 at the start. Plus **149** in the
   vendored trees, which the workspace gates do not run, up from 142.
 - **Gates:** clean.
