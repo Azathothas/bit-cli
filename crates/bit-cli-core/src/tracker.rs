@@ -72,6 +72,29 @@ impl Event {
     }
 }
 
+/// What `left` carries when the length is not known.
+///
+/// A magnet before its metadata arrives has no total length, so there is no
+/// true answer and the question is which untrue one does least harm. Three
+/// candidates, and two of them have a named tracker that refuses them:
+///
+/// - **Zero** is the one to avoid. It is a well-formed answer that means "I am
+///   a seed", so the tracker hands this client to every peer asking for one
+///   and none of them can be served. It fails silently, at other people's
+///   expense, which is the worst of the three.
+/// - **A negative**, which some clients send and BEP 15's signed field allows,
+///   is refused by real trackers. `torrent/tracker/http/http.go:36` records
+///   one: the AWS S3 tracker answers `400 Bad Request: left(-1) was not in the
+///   valid range 0 - 9223372036854775807`.
+/// - **Omitting the key** is refused by the same tracker with a `500`, which
+///   that comment also records.
+///
+/// So: the largest value that tracker names as valid, which is `i64::MAX`. It
+/// is not zero, it is not negative, it is present, and a tracker parsing the
+/// field as signed or unsigned reads the same number. `anacrolix/torrent`
+/// clamps to exactly this for the same reason.
+pub const UNKNOWN_LEFT: u64 = i64::MAX as u64;
+
 /// What to tell the tracker about this client.
 #[derive(Debug, Clone)]
 pub struct Announce {
@@ -80,7 +103,13 @@ pub struct Announce {
     pub port: u16,
     pub uploaded: u64,
     pub downloaded: u64,
-    pub left: u64,
+    /// Bytes still wanted, or `None` when the length is not known yet.
+    ///
+    /// `None` is a magnet before its metadata arrives, which is a normal path
+    /// here rather than an edge case. What goes on the wire for it is
+    /// [`UNKNOWN_LEFT`], never zero: zero means seed. See `TODO/trackers.md`,
+    /// T-180.
+    pub left: Option<u64>,
     pub event: Event,
     pub numwant: u32,
     /// A stable per-run key, which lets a tracker recognise a client whose
@@ -90,7 +119,10 @@ pub struct Announce {
 
 impl Announce {
     /// An announce for a torrent nothing has been downloaded from yet.
-    pub fn new(info_hash: [u8; 20], peer_id: [u8; 20], port: u16, left: u64) -> Self {
+    ///
+    /// `left` is `None` when the length is not known, which is a magnet whose
+    /// metadata has not arrived.
+    pub fn new(info_hash: [u8; 20], peer_id: [u8; 20], port: u16, left: Option<u64>) -> Self {
         Self {
             info_hash,
             peer_id,
@@ -140,6 +172,15 @@ pub struct TrackerResult {
     pub http_status: Option<u16>,
     /// Peers the tracker returned.
     pub peers: Vec<String>,
+    /// Entries in the peer list that are not peers, one line each.
+    ///
+    /// A tracker list comes out of a `.torrent`, which is untrusted input, so
+    /// one malformed entry must not cost the whole response and must not
+    /// vanish either: dropping it silently reports a smaller swarm than the
+    /// tracker described and says nothing about why. See `TODO/trackers.md`,
+    /// T-180.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid_peers: Vec<String>,
     /// The tracker's `warning message`, if it sent one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
@@ -216,6 +257,7 @@ impl TrackerResult {
             min_interval_s: None,
             http_status: None,
             peers: Vec::new(),
+            invalid_peers: Vec::new(),
             warning: None,
             failure: Some(reason.into()),
             family: None,
@@ -312,18 +354,32 @@ impl Client {
     }
 
     /// Scrape one tracker.
-    pub async fn scrape(&self, url: &str, tier: usize, request: &Announce) -> TrackerResult {
+    /// Scrape one tracker.
+    ///
+    /// `at` is the endpoint to ask, for a tracker whose path does not follow
+    /// the BEP 48 convention and so has no endpoint to derive. It replaces the
+    /// derivation entirely, including the protocol: a caller may point an
+    /// `http://` announce at a `udp://` scrape if that is what the tracker
+    /// runs. See `TODO/trackers.md`, T-065.
+    pub async fn scrape(
+        &self,
+        url: &str,
+        tier: usize,
+        request: &Announce,
+        at: Option<&str>,
+    ) -> TrackerResult {
         let started = Instant::now();
-        let outcome = match protocol_of(url) {
-            "udp" => self.udp(url, request, true, None).await,
-            "http" | "https" => match scrape_url(url) {
+        let endpoint = at.unwrap_or(url);
+        let outcome = match protocol_of(endpoint) {
+            "udp" => self.udp(endpoint, request, true, None).await,
+            "http" | "https" => match at.map(str::to_string).or_else(|| scrape_url(endpoint)) {
                 Some(scrape) => self.http_scrape(&scrape, request).await,
                 None => Err(Error::usage(format!(
-                    "{url} does not follow the BEP 48 convention, so its scrape URL cannot be derived"
+                    "{endpoint} does not follow the BEP 48 convention, so its scrape URL cannot be derived. Name it with --scrape-url"
                 ))),
             },
             other => Err(Error::usage(format!(
-                "{url}: `{other}` is not a tracker protocol"
+                "{endpoint}: `{other}` is not a tracker protocol"
             ))),
         };
         match outcome {
@@ -557,7 +613,7 @@ pub fn announce_query(url: &str, request: &Announce) -> String {
     query.push_str(&format!("&port={}", request.port));
     query.push_str(&format!("&uploaded={}", request.uploaded));
     query.push_str(&format!("&downloaded={}", request.downloaded));
-    query.push_str(&format!("&left={}", request.left));
+    query.push_str(&format!("&left={}", request.left.unwrap_or(UNKNOWN_LEFT)));
     query.push_str("&compact=1&no_peer_id=1");
     query.push_str(&format!("&numwant={}", request.numwant));
     query.push_str(&format!("&key={:08x}", request.key));
@@ -588,6 +644,20 @@ pub fn scrape_url(announce: &str) -> Option<String> {
     Some(out)
 }
 
+/// One count from a tracker response, where a negative means "not known".
+///
+/// Clamping a negative to zero is the inbound half of the same mistake
+/// [`UNKNOWN_LEFT`] describes: zero seeders is a fact about the swarm, and a
+/// tracker that sent `-1` did not state one. `None` is the honest reading and
+/// is what an absent key already produces, so a caller has one case to handle
+/// rather than two. See `TODO/trackers.md`, T-180.
+fn count_of(value: &Value, key: &str) -> Option<u64> {
+    match value.get(key).and_then(Value::as_int) {
+        Some(n) if n >= 0 => Some(n as u64),
+        _ => None,
+    }
+}
+
 /// Parse a bencoded HTTP announce response.
 pub fn parse_http_response(body: &[u8]) -> Result<TrackerResult> {
     let value = bencode::decode(body)
@@ -599,29 +669,15 @@ pub fn parse_http_response(body: &[u8]) -> Result<TrackerResult> {
         protocol: String::new(),
         ok: true,
         elapsed_ms: 0,
-        seeders: value
-            .get("complete")
-            .and_then(Value::as_int)
-            .map(|n| n.max(0) as u64),
-        leechers: value
-            .get("incomplete")
-            .and_then(Value::as_int)
-            .map(|n| n.max(0) as u64),
-        completed: value
-            .get("downloaded")
-            .and_then(Value::as_int)
-            .map(|n| n.max(0) as u64),
-        interval_s: value
-            .get("interval")
-            .and_then(Value::as_int)
-            .map(|n| n.max(0) as u64),
-        min_interval_s: value
-            .get("min interval")
-            .or_else(|| value.get("min_interval"))
-            .and_then(Value::as_int)
-            .map(|n| n.max(0) as u64),
+        seeders: count_of(&value, "complete"),
+        leechers: count_of(&value, "incomplete"),
+        completed: count_of(&value, "downloaded"),
+        interval_s: count_of(&value, "interval"),
+        min_interval_s: count_of(&value, "min interval")
+            .or_else(|| count_of(&value, "min_interval")),
         http_status: None,
         peers: Vec::new(),
+        invalid_peers: Vec::new(),
         warning: value.get("warning message").and_then(Value::as_text),
         failure: value.get("failure reason").and_then(Value::as_text),
         family: None,
@@ -632,12 +688,19 @@ pub fn parse_http_response(body: &[u8]) -> Result<TrackerResult> {
         return Ok(result);
     }
 
-    if let Some(peers) = value.get("peers") {
-        result.peers.extend(parse_peers(peers, false));
+    // A response with no `peers` key at all is a well-formed empty swarm and
+    // not an error, which is what an announce to a tracker that knows the
+    // torrent and has nobody on it looks like.
+    let mut invalid = Vec::new();
+    let mut peers = Vec::new();
+    if let Some(list) = value.get("peers") {
+        peers.extend(parse_peers(list, false, &mut invalid));
     }
-    if let Some(peers) = value.get("peers6") {
-        result.peers.extend(parse_peers(peers, true));
+    if let Some(list) = value.get("peers6") {
+        peers.extend(parse_peers(list, true, &mut invalid));
     }
+    result.peers = peers;
+    result.invalid_peers = invalid;
     Ok(result)
 }
 
@@ -673,22 +736,14 @@ pub fn parse_scrape_response(body: &[u8], info_hash: &[u8; 20]) -> Result<Tracke
         protocol: String::new(),
         ok: true,
         elapsed_ms: 0,
-        seeders: entry
-            .get("complete")
-            .and_then(Value::as_int)
-            .map(|n| n.max(0) as u64),
-        leechers: entry
-            .get("incomplete")
-            .and_then(Value::as_int)
-            .map(|n| n.max(0) as u64),
-        completed: entry
-            .get("downloaded")
-            .and_then(Value::as_int)
-            .map(|n| n.max(0) as u64),
+        seeders: count_of(entry, "complete"),
+        leechers: count_of(entry, "incomplete"),
+        completed: count_of(entry, "downloaded"),
         interval_s: None,
         min_interval_s: None,
         http_status: None,
         peers: Vec::new(),
+        invalid_peers: Vec::new(),
         warning: None,
         failure: None,
         family: None,
@@ -697,13 +752,35 @@ pub fn parse_scrape_response(body: &[u8], info_hash: &[u8; 20]) -> Result<Tracke
 }
 
 /// Peers from either the compact form (BEP 23) or the dictionary form.
-fn parse_peers(value: &Value, ipv6: bool) -> Vec<String> {
+///
+/// Anything in the list that is not a peer is described into `invalid` and
+/// skipped. Nothing here fails the response: a tracker that returns one bad
+/// entry beside forty good ones has told the caller about forty peers, and
+/// refusing all of them because of the forty-first is the failure mode this
+/// was written against.
+fn parse_peers(value: &Value, ipv6: bool, invalid: &mut Vec<String>) -> Vec<String> {
     let stride = match ipv6 {
         true => 18,
         false => 6,
     };
+    let key = match ipv6 {
+        true => "peers6",
+        false => "peers",
+    };
     if let Some(bytes) = value.as_bytes() {
-        return bytes
+        // A compact list is a whole number of fixed-size addresses. A
+        // remainder is a truncated address, and `chunks_exact` drops it
+        // without a word, which is the silent half of the same problem.
+        let whole = bytes.len() - bytes.len() % stride;
+        if whole != bytes.len() {
+            invalid.push(format!(
+                "`{key}` carried {} bytes, which is {} address(es) of {stride} bytes and {} left over",
+                bytes.len(),
+                whole / stride,
+                bytes.len() - whole
+            ));
+        }
+        return bytes[..whole]
             .chunks_exact(stride)
             .map(|chunk| match ipv6 {
                 true => {
@@ -721,13 +798,41 @@ fn parse_peers(value: &Value, ipv6: bool) -> Vec<String> {
             })
             .collect();
     }
-    value
-        .as_list()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|peer| {
-            let ip = peer.get("ip")?.as_text()?;
-            let port = peer.get("port")?.as_int()?;
+    let Some(list) = value.as_list() else {
+        invalid.push(format!(
+            "`{key}` is neither a compact byte string nor a list of peer dictionaries"
+        ));
+        return Vec::new();
+    };
+    list.iter()
+        .enumerate()
+        .filter_map(|(index, peer)| {
+            // `peers: [42]` is the shape this exists for: a list whose entries
+            // are integers rather than dictionaries. Naming what the entry is
+            // costs one branch and is the difference between a caller who can
+            // report the tracker and one who counts peers twice looking for
+            // the missing one.
+            if peer.as_dict().is_none() {
+                invalid.push(format!("`{key}` entry {index} is not a peer dictionary"));
+                return None;
+            }
+            let Some(ip) = peer.get("ip").and_then(Value::as_text) else {
+                invalid.push(format!("`{key}` entry {index} has no `ip`"));
+                return None;
+            };
+            let Some(port) = peer.get("port").and_then(Value::as_int) else {
+                invalid.push(format!("`{key}` entry {index} ({ip}) has no `port`"));
+                return None;
+            };
+            // The dictionary form's `port` is a bencoded integer, so it can be
+            // negative or past 65535, and either one formats into an address
+            // string nothing can dial.
+            let Ok(port) = u16::try_from(port) else {
+                invalid.push(format!(
+                    "`{key}` entry {index} ({ip}) has port {port}, which is not a port"
+                ));
+                return None;
+            };
             Some(match ip.contains(':') {
                 true => format!("[{ip}]:{port}"),
                 false => format!("{ip}:{port}"),
@@ -885,7 +990,7 @@ fn announce_request(connection_id: u64, transaction: u32, request: &Announce) ->
     out.extend_from_slice(&request.info_hash);
     out.extend_from_slice(&request.peer_id);
     out.extend_from_slice(&request.downloaded.to_be_bytes());
-    out.extend_from_slice(&request.left.to_be_bytes());
+    out.extend_from_slice(&request.left.unwrap_or(UNKNOWN_LEFT).to_be_bytes());
     out.extend_from_slice(&request.uploaded.to_be_bytes());
     out.extend_from_slice(&request.event.as_udp().to_be_bytes());
     // IP address zero means "use the source address of this datagram", which
@@ -942,6 +1047,9 @@ pub fn parse_udp_announce(reply: &[u8]) -> Result<TrackerResult> {
         min_interval_s: None,
         http_status: None,
         peers,
+        // A UDP announce carries peers as a fixed-size array and nothing
+        // else, so there is no shape here for an entry to be wrong in.
+        invalid_peers: Vec::new(),
         warning: None,
         failure: None,
         family: None,
@@ -974,6 +1082,7 @@ pub fn parse_udp_scrape(reply: &[u8]) -> Result<TrackerResult> {
         min_interval_s: None,
         http_status: None,
         peers: Vec::new(),
+        invalid_peers: Vec::new(),
         warning: None,
         failure: None,
         family: None,
@@ -1031,7 +1140,7 @@ mod tests {
             port: 6881,
             uploaded: 10,
             downloaded: 20,
-            left: 30,
+            left: Some(30),
             event: Event::Started,
             numwant: 50,
             key: 0xdead_beef,

@@ -169,7 +169,7 @@ Source:      `bit-cli` design decision, BEP 12
 Category:    trackers
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T10:20Z
 
 Problem:     `bit-cli trackers` asks every tracker at once. BEP 12 says a
              client should try tier one, and only fall through to tier two if
@@ -183,6 +183,35 @@ Approach:    This is deliberate and documented in `cmd/trackers.rs`. The entry
              `--respect-tiers` flag is wanted later, it goes here.
 Acceptance:  Decide, and either add the flag or close this with the reasoning
              in `docs/`.
+
+**Decided: parallel, everywhere, and the reasoning is
+[`docs/trackers.md`](../docs/trackers.md) section 1.** No `--respect-tiers`. A
+flag that makes a reporting command report less needs a question that wants it,
+and none of the four sessions that have touched this file has had one. The
+section says what to do if one arrives.
+
+**One of the two situations this entry described as different is not.** The
+corpus note above says the divergence is "real for the command and *forced* for
+the download path", because `librqbit` flattens `announce_list` into a
+`HashSet`. That is still true of the code and no longer true of the
+conclusion: the tree is vendored, so a `HashSet` in it is a choice this
+repository is keeping rather than a limit it is under. Measured at
+`vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs:252`, which takes
+`trackers: HashSet<Url>` and pushes every one into a `FuturesUnordered`. Kept,
+for the same reason the command keeps it: every tracker an `announce-list`
+names is contacted, and what BEP 12 would add is a delay.
+
+**One clause of the corpus note was already true and now has a test.** mtorrent
+issue 29 asks that a torrent's own trackers be announced to before any the
+caller added. `tracker_tiers` has always concatenated them in that order and
+nothing held it, so it was one edit from being lost:
+`a_tracker_added_at_runtime_is_a_tier_after_the_torrents_own`.
+
+**What is not adopted, and why.** Promoting a working tracker to the front of
+its tier, which `TorrentNG/crates/rt-tracker/src/tier.rs:55` does, is for a
+client that announces to the same tier repeatedly. `bit-cli trackers` announces
+once and exits, and a download announces to every tracker on its own interval,
+so there is no second choice for a promotion to inform.
 
 ### T-064 UDP tracker retry does not follow the BEP 15 backoff
 
@@ -274,7 +303,7 @@ Source:      BEP 48
 Category:    trackers
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T10:20Z
 
 Problem:     `tracker::scrape_url` derives the scrape endpoint by replacing a
              trailing `announce` path component with `scrape`. A tracker whose
@@ -286,6 +315,33 @@ Approach:    Add `--scrape-url` so a caller who knows the endpoint can supply
              it.
 Acceptance:  `bit-cli trackers <TORRENT> --scrape --scrape-url <URL>` scrapes
              a tracker whose convention differs.
+
+**Done.** `--scrape-url` replaces the derivation, including the protocol, so an
+`http://` announce may be pointed at a `udp://` scrape if that is what the
+tracker runs. `a_named_scrape_endpoint_reaches_a_tracker_the_convention_cannot`
+is the acceptance and it holds both halves: the same tracker, at a path BEP 48
+cannot transform, fails with `cannot be derived` without the flag and answers
+`5` seeders, `3` leechers and `9` completed with it. A test that only ran the
+fixed case would not have said the flag was what fixed it.
+
+**Two things the Approach did not decide.**
+
+**It names one endpoint, so the run has to be about one tracker.** Applying it
+to every tracker would scrape the same URL five times and report one answer as
+five, which is a wrong number rather than a missing one. A run carrying more
+than one tracker is refused with exit 2 and told how to narrow it, which is the
+loud failure rather than the silent one.
+
+**The message that fails now says what to do.** `does not follow the BEP 48
+convention, so its scrape URL cannot be derived` was already right and left the
+reader nowhere. It ends `. Name it with --scrape-url` now, because the whole
+defect this entry describes is a caller who knows something the program does
+not and has no way to say it.
+
+**The document kind was undescribed and now is.** `docs/schema.md` had no
+scrape sample at all, so `scrape_url` and every field a scrape produces went
+undocumented. `schema_gen` drives one now, against a fixture serving a BEP 48
+document at a non-conventional path.
 
 ---
 
@@ -360,7 +416,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    trackers
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T10:20Z
 
 Problem:     Two halves of one question, and neither has been decided.
 
@@ -419,3 +475,57 @@ Acceptance:  `bit-cli trackers <MAGNET> --json` states what it sent for `left`
              "unknown" rather than to a seed, and a fixture response carrying
              `peers: [42]` keeps every valid peer and names the invalid entry
              without failing the run.
+
+**Done, and the outbound half was a live defect rather than an undecided
+question.** The Problem says "nothing in the tree records what is sent in that
+window". What was sent is `0`: `cmd/trackers.rs` passed
+`meta.map(total_length).unwrap_or(0)` and `cmd/download.rs` subtracted from a
+`total_bytes` that is zero until metadata arrives. Zero is not an absence of an
+answer. It is the answer "I am a seed", so every magnet this tool announced was
+offered to other clients as a source and could serve none of them.
+
+**The value sent is `i64::MAX`, and the corpus decided it rather than
+taste.** `torrent/tracker/http/http.go:36` carries the two failures that rule
+the other candidates out, both from a real tracker: `left=-1` gets
+`400 Bad Request: left(-1) was not in the valid range 0 - 9223372036854775807`,
+and omitting the key gets a `500`. So the answer is the largest value that
+tracker names as valid. `anacrolix/torrent` clamps to exactly it.
+
+**`Option<u64>` rather than a sentinel in the struct**, which is what found the
+second site. The type change turned four call sites into compile errors, and
+one of them was `download.rs`'s announce: the entry only describes `trackers`.
+
+**The report says which it is.** `left` carries `bytes`, `known` and a reason,
+because a reader who cannot tell a placeholder from a measurement would have to
+recognise `9223372036854775807` by eye.
+
+**The inbound half is the same distinction pointed the other way**, and the
+entry's wording does not survive contact with the wire: an announce **response**
+carries no `left`. What it carries is `complete`, `incomplete` and `downloaded`,
+and this tree clamped a negative to zero with `n.max(0)`. Zero seeders is a
+statement about the swarm that a tracker sending `-1` did not make, so those
+are `None` now, which is what an absent key already produced. `count_of` is the
+one function all six sites go through.
+
+**`peers: [42]` was already survived and never mentioned**, which is the half
+worth having: `filter_map` dropped it silently, so the run reported a smaller
+swarm than the tracker described with nothing to say why. Four shapes are named
+now, in `trackers[].invalid_peers` and on stderr: an entry that is not a
+dictionary, one with no `ip`, one with no `port`, and a `port` outside 0 to
+65535 that would otherwise format into an address nothing can dial. A compact
+list whose length is not a whole number of addresses is the fifth, and
+`chunks_exact` was dropping that remainder without a word too.
+
+**The measurement, run against the defect.** With the call site put back to
+`unwrap_or(0)` the acceptance test fails and prints what the old tree sent:
+`"left":{"bytes":0,"known":true,...}` for a magnet. That is the whole entry in
+one line of JSON.
+
+**The contract is [`docs/trackers.md`](../docs/trackers.md)**, with the table
+of the four candidate values, what each costs, and a test named for every
+claim.
+
+```
+$ cargo test -p bit-cli --lib trackers::
+test result: ok. 20 passed; 0 failed; 0 ignored; 396 filtered out
+```

@@ -1272,6 +1272,14 @@ A `download` run announces the same three events a client should:
 the session, carrying the session's own peer id and port so the tracker
 updates one record, and `--json` reports them under `announced`.
 
+**A magnet does not announce itself as a seed.** `left=0` means "I have all of
+it", and a source with no metadata yet has no length to report, so what goes
+out is `9223372036854775807` and the report says which it was under `left`,
+with `known: false`. A tracker whose scrape endpoint is not BEP 48's is named
+with `--scrape-url`. [`docs/trackers.md`](docs/trackers.md) has both decisions,
+why every tracker is asked at once rather than tier by tier, and what a
+malformed answer costs.
+
 ### What a UDP tracker that does not answer costs
 
 BEP 15 says to retry at `15 * 2^n` seconds for `n` from 0 to 8, which is nine

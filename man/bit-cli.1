@@ -814,7 +814,7 @@ Disable local service discovery
 .SH NAME
 bit\-cli\-trackers \- Announce or scrape, report the result, then exit
 .SH SYNOPSIS
-\fBbit\-cli\-trackers\fR [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-scrape\fR] [\fB\-\-port\fR] [\fB\-\-no\-withdraw\fR] [\fB\-\-family\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-trackers\fR [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-scrape\fR] [\fB\-\-scrape\-url\fR] [\fB\-\-port\fR] [\fB\-\-no\-withdraw\fR] [\fB\-\-family\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Announce or scrape, report the result, then exit
 .SH OPTIONS
@@ -857,6 +857,11 @@ Disable tracker announces entirely
 .TP
 \fB\-\-scrape\fR
 Scrape instead of announcing
+.TP
+\fB\-\-scrape\-url\fR \fI<URL>\fR
+The scrape endpoint, for a tracker that does not follow BEP 48.
+
+BEP 48 derives the endpoint by replacing a trailing `announce` path component with `scrape`. A tracker whose path does not end that way has no derivable endpoint, and guessing one produces a 404 that reads like the tracker being down. This is how a caller who knows the endpoint says so. It replaces the derivation, so it names one tracker and the run has to be narrowed to that tracker.
 .TP
 \fB\-\-port\fR \fI<PORT>\fR
 Port to announce, or a range as START\-END. `0` asks the OS for a free one.

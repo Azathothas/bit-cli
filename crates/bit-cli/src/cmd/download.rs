@@ -2395,19 +2395,26 @@ async fn announce_event(
     }
     let port = engine.listen_addr().map(|addr| addr.port()).unwrap_or(0);
     let snapshot = engine.snapshot(handle);
+    // A total of zero is a torrent whose metadata has not arrived, which is
+    // every magnet until it does. Subtracting from it gives `left = 0`, and
+    // zero is the one answer that means something specific: this client is a
+    // seed. Announcing that of a torrent whose length is not even known hands
+    // this address to every peer looking for one, and none of them can be
+    // served. `None` is "not known" and goes out as `UNKNOWN_LEFT`. See
+    // `TODO/trackers.md`, T-180.
+    //
+    // A torrent that really is zero bytes is reported as unknown by the same
+    // test. Nothing wants its bytes, so the two answers cost the same.
+    let left = (snapshot.total_bytes > 0)
+        .then(|| snapshot.total_bytes.saturating_sub(snapshot.progress_bytes));
     let request = Announce {
         event,
         uploaded: snapshot.uploaded_bytes,
         downloaded: snapshot.progress_bytes,
-        left: snapshot.total_bytes.saturating_sub(snapshot.progress_bytes),
+        left,
         // A client that is leaving or has finished is not asking for peers.
         numwant: 0,
-        ..Announce::new(
-            handle.info_hash().0,
-            handle.shared().peer_id.0,
-            port,
-            snapshot.total_bytes.saturating_sub(snapshot.progress_bytes),
-        )
+        ..Announce::new(handle.info_hash().0, handle.shared().peer_id.0, port, left)
     };
 
     let client = Client::new(

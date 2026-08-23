@@ -256,6 +256,7 @@ Effects: `read_only`.
 | `--tracker-interval <DUR>` | string |  |  | Override the announce interval |
 | `--no-tracker` | boolean |  | `false` | Disable tracker announces entirely |
 | `--scrape` | boolean |  | `false` | Scrape instead of announcing |
+| `--scrape-url <URL>` | string |  |  | The scrape endpoint, for a tracker that does not follow BEP 48 |
 | `--port <PORT>` | array |  |  | Port to announce, or a range as START-END. `0` asks the OS for a free one |
 | `--no-withdraw` | boolean |  | `false` | Announce and leave the peer record behind |
 | `--family <FAMILY>` | string | `auto`, `v4`, `v6` | `auto` | Which address family to announce over |

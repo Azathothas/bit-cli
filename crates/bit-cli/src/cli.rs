@@ -1065,6 +1065,17 @@ pub struct TrackersArgs {
     #[arg(long)]
     pub scrape: bool,
 
+    /// The scrape endpoint, for a tracker that does not follow BEP 48.
+    ///
+    /// BEP 48 derives the endpoint by replacing a trailing `announce` path
+    /// component with `scrape`. A tracker whose path does not end that way has
+    /// no derivable endpoint, and guessing one produces a 404 that reads like
+    /// the tracker being down. This is how a caller who knows the endpoint
+    /// says so. It replaces the derivation, so it names one tracker and the
+    /// run has to be narrowed to that tracker.
+    #[arg(long, value_name = "URL", requires = "scrape")]
+    pub scrape_url: Option<String>,
+
     /// Port to announce, or a range as START-END. `0` asks the OS for a free
     /// one.
     ///

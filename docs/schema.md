@@ -544,10 +544,14 @@ From `bit-cli trackers <TORRENT> --tracker <URL> --json`.
 | `info_hash` | string |
 | `kind` | string |
 | `leechers` | integer |
+| `left.bytes` | integer |
+| `left.known` | bool |
+| `left.reason` | string |
 | `name` | string |
 | `peers[]` | string |
 | `responded` | integer |
 | `schema_version` | string |
+| `scrape_url` | string |
 | `seeders` | integer |
 | `tracker_count` | integer |
 | `trackers[].completed` | integer |
@@ -557,6 +561,7 @@ From `bit-cli trackers <TORRENT> --tracker <URL> --json`.
 | `trackers[].family` | string |
 | `trackers[].http_status` | integer |
 | `trackers[].interval_s` | integer |
+| `trackers[].invalid_peers[]` | string |
 | `trackers[].leechers` | integer |
 | `trackers[].min_interval_s` | integer |
 | `trackers[].ok` | bool |

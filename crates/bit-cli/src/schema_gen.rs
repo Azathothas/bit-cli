@@ -863,6 +863,16 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         std::net::Ipv4Addr::LOCALHOST,
         seeder_port,
     )]);
+    // A third, for the same reason as the second: `invalid_peers` is only set
+    // by a response with something in its peer list that is not a peer, and a
+    // field no sample produces is a field this document does not describe.
+    // See `TODO/trackers.md`, T-180.
+    let mut malformed = Vec::new();
+    malformed.extend_from_slice(b"d8:completei1e10:incompletei1e8:intervali1800e5:peersl");
+    malformed.extend_from_slice(b"d2:ip8:10.0.0.14:porti6881ee");
+    malformed.extend_from_slice(b"i42e");
+    malformed.extend_from_slice(b"ee");
+    let odd = crate::test_support::Tracker::start_serving(malformed);
     let (_, out) = capture(
         &[
             "--json",
@@ -871,6 +881,8 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
             "--replace-trackers",
             "--tracker",
             &tracker.announce,
+            "--tracker",
+            &odd.announce,
             "--tracker",
             "http://127.0.0.1:1/announce",
             "--tracker-timeout",
@@ -881,6 +893,44 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
     observe_document(
         &mut documents,
         "bit-cli trackers <TORRENT> --tracker <URL> --json",
+        &out,
+    );
+
+    // A scrape, which is the same document kind carrying different fields:
+    // `scrape_url` and `completed` are a scrape's, and `announced_port`,
+    // `withdrawn` and `left` are an announce's. `--scrape-url` is what a
+    // tracker outside the BEP 48 convention needs, and naming it here is what
+    // documents the field. See `TODO/trackers.md`, T-065.
+    let info_hash_bytes: Vec<u8> = (0..fixture.info_hash.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&fixture.info_hash[i..i + 2], 16).unwrap_or(0))
+        .collect();
+    let mut scraped = Vec::new();
+    scraped.extend_from_slice(b"d5:filesd20:");
+    scraped.extend_from_slice(&info_hash_bytes);
+    scraped.extend_from_slice(b"d8:completei5e10:downloadedi9e10:incompletei3eeee");
+    let scrape_tracker = crate::test_support::Tracker::start_serving(scraped);
+    let scrape_base = scrape_tracker
+        .announce
+        .trim_end_matches("/announce")
+        .to_string();
+    let (_, out) = capture(
+        &[
+            "--json",
+            "trackers",
+            &torrent,
+            "--scrape",
+            "--replace-trackers",
+            "--tracker",
+            &format!("{scrape_base}/t/9f3c"),
+            "--scrape-url",
+            &format!("{scrape_base}/t/9f3c/scrape"),
+        ],
+        dir.clone(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli trackers <TORRENT> --scrape --scrape-url <URL> --json",
         &out,
     );
     let _ = seeder.join();

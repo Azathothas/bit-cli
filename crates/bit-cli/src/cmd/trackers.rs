@@ -49,6 +49,16 @@ pub struct TrackersReport {
     /// The highest leecher count any tracker reported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leechers: Option<u64>,
+    /// The endpoint `--scrape-url` named, when it was used. Absent otherwise,
+    /// including on every announce.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scrape_url: Option<String>,
+    /// What this run told the trackers it still wants, and why.
+    ///
+    /// Absent on a scrape, which sends no announce. See `TODO/trackers.md`,
+    /// T-180.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left: Option<LeftSent>,
     /// Distinct peer addresses across every tracker that answered.
     pub peers: Vec<String>,
     /// What each address family's announces returned, separately. Empty on a
@@ -56,6 +66,21 @@ pub struct TrackersReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub families: Vec<FamilyResult>,
     pub trackers: Vec<TrackerResult>,
+}
+
+/// The `left` an announce carried, and the reason it carried that.
+///
+/// A number a caller cannot check is a number a caller has to trust. `known`
+/// says whether the byte count is a measurement or a placeholder, so a reader
+/// never has to recognise 9223372036854775807 to know which it is looking at.
+#[derive(Debug, Clone, Serialize)]
+pub struct LeftSent {
+    /// The value on the wire, in bytes.
+    pub bytes: u64,
+    /// Whether the length was known. False makes `bytes` a placeholder.
+    pub known: bool,
+    /// Why this value and not another.
+    pub reason: &'static str,
 }
 
 /// Run the command.
@@ -125,9 +150,42 @@ pub fn run(
             info_hash.0,
             peer_id(),
             announced_port,
-            meta.as_ref().map(|m| m.layout().total_length).unwrap_or(0),
+            // `None` for a magnet or an info hash, which is a source with no
+            // length to report. It goes out as `UNKNOWN_LEFT` rather than as
+            // zero, because zero says seed. See `TODO/trackers.md`, T-180.
+            meta.as_ref().map(|m| m.layout().total_length),
         )
     };
+
+    // One endpoint names one tracker. Announcing to five and scraping the same
+    // URL five times would report one tracker's answer as five, so this is
+    // refused rather than guessed at: `--tracker <URL> --replace-trackers` is
+    // how a caller narrows the run to the tracker the endpoint belongs to. See
+    // `TODO/trackers.md`, T-065.
+    if let Some(endpoint) = &args.scrape_url
+        && tiers.len() > 1
+    {
+        return Err(Error::usage(format!(
+            "--scrape-url {endpoint} names one endpoint and this run has {} trackers. Narrow it with --tracker <URL> --replace-trackers",
+            tiers.len()
+        )));
+    }
+
+    // Reported rather than inferred. The wire value for "not known" is a
+    // placeholder, and a reader who cannot tell a placeholder from a
+    // measurement cannot tell this run from one that really has 8 EiB left.
+    let left_sent = (!args.scrape).then_some(match request.left {
+        Some(bytes) => LeftSent {
+            bytes,
+            known: true,
+            reason: "the torrent's total length, which this command has not downloaded any of",
+        },
+        None => LeftSent {
+            bytes: bit_cli_core::tracker::UNKNOWN_LEFT,
+            known: false,
+            reason: "the source carries no length yet, and zero would say this client is a seed",
+        },
+    });
 
     if global.dry_run {
         let planned: Vec<serde_json::Value> = tiers
@@ -137,7 +195,10 @@ pub fn run(
                     "tier": tier,
                     "url": url,
                     "protocol": bit_cli_core::tracker::protocol_of(url),
-                    "scrape_url": bit_cli_core::tracker::scrape_url(url),
+                    "scrape_url": args
+                        .scrape_url
+                        .clone()
+                        .or_else(|| bit_cli_core::tracker::scrape_url(url)),
                 })
             })
             .collect();
@@ -145,6 +206,7 @@ pub fn run(
             "dry_run": true,
             "info_hash": info_hash.hex(),
             "action": action(args),
+            "left": left_sent,
             "trackers": planned,
         });
         renderer.emit(env, "trackers", &report, || {
@@ -158,6 +220,7 @@ pub fn run(
     }
 
     let scrape = args.scrape;
+    let scrape_at = args.scrape_url.clone();
     let wanted = args.family;
     let withdraw = !args.scrape && !args.no_withdraw;
     let runtime = swarm::runtime()?;
@@ -181,6 +244,7 @@ pub fn run(
             };
             let client = client.clone();
             let request = request.clone();
+            let scrape_at = scrape_at.clone();
             work.spawn(async move {
                 // One tracker's families go in sequence, not at once, while
                 // the trackers themselves stay concurrent.
@@ -197,7 +261,11 @@ pub fn run(
                 let mut out = Vec::with_capacity(families.len());
                 for family in families {
                     out.push(match scrape {
-                        true => client.scrape(&url, tier, &request).await,
+                        true => {
+                            client
+                                .scrape(&url, tier, &request, scrape_at.as_deref())
+                                .await
+                        }
                         false => client.announce_on(&url, tier, &request, family).await,
                     });
                 }
@@ -263,6 +331,8 @@ pub fn run(
         action: action(args),
         announced_port: (!args.scrape).then_some(announced_port),
         withdrawn: withdraw.then_some(withdrawn),
+        scrape_url: args.scrape_url.clone(),
+        left: left_sent,
         // Counted over distinct URLs, not over results. One tracker announced
         // to over both families is two results and one tracker, and a tracker
         // that answered on IPv4 and not on IPv6 has responded: reporting it as
@@ -298,6 +368,12 @@ pub fn run(
     for tracker in &report.trackers {
         if let Some(warning) = &tracker.warning {
             renderer.warn(env, format!("{}: {warning}", tracker.url));
+        }
+        // Said rather than counted. The peers that did parse are in the
+        // report; this is the part a caller would otherwise have to notice by
+        // comparing two numbers.
+        for note in &tracker.invalid_peers {
+            renderer.warn(env, format!("{}: {note}", tracker.url));
         }
     }
 
@@ -528,6 +604,15 @@ fn lines(report: &TrackersReport) -> Vec<String> {
     if let Some(leechers) = report.leechers {
         out.push(field("leechers", leechers));
     }
+    if let Some(left) = &report.left {
+        out.push(field(
+            "left",
+            match left.known {
+                true => format!("{} bytes", left.bytes),
+                false => format!("{} bytes, a placeholder: {}", left.bytes, left.reason),
+            },
+        ));
+    }
     out.push(field("peers", report.peers.len()));
     // Per family, when there was more than one. One family is the same number
     // twice and saying it twice reads as a second measurement.
@@ -610,6 +695,32 @@ mod tests {
         assert_eq!(tiers, vec![(0, "udp://a.example:451".to_string())]);
     }
 
+    /// The torrent's own trackers are asked before the caller's.
+    ///
+    /// `mtorrent`'s issue 29 is what this holds against: with many trackers
+    /// configured, outgoing connects timed out and the torrent's own trackers
+    /// were never reached. Order is the whole fix and it is free. See
+    /// `TODO/trackers.md`, T-063, and `docs/trackers.md`.
+    #[test]
+    fn a_tracker_added_at_runtime_is_a_tier_after_the_torrents_own() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let meta = Metainfo::read(&fixture.torrent).expect("the fixture torrent");
+        let tiers = tracker_tiers(
+            &args(&["udp://added.example:451"], &[], false),
+            Some(&meta),
+            &env(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            tiers,
+            vec![
+                (0, "udp://tracker.example.com:80".to_string()),
+                (1, "udp://added.example:451".to_string()),
+            ]
+        );
+    }
+
     #[test]
     fn a_repeated_tracker_is_announced_to_once() {
         let tiers = tracker_tiers(
@@ -684,6 +795,7 @@ mod tests {
             min_interval_s: None,
             http_status: None,
             peers: vec!["1.2.3.4:1".into()],
+            invalid_peers: Vec::new(),
             warning: None,
             failure: None,
             family: Some(Family::V4),
@@ -712,6 +824,12 @@ mod tests {
             responded: 2,
             failed: 0,
             announces: 2,
+            scrape_url: None,
+            left: Some(LeftSent {
+                bytes: 4096,
+                known: true,
+                reason: "the torrent's total length, which this command has not downloaded any of",
+            }),
             families: by_family(&[low.clone(), high.clone()]),
             seeders: [low.clone(), high.clone()]
                 .iter()
@@ -805,6 +923,264 @@ mod tests {
         );
         assert!(report["withdrawn"].is_null(), "{report}");
         assert_eq!(tracker.param("event"), ["started"], "{:?}", tracker.seen());
+    }
+
+    /// A source with no length does not tell a tracker it is a seed.
+    ///
+    /// `left=0` is a well-formed answer that means "I have all of it", so a
+    /// tracker hands this client to every peer looking for one. A magnet
+    /// before its metadata arrives has no length to report, and this is the
+    /// difference between saying so and lying about it. See
+    /// `TODO/trackers.md`, T-180.
+    #[test]
+    fn an_announce_with_no_metadata_does_not_claim_to_be_a_seed() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let tracker = crate::test_support::Tracker::start(&[]);
+        let magnet = format!("magnet:?xt=urn:btih:{}", fixture.info_hash);
+        let report = crate::test_support::run_json(
+            &[
+                "trackers",
+                &magnet,
+                "--replace-trackers",
+                "--tracker",
+                &tracker.announce,
+            ],
+            fixture.dir(),
+        );
+
+        assert_eq!(report["left"]["known"], false, "{report}");
+        assert_eq!(
+            report["left"]["bytes"],
+            bit_cli_core::tracker::UNKNOWN_LEFT,
+            "{report}"
+        );
+        // What reached the tracker, rather than what the report says reached
+        // it. The announce and the withdrawal both carry it.
+        let sent = tracker.param("left");
+        assert!(!sent.is_empty(), "{:?}", tracker.seen());
+        for value in &sent {
+            assert_eq!(
+                value,
+                &bit_cli_core::tracker::UNKNOWN_LEFT.to_string(),
+                "{:?}",
+                tracker.seen()
+            );
+            assert_ne!(value, "0", "a magnet announced as a seed");
+        }
+    }
+
+    /// A torrent with metadata sends the length, and says it is a measurement.
+    #[test]
+    fn an_announce_with_metadata_sends_the_length_it_knows() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let tracker = crate::test_support::Tracker::start(&[]);
+        let report = crate::test_support::run_json(
+            &[
+                "trackers",
+                fixture.path_str(),
+                "--replace-trackers",
+                "--tracker",
+                &tracker.announce,
+            ],
+            fixture.dir(),
+        );
+
+        assert_eq!(report["left"]["known"], true, "{report}");
+        let total = report["left"]["bytes"].as_u64().expect("a byte count");
+        assert!(total > 0, "{report}");
+        assert_eq!(tracker.param("left")[0], total.to_string());
+    }
+
+    /// One entry that is not a peer does not cost the peers that are.
+    ///
+    /// `peers: [42]` is the shape anacrolix/torrent PR 1055 was written for. A
+    /// tracker list comes out of a `.torrent`, so this is untrusted input, and
+    /// the two failures to avoid are refusing the whole response and dropping
+    /// the entry without a word. See `TODO/trackers.md`, T-180.
+    #[test]
+    fn a_peer_list_with_an_entry_that_is_not_a_peer_keeps_the_others() {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"d8:completei3e10:incompletei4e8:intervali1800e5:peersl");
+        body.extend_from_slice(b"d2:ip8:10.0.0.14:porti6881ee");
+        body.extend_from_slice(b"i42e");
+        body.extend_from_slice(b"d2:ip8:10.0.0.24:porti70000ee");
+        body.extend_from_slice(b"d4:porti6881ee");
+        body.extend_from_slice(b"d2:ip8:10.0.0.34:porti6882ee");
+        body.extend_from_slice(b"ee");
+
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let tracker = crate::test_support::Tracker::start_serving(body);
+        let report = crate::test_support::run_json(
+            &[
+                "trackers",
+                fixture.path_str(),
+                "--replace-trackers",
+                "--tracker",
+                &tracker.announce,
+            ],
+            fixture.dir(),
+        );
+
+        assert_eq!(report["responded"], 1, "the response was refused: {report}");
+        assert_eq!(
+            report["peers"],
+            serde_json::json!(["10.0.0.1:6881", "10.0.0.3:6882"]),
+            "{report}"
+        );
+
+        let notes = report["trackers"][0]["invalid_peers"]
+            .as_array()
+            .expect("the entries that are not peers")
+            .iter()
+            .map(|note| note.as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(
+            notes[0].contains("entry 1 is not a peer dictionary"),
+            "{notes:?}"
+        );
+        assert!(notes[1].contains("port 70000"), "{notes:?}");
+        assert!(notes[2].contains("entry 3"), "{notes:?}");
+        assert!(notes[2].contains("no `ip`"), "{notes:?}");
+    }
+
+    /// A tracker that says `-1` has not said zero.
+    ///
+    /// aquatic's own WebTorrent types call this out: `left` is `Option<i64>`
+    /// and is None "when opening a magnet link". A count clamped to zero is a
+    /// statement about the swarm that the tracker did not make.
+    #[test]
+    fn a_negative_count_is_unknown_rather_than_zero() {
+        let body = b"d8:completei-1e10:incompletei5e8:intervali1800e5:peers0:e";
+        let result = bit_cli_core::tracker::parse_http_response(body).expect("a response");
+        assert_eq!(result.seeders, None, "a negative complete became a count");
+        assert_eq!(result.leechers, Some(5));
+        assert!(result.ok);
+    }
+
+    /// A compact list that is not a whole number of addresses says so.
+    #[test]
+    fn a_truncated_compact_peer_list_keeps_what_it_can_and_names_the_rest() {
+        // Two six byte addresses and three bytes left over.
+        let mut body = Vec::new();
+        body.extend_from_slice(b"d8:intervali1800e5:peers15:");
+        body.extend_from_slice(&[10, 0, 0, 1, 0x1a, 0xe1]);
+        body.extend_from_slice(&[10, 0, 0, 2, 0x1a, 0xe2]);
+        body.extend_from_slice(&[10, 0, 0]);
+        body.extend_from_slice(b"e");
+
+        let result = bit_cli_core::tracker::parse_http_response(&body).expect("a response");
+        assert_eq!(result.peers, ["10.0.0.1:6881", "10.0.0.2:6882"]);
+        assert_eq!(result.invalid_peers.len(), 1, "{:?}", result.invalid_peers);
+        assert!(
+            result.invalid_peers[0].contains("3 left over"),
+            "{:?}",
+            result.invalid_peers
+        );
+    }
+
+    /// A BEP 48 scrape document for one info hash.
+    #[cfg(test)]
+    fn scrape_body(info_hash_hex: &str) -> Vec<u8> {
+        let raw: Vec<u8> = (0..info_hash_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&info_hash_hex[i..i + 2], 16).expect("hex"))
+            .collect();
+        let mut body = Vec::new();
+        body.extend_from_slice(b"d5:filesd20:");
+        body.extend_from_slice(&raw);
+        body.extend_from_slice(b"d8:completei5e10:downloadedi9e10:incompletei3eeee");
+        body
+    }
+
+    /// A tracker whose path does not end in `announce` can still be scraped.
+    ///
+    /// BEP 48 derives the endpoint by replacing a trailing `announce`
+    /// component, and a tracker that does not use that convention has no
+    /// endpoint to derive. Guessing one produces a 404 that reads like the
+    /// tracker being down, so the answer is to be told. See
+    /// `TODO/trackers.md`, T-065.
+    #[test]
+    fn a_named_scrape_endpoint_reaches_a_tracker_the_convention_cannot() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let tracker = crate::test_support::Tracker::start_serving(scrape_body(&fixture.info_hash));
+        // The fixture serves every path, so this is the announce URL with a
+        // path BEP 48 cannot turn into anything.
+        let base = tracker.announce.trim_end_matches("/announce").to_string();
+        let announce = format!("{base}/t/9f3c");
+        let endpoint = format!("{base}/t/9f3c/scrape");
+
+        // Without the flag, the derivation fails and says so rather than
+        // guessing a URL and reporting the 404 it would get.
+        let (mut env, captured) = Env::test(
+            &[
+                "--json",
+                "trackers",
+                fixture.path_str(),
+                "--scrape",
+                "--replace-trackers",
+                "--tracker",
+                &announce,
+            ],
+            fixture.dir(),
+        );
+        let _ = crate::run(&mut env);
+        let report = captured.json().expect("a report");
+        let failure = report["trackers"][0]["failure"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(failure.contains("cannot be derived"), "{report}");
+        assert!(failure.contains("--scrape-url"), "{failure}");
+
+        // With it, the same tracker answers.
+        let report = crate::test_support::run_json(
+            &[
+                "trackers",
+                fixture.path_str(),
+                "--scrape",
+                "--replace-trackers",
+                "--tracker",
+                &announce,
+                "--scrape-url",
+                &endpoint,
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(report["responded"], 1, "{report}");
+        assert_eq!(report["seeders"], 5, "{report}");
+        assert_eq!(report["leechers"], 3, "{report}");
+        assert_eq!(report["trackers"][0]["completed"], 9, "{report}");
+        assert_eq!(report["scrape_url"], endpoint, "{report}");
+    }
+
+    /// One endpoint cannot stand for several trackers, and says so.
+    #[test]
+    fn a_named_scrape_endpoint_is_refused_when_the_run_has_several_trackers() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let (mut env, captured) = Env::test(
+            &[
+                "--json",
+                "trackers",
+                fixture.path_str(),
+                "--scrape",
+                "--replace-trackers",
+                "--tracker",
+                "http://127.0.0.1:1/t/a",
+                "--tracker",
+                "http://127.0.0.1:2/t/b",
+                "--scrape-url",
+                "http://127.0.0.1:1/t/a/scrape",
+            ],
+            fixture.dir(),
+        );
+        let code = crate::run(&mut env);
+        assert_eq!(code, ExitCode::Usage, "{}", captured.err());
+        assert!(
+            captured.err().contains("names one endpoint"),
+            "{}",
+            captured.err()
+        );
     }
 
     /// A scrape announces nothing, so it binds nothing and withdraws nothing.

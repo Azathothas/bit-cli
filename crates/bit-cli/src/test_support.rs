@@ -603,9 +603,19 @@ pub struct Tracker {
 impl Tracker {
     /// Serve an announce that hands back `peers`, on a port the OS picks.
     pub fn start(peers: &[std::net::SocketAddrV4]) -> Self {
+        Self::start_serving(announce_body(peers))
+    }
+
+    /// Serve one document, whatever it is, to every announce.
+    ///
+    /// For the responses a well-behaved tracker does not send. A tracker list
+    /// comes out of a `.torrent` and is untrusted, so what a malformed answer
+    /// does here is a property worth a fixture rather than a unit test on the
+    /// parser: the question is what the command reports, not what one function
+    /// returns. See `TODO/trackers.md`, T-180.
+    pub fn start_serving(body: Vec<u8>) -> Self {
         use std::io::{Read, Write};
 
-        let body = announce_body(peers);
         let listener =
             std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind loopback");
         let port = listener.local_addr().expect("local addr").port();

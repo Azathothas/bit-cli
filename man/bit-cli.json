@@ -957,6 +957,12 @@
           "type": "boolean"
         },
         {
+          "description": "The scrape endpoint, for a tracker that does not follow BEP 48",
+          "name": "--scrape-url",
+          "type": "string",
+          "value_name": "URL"
+        },
+        {
           "description": "Port to announce, or a range as START-END. `0` asks the OS for a free one",
           "name": "--port",
           "type": "array",

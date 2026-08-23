@@ -135,10 +135,10 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-060](trackers.md) | P1 | trackers | **done** | The announced port is wrong when no port is configured |
 | [T-061](trackers.md) | P1 | trackers | **done** | bit-cli trackers announces a fixed port |
 | [T-062](trackers.md) | P1 | trackers | **done** | Announce timing has no started, completed, or stopped events |
-| [T-063](trackers.md) | P3 | trackers | open | Tracker tiers are announced in parallel rather than in order |
+| [T-063](trackers.md) | P3 | trackers | **done** | Tracker tiers are announced in parallel rather than in order |
 | [T-064](trackers.md) | P2 | trackers | **done** | UDP tracker retry does not follow the BEP 15 backoff |
-| [T-065](trackers.md) | P3 | trackers | open | Scrape is only implemented for the BEP 48 URL convention |
-| [T-180](trackers.md) | P2 | trackers | open | A negative left in a tracker exchange has no decided handling |
+| [T-065](trackers.md) | P3 | trackers | **done** | Scrape is only implemented for the BEP 48 URL convention |
+| [T-180](trackers.md) | P2 | trackers | **done** | A negative left in a tracker exchange has no decided handling |
 | [T-070](windows.md) | P1 | windows | **done** | A downloaded executable cannot be run until the process exits |
 | [T-071](windows.md) | P0 | windows | **done** | Reserved device names in torrent paths are not sanitised |
 | [T-072](windows.md) | P0 | windows | **done** | Case-colliding paths silently overwrite |
@@ -189,7 +189,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-145](cli-surface.md) | P2 | ci | **done** | The macOS test job fails to link |
 | [T-146](cli-surface.md) | P1 | ci | **done** | CI built a Windows binary against the dynamic C runtime |
 | [T-147](windows.md) | P1 | windows | **done** | The rename reason differed by host, so two tests only passed on Windows |
-| [T-150](cli-surface.md) | P2 | ci | open | Clippy pins a floating toolchain, so a Rust release can turn the tree red |
+| [T-150](cli-surface.md) | P2 | ci | **done** | Clippy pins a floating toolchain, so a Rust release can turn the tree red |
 | [T-153](cli-surface.md) | P3 | ci | open | Link speeds are not read on macOS |
 | [T-154](cli-surface.md) | P2 | cli | **done** | A Metalink named by URL is not recognised |
 | [T-155](cli-surface.md) | P3 | cli | **done** | --hash-check-only drops the metalink report |
@@ -245,7 +245,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 167 items: 157 to work through, and 10 deferred to Phase C.
-37 open, 1 partial, 0 blocked, 119 done.
+33 open, 1 partial, 0 blocked, 123 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -504,10 +504,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 56 | 57 |
-| P2 | 20 | 1 | 0 | 41 | 62 |
-| P3 | 16 | 0 | 0 | 10 | 26 |
+| P2 | 18 | 1 | 0 | 43 | 62 |
+| P3 | 14 | 0 | 0 | 12 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **37** | **1** | **0** | **119** | **167** |
+| **All** | **33** | **1** | **0** | **123** | **167** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

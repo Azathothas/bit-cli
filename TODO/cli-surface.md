@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2547` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2322` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2358` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2053` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2558` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2336` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2372` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2067` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -1049,7 +1049,7 @@ Source:      CI run 32437262089, 2026-08-21
 Category:    ci
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T09:45Z
 
 Problem:     The `Clippy` job pins `toolchain: stable`, which is whatever
              Rust released most recently. Three lints fired there that do not
@@ -1143,9 +1143,20 @@ lesson. With `fmt` put back on `stable` it reports
 `1.97.1` it reports `the workflows disagree about RUST_GATE`. The tracking job,
 which floats on purpose, is reported by neither.
 
-**What is left is the run.** The Acceptance asks this entry to record one where
-the tracking job is red and the gate is green, and that run is the push that
-carries this change.
+**The run, which is the third clause.** Run **32631078557**, commit `e0718f7`,
+nineteen jobs:
+
+```
+success  Clippy                        the gate, 1.98.0
+success  Clippy (tracking stable)      stable is 1.98.0 today
+failure  Clippy (tracking beta)        1.99.0-beta.1
+success  ... every other job
+```
+
+The run's own conclusion is `success`. That is the property the split exists
+for: a toolchain six weeks away found something, said so by name, and stopped
+nothing. Without it the same finding would have arrived as sixteen red jobs on
+whichever commit happened to be pushed the day 1.99 shipped.
 
 ### T-151 Only one of the three release targets was checked for static linking
 
@@ -1536,7 +1547,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1154` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1206` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -2022,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2547` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2558` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
