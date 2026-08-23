@@ -81,9 +81,14 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** the last one read to a conclusion is run **32628316314**, against
-  commit `cad1ceb`. The push after it carries the fixes for the two red
-  jobs below and its run is not read yet, which is the first thing to do.
+- **CI:** green on all **seventeen** jobs at run **32628316314**, against commit
+  `cad1ceb`, which is the run that proved [T-215](webseed.md)'s fix.
+
+  **The last commit of the session is `246f341`** and it is documentation only,
+  so it carries `[skip ci]` and started no run. The commit under it, `a044421`,
+  started run **32629207782**, which was still in flight when the session ended.
+  **Read it first**: it carries [T-216](windows.md)'s fix and both script
+  changes, and nothing has confirmed them on a runner yet.
 
   **Two jobs went red this session and both are fixed**, [T-215](webseed.md) on
   `Test (windows-latest)` at run 32626337016 and [T-216](windows.md) on
@@ -388,12 +393,12 @@ Derived from the rows rather than from memory:
 pwsh -NoProfile -File scripts/check-todo.ps1
 ```
 
-1. **Read the CI run the last push started**, before anything else. Two jobs went
-   red this session and the fixes for both are in that push, so its run is the
-   evidence they worked:
+1. **Read run 32629207782**, before anything else. It is `a044421`'s, it was
+   still in flight when the session ended, and it carries
+   [T-216](windows.md)'s fix and both `check-todo.ps1` changes:
 
 ```bash
-gh run list --limit 1
+gh run view 32629207782
 ```
 
 2. **The six hour soak, and it is the operator's to run.** No agent session lasts
