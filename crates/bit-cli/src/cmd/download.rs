@@ -419,6 +419,38 @@ pub fn run(
     let (torrent_download_rate, torrent_upload_rate) = setup.torrent_rates()?;
     let directory = engine_options.download_directory.clone();
 
+    // `-o`/`--out` names one payload's destination, so a run with two sources
+    // would be telling both to write to the same path. Refused here, before
+    // the session starts, rather than per worker: by the time the second
+    // worker noticed, the first would already have created files.
+    // See `TODO/cli-surface.md`, T-226.
+    if args.selection.out.is_some() && args.sources.len() > 1 {
+        return Err(Error::usage(format!(
+            "--out names where one payload goes and this run has {} sources; use --dir for the directory they share",
+            args.sources.len()
+        ))
+        .with("sources", args.sources.len()));
+    }
+    // Relative to `--dir` where one is given, and to the working directory
+    // otherwise, so neither flag is silently inert beside the other:
+    // `--dir out --out album` is `out/album`. `directory` is already absolute,
+    // so joining a relative `--out` onto it is the whole rule, and an absolute
+    // `--out` is the caller naming a destination outright, which is what `-o`
+    // means everywhere else and what `--dir` is already allowed to do.
+    //
+    // Normalised lexically rather than with `canonicalize`, which needs the
+    // path to exist and returns an extended-length prefix on Windows. Without it a
+    // `..` survives into the report, and the report is what says where the
+    // payload went. See `TODO/cli-surface.md`, T-226.
+    let out = args
+        .selection
+        .out
+        .as_ref()
+        .map(|path| match path.is_absolute() {
+            true => normalise(path),
+            false => normalise(&directory.join(path)),
+        });
+
     if global.dry_run {
         return dry_run(args, global, &setup, renderer, env, &directory);
     }
@@ -592,6 +624,7 @@ pub fn run(
             specs,
             trackers,
             files,
+            multi_file: meta.as_ref().map(|m| m.info().multi_file),
             file_count,
             donations: Vec::new(),
         });
@@ -747,6 +780,7 @@ pub fn run(
                 select_file: args.selection.select_file.clone(),
                 exclude_file: args.selection.exclude_file.clone(),
                 index_out: args.selection.index_out.clone(),
+                out: out.clone(),
                 piece_hook: piece_hook.clone(),
                 verify_on_complete: args.verify_on_complete,
                 report_interval,
@@ -882,6 +916,33 @@ pub(crate) fn allocation_of(method: crate::cli::FileAllocation) -> bit_cli_core:
     }
 }
 
+/// Resolve `.` and `..` in a path without touching the filesystem.
+///
+/// `std::fs::canonicalize` needs every component to exist, which `--out`'s
+/// does not yet, and on Windows it returns an extended-length prefixed path that no
+/// caller wants to read in a report. A `..` with nothing before it is kept,
+/// because dropping it would change which directory the path names.
+/// See `TODO/cli-surface.md`, T-226.
+fn normalise(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    match out.as_os_str().is_empty() {
+        true => std::path::PathBuf::from("."),
+        false => out,
+    }
+}
+
 /// Everything one worker needs beyond the plan.
 #[derive(Clone)]
 struct Options {
@@ -898,6 +959,11 @@ struct Options {
     /// count until its metadata resolves, and the count is what makes an index
     /// past the end a usage error. See `TODO/cli-surface.md`, T-116.
     index_out: Vec<String>,
+    /// `-o`/`--out`, already resolved against `--dir` and the working
+    /// directory. `None` when the flag was not given, which is the ordinary
+    /// case and leaves the session's own rule in force. See
+    /// `TODO/cli-surface.md`, T-226.
+    out: Option<std::path::PathBuf>,
     /// `--on-piece-verified`, already running, or `None` when the flag was not
     /// given. Shared by every worker: one command means one queue and one
     /// thread whatever `-j` is. See `TODO/cli-surface.md`, T-115.
@@ -983,6 +1049,14 @@ struct Plan {
     /// Which files of this torrent to fetch, from `--select-file` and
     /// `--exclude-file`. See `TODO/cli-surface.md`, T-185.
     files: FileSelection,
+    /// Whether the torrent carries a `files` list, when this run already read
+    /// the metadata. It decides what `--out` names: the file, for a
+    /// single-file torrent, or the directory the files go directly into, for a
+    /// multi-file one. `None` for a magnet, for the same reason `file_count`
+    /// is. A multi-file torrent holding one file is still multi-file, which is
+    /// why this is not derived from the count. See `TODO/cli-surface.md`,
+    /// T-226 and T-036.
+    multi_file: Option<bool>,
     /// How many files the torrent has, when this run already read the
     /// metadata. `None` for a magnet, whose file list does not exist until it
     /// resolves. See `TODO/cli-surface.md`, T-116.
@@ -1293,6 +1367,9 @@ async fn one_inner(
         ..Default::default()
     };
     let mut torrent_bytes = plan.torrent_bytes.clone();
+    // A magnet's shape, once its metadata resolves. `plan.multi_file` already
+    // has it for every other source kind. T-226.
+    let mut resolved_multi_file: Option<bool> = None;
     match &plan.files {
         FileSelection::Decided(files) => add.only_files = files.clone(),
         // A magnet whose selection needs a file count. Read the metadata
@@ -1334,9 +1411,55 @@ async fn one_inner(
             // five-file magnet is the same usage error it is against a
             // `.torrent`. T-116.
             add.index_out = crate::selection::index_out(&options.index_out, Some(count))?;
+            resolved_multi_file = Some(resolved.layout.multi_file);
             torrent_bytes = Some(resolved.torrent_bytes);
         }
     }
+    // `--out` is the payload's destination, and what it replaces depends on
+    // the torrent's shape. A multi-file torrent's name is a directory, so the
+    // path becomes that directory and `subfolder: false` in `add_inner` is
+    // what stops the name being appended to it. A single-file torrent's name
+    // is the file, so the path's parent becomes the directory and the leaf
+    // becomes an `--index-out` rename of file 0, which is machinery that
+    // already sanitises, truncates and disambiguates a caller's path. Doing it
+    // any other way would let `-o ../../x` out of the output directory.
+    // See `TODO/cli-surface.md`, T-226.
+    // Where this torrent's payload actually lands, which is what the report
+    // has to name. `options.directory` is the run's and stops being this
+    // torrent's the moment `--out` is given.
+    let mut payload_directory = options.directory.clone();
+    if let Some(out) = &options.out {
+        let multi_file = plan
+            .multi_file
+            .or_else(|| resolved_multi_file.as_ref().copied())
+            .ok_or_else(|| {
+                Error::usage(format!(
+                    "{}: --out needs to know whether the torrent is single-file, and the metadata did not say",
+                    plan.source
+                ))
+            })?;
+        match multi_file {
+            true => {
+                payload_directory = out.clone();
+                add.output_folder = Some(out.to_string_lossy().into_owned());
+            }
+            false => {
+                let leaf = out.file_name().ok_or_else(|| {
+                    Error::usage(format!("--out `{}` names no file", out.display()))
+                        .with("value", out.display().to_string())
+                })?;
+                payload_directory = out
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_path_buf();
+                add.output_folder = Some(payload_directory.to_string_lossy().into_owned());
+                add.index_out
+                    .insert(0, leaf.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+
     let only_files = add.only_files.clone();
     // Bounded by `--init-timeout`, the same budget and the same error as the
     // selection branch fifty lines above. `engine.add` resolves a magnet's
@@ -1453,7 +1576,7 @@ async fn one_inner(
         let snapshot = engine.snapshot(&handle);
         let mut report = finish(
             plan,
-            options,
+            &payload_directory,
             &snapshot,
             &[],
             Stopped::Completed,
@@ -1607,7 +1730,7 @@ async fn one_inner(
     let snapshot = engine.snapshot(&handle);
     let mut report = finish(
         plan,
-        options,
+        &payload_directory,
         &snapshot,
         &sources,
         stopped,
@@ -2512,7 +2635,10 @@ fn publish_donor(
 #[allow(clippy::too_many_arguments)]
 fn finish(
     plan: &Plan,
-    options: &Options,
+    // Where this torrent's payload landed, which is the run's download
+    // directory unless `--out` moved it. It replaced an `&Options` this
+    // function read one field of. See `TODO/cli-surface.md`, T-226.
+    payload_directory: &std::path::Path,
     snapshot: &TorrentSnapshot,
     sources: &[AttachedSource],
     stopped: Stopped,
@@ -2551,7 +2677,7 @@ fn finish(
         peers_seen: snapshot.peers.seen,
         redials,
         sources: sources.iter().map(AttachedSource::report).collect(),
-        output_directory: options.directory.display().to_string(),
+        output_directory: payload_directory.display().to_string(),
         renamed,
         shared: Vec::new(),
         announced: Vec::new(),
@@ -2676,8 +2802,13 @@ fn plan_selection(
         // have the file list. Resolving first costs a magnet one metadata
         // round trip it was going to make anyway.
         // See `TODO/cli-surface.md`, T-116 and T-185.
+        // `--out` needs the metadata for a different fact than the count:
+        // whether the torrent is single-file, which is what says if the path
+        // names a file or a directory. Same round trip, so it is the same
+        // branch. See `TODO/cli-surface.md`, T-226.
         None if crate::selection::needs_file_count(&args.select_file, &args.exclude_file)
-            || !args.index_out.is_empty() =>
+            || !args.index_out.is_empty()
+            || args.out.is_some() =>
         {
             Ok(FileSelection::AwaitingCount)
         }
@@ -3159,7 +3290,7 @@ mod tests {
 
     use super::*;
     use crate::cli::SelectionArgs;
-    use crate::test_support::{TorrentFixture, run_json, run_json_code};
+    use crate::test_support::{TorrentFixture, run_err, run_json, run_json_code};
 
     /// Every selector value maps to one of two behaviours, and which is which
     /// is stated once.
@@ -3527,6 +3658,174 @@ mod tests {
             "--on-complete did not fire"
         );
         assert!(marks.join("on-error").is_dir(), "--on-error did not fire");
+    }
+
+    /// `-o`/`--out` writes a **multi-file** torrent's payload directly into
+    /// the named directory, without the torrent's own name under it.
+    ///
+    /// The flag parsed and reached no code at all until T-226: renaming the
+    /// field broke no build, and a run passing it wrote where it would have
+    /// written anyway. See `TODO/cli-surface.md`, T-226.
+    #[test]
+    fn out_writes_a_multi_file_payload_into_the_named_directory() {
+        let fixture = TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let out = dir.join("elsewhere");
+        let report = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--out",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(report["torrents"][0]["finished"], true, "{report}");
+
+        for (path, bytes) in &fixture.files {
+            let landed = out.join(path);
+            assert!(landed.is_file(), "nothing at {}", landed.display());
+            assert_eq!(
+                &std::fs::read(&landed).expect("read the file"),
+                bytes,
+                "{} does not hold the torrent's bytes",
+                landed.display()
+            );
+        }
+        // The torrent's own name is what `--out` replaced, so it must not be
+        // a directory under it. Without this the test passes on a run that
+        // ignored the flag and wrote to `<cwd>/album/` instead.
+        assert!(
+            !out.join(&fixture.name).exists(),
+            "the torrent's name is still a directory under --out"
+        );
+        assert!(
+            !dir.join(&fixture.name).exists(),
+            "the payload also landed where --out was supposed to move it from"
+        );
+        // And the report says where it went, which is the half a script reads.
+        assert_eq!(
+            report["torrents"][0]["output_directory"],
+            out.display().to_string(),
+            "{report}"
+        );
+    }
+
+    /// For a **single-file** torrent the payload is one file, so `--out` names
+    /// that file. T-226.
+    #[test]
+    fn out_names_the_file_itself_for_a_single_file_torrent() {
+        let fixture = TorrentFixture::single_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let out = dir.join("renamed").join("payload.dat");
+        let report = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--out",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(report["torrents"][0]["finished"], true, "{report}");
+        assert!(out.is_file(), "nothing at {}", out.display());
+        assert_eq!(
+            std::fs::read(&out).expect("read the renamed payload"),
+            fixture.files[0].1
+        );
+        assert!(
+            !dir.join(&fixture.name).exists(),
+            "the payload also landed under the torrent's own name"
+        );
+    }
+
+    /// A relative `--out` is relative to `--dir`, so neither flag is inert
+    /// beside the other. T-226.
+    #[test]
+    fn a_relative_out_resolves_against_dir() {
+        let fixture = TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let base = dir.join("base");
+        let report = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                base.to_str().expect("utf-8 path"),
+                "--out",
+                "under",
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(report["torrents"][0]["finished"], true, "{report}");
+        let landed = base.join("under").join(&fixture.files[0].0);
+        assert!(landed.is_file(), "nothing at {}", landed.display());
+        assert_eq!(
+            report["torrents"][0]["output_directory"],
+            base.join("under").display().to_string(),
+            "{report}"
+        );
+    }
+
+    /// `--out` names where one payload goes, so a run with two sources is a
+    /// usage error before the session starts rather than two torrents writing
+    /// over each other. T-226.
+    #[test]
+    fn out_with_more_than_one_source_is_a_usage_error() {
+        let first = TorrentFixture::multi_file();
+        let second = TorrentFixture::single_file();
+        let dir = first.dir();
+        let said = run_err(
+            &[
+                "download",
+                first.path_str(),
+                second.path_str(),
+                "--out",
+                "somewhere",
+                "--port",
+                "0",
+            ],
+            dir,
+            ExitCode::Usage,
+        );
+        assert!(said.contains("--out"), "{said}");
+        assert!(said.contains("2 sources"), "{said}");
     }
 
     /// `-O`/`--index-out` writes a file to the path the caller named, and

@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2596` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2374` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2410` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2105` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2601` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2379` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2415` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2110` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2596` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2601` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -3677,7 +3677,7 @@ Source:      measured while opening T-103, 2026-08-23
 Category:    cli
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T17:40Z
 
 Problem:     `bit-cli download -o/--out <PATH>` is declared at
              `crates/bit-cli/src/cli.rs:934` as
@@ -3747,4 +3747,73 @@ cannot be being read.
 
 ```bash
 cargo check --workspace --all-targets
+```
+
+**Done 2026-08-23T17:40Z, and the Approach held.** The machinery was already
+there and `seed` was already using it, which is what made this effort S: the
+change is where `--out` is resolved and what it is turned into, not new
+plumbing.
+
+**Multi-file**: `AddOptions::output_folder = PATH`. `add_inner` passes
+`subfolder: false` for a set `output_folder`, which is exactly what stops the
+torrent's own name being appended, so the files land directly under `PATH`.
+
+**Single-file**: the payload is one file, so `PATH` names it.
+`output_folder = PATH.parent()` and `index_out[0] = PATH.file_name()`. The
+leaf goes through the `-O` machinery rather than around it, so it is
+sanitised, truncated and disambiguated exactly as a torrent path is.
+
+**A magnet resolves its metadata first**, on the branch `-O` already uses.
+`--out` needs a different fact than the count, whether the torrent is
+single-file, and it is the same round trip, so `plan_selection` returns
+`AwaitingCount` for `--out` too and `run_one` reads
+`resolved.layout.multi_file`. `Plan` carries `multi_file: Option<bool>` for
+every other source kind, and it is not derived from the file count because a
+multi-file torrent holding one file is still multi-file, which is
+[T-036](performance.md).
+
+### Three things the entry did not name, and two were found by running
+
+**`--out` beside `--dir` was resolved the wrong way round, and the first
+version escaped the output directory.** The entry proposed resolving `--out`
+against `--dir`, which is right, and the first attempt wrote
+`directory.join(env.resolve(path))`. `env.resolve` makes a relative path
+absolute against the working directory, and joining an absolute path onto
+another returns the absolute one, so `--dir out --out album` wrote to
+`<cwd>/album` and `--dir out --out ../../x` wrote **two levels above the
+repository**, which a run confirmed by leaving a file there. Relative paths
+join onto `--dir`; an absolute `--out` is honoured, which is what `-o` means
+everywhere else and what `--dir` is already allowed to do.
+
+**The report named the run's directory rather than the torrent's.**
+`output_directory` was `options.directory` at both sites, which stops being
+this torrent's the moment `--out` is given, so the Acceptance's last clause
+failed on the first run that otherwise worked. `finish` takes the payload
+directory now and lost the `&Options` it read one field of.
+
+**A `..` survived into that report**, because `std::fs::canonicalize` needs
+every component to exist and returns an extended-length prefix on Windows that
+no caller wants to read. `normalise` resolves `.` and `..` lexically instead.
+
+### Measured, and run against the defect
+
+Three runs against `loopback-fileserver` with `--web-seed-only`, and the
+fourth is the refusal:
+
+| torrent | flag | where the payload landed | `output_directory` |
+| --- | --- | --- | --- |
+| single-file | `--out .tmp/t226/renamed.bin` | `.tmp/t226/renamed.bin` | `.tmp\t226` |
+| multi-file | `--out .tmp/t226/mydir` | `.tmp/t226/mydir/inner.bin` | `.tmp\t226\mydir` |
+| multi-file | `--dir .tmp/t226b --out under` | `.tmp/t226b/under/inner.bin` | `.tmp\t226b\under` |
+| two sources | `--out .tmp/t226/x` | nothing, exit 2 | |
+
+Four acceptance cases in `crates/bit-cli/src/cmd/download.rs`. Each asserts
+the bytes at the named path **and** that nothing landed under the torrent's
+own name, because a test that only checks the first passes on a run that
+ignored the flag. With the application disabled, three of the four fail and
+the usage-error case still passes, which is right: it is a different code
+path.
+
+```bash
+cargo test -p bit-cli --lib out_writes_a_multi_file out_names_the_file a_relative_out_resolves out_with_more_than_one
 ```

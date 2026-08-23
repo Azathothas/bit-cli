@@ -930,6 +930,12 @@ pub struct SelectionArgs {
     pub index_out: Vec<String>,
 
     /// Write the payload here instead of using the torrent's name.
+    ///
+    /// For a single-file torrent this names the file. For a multi-file one it
+    /// names the directory that replaces the torrent's own name, so the files
+    /// land directly under it. Relative to `--dir` when one is given, and to
+    /// the working directory otherwise. One source only: two torrents told to
+    /// write to one path is a usage error. See `TODO/cli-surface.md`, T-226.
     #[arg(short = 'o', long, value_name = "PATH")]
     pub out: Option<PathBuf>,
 

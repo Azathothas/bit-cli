@@ -102,8 +102,8 @@ pwsh -NoProfile -Command "Get-Content bench/soak-20260823T154716064Z.json | Conv
 gh run list --limit 1
 ```
 
-- **Entries:** 175 items. 25 open, 1 partial, 0 blocked, 139 done, 10 deferred
-  to Phase C. 139 of 165 workable done, 26 left.
+- **Entries:** 175 items. 24 open, 1 partial, 0 blocked, 140 done, 10 deferred
+  to Phase C. 140 of 165 workable done, 25 left.
 - **Tree:** 96 Rust files, 56,704 lines of code, 14,358 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **31 patches**

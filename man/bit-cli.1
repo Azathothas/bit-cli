@@ -507,7 +507,9 @@ Skip these files
 Rename a file by index, as INDEX=PATH
 .TP
 \fB\-o\fR, \fB\-\-out\fR \fI<PATH>\fR
-Write the payload here instead of using the torrent\*(Aqs name
+Write the payload here instead of using the torrent\*(Aqs name.
+
+For a single\-file torrent this names the file. For a multi\-file one it names the directory that replaces the torrent\*(Aqs own name, so the files land directly under it. Relative to `\-\-dir` when one is given, and to the working directory otherwise. One source only: two torrents told to write to one path is a usage error. See `TODO/cli\-surface.md`, T\-226.
 .TP
 \fB\-\-file\-allocation\fR \fI<METHOD>\fR [default: sparse]
 How disk space is allocated
