@@ -1162,3 +1162,62 @@ where it matters.
 ```bash
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
+
+---
+
+## librqbit-tracker-comms: an HTTP announce has no deadline and no ceiling
+
+```
+Unblocks:    nothing on its own. It is nzbd's 0005 read and taken in part, and
+             TODO/trackers.md is where the tracker entries live.
+Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
+             patches/rqbit/0021-crates-tracker_comms-src-tracker_comms.rs.patch
+Upstream:    not offered yet. It should be, and nzbd's own draft is written:
+             see contrib/rqbit/TRACKER_REQUEST_BUDGET_PR.md in that repository.
+Added:       2026-08-23T04:35Z
+```
+
+Three things a tracker could decide for this process, and none of them was
+bounded.
+
+- **How long an announce takes.** Neither `reqwest` client `session.rs` builds
+  carries a timeout, so a tracker that accepts the connection and answers one
+  byte a minute held an announce task for as long as it liked. Thirty seconds
+  over the whole exchange now, headers and body together.
+- **How much it allocates.** `Response::bytes()` reads the whole body with no
+  ceiling, so the size of this process's allocation was a number the tracker
+  picked. One megabyte now, checked against the running total rather than
+  against `Content-Length`: the header is checked when it is there and never
+  trusted, so a missing or lying one changes nothing. A compact peer list is
+  six bytes per peer, so the limit is about 175,000 peers.
+- **How often we come back.** `interval: 0` gave an announce loop with no
+  sleep in it. Floored now.
+
+**The floor is five seconds and not sixty, and that is a deliberate departure
+from the patch this was read from.** nzbd's `0005` takes 60, and its own draft
+says outright that this is a policy tradeoff rather than a safety check: a
+tracker legitimately asking for 10 seconds would be delayed to 60. The UDP path
+**in this same file** already clamps to five, so five is the number this
+codebase had already chosen for the same question, and matching it makes one
+protocol have one answer. Raising both to sixty is a decision about how often
+to talk to honest trackers, and it is not this change's to make.
+
+**Why it has to be here.** `tracker_one_request_http` is a private method and
+the client is built inside `Session::new_with_opts`. `bit-cli` sets
+`--tracker-timeout` on **its own** tracker client, in
+`crates/bit-cli-core/src/tracker.rs`, which is the one `bit-cli trackers` uses
+and not the one the session announces with. Two clients, one of which was
+reachable from the command line and one of which was not.
+
+**How it was measured.** Three tests in `bounds_tests`: a zero interval is
+floored, an honest interval from five seconds to thirty minutes is not touched,
+and the UDP path's clamp produces the same number as the HTTP path's floor,
+which is what says the two agree rather than happening to look similar.
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit -p librqbit-tracker-comms
+```
+
+**What is not proved.** That a hostile tracker is refused, because there is no
+fixture that is one. `loopback-tracker` answers correctly by construction, and
+the three bounds are asserted on the functions rather than through a socket.

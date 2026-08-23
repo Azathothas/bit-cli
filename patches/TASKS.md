@@ -280,11 +280,72 @@ exists and nothing about the session is written down. **Read `0001` before
 adopting it for anything else**: it solves a problem this repository no longer
 has, and its value here was the reading rather than the patch.
 
-**Four of the nine remain worth reading and none of them is claimed yet**:
-`0012`, `0014` and `0016` are bounds on queues that [T-040](../TODO/memory.md)
-and [`TODO/dht.md`](../TODO/dht.md) would want, and `0005` is a bound on
-tracker responses. Nothing has read them. Section 2 says the same thing and it
-is still true.
+### All nine have been read now, 2026-08-23, and one was taken
+
+The four that were still unread are read, against the vendored tree rather than
+against 8.1.1, and the verdicts differ.
+
+**`0005-bound-tracker-requests`: taken, in part.** The defect is real and this
+tree has all of it. Neither `reqwest` client the session builds carries a
+timeout; `Response::bytes()` reads an announce body with no ceiling, so the
+size of this process's allocation was a number the tracker picked; and
+`interval: 0` gave an announce loop with no sleep in it. All three are bounded
+now and `patches/UPSTREAM.md` carries it.
+
+**The part not taken is the interval floor's value**, and it is the worked
+example of `README.md`'s "upstream is not automatically right" applied to a
+third party. `0005` floors at 60 seconds, and its own draft says outright that
+this is a policy tradeoff rather than a safety check: a tracker legitimately
+asking for 10 seconds is delayed to 60. The UDP path **in the same file**
+already clamped to five, so five is the number this codebase had already chosen
+for the same question. Matching it makes one protocol have one answer; raising
+both to sixty is a decision about how often to talk to honest trackers, and it
+was not this change's to make.
+
+**`0016-limit-peer-metadata-before-allocation`: not taken, and it found
+something.** The cap it adds already exists at 9.0.1: `HandlerLocked::new`
+refuses a `metadata_size` over 32 MiB **before** allocating, at
+`vendor/rqbit/crates/librqbit/src/peer_info_reader/mod.rs:87`. What `0016` adds
+beyond that is `PeerConnectionOptions::max_metadata_size`, a knob with no
+caller here, and this repository does not ship infrastructure written against a
+guess.
+
+Reading it against the tree found the thing that **is** unbounded, and it is
+not the per-peer cap: `dht_utils.rs:42` runs 128 metadata reads at once, so the
+product is 4 GiB and nothing bounds a product. That is
+[T-212](../TODO/memory.md), filed rather than fixed, with the arithmetic and
+both citations and an acceptance that says what would replace the arithmetic
+with a measurement.
+
+**`0012-bound-peer-response-backlog`: read, not taken, and the reason is that
+its premise is half true here.** It gives each peer a 128 permit response
+budget and advertises that as BEP 10 `reqq`. The web seed bridge in this
+repository already advertises `reqq` 250 and refuses a request over
+`MAX_REQUEST_LEN`, but that is the bridge and not the session: the session's
+own writer channel is still unbounded and a peer can still queue piece
+responses faster than a slow socket drains them. So the defect is real and the
+patch is 14 KB across two files carrying a permit through the upload scheduler,
+the writer queue, the disk read and the socket write. It is a change worth
+making and it is not one to make at the end of a session on somebody else's
+description of it. It belongs to [T-040](../TODO/memory.md)'s family and needs
+its own entry and its own measurement first.
+
+**`0014-bound-discovery-pressure`: read, not taken, and it is the largest of
+the nine.** 33 KB against that repository's `dht.rs`, bounding the outgoing
+datagram queue, the recursive node queues, the delivered peer queue and the
+metadata resolver, and changing DHT traversal behaviour under saturation in
+each. Two of its findings are worth carrying forward whatever happens to the
+patch: the resolver retains every address it has seen, which
+[T-212](../TODO/memory.md) records, and a recursive request was being sent
+twice, once for the callback and once for traversal, doubling DHT traffic and
+discarding half the returned data. That second one is a defect rather than a
+bound and it should be checked against 9.0.1 before anything larger is
+attempted. Nothing here has checked it.
+
+**What the reading was worth, counted.** One patch taken in part, one entry
+filed, one deliberate departure recorded, and two patches whose value was the
+reading rather than the code. Section 2 said the same about `0010` and it was
+right about these too.
 
 ## 5. The rest, in the order the entries already argue for
 

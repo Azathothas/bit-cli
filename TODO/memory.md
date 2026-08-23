@@ -521,6 +521,60 @@ pwsh -NoProfile -File scripts/soak.ps1 -Minutes 1 -Workload idle -Root .tmp/soak
 
 `complete=True`, 2 samples, and zero `bench/*.tmp` left behind.
 
+### T-212 Resolving a magnet can allocate 4 GiB across 128 peers
+
+Source:      reading nzbd's `0016-limit-peer-metadata-before-allocation` and
+             `0014-bound-discovery-pressure` against the vendored tree,
+             2026-08-23
+Category:    memory
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     Two bounds that multiply.
+             `vendor/rqbit/crates/librqbit/src/dht_utils.rs:42` runs **128**
+             metadata reads at once, and
+             `vendor/rqbit/crates/librqbit/src/peer_info_reader/mod.rs:87`
+             lets each one allocate whatever the peer says the metadata is,
+             up to **32 MiB**, on the peer's word. 128 hostile peers
+             answering one magnet is 4 GiB of allocation, held until the read
+             timeout drops them.
+Relevance:   Adding a magnet is the one operation that takes a number from a
+             stranger and allocates it. `--max-rss` is the backstop and a
+             backstop is not a bound: it stops the process rather than the
+             peer. The per-peer 32 MiB is a sensible ceiling on its own, and
+             it is the multiplication that is not bounded anywhere.
+Approach:    Not the option nzbd's `0016` adds. That makes the per-peer cap
+             configurable, which is a knob with no caller here and does not
+             touch the product. Bound the **aggregate** instead: a byte budget
+             shared across the resolution, acquired before the buffer is
+             built, so 128 peers cannot each take 32 MiB. The check also
+             belongs before the two writer sends in `on_extended_handshake`,
+             which currently unchoke and declare interest to a peer that is
+             about to be refused.
+             `seen`, at `dht_utils.rs:39`, is the smaller half: one
+             `SocketAddr` per address the DHT returns, retained for the whole
+             resolution and handed on as the initial peer list. It is bounded
+             by `--init-timeout` rather than by design.
+Acceptance:  A magnet resolution against a fixture swarm where every peer
+             advertises the maximum metadata size holds peak RSS under a named
+             ceiling, and the same run with one honest peer still resolves. A
+             `bench` run recorded here with both numbers.
+
+**What is measured and what is arithmetic.** The two numbers above are read off
+those two lines and multiplied. What has **not** been measured is a run that
+reaches 4 GiB: it needs a fixture swarm of peers that answer an extended
+handshake with a large `metadata_size` and then stall, and no such fixture
+exists here. The entry is filed with the arithmetic and the citations rather
+than with a measurement, and the acceptance is what would replace one with the
+other.
+
+**Why the per-peer cap is not the thing to lower.** A torrent of 1,048,576
+pieces, which [T-195](peers.md) made resolvable, carries 20 MiB of piece hashes
+in its info dictionary. 32 MiB is therefore a real ceiling with about 50 per
+cent of headroom, not an absurd one, and lowering it would refuse torrents this
+repository has gone out of its way to support.
+
 ### T-041 Per-source window cache is bounded but not measured
 
 Source:      `bit-cli` design

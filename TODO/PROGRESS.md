@@ -71,8 +71,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
   The seventeenth job is `Record`, added this session, which runs
   `scripts/check-todo.ps1` where `-SkipGates` cannot reach it. Two runs went
   red mid-session and neither was this tree's fault: see [T-211](bench.md).
-- **Entries:** 160 items. 44 open, 2 partial, 0 blocked, 104 done, 10 deferred
-  to Phase C. 104 of 150 workable done, 46 left.
+- **Entries:** 161 items. 45 open, 2 partial, 0 blocked, 104 done, 10 deferred
+  to Phase C. 104 of 151 workable done, 47 left.
 - **Tree:** 87 Rust files, 50,718 lines of code, 11,912 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **23 patches**

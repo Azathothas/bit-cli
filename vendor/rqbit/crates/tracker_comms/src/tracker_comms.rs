@@ -26,6 +26,74 @@ use crate::tracker_comms_udp;
 use crate::tracker_comms_udp::UdpTrackerClient;
 use librqbit_core::hash_id::Id20;
 
+/// Longest an HTTP announce may take, headers and body together.
+///
+/// Neither `reqwest` client this crate is handed carries a timeout, so without
+/// this a tracker that accepts a connection and then sends one byte a minute
+/// holds an announce task for as long as it likes. Added by this fork; see
+/// `patches/UPSTREAM.md`.
+const HTTP_TRACKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Most bytes an HTTP announce response may carry.
+///
+/// A compact peer list is six bytes per peer, so a megabyte is about 175,000
+/// peers and no honest tracker approaches it. `Response::bytes` had no bound at
+/// all, which made the size of this process's allocation a number the tracker
+/// picks.
+const MAX_HTTP_TRACKER_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// Shortest announce interval this client will honour.
+///
+/// A tracker that answers `interval: 0` otherwise gets an announce loop with no
+/// sleep in it. Five seconds rather than the sixty a stricter reading would
+/// take, because the UDP path in this same file already clamps to five and two
+/// floors for the same protocol is a difference nobody chose. Raising it is a
+/// policy decision about how often to talk to honest trackers, and this is not
+/// that: it is the smallest number that makes the loop a loop.
+const MIN_TRACKER_ANNOUNCE_INTERVAL_SECS: u64 = 5;
+
+/// Clamp what a tracker asked for to something that is not a tight loop.
+fn floor_announce_interval(interval: Duration) -> Duration {
+    interval.max(Duration::from_secs(MIN_TRACKER_ANNOUNCE_INTERVAL_SECS))
+}
+
+/// Read an announce response with a deadline and a ceiling.
+///
+/// Both halves are needed and neither substitutes for the other: the deadline
+/// bounds a tracker that stalls, and the ceiling bounds one that answers
+/// quickly and forever. `Content-Length` is checked when it is there and never
+/// trusted when it is: the running total is what refuses, so a missing or
+/// lying header changes nothing.
+async fn fetch_http_tracker_response(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> anyhow::Result<Vec<u8>> {
+    if let Some(len) = response.content_length()
+        && len > max_bytes as u64
+    {
+        anyhow::bail!("tracker response declares {len} bytes, over the {max_bytes} limit");
+    }
+    let mut response = response;
+    let mut out = Vec::with_capacity(
+        response
+            .content_length()
+            .unwrap_or(0)
+            .min(max_bytes as u64)
+            .try_into()
+            .unwrap_or(0),
+    );
+    while let Some(chunk) = response.chunk().await? {
+        if out.len() + chunk.len() > max_bytes {
+            anyhow::bail!(
+                "tracker response passed {} bytes, over the {max_bytes} limit",
+                out.len() + chunk.len()
+            );
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
 pub struct TrackerComms {
     info_hash: Id20,
     peer_id: Id20,
@@ -449,11 +517,17 @@ impl TrackerComms {
         }
         url.set_query(Some(&queries));
 
-        let response: reqwest::Response = client.get(url).send().await?;
-        if !response.status().is_success() {
-            anyhow::bail!("tracker responded with {:?}", response.status());
-        }
-        let bytes = response.bytes().await?;
+        // One deadline over the whole exchange rather than one per read, so a
+        // tracker cannot keep an announce alive by answering slowly forever.
+        let bytes = tokio::time::timeout(HTTP_TRACKER_REQUEST_TIMEOUT, async {
+            let response: reqwest::Response = client.get(url).send().await?;
+            if !response.status().is_success() {
+                anyhow::bail!("tracker responded with {:?}", response.status());
+            }
+            fetch_http_tracker_response(response, MAX_HTTP_TRACKER_RESPONSE_BYTES).await
+        })
+        .await
+        .context("tracker request timed out")??;
         if let Ok((error, _)) =
             bencode::from_bytes_with_rest::<tracker_comms_http::TrackerError>(&bytes)
         {
@@ -472,9 +546,9 @@ impl TrackerComms {
         for peer in response.iter_peers() {
             self.tx.send(peer).await?;
         }
-        Ok(Duration::from_secs(
+        Ok(floor_announce_interval(Duration::from_secs(
             response.min_interval.unwrap_or(response.interval),
-        ))
+        )))
     }
 
     async fn task_single_tracker_monitor_udp(
@@ -584,7 +658,9 @@ impl TrackerComms {
                 for addr in response.addrs {
                     self.tx.send(addr).await.context("rx closed")?;
                 }
-                let sleep = response.interval.max(5);
+                // Through the same floor as the HTTP path, so one protocol
+                // does not have two answers to the same question.
+                let sleep = response.interval.max(MIN_TRACKER_ANNOUNCE_INTERVAL_SECS as u32);
                 let sleep = Duration::from_secs(sleep as u64);
                 Ok(sleep)
             }
@@ -593,5 +669,54 @@ impl TrackerComms {
                 Err(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+
+    /// Added by this fork. A tracker that answers `interval: 0` used to get an
+    /// announce loop with no sleep in it, on the HTTP path only: the UDP path
+    /// in this same file already clamped to five seconds.
+    #[test]
+    fn a_zero_interval_is_floored_rather_than_slept_on() {
+        assert_eq!(
+            floor_announce_interval(Duration::from_secs(0)),
+            Duration::from_secs(MIN_TRACKER_ANNOUNCE_INTERVAL_SECS)
+        );
+        assert_eq!(
+            floor_announce_interval(Duration::from_secs(1)),
+            Duration::from_secs(MIN_TRACKER_ANNOUNCE_INTERVAL_SECS)
+        );
+    }
+
+    /// And an honest interval is left alone. A floor that rounded 1,800 seconds
+    /// up to anything would be a policy change rather than a bound.
+    #[test]
+    fn an_honest_interval_is_not_changed() {
+        for secs in [
+            MIN_TRACKER_ANNOUNCE_INTERVAL_SECS,
+            30,
+            60,
+            900,
+            1800,
+        ] {
+            assert_eq!(
+                floor_announce_interval(Duration::from_secs(secs)),
+                Duration::from_secs(secs),
+                "interval {secs}"
+            );
+        }
+    }
+
+    /// The two floors are the same number, which is the point of naming it.
+    #[test]
+    fn the_udp_path_uses_the_same_floor() {
+        let clamped = 0u32.max(MIN_TRACKER_ANNOUNCE_INTERVAL_SECS as u32);
+        assert_eq!(
+            Duration::from_secs(clamped as u64),
+            floor_announce_interval(Duration::from_secs(0))
+        );
     }
 }
