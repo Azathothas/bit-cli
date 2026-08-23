@@ -82,8 +82,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 - **CI:** green at run **32620536345** against commit `a289977`, all
   **seventeen** jobs. `f055328` is on top of it and is documentation only, so it
   carries `[skip ci]` and started no run.
-- **Entries:** 163 items. 40 open, 1 partial, 0 blocked, 112 done, 10 deferred
-  to Phase C. 112 of 153 workable done, 41 left.
+- **Entries:** 164 items. 40 open, 1 partial, 0 blocked, 113 done, 10 deferred
+  to Phase C. 113 of 154 workable done, 41 left.
 - **Tree:** 92 Rust files, 52,557 lines of code, 12,567 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
@@ -229,6 +229,28 @@ entry asked, and **failed twice**. `raw_arg` is the fix.
 Acceptance never covered: `seed` has no `--on-*` flag at all. The entry says
 what has to be decided first, because a seeder does not mean the same thing by
 "complete" that a download does.
+
+### A red job, and the fourth of its kind
+
+**[T-215](webseed.md), P1, filed and done.** CI run **32626337016**, the T-116
+push, turned `Test (windows-latest)` red on
+`bench_webseed_measures_only_what_a_scope_covers`: `errors.total` was 1 where
+the test asserted 0. That commit changed the path planner, the storage factory
+and two commands, none of which `bench::webseed::run` touches.
+
+It is a test about **scope**, and it was asserting that a 600 ms bench against a
+loopback server on a loaded runner cannot lose a connection. That is the fourth
+instance of the rule [RULES.md](RULES.md) section 5 already carries, after
+[T-148](bench.md), [T-160](cli-surface.md) and [T-162](webseed.md).
+
+**The lesson is narrower than the rule, and it is about T-162.** T-162 reshaped
+the two tests immediately above this one in the same file and did not read
+further down it. Three of the four `errors.total` assertions in
+`webseed_e2e.rs` had been dealt with; this was the fourth, twenty lines below
+the last one edited. **When a defect is found in a file, the fix is the file
+rather than the line.** So the remaining one,
+`bench_webseed_moves_real_bytes_and_reports_them`, went with it, before it
+turned anything red.
 
 ### A defect in the tooling, found on the way
 

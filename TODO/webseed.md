@@ -1813,3 +1813,58 @@ some other way, after [T-148](bench.md), [T-160](cli-surface.md) and
 rather than about a clock. [RULES.md](RULES.md) section 5 carries the rule; the
 shape it did not spell out is that "two things will both happen" is the same
 assumption as "this will happen within N seconds".
+
+### T-215 A third bench webseed test asserted a loaded runner cannot fail
+
+Source:      CI run 32626337016, `Test (windows-latest)`, 2026-08-23
+Category:    bench
+Priority:    P1
+Effort:      S
+Status:      **done** 2026-08-23T08:10Z
+
+Problem:     `bench_webseed_measures_only_what_a_scope_covers` asserted
+             `outcome.summary.errors.total == 0` after a 600 ms bench against a
+             loopback server. It is a test about **scope**: whether a binding
+             restricted to file 0 reads file 0 and nothing else. Whether a
+             connection survives 600 ms on a loaded runner is a different
+             question and not one the test set out to ask.
+Relevance:   `left: 1, right: 0`. One error in one run turned a job red on a
+             commit that changed the path planner, the storage factory and two
+             commands, none of which `bench::webseed::run` touches. The cost of
+             a red job is not the defect it names, it is every defect behind
+             it, and this one named nothing.
+Approach:    The shape [T-162](#t-162-two-bench-webseed-tests-assumed-a-loaded-runner-cannot-also-fail)
+             settled for the two tests immediately above it in the same file:
+             assert the invariant that holds whatever the runner does, which is
+             that every error carries a class a reader can act on, and assert
+             the thing the test is actually about.
+Acceptance:  The scope assertion runs both ways, every endpoint is file 0 and
+             none is file 1, and a lost connection cannot fail it.
+
+**Done, and this is the fourth of its kind**, after [T-148](bench.md),
+[T-160](cli-surface.md) and [T-162](#t-162-two-bench-webseed-tests-assumed-a-loaded-runner-cannot-also-fail).
+T-162 reshaped the two tests immediately above this one in the same file and
+did not look further down it, which is the lesson worth keeping: **when a
+defect is found in a file, the fix is the file rather than the line**. Three of
+the four `errors.total` assertions in `webseed_e2e.rs` had already been dealt
+with; this was the fourth, twenty lines below the last one edited.
+
+What it asserts now:
+
+- **Both directions of the scope.** Every endpoint ends in `a.bin` and none
+  contains `b.bin`, and the endpoint list is non-empty, because a run that read
+  nothing satisfies "every endpoint is file 0" vacuously.
+- **The error invariant**, whatever the count: every error has a class, so
+  `by_class` summing to `total` is the assertion rather than `total` being zero.
+
+**The fourth `errors.total` assertion went with it, before it turned anything
+red.** `bench_webseed_moves_real_bytes_and_reports_them` is a 700 ms bench with
+the same assumption, thirty lines from the top of the same block. Fixing only
+the one that failed is how this defect reached its fourth instance, so both are
+reshaped and the file now holds no assertion that a loaded runner cannot lose a
+connection.
+
+```
+$ cargo test -p bit-cli-core --test webseed_e2e bench_webseed
+test result: ok. 8 passed; 0 failed; 0 ignored; 44 filtered out
+```

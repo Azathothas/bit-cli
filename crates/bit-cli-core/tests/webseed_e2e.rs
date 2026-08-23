@@ -1657,9 +1657,16 @@ async fn bench_webseed_moves_real_bytes_and_reports_them() {
         outcome.summary
     );
     assert!(outcome.summary.requests > 0);
+    // The same invariant, and for the same reason, as the scope test at the
+    // bottom of this file: a 700 ms bench against a loopback server on a
+    // loaded runner can lose a connection, and what this test is about is that
+    // bytes moved and were reported. Taken here **before** it turned a job
+    // red, because the one below it did and the two are the same assumption.
+    // See `TODO/webseed.md`, T-215.
     assert_eq!(
-        outcome.summary.errors.total, 0,
-        "{:?}",
+        outcome.summary.errors.by_class.values().sum::<u64>(),
+        outcome.summary.errors.total,
+        "an error with no class is an error nobody can act on: {:?}",
         outcome.summary.errors
     );
     assert!(outcome.summary.sustained_rate.0 > 0);
@@ -1898,12 +1905,38 @@ async fn bench_webseed_measures_only_what_a_scope_covers() {
             .unwrap();
 
     assert!(outcome.summary.bytes.0 > 0);
-    assert_eq!(outcome.summary.errors.total, 0);
     assert!(served.load(Ordering::Relaxed) > 0);
-    assert!(
-        outcome.endpoints[0].ends_with("a.bin"),
-        "a scope of file 0 reads file 0: {}",
-        outcome.endpoints[0]
+
+    // **What this test is about is the scope**, so that is what it asserts:
+    // every endpoint the bench read is file 0, and none of them is file 1.
+    // Both directions, because a run that read nothing would satisfy the first
+    // alone.
+    assert!(!outcome.endpoints.is_empty(), "nothing was read at all");
+    for endpoint in &outcome.endpoints {
+        assert!(
+            endpoint.ends_with("a.bin"),
+            "a scope of file 0 reads file 0: {endpoint}"
+        );
+        assert!(
+            !endpoint.contains("b.bin"),
+            "a scope of file 0 read file 1: {endpoint}"
+        );
+    }
+
+    // It used to assert `errors.total == 0` here, which is a claim about the
+    // machine rather than about the scope: a 600 ms bench against a loopback
+    // server on a loaded runner can lose a connection, and one did, on CI run
+    // 32626337016, `Test (windows-latest)`. What holds whatever the runner
+    // does is that an error which happened is one a reader can act on. That is
+    // the shape [T-162] settled for the two tests above this one and this is
+    // the third that needed it. See `TODO/webseed.md`, T-162 and T-215.
+    //
+    // [T-162]: `TODO/webseed.md`
+    assert_eq!(
+        outcome.summary.errors.by_class.values().sum::<u64>(),
+        outcome.summary.errors.total,
+        "an error with no class is an error nobody can act on: {:?}",
+        outcome.summary.errors
     );
 }
 
