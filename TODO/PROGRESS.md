@@ -65,10 +65,12 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-23T06:14:39Z, unattended, and running.
-- **Tests:** 1,204 passing, 0 failing. 1,166 at the start, re-measured rather
-  than carried forward. Plus **149** in the vendored trees, which the workspace
-  gates do not run.
+- **Last session:** 2026-08-23T06:14:39Z, unattended, and it ran to 08:40Z. It
+  was ended on the operator's word. The duration is not restated here:
+  `scripts/session-report.ps1` derives it from the instant above, and a
+  duration written down twice is a number two documents disagree about.
+- **Tests:** 1,204 passing, 0 failing. 1,166 at the start. Plus **149** in the
+  vendored trees, which the workspace gates do not run.
 - **Gates:** clean, on rustc 1.98.0.
 
 ```bash
@@ -79,12 +81,18 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green at run **32620536345** against commit `a289977`, all
-  **seventeen** jobs. `f055328` is on top of it and is documentation only, so it
-  carries `[skip ci]` and started no run.
-- **Entries:** 164 items. 39 open, 1 partial, 0 blocked, 114 done, 10 deferred
-  to Phase C. 114 of 154 workable done, 40 left.
-- **Tree:** 92 Rust files, 52,557 lines of code, 12,567 of comment,
+- **CI:** the last one read to a conclusion is run **32628316314**, against
+  commit `cad1ceb`. The push after it carries the fixes for the two red
+  jobs below and its run is not read yet, which is the first thing to do.
+
+  **Two jobs went red this session and both are fixed**, [T-215](webseed.md) on
+  `Test (windows-latest)` at run 32626337016 and [T-216](windows.md) on
+  `Test (ubuntu-latest)` at run 32627489685. Neither was a defect in `bit-cli`:
+  both were tests asserting something about the runner. That is now the fourth
+  and fifth of that kind.
+- **Entries:** 166 items. 38 open, 1 partial, 0 blocked, 117 done, 10 deferred
+  to Phase C. 117 of 156 workable done, 39 left.
+- **Tree:** 94 Rust files, 54,369 lines of code, 13,312 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
   across seventeen sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
@@ -93,9 +101,9 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 
 ## What the last session did
 
-**This session is in progress.** What is below is what it set out to do, written
-before doing it, by [RULES.md](RULES.md) section 1 step 4. It is rewritten as
-each entry closes.
+**Two standing instructions from the operator, the whole `cli` group the last
+work order named, and five entries that came out of doing them.** Nine entries
+closed and five were filed.
 
 ### The two standing instructions, taken first
 
@@ -208,8 +216,11 @@ the old shape could not express at all: it picked one for the whole run by
 `--on-piece-verified` fires for the first time.
 
 **The entry's "probably a rate limit" is answered with a measurement rather
-than a flag.** One piece is one process, and **1,025 invocations of `cmd /C
-rem` took 47.55 seconds on this machine**, 46 ms each. Two bounds instead of a
+than a flag.** One piece is one process, and **1,025 invocations took 47.55
+seconds on this machine**, 46 ms each. The measured command was `cmd /C rem` and
+a hook already runs through `cmd /C`, so that is two processes per invocation
+and about 23 ms per `cmd`; `docs/hooks.md` says so rather than rounding it into
+a bigger number. Two bounds instead of a
 rate limit, because a rate limit loses notifications and a caller cannot tell
 which: the hook runs on its own thread, and its queue is bounded at 1,024 with
 what does not fit **counted** into `hooks.skipped` and warned about.
@@ -274,12 +285,12 @@ loopback server on a loaded runner cannot lose a connection. That is the fourth
 instance of the rule [RULES.md](RULES.md) section 5 already carries, after
 [T-148](bench.md), [T-160](cli-surface.md) and [T-162](webseed.md).
 
-**The lesson is narrower than the rule, and it is about T-162.** T-162 reshaped
-the two tests immediately above this one in the same file and did not read
-further down it. Three of the four `errors.total` assertions in
-`webseed_e2e.rs` had been dealt with; this was the fourth, twenty lines below
-the last one edited. **When a defect is found in a file, the fix is the file
-rather than the line.** So the remaining one,
+**The lesson is narrower than the rule, and it is about T-162.** Counted rather
+than remembered, because the first draft of this paragraph got it wrong:
+`webseed_e2e.rs` held exactly **two** assertions that no error can occur. T-162
+reshaped two **other** tests sitting between them and left both standing. The
+one that went red is 58 lines below T-162's last edit. **When a defect is found
+in a file, the fix is the file rather than the line.** So the other,
 `bench_webseed_moves_real_bytes_and_reports_them`, went with it, before it
 turned anything red.
 
@@ -297,44 +308,106 @@ renders from the crate being compiled. **`gates.ps1` printed `man ok` and
 release build in front of every `gates.ps1` run; it compares the binary's
 timestamp against the newest `.rs` under `crates/` and defers to the test.
 
+
+### The operator's correction, and the two entries it produced
+
+**[T-161](cli-surface.md) was open and had been done for a session**, which the
+operator spotted and no script did. The action it is about,
+`ilammy/setup-nasm@v1.5.2`, was replaced by `scripts/setup-nasm.ps1` at all five
+call sites when [T-199](cli-surface.md) closed, and the entry went on describing
+a workflow the tree does not have.
+
+**Two gaps in `scripts/check-todo.ps1`, both closed.** `.github/` was not in the
+cited-path prefixes at all, so this entry's four citations of
+`.github/workflows/ci.yml:<line>` were never resolved for anything. And nothing
+compared an entry's premise to the workflows: a new `stale-premise` check reads
+the `uses:` lines and fails when an **open or partial** entry names an
+`owner/name@ref` pin that no workflow carries. That is the one shape of "this
+entry describes a state the tree is not in" that can be decided mechanically,
+because nothing else in this record is spelled that way.
+
+**The first draft of that check passed T-161**, and the reason is the useful
+part: it searched the raw text of the workflows, and `ci.yml` carries the comment
+"Ours, not ilammy/setup-nasm: that action is unmaintained". A substring search
+found the very action the comment exists to say is gone. It reads `uses:` lines
+only now.
+
+**[T-217](windows.md), filed and done, and it is the reason the check took two
+tries.** Writing that check put a `0x08` backspace into
+`scripts/check-todo.ps1`, from a Python `\b` escape interpreted on its way to the
+file. It landed inside the regex `'^###\s+(T-\d+)\b'`, so the pattern required a
+byte nothing has, matched no entry, and passed every file **silently**. The
+`text` gate said `text ok` on the same run, because it searched for a NUL and
+nothing else.
+
+It searches for every C0 byte except tab, newline and return now, and widening it
+found three more: another backspace in `gates.ps1`'s own comment about the first,
+one in `TODO/windows.md` where `foo\bar` lost its backslash, and **two `0x13`
+bytes in `crates/bit-cli-core/src/mse/handshake.rs`**, where the BitTorrent
+handshake's length byte was written as itself in a `b"..."` literal rather than
+as `\x13`. That last is the same defect [RULES.md](RULES.md) section 5 already
+records for `torrent/bencode.rs`, in a file written after that rule was.
+
+**[T-216](windows.md), filed and done**, the second red job. A seeder test waited
+up to 20 seconds for a listener that `--stop-after 15s` had already taken away.
+Two numbers that have to be ordered and were not. They are ordered by a factor of
+two now, and the peer thread returns a `Result<(), String>` so a failure names
+which of its three steps failed rather than saying "the peer never completed a
+handshake", which was true of all three.
+
 ## In progress
 
-- **[T-212](memory.md)** is filed and open, with an acceptance that names the
-  fixture it needs.
-- **[T-102](bep-coverage.md)**, **[T-164](peers.md)** are open or partial.
+Nothing is half-written.
+
+- **The push carrying T-161, T-216, T-217 and the two script fixes** is the last
+  of the session and its CI run has not been read. That is item 1 below.
+- **[T-212](memory.md)**, **[T-213](cli-surface.md)**, **[T-214](cli-surface.md)**
+  are filed and open. All three came out of this session's own work and each
+  names what it needs.
+- **[T-102](bep-coverage.md)** is open and **[T-164](peers.md)** is partial, the
+  only partial left.
 
 ## Start here next session
 
-**The shape of the work order is the operator's, from the session before this
-one.** Not priority first. Clear as many small entries as possible, so the open
-count comes down, and then take the bigger ones a **category at a time**: all of
-`bep`, or all of `dht`, in one session rather than one entry from each.
+**The shape of the work order is the operator's, from two sessions ago.** Not
+priority first. Clear as many small entries as possible, so the open count comes
+down, and then take the bigger ones a **category at a time**: all of `bep`, or
+all of `dht`, in one session rather than one entry from each.
 
-The reading taken of "an easy win": one that is **not** waiting on an open
-high-priority entry. That is nearly all of them. **There is no open P0 and
-exactly one open P1**, `T-081`, BEP 52 v2 and hybrid torrents, effort XL. The
-only open entry that waits on it is [T-134](bep-coverage.md), v1 and v2 info
-hash reconciliation. Everything else below is unblocked.
+**The `cli` group that item 3 named is finished.** All eight closed this session:
+T-115, T-116, T-118, T-136, T-154, T-155, T-156 and T-159. Two more entries came
+out of doing them, [T-213](cli-surface.md) and [T-214](cli-surface.md), and three
+more out of the CI and tooling work beside them, [T-215](webseed.md),
+[T-216](windows.md) and [T-217](windows.md). **There is no open P0 and exactly
+one open P1**, `T-081`, BEP 52 v2 and hybrid torrents, effort XL. The only open
+entry waiting on it is [T-134](bep-coverage.md). Everything below is unblocked.
 
-Derived from the `Effort:` line of every open or partial entry, not from memory:
+Derived from the rows rather than from memory:
 
 ```bash
 pwsh -NoProfile -File scripts/check-todo.ps1
 ```
 
-1. **Read the CI run named above before anything else.**
-2. **The six hour soak, and it is the operator's to run.** No agent session
-   lasts six hours and a session ending kills the process it started, so a
-   session prints this and moves on. In a dedicated foreground terminal, from
-   the repository root:
+1. **Read the CI run the last push started**, before anything else. Two jobs went
+   red this session and the fixes for both are in that push, so its run is the
+   evidence they worked:
+
+```bash
+gh run list --limit 1
+```
+
+2. **The six hour soak, and it is the operator's to run.** No agent session lasts
+   six hours and a session ending kills the process it started, so a session
+   prints this and moves on. In a dedicated foreground terminal, from the
+   repository root:
 
 ```bash
 pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
 ```
 
    **How a later session reads it.** The run writes `bench/soak-<stamp>.csv` one
-   row per sample and rewrites `bench/soak-<stamp>.json` after every sample, so
-   a run still going has both. `"complete": true` in the JSON is the only thing
+   row per sample and rewrites `bench/soak-<stamp>.json` after every sample, so a
+   run still going has both. `"complete": true` in the JSON is the only thing
    that says the window finished; `elapsed_hours` and `samples` say how far it
    got. Six hours at the default 30 second interval is about 720 samples.
 
@@ -344,46 +417,45 @@ pwsh -NoProfile -Command "Get-ChildItem bench/soak-*.json | Sort-Object LastWrit
 
    The last run reached 1.32 hours of six with 145 samples, zero `CLOSE_WAIT` at
    every one of them and 288 leech cycles with none failed. Those two are counts
-   and hold at that window. The RSS slope is not: +0.622 MiB/h at r squared
-   0.105 is noise fitted to a line, and [T-040](memory.md) already recorded the
-   same shape at 5.06 hours. **A slope needs a window long enough to have one.**
-3. **The `cli` group, eight entries at effort S**, which is the largest single
-   category of easy wins and the one where a reader sees the result:
-   [T-115](cli-surface.md) partial, [T-136](cli-surface.md),
-   [T-154](cli-surface.md), [T-116](cli-surface.md), [T-118](cli-surface.md),
-   [T-155](cli-surface.md), [T-156](cli-surface.md), [T-159](cli-surface.md).
-   Two of them, T-118 and T-159, are about the help output itself, so
-   `scripts/check-man.ps1 -Fix` follows both.
-4. **The `ci` and `windows` groups, four entries at effort S**:
-   [T-150](cli-surface.md), [T-161](cli-surface.md), [T-075](windows.md),
-   [T-178](windows.md). T-150 and T-161 are workflow edits, so they need a real
-   run to prove them and cannot go in a `-NoCi` push.
-5. **The `trackers` and `dht` groups, five entries at effort S**:
+   and hold at that window. The RSS slope is not: +0.622 MiB/h at r squared 0.105
+   is noise fitted to a line, and [T-040](memory.md) recorded the same shape at
+   5.06 hours. **A slope needs a window long enough to have one.** The tree has
+   moved a long way since that run, so it is worth restarting rather than
+   resuming.
+3. **The `ci` and `windows` groups, three entries at effort S**:
+   [T-150](cli-surface.md), [T-075](windows.md) and [T-178](windows.md). The
+   fourth, T-161, closed this session. T-150 is a workflow edit, so it needs a
+   real run to prove it and cannot go in a `-NoCi` push.
+4. **The `trackers` and `dht` groups, five entries at effort S**:
    [T-180](trackers.md), [T-063](trackers.md), [T-065](trackers.md),
    [T-050](dht.md), [T-051](dht.md).
-6. **The rest of the effort S entries**, ten of them, in
-   `bench`, `create`, `metainfo`, `memory`, `peers`, `performance`, `webseed`
-   and `bep`: [T-094](bench.md), [T-191](bench.md), [T-176](create-seed.md),
-   [T-173](metainfo.md), [T-187](metainfo.md), [T-041](memory.md),
-   [T-165](peers.md), [T-033](performance.md), [T-008](webseed.md),
-   [T-103](bep-coverage.md).
-7. **Then, a category at a time.** `bep-coverage.md` is the one with the most
-   left and the most shared machinery. After it, `dht.md`.
-8. **[T-212](memory.md)** whenever the fixture for it is being built anyway. It
-   is the only entry in the record whose numbers are arithmetic rather than
-   measurement, and it needs a swarm of peers that answer an extended handshake
-   with a large `metadata_size` and then stall.
-   `crates/bit-cli-core/src/bench/swarm.rs` already builds synthetic peers.
+5. **The three this session filed**, all effort S and all with the machinery
+   already built: [T-213](cli-surface.md) is `-O` on `seed`, which is the flag
+   and the test because [T-116](cli-surface.md) built the rest;
+   [T-214](cli-surface.md) is hooks on `seed`, which needs a decision about what
+   a seeder means by each trigger **before** any code; and [T-212](memory.md)
+   whenever a fixture of stalling peers is being built anyway.
+6. **The rest of the effort S entries**, in `bench`, `create`, `metainfo`,
+   `memory`, `peers`, `performance`, `webseed` and `bep`: [T-094](bench.md),
+   [T-191](bench.md), [T-176](create-seed.md), [T-173](metainfo.md),
+   [T-187](metainfo.md), [T-041](memory.md), [T-165](peers.md),
+   [T-033](performance.md), [T-008](webseed.md), [T-103](bep-coverage.md).
+7. **Then, a category at a time.** `bep-coverage.md` has the most left and the
+   most shared machinery. After it, `dht.md`.
 
-**Two corpus sources the list above may want**, both already on this machine
-and neither needing a fetch: `reference/RESEARCH.md` sections C and D, which is
-where seventeen of the T-163 to T-182 block came from, and `contrib/rqbit/` in
-<https://github.com/pjunod/nzbd>, MIT OR Apache-2.0, which is fetched per
-session rather than kept and whose `0012` and `0014` are read and not taken.
-**Both are reads.** Nothing is opened, filed or commented on either.
+**Two corpus sources the list above may want**, both already on this machine and
+neither needing a fetch: `reference/RESEARCH.md` sections C and D, and
+`contrib/rqbit/` in <https://github.com/pjunod/nzbd>, MIT OR Apache-2.0, whose
+`0012` and `0014` are read and not taken. **Both are reads.** Nothing is opened,
+filed or commented on either, by [RULES.md](RULES.md) section 6a.
 
 ## Open questions for the operator
 
-None outstanding. The one the previous session left, the unfinished soak, is
-answered by the operator's own instruction: it is item 2 above and it is run
-outside a session.
+None outstanding.
+
+The soak is item 2 and is the operator's to run, which answers the question the
+session before this one left. The two standing instructions this session was
+given are written into [RULES.md](RULES.md) sections 6 and 6a, into
+`patches/README.md`, `patches/UPSTREAM.md`, `patches/TASKS.md` and the three
+kickoff prompt samples, so a session that has read what it is told to read cannot
+propose either again.

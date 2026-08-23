@@ -408,15 +408,17 @@ torrent's info hash and the run's totals, which describes neither.
 
 **`--on-piece-verified` fires now, and the entry's "probably a rate limit" is
 answered with a measurement rather than a flag.** One piece is one process and a
-process is not free: **1,025 invocations of `cmd /C rem` took 47.55 seconds on
-this machine**, 46 ms each, so the same hook on a 4 GiB torrent at a 1 MiB piece
-length is over three minutes of process startup. Two bounds rather than a rate
+process is not free: **1,025 invocations took 47.55 seconds on this machine**,
+46 ms each. That number is honest about what it measured and the doc says so:
+the command was `cmd /C rem` and a hook is already run through `cmd /C`, so each
+invocation started two processes, about 23 ms per `cmd`. Either way a 4 GiB
+torrent at a 1 MiB piece length is 4,096 pieces. Two bounds rather than a rate
 limit, because a rate limit silently loses notifications and a caller cannot
 tell which:
 
 - **Its own thread.** The watch loop hands over a map and returns. Without this
-  a 46 ms hook would cap the download at about 22 pieces a second whatever the
-  network could do.
+  a hook at that cost would cap the download at tens of pieces a second whatever
+  the network could do.
 - **A bounded queue, 1,024 deep, and what does not fit is counted.**
   `--json` carries `hooks.skipped` and a run with any warns on stderr. Nothing
   is dropped silently and nothing waits.
@@ -1794,7 +1796,7 @@ Source:      CI run 32457763652 annotations, 2026-08-21
 Category:    ci
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T08:35Z
 
 Problem:     Three jobs annotate:
 
@@ -1830,6 +1832,51 @@ Acceptance:  A CI run with no Node.js deprecation annotation, and the Windows
 Recorded rather than acted on, because the run this came from is green on all
 sixteen jobs and changing a build dependency of the one target that has to link
 statically is not a change to make in the same push as everything else.
+
+**Done, and it was done in the session of 2026-08-23 that closed
+[T-199](#t-199-the-ci-supply-chain-was-unwatched-and-one-action-was-abandoned)
+without this entry being closed with it.** The action is gone from all four call
+sites and from `release.yml`'s fifth: every one of them runs
+`pwsh -NoProfile -File scripts/setup-nasm.ps1`, which pins the version and
+checks what it downloads. `.github/workflows/ci.yml:88` is the comment that says
+why, and it names the action this entry is about, which is what made it look
+present to anything searching the file for a string.
+
+The Acceptance holds: the Windows jobs are green, which is what says NASM is
+still being found, and no run since carries a Node.js deprecation annotation for
+it. Confirmed against run **32628316314**, and `grep -rn "uses:" .github/`
+carries eight distinct actions and `ilammy/setup-nasm` is not one of them.
+
+**Why nothing caught it, and what does now.** Two gaps in
+`scripts/check-todo.ps1`, both closed on 2026-08-23:
+
+1. **`.github/` was not in the cited-path prefixes at all.** The regex resolved
+   `crates|scripts|docs|vendor|patches|man` and nothing else, so this entry's
+   four citations of `.github/workflows/ci.yml:<line>` were never checked for
+   the file existing, for the line existing, or for anything else. That is now
+   a sixth prefix.
+2. **Nothing compared an entry's premise to the workflows.** A new check reads
+   the `uses:` lines of `.github/workflows/*.yml` and fails when an **open or
+   partial** entry names an `owner/name@ref` pin that no workflow carries. That
+   is the one shape of "this entry describes a state the tree is not in" that
+   can be decided mechanically: nothing else in this record is spelled
+   `owner/name@ref`. Closed entries are exempt, because one quoting the pin it
+   removed is evidence, which is the same rule the drifted-line check already
+   follows for a fenced citation.
+
+**The first draft of check 2 passed this entry**, and the reason is worth
+keeping: it searched the raw text of the workflow files, and `ci.yml` carries
+the comment "Ours, not ilammy/setup-nasm: that action is unmaintained". A
+substring search found the very action the comment exists to say is gone. It
+reads `uses:` lines only now.
+
+```
+$ pwsh -NoProfile -File scripts/check-todo.ps1
+  [stale-premise] cli-surface.md:1804 : T-161 is open and names the action
+  `ilammy/setup-nasm@v1.5.2`, which no workflow uses.
+```
+
+That is the output that closed this entry, produced by the check written for it.
 
 ### T-181 Four flags are accepted in silence and reach no code
 

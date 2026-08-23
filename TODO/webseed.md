@@ -1841,13 +1841,20 @@ Approach:    The shape [T-162](#t-162-two-bench-webseed-tests-assumed-a-loaded-r
 Acceptance:  The scope assertion runs both ways, every endpoint is file 0 and
              none is file 1, and a lost connection cannot fail it.
 
-**Done, and this is the fourth of its kind**, after [T-148](bench.md),
+**Done, and this is the fourth entry of its kind**, after [T-148](bench.md),
 [T-160](cli-surface.md) and [T-162](#t-162-two-bench-webseed-tests-assumed-a-loaded-runner-cannot-also-fail).
-T-162 reshaped the two tests immediately above this one in the same file and
-did not look further down it, which is the lesson worth keeping: **when a
-defect is found in a file, the fix is the file rather than the line**. Three of
-the four `errors.total` assertions in `webseed_e2e.rs` had already been dealt
-with; this was the fourth, twenty lines below the last one edited.
+
+**Counted rather than remembered**, because the first draft of this paragraph
+got it wrong. `webseed_e2e.rs` held exactly **two** assertions that no error can
+occur, `assert_eq!(outcome.summary.errors.total, 0)`, one near the top of the
+bench block and one at the bottom. T-162 reshaped **two other tests** that sit
+between them, the range-ignored and 404 cases, into "every error carries a
+class", and left both `== 0` assertions standing. The one at the bottom is the
+one that went red, 58 lines below T-162's last edit.
+
+The lesson is the one that costs: **when a defect is found in a file, the fix is
+the file rather than the line.** T-162 edited two tests and did not read the
+others in the same block.
 
 What it asserts now:
 
@@ -1857,12 +1864,11 @@ What it asserts now:
 - **The error invariant**, whatever the count: every error has a class, so
   `by_class` summing to `total` is the assertion rather than `total` being zero.
 
-**The fourth `errors.total` assertion went with it, before it turned anything
-red.** `bench_webseed_moves_real_bytes_and_reports_them` is a 700 ms bench with
-the same assumption, thirty lines from the top of the same block. Fixing only
-the one that failed is how this defect reached its fourth instance, so both are
-reshaped and the file now holds no assertion that a loaded runner cannot lose a
-connection.
+**The other one went with it, before it turned anything red.**
+`bench_webseed_moves_real_bytes_and_reports_them` is a 700 ms bench with the
+same assumption. Fixing only the one that failed is how this reached a fourth
+entry, so both are reshaped and the file now holds no assertion that a loaded
+runner cannot lose a connection.
 
 ```
 $ cargo test -p bit-cli-core --test webseed_e2e bench_webseed

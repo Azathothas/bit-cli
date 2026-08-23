@@ -79,8 +79,10 @@ impl PieceHook {
     /// [`Self::start`] with a queue of a given size.
     ///
     /// For the test that drives the bound. Filling a 1,024 entry queue means
-    /// starting more than a thousand processes, which is 47 seconds on this
-    /// machine and measures the operating system rather than this code.
+    /// starting more than a thousand processes, which was 47.55 seconds when
+    /// this was written and measures the operating system rather than this
+    /// code. `docs/hooks.md` carries that number and what it was a measurement
+    /// of.
     fn with_capacity(command: String, capacity: usize) -> Self {
         let (tx, rx) = std::sync::mpsc::sync_channel::<BTreeMap<String, String>>(capacity);
         let ran = Arc::new(AtomicU64::new(0));

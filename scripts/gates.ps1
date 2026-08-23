@@ -31,9 +31,9 @@
 #   - Builds with `--bins --examples` when asked. `--examples` alone builds the
 #     examples and no binaries, which is how a script comes to run yesterday's
 #     `bit-cli.exe`. TODO/RULES.md section 5.
-#   - Fails on a NUL byte in any tracked text file. Two were in this tree and
-#     neither was noticed, because a file with one in it is what `grep` calls
-#     binary and skips.
+#   - Fails on any C0 control byte except tab, newline and return, in any
+#     tracked text file. Four were in this tree and none was noticed, because
+#     a file with one in it is what `grep` calls binary and skips.
 #   - Runs `check-todo.ps1`, so a push cannot carry a record that contradicts
 #     the tree. `patches/TASKS.md` said two P0 entries were open for a session
 #     after both closed, because nothing compared the two files.
@@ -137,8 +137,8 @@ if (-not $Fast -and (Get-Command rustup -ErrorAction SilentlyContinue)) {
 # text
 # ---------------------------------------------------------------------------
 #
-# A NUL byte in a tracked text file makes every text tool treat the file as
-# binary. `grep` answers "Binary file X matches" instead of the line, a diff is
+# A control byte in a tracked text file is invisible and changes what the file
+# means. A NUL makes every text tool treat the file as binary. `grep` answers "Binary file X matches" instead of the line, a diff is
 # unreadable, and whatever is around it is invisible to a review.
 #
 # Two got in and neither was noticed. `crates/bit-cli-core/src/torrent/bencode.rs`
@@ -151,6 +151,16 @@ if (-not $Fast -and (Get-Command rustup -ErrorAction SilentlyContinue)) {
 # Tracked files only, and only the ones meant to be text: `git ls-files` knows
 # what is tracked, and the extension list is what this tree actually holds.
 
+# NUL is not the only one. On 2026-08-23 a 0x08 backspace reached
+# `scripts/check-todo.ps1` the same way the `TODO/trackers.md` NUL did, from a
+# Python `\b` escape interpreted on the way to the file. It landed inside a
+# regex, so the pattern silently matched nothing and a check written that
+# afternoon passed everything. This gate said `text ok` on the same run.
+#
+# So the set is every C0 control byte except the three that are text: tab,
+# newline, and carriage return. A byte in that range is never something anybody
+# typed on purpose into a source file, and it is invisible in every editor.
+$allowed = @([byte]9, [byte]10, [byte]13)
 $binaryish = [System.Collections.ArrayList]::new()
 $tracked = & git ls-files -- "*.rs" "*.md" "*.ps1" "*.toml" "*.yml" "*.jq" 2>$null
 foreach ($relative in $tracked) {
@@ -158,11 +168,16 @@ foreach ($relative in $tracked) {
     $path = Join-Path $repo $relative
     if (-not (Test-Path $path)) { continue }
     $bytes = [System.IO.File]::ReadAllBytes($path)
-    $at = [System.Array]::IndexOf($bytes, [byte]0)
-    if ($at -ge 0) { [void]$binaryish.Add("${relative}:$at") }
+    for ($i = 0; $i -lt $bytes.Length; $i++) {
+        $b = $bytes[$i]
+        if ($b -lt 32 -and $allowed -notcontains $b) {
+            [void]$binaryish.Add("${relative}:$i is byte 0x$('{0:x2}' -f $b)")
+            break
+        }
+    }
 }
 Record "text" ($binaryish.Count -eq 0) $(if ($binaryish.Count -eq 0) { "" }
-    else { "NUL byte in $($binaryish -join ', ')" })
+    else { "control byte in $($binaryish -join ', ')" })
 
 # ---------------------------------------------------------------------------
 # record

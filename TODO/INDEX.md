@@ -197,7 +197,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-158](cli-surface.md) | P2 | cli | **done** | Regenerating the schema deletes fields the sample did not produce |
 | [T-159](cli-surface.md) | P3 | cli | **done** | Subcommand flags are filed under "Report options" in the help |
 | [T-160](cli-surface.md) | P1 | ci | **done** | A peers test raced its own seeder |
-| [T-161](cli-surface.md) | P3 | ci | open | A CI action still targets Node.js 20, which is deprecated *(four call sites, not two)* |
+| [T-161](cli-surface.md) | P3 | ci | **done** | A CI action still targets Node.js 20, which is deprecated *(four call sites, not two)* |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
 | [T-181](cli-surface.md) | P1 | cli | **done** | Four flags are accepted in silence and reach no code |
 | [T-183](cli-surface.md) | P1 | cli | **done** | --web-seed-list-url is read, only into a refusal |
@@ -214,6 +214,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-213](cli-surface.md) | P3 | cli | open | seed cannot serve a payload renamed by --index-out |
 | [T-214](cli-surface.md) | P3 | cli | open | seed runs no hooks |
 | [T-215](webseed.md) | P1 | bench | **done** | A third bench webseed test asserted a loaded runner cannot fail |
+| [T-216](windows.md) | P1 | ci | **done** | A seeder test waited longer for a listener than the run was allowed to live |
+| [T-217](windows.md) | P2 | ci | **done** | The text gate caught one control byte and not the other twenty-eight |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -241,8 +243,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-164 items: 154 to work through, and 10 deferred to Phase C.
-39 open, 1 partial, 0 blocked, 114 done.
+166 items: 156 to work through, and 10 deferred to Phase C.
+38 open, 1 partial, 0 blocked, 117 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -500,11 +502,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 1 | 0 | 0 | 55 | 56 |
-| P2 | 20 | 1 | 0 | 39 | 60 |
-| P3 | 18 | 0 | 0 | 8 | 26 |
+| P1 | 1 | 0 | 0 | 56 | 57 |
+| P2 | 20 | 1 | 0 | 40 | 61 |
+| P3 | 17 | 0 | 0 | 9 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **39** | **1** | **0** | **114** | **164** |
+| **All** | **38** | **1** | **0** | **117** | **166** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

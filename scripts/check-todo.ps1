@@ -374,8 +374,15 @@ foreach ($file in $scanFiles) {
         # A citation into this tree, as `crates/a/b.rs:123`. The lookbehind is
         # load-bearing: without it `TorrentNG/crates/rt-storage/src/x.rs` from
         # the corpus matches from `crates/` and is reported as a path this
-        # repository does not have, which is true and not the question.
-        foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<p>(?:crates|scripts|docs|vendor|patches|man)/[A-Za-z0-9._/-]+\.(?:rs|ps1|md|toml|json|jq|yml|patch))(?::(?<l>\d+))?')) {
+        # repository does not have, which is true and not the question. It
+        # excludes `/` and word characters and **not** `.`, because `.github`
+        # starts with one; a corpus path ending in a directory called
+        # `.github` would be a false positive nobody has ever written.
+        #
+        # `.github` was not in this list until 2026-08-23, so every citation
+        # into a workflow resolved to nothing at all. T-161 named four lines of
+        # `.github/workflows/ci.yml` and none was checked.
+        foreach ($m in [regex]::Matches($line, '(?<![\w/-])(?<p>(?:crates|scripts|docs|vendor|patches|man|\.github)/[A-Za-z0-9._/-]+\.(?:rs|ps1|md|toml|json|jq|yml|patch))(?::(?<l>\d+))?')) {
             $cited = $m.Groups['p'].Value
             # A path written with an ellipsis is deliberately abbreviated and
             # there is nothing to resolve.
@@ -534,6 +541,63 @@ if (Test-Path $tasksPath) {
     }
 }
 else { Problem "tasks-table" "patches/TASKS.md is not there" }
+
+# ---------------------------------------------------------------------------
+# 8a: an open entry that names a workflow action nothing pins
+# ---------------------------------------------------------------------------
+#
+# T-161 stayed open for a session after it was fixed, and nothing here noticed.
+# Its Problem was that four jobs pinned `ilammy/setup-nasm@v1.5.2`, which was
+# replaced by `scripts/setup-nasm.ps1` at every call site. The entry went on
+# describing a workflow the tree does not have.
+#
+# Nothing mechanical can decide in general whether an entry describes a state
+# the tree is in. This is the one shape that can be decided: an action pin is
+# spelled `owner/name@ref` and nothing else in this record is, so a **backticked
+# or fenced** pin in an **open or partial** entry that no workflow carries is an
+# entry whose premise has moved.
+#
+# Restricted to open and partial deliberately. A closed entry quoting the pin it
+# removed is evidence and has to keep it, which is the same rule the drifted-line
+# check follows for a fenced citation.
+#
+# `bit-cli` is excluded because `Azathothas/bit-cli@v1` is this repository and
+# not an action.
+
+$workflowDir = Join-Path $repo ".github/workflows"
+if (Test-Path $workflowDir) {
+    # From `uses:` lines only, never from the raw text. `ci.yml` carries the
+    # comment "Ours, not ilammy/setup-nasm: that action is unmaintained", so a
+    # substring search over the file finds the very action the comment exists
+    # to say is gone. That is how the first draft of this check passed T-161.
+    $pinned = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($wf in Get-ChildItem -Path $workflowDir -Filter *.yml -File) {
+        foreach ($wfLine in [System.IO.File]::ReadAllLines($wf.FullName)) {
+            if ($wfLine -match '^\s*(?:-\s*)?uses:\s*(?<a>[^@\s]+)') {
+                [void]$pinned.Add($Matches['a'].Trim())
+            }
+        }
+    }
+    foreach ($file in $files) {
+        $current = $null
+        $lineNo = 0
+        foreach ($line in [System.IO.File]::ReadAllLines($file.FullName)) {
+            $lineNo++
+            if ($line -match '^###\s+(T-\d+)\b') { $current = $Matches[1]; continue }
+            if (-not $current) { continue }
+            $state = Normalize $entries[$current].status
+            if ($state -ne 'open' -and $state -ne 'partial') { continue }
+            foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<a>[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)@(?<v>v?[0-9][A-Za-z0-9._-]*)')) {
+                $action = $m.Groups['a'].Value
+                if ($action -match '(?i)/bit-cli$') { continue }
+                if ($pinned.Contains($action)) { continue }
+                Problem "stale-premise" ("$($file.Name):$lineNo : $current is $state and names the action " +
+                    "``$action@$($m.Groups['v'].Value)``, which no workflow uses. Either the entry is done " +
+                    "or its premise moved.")
+            }
+        }
+    }
+}
 
 # ---------------------------------------------------------------------------
 # 9: TODO/PROGRESS.md, the only file the next session is told to read

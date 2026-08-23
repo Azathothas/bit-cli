@@ -505,7 +505,7 @@ mod tests {
         assert!(out.leftover.is_empty());
         assert!(inc.leftover.is_empty());
 
-        let mut message = b"BitTorrent protocol and the rest".to_vec();
+        let mut message = b"\x13BitTorrent protocol and the rest".to_vec();
         let plain = message.clone();
         out.encrypt.apply(&mut message);
         assert_ne!(message, plain);
@@ -578,7 +578,7 @@ mod tests {
         let (a, b) = tokio::io::duplex(8192);
         let (a_read, mut a_write) = tokio::io::split(a);
         let (b_read, mut b_write) = tokio::io::split(b);
-        let payload = b"BitTorrent protocol0000000000000000".to_vec();
+        let payload = b"\x13BitTorrent protocol0000000000000000".to_vec();
         let expect = payload.clone();
         let (out, inc) = tokio::join!(
             async move {

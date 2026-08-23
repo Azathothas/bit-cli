@@ -1148,28 +1148,38 @@ mod tests {
                 .collect()
         };
 
+        // The peer's patience and the seeder's deadline are two numbers that
+        // have to be ordered, and they were not: the peer waited up to 20
+        // seconds for a listener that `--stop-after 15s` had already taken
+        // away, so a slow start failed as "the peer never completed a
+        // handshake" whatever had actually gone wrong. The peer now gives up
+        // well inside the run. See `TODO/windows.md`, T-216.
+        const PEER_PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
         let port = crate::test_support::free_port();
-        let peer = std::thread::spawn(move || {
-            if !crate::test_support::wait_for_listener(port, std::time::Duration::from_secs(20)) {
-                return false;
+        let peer = std::thread::spawn(move || -> Result<(), String> {
+            if !crate::test_support::wait_for_listener(port, PEER_PATIENCE) {
+                return Err(format!(
+                    "no listener on port {port} within {PEER_PATIENCE:?}: the seeder never bound it"
+                ));
             }
-            let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
-                return false;
-            };
+            let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
+                .map_err(|e| format!("cannot connect to port {port}: {e}"))?;
             let mut handshake = Vec::with_capacity(68);
             handshake.push(19u8);
             handshake.extend_from_slice(b"BitTorrent protocol");
             handshake.extend_from_slice(&[0u8; 8]);
             handshake.extend_from_slice(&info_hash);
             handshake.extend_from_slice(b"-bitCLItest000000001");
-            if stream.write_all(&handshake).is_err() {
-                return false;
-            }
+            stream
+                .write_all(&handshake)
+                .map_err(|e| format!("cannot send the handshake: {e}"))?;
             // Read theirs back, so the connection is established from both
             // ends before it is dropped. Without this the seeder may never
             // reach the live state and there is nothing to disconnect from.
             let mut theirs = [0u8; 68];
-            let read = stream.read_exact(&mut theirs).is_ok();
+            let read = stream
+                .read_exact(&mut theirs)
+                .map_err(|e| format!("cannot read the seeder's handshake back: {e}"));
             drop(stream);
             read
         });
@@ -1192,15 +1202,23 @@ mod tests {
                 "--no-lsd",
                 "--no-tracker",
                 "--stop-after",
-                "15s",
+                "20s",
             ],
             fixture.dir(),
             bit_cli_core::exit::ExitCode::Timeout,
         );
-        assert!(
-            peer.join().unwrap_or(false),
-            "the peer never completed a handshake, so nothing disconnected"
-        );
+        // Twice the peer's patience, so a slow start cannot take the listener
+        // away before the peer has reached it.
+        //
+        // The failure is named rather than reduced to a boolean. "The peer
+        // never completed a handshake" was true of a port that was never
+        // bound, a connect that was refused, and a read that was cut short,
+        // and a reader of a red job could not tell which.
+        match peer.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(why)) => panic!("the peer never completed a handshake: {why}"),
+            Err(_) => panic!("the peer thread panicked"),
+        }
 
         let peers = report["peers"].as_array().expect("peers");
         let with_history: Vec<_> = peers

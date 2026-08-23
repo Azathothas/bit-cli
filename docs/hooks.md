@@ -74,10 +74,14 @@ before the hook could read it; `--jsonl` is the surface for watching a run.
 
 **One piece is one process, and a process is not free.** Measured on this
 project's development machine, Windows 11 with a 20 core CPU: **1,025
-invocations of `cmd /C rem` took 47.55 seconds**, which is 46 ms each. A 4 GiB
-torrent at a 1 MiB piece length is 4,096 pieces, so the same hook is over three
-minutes of process startup. Two bounds stop that deciding how fast the download
-goes.
+invocations took 47.55 seconds**, which is 46 ms each.
+
+Read that number for what it is. The command measured was `cmd /C rem`, and a
+hook is already run through `cmd /C`, so each invocation started **two**
+processes rather than one: about 23 ms per `cmd`. An ordinary hook is one
+process and costs about half of it. Either way a 4 GiB torrent at a 1 MiB piece
+length is 4,096 pieces, so a hook that does anything at all is minutes of
+process startup. Two bounds stop that deciding how fast the download goes.
 
 1. **It runs on its own thread.** The download never waits for a hook process
    to exit. Without this a hook taking 20 ms would cap the run at 50 pieces a

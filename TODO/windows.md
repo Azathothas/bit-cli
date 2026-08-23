@@ -475,7 +475,7 @@ neither starts with a letter. Every one of those matches what the Windows
 parser gave before, so for them this is the same behaviour made portable.
 
 **One answer did change, and it changed to the right one.** A component with a
-backslash inside it, `fooar`, was an escape on Windows before, because
+backslash inside it, `foo\bar`, was an escape on Windows before, because
 `Path::components` splits it into two and the old rule read anything but a
 single `Normal` as an escape. It is not an escape: joined onto the output
 directory it lands inside it. What is wrong with it is the separator, which is
@@ -564,3 +564,91 @@ Acceptance:  A test double whose write returns `Ok(0)` causes the run to fail
              the error says which file and offset. Windows only, so the test is
              `#[cfg(windows)]` and the guard is in `bit-cli`'s wrapper rather
              than conditional on a librqbit version.
+
+### T-216 A seeder test waited longer for a listener than the run was allowed to live
+
+Source:      CI run 32627489685, `Test (ubuntu-latest)`, 2026-08-23
+Category:    ci
+Priority:    P1
+Effort:      S
+Status:      **done** 2026-08-23T08:32Z
+
+Problem:     `a_peer_that_leaves_is_reported_with_a_reason_and_a_time` runs
+             `bit-cli seed --stop-after 15s` and, on a thread beside it, waits
+             up to **20 seconds** for the listener before handshaking. The two
+             numbers have to be ordered and were not: a slow start takes the
+             listener away before the peer reaches it, and the peer returns
+             `false`.
+Relevance:   It turned `Test (ubuntu-latest)` red on a commit that changed one
+             assertion in a `bench webseed` test and nothing else. And the
+             failure said `the peer never completed a handshake, so nothing
+             disconnected`, which is true of a port that was never bound, a
+             connect that was refused and a read that was cut short, so a
+             reader of the red job could not tell which.
+Approach:    Order the two, and name the failure. The peer's patience is a
+             named constant well inside the run's deadline, and the thread
+             returns a `Result<(), String>` so the panic says which step failed
+             and with what.
+Acceptance:  The peer cannot outlast the run, and a failure names the step.
+
+**Done.** `PEER_PATIENCE` is 10 seconds and `--stop-after` is 20, so the run
+outlives the peer by a factor of two whatever the runner is doing. The thread's
+three failure paths each carry their own message: no listener within the
+patience, a connect that was refused with the OS error, and a read cut short.
+
+**What is not fixed, and it is the residual.** `free_port` binds a port to learn
+its number and drops the listener, so there is a window where the number is
+known and nothing is listening, and another test can take it. That is
+[T-160](cli-surface.md)'s own finding and this test rests on the same mechanism
+at `crates/bit-cli/src/cmd/seed.rs:1152`. Ordering the deadlines removes the
+failure mode that was observed; a port taken in that window would still fail,
+and would now say `no listener on port N within 10s: the seeder never bound it`,
+which is the sentence that would identify it.
+
+```
+$ cargo test -p bit-cli --lib a_peer_that_leaves_is_reported
+test result: ok. 1 passed; 0 failed; 0 ignored; 410 filtered out
+```
+
+### T-217 The text gate caught one control byte and not the other twenty-eight
+
+Source:      found while writing T-161's check, 2026-08-23
+Category:    ci
+Priority:    P2
+Effort:      S
+Status:      **done** 2026-08-23T08:39Z
+
+Problem:     `gates.ps1`'s `text` gate searched tracked text files for a NUL
+             and nothing else. A `0x08` backspace reached
+             `scripts/check-todo.ps1` the same way `TODO/trackers.md`'s NUL
+             did, from a Python `\b` escape interpreted on its way to the file,
+             and the gate said `text ok` on the run that carried it.
+Relevance:   The backspace landed **inside a regular expression**,
+             `'^###\s+(T-\d+)\b'`, where it became a byte the pattern requires
+             and nothing has. The check written that afternoon then matched no
+             entry at all and passed every file, silently. A control byte is
+             invisible in every editor, so nothing about reading the code says
+             which of the two it is.
+Approach:    Every C0 byte rather than one of them. Tab, newline and carriage
+             return are text; nothing else below 32 is ever typed on purpose
+             into a source file.
+Acceptance:  The gate names the file, the offset and the byte, and the tree is
+             clean of all of them.
+
+**Done, and widening it found three more the old gate had passed.**
+
+| File | Byte | What it was |
+| --- | --- | --- |
+| `scripts/check-todo.ps1` | `0x08` | the one that started this, in a regex |
+| `scripts/gates.ps1` | `0x08` | in the comment written to explain the first |
+| `TODO/windows.md` | `0x08` | `foo\bar` in prose, the backslash interpreted |
+| `crates/bit-cli-core/src/mse/handshake.rs` | `0x13` | twice: the BitTorrent handshake's length byte, written as itself in `b"..."` rather than as `\x13` |
+
+The last is the same defect [RULES.md](RULES.md) section 5 already records for
+`TOLERATED_TRAILING` in `torrent/bencode.rs`, in a file written after that rule
+was. Two of the four were written by the session that widened the gate, which is
+the argument for the gate: the rule was known, written down, and broken twice in
+one afternoon anyway.
+
+The message names the offset and the byte now, where it used to say "NUL byte"
+whatever it found.
