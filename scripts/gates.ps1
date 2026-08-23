@@ -180,38 +180,6 @@ Record "text" ($binaryish.Count -eq 0) $(if ($binaryish.Count -eq 0) { "" }
     else { "control byte in $($binaryish -join ', ')" })
 
 # ---------------------------------------------------------------------------
-# record
-# ---------------------------------------------------------------------------
-#
-# `TODO/` is the authoritative record and `patches/TASKS.md` is the ordered
-# list of vendored work. Both are second copies of a status that lives in an
-# entry, and a second copy is the thing that goes stale.
-#
-# It went stale, and this gate is what it cost. The session of 2026-08-22
-# closed both P0 entries, wrote it into the entries, into `INDEX.md` and into
-# `PROGRESS.md`, and pushed. `patches/TASKS.md` was rewritten afterwards and
-# never committed, so HEAD went on saying `T-020 | P0 | open` while the entry
-# beside it said `done`. The next session read the stale one first.
-#
-# `check-todo.ps1` compares them: every row against the entry it names, every
-# count against the rows, and PROGRESS.md against what RULES.md section 2 step
-# 2 says it must carry. That is a second, and it runs here so that a push
-# cannot carry a record contradicting the tree it describes. It is not skipped
-# by -Fast: it costs about three seconds, and it is the one gate here that
-# catches a claim rather than a defect.
-
-$todoArgs = @("-NoProfile", "-File", (Join-Path $PSScriptRoot "check-todo.ps1"))
-$todoOut = (& pwsh @todoArgs 2>&1 | Out-String)
-$todoOk = ($LASTEXITCODE -eq 0)
-$todoDetail = ""
-if (-not $todoOk) {
-    $lines = @($todoOut -split "`r?`n" | Where-Object { $_ -match '^\s+\[' })
-    $todoDetail = if ($lines.Count -gt 0) { ($lines[0].Trim()) } else { "see: pwsh -NoProfile -File scripts/check-todo.ps1" }
-    if ($lines.Count -gt 1) { $todoDetail += " and $($lines.Count - 1) more" }
-}
-Record "record" $todoOk $todoDetail
-
-# ---------------------------------------------------------------------------
 # man
 # ---------------------------------------------------------------------------
 #
@@ -257,6 +225,48 @@ else {
     & cargo fmt --all --check | Out-Null
     Record "fmt" ($LASTEXITCODE -eq 0) $(if ($LASTEXITCODE -eq 0) { "" } else { "run with -Fix" })
 }
+
+# ---------------------------------------------------------------------------
+# record
+# ---------------------------------------------------------------------------
+#
+# `TODO/` is the authoritative record and `patches/TASKS.md` is the ordered
+# list of vendored work. Both are second copies of a status that lives in an
+# entry, and a second copy is the thing that goes stale.
+#
+# It went stale, and this gate is what it cost. The session of 2026-08-22
+# closed both P0 entries, wrote it into the entries, into `INDEX.md` and into
+# `PROGRESS.md`, and pushed. `patches/TASKS.md` was rewritten afterwards and
+# never committed, so HEAD went on saying `T-020 | P0 | open` while the entry
+# beside it said `done`. The next session read the stale one first.
+#
+# `check-todo.ps1` compares them: every row against the entry it names, every
+# count against the rows, and PROGRESS.md against what RULES.md section 2 step
+# 2 says it must carry. That is a second, and it runs here so that a push
+# cannot carry a record contradicting the tree it describes. It is not skipped
+# by -Fast: it costs about three seconds, and it is the one gate here that
+# catches a claim rather than a defect.
+#
+# **It runs after `man` and `fmt`, and that ordering is load-bearing.** Both of
+# those rewrite files under `-Fix`, and one of the things this checks is that a
+# `TODO/` citation names the line its symbol is actually on. Run first, it
+# checked line numbers that `cargo fmt --all` then moved: on 2026-08-23 a local
+# `gates.ps1 -Fix` printed `record ok` and the same check failed in CI on the
+# push that followed, because the formatting pass had added ten lines to the
+# file a citation pointed into. A gate that reports on a tree the run then
+# changes is the same defect `check-man.ps1` had. See `TODO/cli-surface.md`,
+# T-220.
+
+$todoArgs = @("-NoProfile", "-File", (Join-Path $PSScriptRoot "check-todo.ps1"))
+$todoOut = (& pwsh @todoArgs 2>&1 | Out-String)
+$todoOk = ($LASTEXITCODE -eq 0)
+$todoDetail = ""
+if (-not $todoOk) {
+    $lines = @($todoOut -split "`r?`n" | Where-Object { $_ -match '^\s+\[' })
+    $todoDetail = if ($lines.Count -gt 0) { ($lines[0].Trim()) } else { "see: pwsh -NoProfile -File scripts/check-todo.ps1" }
+    if ($lines.Count -gt 1) { $todoDetail += " and $($lines.Count - 1) more" }
+}
+Record "record" $todoOk $todoDetail
 
 # ---------------------------------------------------------------------------
 # clippy

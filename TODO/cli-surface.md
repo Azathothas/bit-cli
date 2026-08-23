@@ -1547,7 +1547,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1286` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1296` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -3340,3 +3340,43 @@ Acceptance:  A test drives one command per documented subsystem with that
              and any subsystem that cannot be made to emit is removed from
              `SUBSYSTEMS`, from the help and from the manuals in the same
              change. The list a caller reads matches the list that works.
+
+### T-220 The record gate reported on a tree the same run then rewrote
+
+Source:      CI run 32637486414, `Record`, 2026-08-23
+Category:    ci
+Priority:    P2
+Effort:      S
+Status:      **done** 2026-08-23T12:05Z
+
+Problem:     `gates.ps1` ran the `record` gate **before** `man` and `fmt`, and
+             both of those rewrite files under `-Fix`. One of the things
+             `check-todo.ps1` checks is that a `TODO/` citation names the line
+             its symbol is actually on, so a formatting pass that adds lines to
+             a cited file invalidates a check that has already reported `ok`.
+Relevance:   Measured rather than supposed: `pwsh -File scripts/gates.ps1 -Fix`
+             printed `record ok` and `all gates pass`, the push that followed
+             went red on `Record`, and the reason was a citation into
+             `schema_gen.rs` that `cargo fmt --all` had moved by ten lines
+             **in the same run that had just approved it**.
+
+             That is the same shape as the `check-man.ps1 -Fix` defect the
+             session of 2026-08-23 found earlier: a gate that reports on a tree
+             the run then changes reads as the gate being wrong, and the next
+             person debugs the check rather than the file.
+Approach:    Order it. The `record` block moves below `man` and `fmt`, so
+             everything that rewrites has rewritten before anything checks a
+             line number. Nothing else in the file depends on the order: each
+             gate reports independently and the summary is printed at the end.
+Acceptance:  `gates.ps1 -Fix` on a tree where formatting moves a cited line
+             fails rather than passing, and the ordering is written where the
+             gate is.
+
+**Done.** The gate is at `scripts/gates.ps1:269` now, after both. The comment
+above it says why, because the ordering looks arbitrary and is not.
+
+**Proved by the case that produced it.** With the record gate first, the run
+that closed [T-191](bench.md) printed `record ok` and CI then failed on
+`cli-surface.md:1550 cites schema_gen.rs:1286 ... which is at :1296`. With the
+gate moved, the same tree fails locally, on the same line, before a commit
+exists.

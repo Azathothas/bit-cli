@@ -83,16 +83,24 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```
 
 - **CI:** green on all **nineteen** jobs at run **32635532834**, against commit
-  `35707ee`. Seventeen until this session: [T-150](cli-surface.md) added
-  `Clippy (tracking stable)` and `Clippy (tracking beta)`.
+  `35707ee`. The pushes after it are named under "Start here next session"
+  item 1, which is to read the last of them. Seventeen jobs until this session:
+  [T-150](cli-surface.md) added `Clippy (tracking stable)` and
+  `Clippy (tracking beta)`.
+
+  **One job went red and it is fixed.** Run **32637486414** failed `Record` on
+  a `TODO/` citation that the same local `gates.ps1 -Fix` run had approved and
+  then moved: the record gate ran before `cargo fmt --all` rewrote the file.
+  That is [T-220](cli-surface.md), and the gate runs after the two that rewrite
+  now.
 
   **Nothing went red that was not meant to.** Run **32631078557** carries the
   demonstration T-150's acceptance asked for: the run's own conclusion is
   `success` with `Clippy (tracking beta)` failing, because the tracking job
   does not block. What it found is [T-218](cli-surface.md), fixed two pushes
   later, and the run above is green on all nineteen including that job.
-- **Entries:** 168 items. 27 open, 1 partial, 0 blocked, 130 done, 10 deferred
-  to Phase C. 130 of 158 workable done, 28 left.
+- **Entries:** 169 items. 27 open, 1 partial, 0 blocked, 131 done, 10 deferred
+  to Phase C. 131 of 159 workable done, 28 left.
 - **Tree:** 94 Rust files, 55,302 lines of code, 13,766 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **27 patches**
@@ -102,7 +110,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 
 ## What the last session did
 
-**Thirteen entries closed, two filed, and nine of the thirteen had a premise
+**Fourteen entries closed, three filed, and nine of the fourteen had a premise
 the measurement disproved.** That is the highest proportion any session has
 had, and every one of them was found by running something rather than by
 reading it.
@@ -230,6 +238,15 @@ spread, and in one the traced arm used less memory.
 found so far: ten of the eleven documented `--trace` subsystems raise a target
 nothing writes to. Measured on one run tracing all ten: zero lines of stderr,
 against 257 for `http` on the same run.
+
+### The last push went red, and the gate that missed it is fixed
+
+**[T-220](cli-surface.md), filed and done.** `gates.ps1` ran the `record` gate
+before `man` and `fmt`, both of which rewrite files under `-Fix`. A local run
+printed `record ok` and `all gates pass`; the push went red on `Record`,
+because `cargo fmt --all` had moved a cited line by ten **in the same run that
+had just approved it**. The gate runs after both now. Same shape as the
+`check-man.ps1 -Fix` defect found earlier the same day.
 
 ## In progress
 
