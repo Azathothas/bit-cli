@@ -1181,7 +1181,7 @@ Source:      two red CI runs on main, 2026-08-22
 Category:    bench
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**, 2026-08-23T03:10Z
 
 Problem:     `cmd::bench::tests::a_leech_measures_the_transfer_the_hashing_and_the_disk`
              and
@@ -1250,3 +1250,53 @@ legitimate outcome of a reconnect, and the payload on disk being correct is the
 invariant. `hashing.pieces` is the same shape read the other way. Arrange each
 so the count is not a race, the way [T-179](webseed.md) did, rather than
 widening the comparison until it stops failing.
+
+**Closed 2026-08-23, and the two were different defects.** One was the
+benchmark's, not the test's.
+
+**Two pieces where three were hashed was a lost interval, not a lost piece.**
+`drive_leech` took its storage baseline at the top of its own body, and by then
+the caller had already attached the sources: `attach_sources` returns with the
+bridges dialling, and there is an `await` between that and the first counter
+read. Every counter the report carries is a sum of interval deltas, so a piece
+verified in that gap is in no interval at all and is counted nowhere. The
+payload was complete, the bytes were right, and `hashing.pieces` was one short,
+which is exactly what the runner reported.
+
+The baseline moves ahead of `attach_sources` and is passed in as
+`LeechOptions::storage_baseline`. It cannot move further: the hash check on add
+happens before it and a resumed run would otherwise report its pieces as
+transfer work.
+
+**4,024 bytes against 3,000 was the wrong assertion.** `summary.bytes` counts
+what arrived from the source. With `--web-seed-connections 3` the session can
+ask twice for a block that is already outstanding and be answered twice, which
+is a legitimate outcome of several connections and is [T-008](webseed.md). An
+equality against the payload length was asserting that this never happens,
+which is a scheduling outcome the test does not control.
+
+What replaced it is not a widening. The payload on disk is asserted exactly, as
+before; the counted total has to be at least the payload; **the one source row
+has to equal the counted total**, which is the claim the test is named for and
+which an equality against the payload length would have passed with the row and
+the summary both wrong by the same amount; and the row has to report **three**
+connections, so a run that quietly fell back to one no longer passes as "one
+row".
+
+**Proved by running them.** The whole `cmd::bench::tests` module, which is what
+the two run beside and contend with for blocking threads, **50 times at
+`--test-threads 8`, 0 failures**.
+
+```bash
+cargo test -p bit-cli --lib --no-run
+```
+
+```bash
+for ($i = 1; $i -le 50; $i++) { & (Get-ChildItem target/debug/deps/bit_cli-*.exe | Select-Object -First 1) cmd::bench::tests --test-threads 8 }
+```
+
+**What is not proved.** That the runner cannot find a third way. Fifty local
+runs is evidence and not a proof, and the first of the two failures was one run
+in three on a machine this is not. What makes this closable rather than
+hopeful is that both causes were found and named: neither was a tolerance, and
+both are defects a reader can check against the code.

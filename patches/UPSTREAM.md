@@ -104,8 +104,8 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0007-crates-librqbit-src-peer_info_reader-mod.rs.patch
-             patches/rqbit/0013-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0017-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0018-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0020-package-lock.json.patch
+             patches/rqbit/0021-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -245,7 +245,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```
 Unblocks:    T-020, TODO/peers.md, the record's only open P0
 Files:       vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0009-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0010-crates-librqbit-src-session.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T14:37Z
 ```
@@ -316,8 +316,8 @@ open since before this repository existed, and the change is one match arm.
 Unblocks:    T-040, TODO/memory.md, the record's other P0
 Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0013-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T15:30Z
 ```
@@ -389,8 +389,8 @@ open, and reported as exactly this: RSS climbing in a long-lived server.
 Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0009-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0019-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0010-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0020-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T17:26Z
 ```
@@ -551,7 +551,7 @@ Unblocks:    T-132, TODO/multi-source.md
 Files:       vendor/rqbit/crates/librqbit/src/limits.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0005-crates-librqbit-src-limits.rs.patch
-             patches/rqbit/0013-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
 Upstream:    not offered yet
 Added:       2026-08-22T17:55Z
 ```
@@ -738,9 +738,9 @@ Files:       vendor/rqbit/crates/librqbit/src/lib.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/initializing.rs
              vendor/rqbit/crates/rqbit/src/main.rs, which builds the struct
              patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
-             patches/rqbit/0009-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0012-crates-librqbit-src-torrent_state-initializing.rs.patch
-             patches/rqbit/0018-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0010-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0013-crates-librqbit-src-torrent_state-initializing.rs.patch
+             patches/rqbit/0019-crates-rqbit-src-main.rs.patch
 Upstream:    not offered yet, and the first two thirds of it should be
 Added:       2026-08-22T19:28Z
 ```
@@ -847,8 +847,9 @@ Unblocks:    T-167, TODO/bep-coverage.md, which was blocked on exactly this
 Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/peer_binary_protocol/src/extended/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
+             vendor/rqbit/crates/librqbit/src/piece_tracker.rs
 Upstream:    not offered yet, and it should be
-Added:       2026-08-22T19:49Z
+Added:       2026-08-22T19:49Z, extended 2026-08-23T03:26Z
 ```
 
 A peer's bitfield only ever grew. BEP 3 has `Have` and no inverse, so a peer
@@ -895,13 +896,29 @@ never advertised the extension cannot be sent one.
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-142 upstream tests pass, two of them new.
+143 upstream tests pass, three of them new.
 
 **What is proved and what is not.** The message round trips on the wire and is
 dispatched to a handler that clears the bit. It is not yet proved end to end,
 because nothing in this repository sends one: that is the send half, which is
 `bit-cli`'s own web seed bridge, and T-167 carries it. This patch is what makes
 sending one worth doing.
+
+**Extended 2026-08-23: clearing the bit was not the whole of honouring it.**
+The first version cleared the bitfield bit and stopped there, which stops the
+peer being **picked** for that piece again and does nothing about the piece
+already assigned to it. A retracted piece stayed in flight against a peer that
+had just said it cannot serve it, until something else timed it out, and the
+entry's acceptance says the session has to stop asking.
+
+`PieceTracker::release_piece_owned_by(piece, peer)` is the missing half:
+`on_peer_died` already releases **every** piece a peer owns, through
+`release_pieces_owned_by`, and this is one piece of that. `on_donthave` calls
+it after the bitfield closure returns, outside the peer lock that closure
+holds, and notifies the piece waiters so another peer can take it. A peer that
+does not own the piece cannot release it, which is the case that would let one
+peer's retraction cancel another peer's download, and
+`test_release_piece_owned_by_one_peer` asserts exactly that.
 
 **Offer it upstream.** It is a BEP with an implementation in two other clients,
 the receive side is twenty lines, and a client that honours a retraction
@@ -922,11 +939,11 @@ Files:       vendor/rqbit/crates/librqbit/src/stream_transform.rs (new)
              vendor/rqbit/crates/rqbit/src/main.rs
              patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
-             patches/rqbit/0009-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0010-crates-librqbit-src-stream_connect.rs.patch
-             patches/rqbit/0011-crates-librqbit-src-stream_transform.rs.patch
-             patches/rqbit/0015-crates-librqbit-src-type_aliases.rs.patch
-             patches/rqbit/0018-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0010-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0011-crates-librqbit-src-stream_connect.rs.patch
+             patches/rqbit/0012-crates-librqbit-src-stream_transform.rs.patch
+             patches/rqbit/0016-crates-librqbit-src-type_aliases.rs.patch
+             patches/rqbit/0019-crates-rqbit-src-main.rs.patch
 Upstream:    not offered, and it is a seam rather than a fix
 Added:       2026-08-23T02:52Z
 ```

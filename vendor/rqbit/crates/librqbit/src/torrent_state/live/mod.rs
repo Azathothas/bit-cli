@@ -1612,12 +1612,13 @@ impl PeerHandler {
     /// and allocating here would record an empty bitfield for a peer that has
     /// not sent one yet, which `on_bitfield` would then have to reconcile.
     fn on_donthave(&self, piece: u32) {
-        self.state
+        let cleared = self
+            .state
             .peers
             .with_live_mut(self.addr, "on_donthave", |live| {
                 if live.bitfield.is_empty() {
                     trace!("received donthave={piece} from a peer that has claimed nothing");
-                    return;
+                    return false;
                 }
                 match live.bitfield.get_mut(piece as usize) {
                     Some(mut v) => *v = false,
@@ -1628,11 +1629,40 @@ impl PeerHandler {
                             addr = ?self.addr,
                             "received donthave {piece} out of range"
                         );
-                        return;
+                        return false;
                     }
                 };
                 trace!("updated bitfield with donthave={piece}");
-            });
+                true
+            })
+            .unwrap_or(false);
+
+        if !cleared {
+            return;
+        }
+
+        // Clearing the bit stops this peer being picked for that piece again.
+        // It does nothing about the piece already assigned to it, which would
+        // stay in flight against a peer that has just said it cannot serve it
+        // until something else timed it out. Released here, outside the peer
+        // lock the closure above holds, so the piece goes back on the queue
+        // and another peer can take it. `on_peer_died` releases every piece a
+        // peer owns for the same reason; this is one piece of that.
+        let piece = match self.state.lengths.validate_piece_index(piece) {
+            Some(piece) => piece,
+            None => return,
+        };
+        let released = {
+            let mut g = self.state.lock_write("on_donthave");
+            match g.get_pieces_mut() {
+                Ok(pieces) => pieces.release_piece_owned_by(piece, self.addr),
+                Err(_) => false,
+            }
+        };
+        if released {
+            trace!(?piece, "donthave released an in-flight piece back to the queue");
+            self.state.new_pieces_notify.notify_waiters();
+        }
     }
 
     fn on_bitfield(&self, bitfield: ByteBufOwned) -> anyhow::Result<()> {

@@ -177,6 +177,8 @@ pub struct BridgeStatus {
     gone_files: Mutex<Vec<GoneFile>>,
     /// Pieces given up across every file lost.
     pieces_dropped: AtomicU64,
+    /// Of those, the ones retracted with BEP 54 rather than by reconnecting.
+    pieces_retracted: AtomicU64,
 }
 
 /// One file a source turned out not to hold.
@@ -208,6 +210,7 @@ impl Default for BridgeStatus {
             reconnect_reasons: Mutex::new(std::collections::BTreeMap::new()),
             gone_files: Mutex::new(Vec::new()),
             pieces_dropped: AtomicU64::new(0),
+            pieces_retracted: AtomicU64::new(0),
         }
     }
 }
@@ -324,6 +327,22 @@ impl BridgeStatus {
                 reason: reason.to_string(),
             });
         }
+    }
+
+    /// Record that pieces were retracted on the wire rather than by
+    /// reconnecting.
+    ///
+    /// Separate from `pieces_dropped`, which counts pieces given up however it
+    /// happened. This counts the ones a `lt_donthave` carried, which is the
+    /// number that says BEP 54 was used rather than the reconnect.
+    fn record_retraction(&self, pieces: usize) {
+        self.pieces_retracted
+            .fetch_add(pieces as u64, Ordering::Relaxed);
+    }
+
+    /// Pieces retracted with BEP 54 `lt_donthave` on a live connection.
+    pub fn pieces_retracted(&self) -> u64 {
+        self.pieces_retracted.load(Ordering::Relaxed)
     }
 
     /// Files this source turned out not to hold, in the order they were found.
@@ -585,7 +604,7 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
             return;
         }
         status.set_state(BridgeState::Connecting);
-        let outcome = serve(&params, &fetcher, &status).await;
+        let outcome = serve(&mut params, &fetcher, &status).await;
         status.set_local_port(0);
         status.reset_in_flight();
         // Named before the reason string is moved into the error slot, and
@@ -705,8 +724,14 @@ pub async fn run(params: BridgeParams, fetcher: Arc<Fetcher>, status: Arc<Bridge
 }
 
 /// Connect to the session and serve requests until the connection ends.
+///
+/// `params` is taken by mutable reference because a source can lose a file
+/// while this connection is up, and with BEP 54 that narrows the scope here
+/// rather than on the next reconnect: the piece list the caller holds has to
+/// shrink with it, or a later reconnect would announce pieces this source has
+/// already retracted. See `TODO/bep-coverage.md`, T-167.
 async fn serve(
-    params: &BridgeParams,
+    params: &mut BridgeParams,
     fetcher: &Arc<Fetcher>,
     status: &Arc<BridgeStatus>,
 ) -> Result<(), BridgeError> {
@@ -733,7 +758,25 @@ async fn serve(
     let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(64);
     let mut tasks: JoinSet<Result<(), BlockFailure>> = JoinSet::new();
     let mut keep_alive = tokio::time::interval(KEEP_ALIVE_INTERVAL);
-    let served: HashSet<u32> = params.pieces.iter().copied().collect();
+    let mut served: HashSet<u32> = params.pieces.iter().copied().collect();
+    // The id the session gave `lt_donthave`, once its extended handshake has
+    // arrived. `None` until then, and `None` for good against a session that
+    // does not speak BEP 54, which is what keeps sending one a no-op rather
+    // than a message the far end warns about and ignores.
+    let mut donthave: Option<u8> = None;
+    // Pieces retracted with `lt_donthave` on this connection. A request for
+    // one of them was already on the wire when the retraction went out, so it
+    // is dropped rather than refused: refusing ends the connection, and the
+    // whole point of BEP 54 is that this one does not end. The session's own
+    // request timeout takes it from here, and `on_donthave` has already put
+    // the piece back on the queue for another peer.
+    let mut retracted: HashSet<u32> = HashSet::new();
+    // Files already retracted on this connection. Every block that was in
+    // flight against a file when it turned out to be gone fails the same way,
+    // so the second failure and the tenth are the same news as the first, and
+    // narrowing on them again would report a file twice and then retire the
+    // source for being unable to narrow.
+    let mut gone: HashSet<usize> = HashSet::new();
 
     loop {
         // A source convicted of serving wrong bytes stops here rather than at
@@ -763,6 +806,17 @@ async fn serve(
             // already said it does not speak. See `TODO/peers.md`, T-166.
             if frame.get(4) == Some(&MSGID_EXTENDED) {
                 let extension = frame.get(5).copied().unwrap_or(EXTENDED_HANDSHAKE);
+                // The one exception, and BEP 10 is what makes it safe: the
+                // extended handshake is id 0 in both directions, so it is the
+                // only frame that can be read before a numbering is agreed.
+                // What is kept out of it is the id to address `lt_donthave`
+                // to, and nothing else.
+                if extension == EXTENDED_HANDSHAKE {
+                    if let Some(dict) = frame.get(6..) {
+                        donthave = peer_donthave_id(dict);
+                    }
+                    continue;
+                }
                 if !is_our_extension(extension) {
                     continue;
                 }
@@ -781,6 +835,9 @@ async fn serve(
                     // A request for a piece this source never announced is a
                     // session bug, and answering it would fetch bytes outside
                     // the scope. Refuse loudly rather than silently.
+                    if retracted.contains(&request.index) {
+                        continue;
+                    }
                     if !served.contains(&request.index) {
                         return Err(BridgeError::Link(format!(
                             "session asked for piece {}, which this source did not announce",
@@ -834,7 +891,48 @@ async fn serve(
             Some(finished) = tasks.join_next(), if !tasks.is_empty() => {
                 match finished {
                     Ok(Ok(())) => {}
-                    Ok(Err(failure)) => return Err(retryable_failure(failure)),
+                    Ok(Err(failure)) => {
+                        let ended = retryable_failure(failure);
+                        // BEP 54. A file that turned out not to be there
+                        // narrows this source, and the wire has a way to say
+                        // so now: one `lt_donthave` per piece given up, on the
+                        // connection that is already open. Without it the only
+                        // way to retract a bit is to drop the connection and
+                        // announce a smaller bitfield, which is what `run`
+                        // still does when the session does not speak BEP 54.
+                        // See `TODO/bep-coverage.md`, T-167.
+                        let BridgeError::FileGone { file, reason } = &ended else {
+                            return Err(ended);
+                        };
+                        let Some(extension) = donthave else {
+                            return Err(ended);
+                        };
+                        if gone.contains(file) {
+                            continue;
+                        }
+                        let (keep, dropped) = split_on_file(params, *file);
+                        // Both terminal cases are the caller's: it has the
+                        // reporting and the state machine for a source that
+                        // cannot narrow and one that has nothing left.
+                        if dropped.is_empty() || keep.is_empty() {
+                            return Err(ended);
+                        }
+                        status.record_file_gone(*file, dropped.len(), reason);
+                        for piece in &dropped {
+                            let message = serialize_donthave(*piece, extension);
+                            write.write_all(&message).await.map_err(|e| {
+                                BridgeError::Link(format!("lt_donthave: {e}"))
+                            })?;
+                        }
+                        // Announced and served have to move together, or a
+                        // request for a retracted piece would be answered from
+                        // a file this source no longer has.
+                        served = keep.iter().copied().collect();
+                        retracted.extend(dropped.iter().copied());
+                        gone.insert(*file);
+                        params.pieces = keep;
+                        status.record_retraction(dropped.len());
+                    }
                     Err(e) if e.is_panic() => {
                         return Err(BridgeError::Source(format!("bridge task panicked: {e}")));
                     }
@@ -955,6 +1053,57 @@ fn extended_handshake(params: &BridgeParams) -> Vec<u8> {
     out.push(MSGID_EXTENDED);
     out.push(EXTENDED_HANDSHAKE);
     out.extend_from_slice(&dict);
+    out
+}
+
+/// The pieces that survive losing one file, and the pieces that do not.
+///
+/// A piece needs all of its bytes, so a piece that touches a file this source
+/// cannot serve any more is one this source cannot serve any more.
+fn split_on_file(params: &BridgeParams, file: usize) -> (Vec<u32>, Vec<u32>) {
+    let mut keep = Vec::with_capacity(params.pieces.len());
+    let mut dropped = Vec::new();
+    for &piece in &params.pieces {
+        if params.piece_touches(piece, file) {
+            dropped.push(piece);
+        } else {
+            keep.push(piece);
+        }
+    }
+    (keep, dropped)
+}
+
+/// The extension id the session gave `lt_donthave`, from its own handshake.
+///
+/// BEP 10 numbers extension messages **per receiver**: the id in a message is
+/// the one the receiver advertised, not the sender's. So sending one costs a
+/// second table, read out of the peer's `m` rather than out of
+/// [`OUR_EXTENSIONS`], and this is that table for the one extension the bridge
+/// sends. See `TODO/peers.md` T-166 and `TODO/bep-coverage.md` T-167.
+///
+/// The extended handshake is the one frame that can be decoded without
+/// agreeing a numbering first, because BEP 10 fixes it at id 0 in both
+/// directions. Everything after it still goes through `OUR_EXTENSIONS`.
+fn peer_donthave_id(dict: &[u8]) -> Option<u8> {
+    use crate::torrent::bencode::{Value, decode};
+
+    let value = decode(dict).ok()?;
+    let m = value.get("m")?;
+    let id = m.get("lt_donthave").and_then(Value::as_int)?;
+    u8::try_from(id).ok().filter(|id| *id != EXTENDED_HANDSHAKE)
+}
+
+/// One `lt_donthave`, addressed with the id the session advertised.
+///
+/// BEP 54: the payload is a four byte big-endian piece index and nothing else,
+/// which is why it is built here rather than through the bencode path every
+/// other extension message takes.
+fn serialize_donthave(piece: u32, extension: u8) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + 6);
+    out.extend_from_slice(&6u32.to_be_bytes());
+    out.push(MSGID_EXTENDED);
+    out.push(extension);
+    out.extend_from_slice(&piece.to_be_bytes());
     out
 }
 
@@ -1363,6 +1512,64 @@ mod tests {
         let upload = text.find("11:upload_only").unwrap();
         let v = text.rfind("1:v").unwrap();
         assert!(m < reqq && reqq < upload && upload < v, "{text}");
+    }
+
+    /// BEP 10 numbers extension messages per receiver, so the id to send
+    /// `lt_donthave` to comes out of the session's handshake and nowhere else.
+    #[test]
+    fn the_peers_donthave_id_is_read_from_its_own_m() {
+        let dict = b"d1:md11:lt_donthavei7e11:ut_metadatai3ee4:reqqi250ee";
+        assert_eq!(peer_donthave_id(dict), Some(7));
+    }
+
+    #[test]
+    fn a_session_that_does_not_speak_bep_54_gives_no_id() {
+        let dict = b"d1:md11:ut_metadatai3e6:ut_pexi1ee4:reqqi250ee";
+        assert_eq!(peer_donthave_id(dict), None);
+        // An empty `m`, which is what this bridge itself sends.
+        assert_eq!(peer_donthave_id(b"d1:mde4:reqqi250ee"), None);
+        // Not a dictionary at all.
+        assert_eq!(peer_donthave_id(b"le"), None);
+    }
+
+    /// Id 0 is the extended handshake in both directions. A peer that
+    /// advertises `lt_donthave` there is either broken or trying, and sending
+    /// to id 0 would be sending a handshake.
+    #[test]
+    fn extension_id_zero_is_never_taken_as_a_message_id() {
+        assert_eq!(peer_donthave_id(b"d1:md11:lt_donthavei0eee"), None);
+    }
+
+    /// BEP 54's payload is four big-endian bytes and no bencode, which is the
+    /// detail every other extension message in the protocol does not share.
+    #[test]
+    fn a_donthave_is_ten_bytes_on_the_wire() {
+        let frame = serialize_donthave(0x0102_0304, 7);
+        assert_eq!(frame.len(), 10);
+        assert_eq!(&frame[..4], &6u32.to_be_bytes(), "length prefix");
+        assert_eq!(frame[4], MSGID_EXTENDED);
+        assert_eq!(frame[5], 7, "the id the session advertised");
+        assert_eq!(&frame[6..], &[0x01, 0x02, 0x03, 0x04], "big endian piece");
+    }
+
+    /// A file this source cannot serve takes every piece that touches it, and
+    /// leaves every piece that does not.
+    #[test]
+    fn losing_a_file_splits_the_piece_list_on_it() {
+        let params = params("*");
+        let (keep, dropped) = split_on_file(&params, 0);
+        assert!(!dropped.is_empty(), "file 0 has to touch some piece");
+        assert_eq!(
+            keep.len() + dropped.len(),
+            params.pieces.len(),
+            "every announced piece is in exactly one of the two"
+        );
+        for piece in &dropped {
+            assert!(params.piece_touches(*piece, 0));
+        }
+        for piece in &keep {
+            assert!(!params.piece_touches(*piece, 0));
+        }
     }
 
     #[test]

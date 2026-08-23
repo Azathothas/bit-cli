@@ -2888,6 +2888,81 @@ async fn a_mirror_that_404s_one_file_keeps_serving_the_other() {
     run.engine.stop().await;
 }
 
+/// BEP 54. A mirror that loses a file retracts the pieces it can no longer
+/// serve **on the connection it is already on**, rather than dropping it and
+/// announcing a smaller bitfield.
+///
+/// This is `TODO/bep-coverage.md` T-167's acceptance and it asserts both
+/// halves: one `lt_donthave` per piece given up, and the connection surviving.
+/// The second is what the message is for. Before it, the only way to retract a
+/// bit was to reconnect, and the test above measures that path from the other
+/// side.
+///
+/// The two counters are deliberately different: `pieces_dropped` counts pieces
+/// given up however it happened, and `pieces_retracted` counts the ones a
+/// message carried. Equal means the wire did all of it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mirror_that_loses_a_file_retracts_its_pieces_without_reconnecting() {
+    let src = tempfile::tempdir().unwrap();
+    let partial_root = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    partial_mirror(src.path(), partial_root.path(), &["a.bin"]);
+
+    let (partial, _p) = serve(partial_root.path().to_path_buf(), ServeMode::Ranges).await;
+    let run = attach(
+        &src.path().join("album"),
+        out.path(),
+        tmp.path(),
+        vec![whole(&partial)],
+    )
+    .await;
+
+    let narrowed = run.statuses[0].clone();
+    assert!(
+        wait_for(Duration::from_secs(60), || narrowed.pieces_retracted() > 0).await,
+        "the mirror never retracted a piece: {:?}",
+        run.reasons()
+    );
+
+    assert_eq!(
+        narrowed.pieces_retracted(),
+        4,
+        "b.bin covers four whole pieces and every one of them has to be retracted"
+    );
+    assert_eq!(
+        narrowed.pieces_retracted(),
+        narrowed.pieces_dropped(),
+        "every piece given up went out as a message, or something reconnected"
+    );
+
+    // The half that is the point of the extension. `file_gone` is the reason
+    // `run` charges a reconnect to when it has to drop the connection to
+    // narrow, so its absence is the connection surviving.
+    assert_eq!(
+        narrowed.reconnect_reasons().get("file_gone").copied(),
+        None,
+        "the connection was dropped to narrow, which is what lt_donthave replaces: {:?}",
+        narrowed.reconnect_reasons()
+    );
+    // A bridge takes a new loopback port every time it dials, and the status
+    // keeps the history rather than the current one, so the length of that
+    // history is the number of connections this source has made. One, and no
+    // reading of it can race: it is the history rather than a snapshot.
+    assert_eq!(
+        narrowed.local_ports().len(),
+        1,
+        "the source dialled more than once, so it did not narrow in place: {:?}",
+        narrowed.local_ports()
+    );
+    assert_ne!(
+        narrowed.state(),
+        BridgeState::Failed,
+        "a mirror missing one file of two is still a mirror"
+    );
+    run.engine.stop().await;
+}
+
 /// The acceptance's own shape: the narrowed mirror plus one that has the rest,
 /// and the run completes.
 ///

@@ -260,6 +260,23 @@ impl PieceTracker {
         count
     }
 
+    /// Release one in-flight piece, if this peer is the one holding it.
+    ///
+    /// Added by this fork, for BEP 54. A peer that retracts a piece it is
+    /// currently being asked for leaves that piece in-flight against it
+    /// forever otherwise: clearing the bitfield bit stops it being *picked*
+    /// again and does nothing about the one already assigned. See
+    /// `patches/UPSTREAM.md` and `TODO/bep-coverage.md` T-167.
+    pub fn release_piece_owned_by(&mut self, piece: ValidPieceIndex, peer: PeerHandle) -> bool {
+        match self.inflight.get(&piece) {
+            Some(info) if info.peer == peer => {}
+            _ => return false,
+        }
+        self.inflight.remove(&piece);
+        self.chunks.mark_piece_broken_if_not_have(piece);
+        true
+    }
+
     // === QUERIES ===
 
     /// Get the inflight info for a piece, if it's currently being downloaded.
@@ -593,6 +610,50 @@ mod tests {
         // Verify peer A's pieces are no longer in-flight
         assert!(!tracker.is_inflight(piece_a1));
         assert!(!tracker.is_inflight(piece_a2));
+    }
+
+    /// Added by this fork, for BEP 54. A peer that retracts a piece it is
+    /// being asked for has to give that piece back to the queue, or it stays
+    /// assigned to a peer that has said it cannot serve it.
+    #[test]
+    fn test_release_piece_owned_by_one_peer() {
+        let chunks = make_test_chunk_tracker(5);
+        let mut tracker = PieceTracker::new(chunks);
+        let file_infos = make_test_file_infos(5);
+        let file_priorities = make_default_file_priorities(&file_infos);
+
+        let peer_a = peer(1);
+        let peer_b = peer(2);
+        let mut reserve = |who| match tracker.acquire_piece(AcquireRequest {
+            peer: who,
+            peer_avg_time: None,
+            priority_pieces: std::iter::empty(),
+            file_priorities: &file_priorities,
+            file_infos: &file_infos,
+            peer_has_piece: |_| true,
+            can_steal: |_| true,
+        }) {
+            AcquireResult::Reserved(p) => p,
+            _ => panic!("expected Reserved"),
+        };
+        let piece_a = reserve(peer_a);
+        let piece_b = reserve(peer_b);
+        assert_eq!(tracker.inflight_count(), 2);
+
+        // The peer that holds it gives it back.
+        assert!(tracker.release_piece_owned_by(piece_a, peer_a));
+        assert!(!tracker.is_inflight(piece_a));
+        assert_eq!(tracker.inflight_count(), 1);
+
+        // A peer that does not hold it cannot take it away from one that does,
+        // which is the case that would let one peer's retraction cancel
+        // another peer's download.
+        assert!(!tracker.release_piece_owned_by(piece_b, peer_a));
+        assert!(tracker.is_inflight(piece_b));
+
+        // And a piece nobody holds is not released twice.
+        assert!(!tracker.release_piece_owned_by(piece_a, peer_a));
+        assert_eq!(tracker.inflight_count(), 1);
     }
 
     #[test]

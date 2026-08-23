@@ -452,7 +452,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    bep
 Priority:    P2
 Effort:      S
-Status:      partial
+Status:      **done**, 2026-08-23T03:26Z
 
 Problem:     A peer's bitfield only ever grows. BEP 3 has `Have` and no
              inverse, so once a peer has claimed a piece there is no way for
@@ -597,6 +597,76 @@ thing left:
 
 Sending it when the session has not advertised it must stay a no-op: this
 repository's own session advertises it now, and a real peer may not.
+
+## The send half is built, 2026-08-23, and this is done
+
+All three steps above, in that order, and one thing the entry did not predict.
+
+**1. The bridge reads the session's `m`.** BEP 10 numbers extension messages
+per receiver: the id in a message is the one the **receiver** advertised. So
+sending one costs a second table, which is what [T-166](peers.md) records and
+what did not exist because nothing sent an extension message. It exists now and
+it holds exactly one entry, read out of the session's extended handshake.
+
+That handshake is the one frame the bridge decodes rather than drops, and BEP
+10 is what makes it safe: id 0 is the extended handshake in both directions, so
+it is the only frame that can be read before a numbering is agreed. Everything
+after it still goes through `OUR_EXTENSIONS`, which is still empty, because the
+bridge still accepts no extension message. A session that does not advertise
+`lt_donthave` leaves the id `None` and nothing is ever sent, which is the
+no-op the paragraph above asks for.
+
+**2. The `FileGone` path sends one message per dropped piece.** The narrowing
+moved from `run` into `serve`, which holds the socket, and `serve` takes its
+params by mutable reference so the caller's piece list shrinks with it. `run`
+still has the reconnect, and it is what happens when the session does not speak
+BEP 54, when nothing is left to serve, or when no announced piece touches the
+lost file.
+
+**3. The acceptance ran.**
+`a_mirror_that_loses_a_file_retracts_its_pieces_without_reconnecting` in
+`crates/bit-cli-core/tests/webseed_e2e.rs`, against the same partial mirror
+fixture `a_mirror_that_404s_one_file_keeps_serving_the_other` uses.
+
+| | |
+| --- | --- |
+| pieces retracted | **4**, every piece `b.bin` covers |
+| pieces dropped | **4**, so the wire carried all of it |
+| reconnects charged to `file_gone` | **0** |
+| loopback ports used | **1** |
+
+The last row is the assertion that says the connection survived, and it is the
+history rather than a snapshot: a bridge takes a new port every time it dials,
+so the length of that list is the number of connections it has made. Reading a
+current port would have raced its own retraction, and the first version of the
+test did exactly that and failed.
+
+**What the entry did not predict, and it cost two red tests.** Every block in
+flight against a lost file fails the same way, so the second failure and the
+tenth are the same news as the first. Narrowing on each of them reported the
+file once per failure and then retired the source for being unable to narrow,
+because by the second one there was nothing left to drop. The connection
+remembers which files it has already retracted, and a repeat is dropped.
+
+The same shape one layer up: a request the session had already sent for a piece
+this source has just retracted arrives after the retraction. Refusing it ends
+the connection, which is the thing `lt_donthave` exists to avoid, so a request
+for a retracted piece is dropped rather than refused.
+
+**Clearing the bit was not the whole of honouring one either.** The receive
+side built on 2026-08-22 cleared the peer's bitfield bit, which stops that peer
+being **picked** for the piece again and does nothing about the piece already
+assigned to it: it stayed in flight against a peer that had just said it cannot
+serve it. `PieceTracker::release_piece_owned_by` gives it back to the queue,
+and `on_donthave` calls it outside the peer lock. `on_peer_died` already
+released every piece a peer owns, so this is one piece of an operation that
+existed. `patches/UPSTREAM.md` carries it.
+
+**What is proved and what is not.** The message goes out for every piece given
+up, the connection survives it, and the piece goes back on the queue for
+another peer, all asserted. What no test here asserts is a real peer's
+behaviour on receiving one: both ends are this repository's. That is what the
+BEP is for and there is nothing further to build for it.
 
 ### T-168 WebTorrent peers and WSS trackers are not supported
 

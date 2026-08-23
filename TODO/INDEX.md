@@ -169,7 +169,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested *(title disproved: it is not reachable)* |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
 | [T-103](bep-coverage.md) | P2 | bep | open | Filenames that are not valid UTF-8 are refused |
-| [T-167](bep-coverage.md) | P2 | bep | partial | BEP 54 lt_donthave is not implemented |
+| [T-167](bep-coverage.md) | P2 | bep | **done** | BEP 54 lt_donthave is not implemented |
 | [T-168](bep-coverage.md) | P3 | bep | open | WebTorrent peers and WSS trackers are not supported |
 | [T-171](metainfo.md) | P2 | metainfo | **done** | httpseeds written as a bencoded string is silently dropped |
 | [T-172](metainfo.md) | P2 | metainfo | **done** | Strictness on read is undecided, and the error does not say |
@@ -209,7 +209,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-198](cli-surface.md) | P1 | cli | **done** | An agent that wants a flag name greps for it |
 | [T-199](cli-surface.md) | P2 | cli | **done** | The CI supply chain was unwatched and one action was abandoned |
 | [T-182](cli-surface.md) | P1 | ci | **done** | A macOS test asserted an invariant across two kernel subsystems |
-| [T-211](bench.md) | P1 | bench | open | Two bench tests fail on the CI runner and pass on every local run |
+| [T-211](bench.md) | P1 | bench | **done** | Two bench tests fail on the CI runner and pass on every local run |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -238,7 +238,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 160 items: 150 to work through, and 10 deferred to Phase C.
-45 open, 4 partial, 0 blocked, 101 done.
+44 open, 3 partial, 0 blocked, 103 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -496,11 +496,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 2 | 0 | 0 | 53 | 55 |
-| P2 | 22 | 4 | 0 | 33 | 59 |
+| P1 | 1 | 0 | 0 | 54 | 55 |
+| P2 | 22 | 3 | 0 | 34 | 59 |
 | P3 | 21 | 0 | 0 | 3 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **45** | **4** | **0** | **101** | **160** |
+| **All** | **44** | **3** | **0** | **103** | **160** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
