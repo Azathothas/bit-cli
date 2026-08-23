@@ -187,13 +187,35 @@ New-PayloadFile (Join-Path $payload "disc 1/b.flac")     150000 2
 New-PayloadFile (Join-Path $payload "extras/notes.nfo")   40000 3
 New-PayloadFile (Join-Path $payload "tiny.bin")              12 4
 
+# Hash a file that a just-killed client may still hold open.
+#
+# A sharing violation here is transient by construction: the only thing that
+# had the file is the client this script started and has already stopped. It is
+# waited out on the condition, with a ceiling, so a slow teardown is a slow
+# hash rather than a red job whose message names neither the client nor the
+# timeout that caused it. See `TODO/create-seed.md`, T-225.
+function Get-FileHashWhenReadable($path, $timeoutSeconds = 30) {
+    $deadline = (Get-Date).AddSeconds($timeoutSeconds)
+    while ($true) {
+        try {
+            return (Get-FileHash -Algorithm SHA256 -LiteralPath $path -ErrorAction Stop).Hash.ToLower()
+        }
+        catch {
+            if ((Get-Date) -ge $deadline) {
+                throw "cannot read $path after $timeoutSeconds seconds: $($_.Exception.Message)"
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+}
+
 function Get-TreeHashes($dir) {
     $dir = (Resolve-Path $dir).Path
     $out = [ordered]@{}
     Get-ChildItem -Recurse -File $dir | Sort-Object FullName | ForEach-Object {
         $relative = $_.FullName.Substring($dir.Length + 1).Replace('\', '/')
         $out[$relative] = @{
-            sha256 = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower()
+            sha256 = Get-FileHashWhenReadable $_.FullName
             bytes  = $_.Length
         }
     }
@@ -253,6 +275,14 @@ function Invoke-Recorded($label, $path, $arguments, $workDir, $timeout) {
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if (-not $process.WaitForExit($timeout * 1000)) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        # `Stop-Process -Force` returns before Windows has finished tearing the
+        # process down, and a client that was mid-download still holds its
+        # output files open for a moment after it. Everything below this hashes
+        # those files, so waiting for the process to be gone is the difference
+        # between a timeout reported as a timeout and a timeout reported as
+        # `Get-FileHash: the process cannot access the file`. Waited on the
+        # condition with a ceiling, not slept. See `TODO/create-seed.md`, T-225.
+        $null = $process.WaitForExit(30 * 1000)
         $clock.Stop()
         return [pscustomobject]@{
             label = $label; command = "$path $($arguments -join ' ')"

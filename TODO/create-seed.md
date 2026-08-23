@@ -710,3 +710,85 @@ are about what a recipient's client will refuse rather than about tidiness.
 Approach names as where the 16 MiB number comes from in practice. That is a
 feature rather than a lint and the entry already said it was not proposed here.
 
+
+### T-225 The interop script hashes files the client it just killed still holds
+
+Source:      CI run 32649574641, `Create round trip (windows-latest)`, 2026-08-23
+Category:    create
+Priority:    P1
+Effort:      S
+Status:      **done** 2026-08-23T15:55Z
+
+Problem:     A push carrying `TODO/`, `bench/`, two documentation files and one
+             comment turned `Create round trip (windows-latest)` red:
+
+             ```
+             Get-FileHash: scripts/interop-roundtrip.ps1:196
+             The process cannot access the file
+             '...\.tmp\interop\out-v1\payload\disc 1\a.flac'
+             because it is being used by another process.
+             ```
+
+             The timestamps say what happened. `seeder announced` at
+             15:49:04 and the failure at 15:52:04, which is exactly the
+             `-TimeoutSeconds 180` CI passes. The leech did not finish inside
+             its budget, `Invoke-Recorded` force-killed it, and the script went
+             straight on to hash the output directory.
+
+             `Stop-Process -Force` returns before Windows has finished tearing
+             a process down, so `aria2c` still held its output files open. The
+             run then failed on a sharing violation whose message names neither
+             the client nor the timeout that caused it.
+Relevance:   **A slow runner became a red job with a message about the wrong
+             thing**, which is the worst shape a CI failure can have: the next
+             session debugs `Get-FileHash` rather than reading "the download
+             did not finish in 180 seconds".
+
+             It is also the seventh entry of the family
+             [RULES.md](../TODO/RULES.md) section 5 names, and the first one in
+             a `scripts/` acceptance rather than in a `cargo` test: a step that
+             assumes a process is gone because it was asked to go is the same
+             assumption as waiting a guessed duration.
+
+             Nothing in the push could have caused it. The commit changed no
+             source the interop path touches, which is the cleanest available
+             proof that the script was wrong rather than the tree, and this
+             repository has had that proof four times before.
+Approach:    Two changes, and both wait on the condition.
+
+             `Invoke-Recorded` waits for the process to actually exit after it
+             kills it, bounded at 30 seconds, so nothing downstream runs while
+             a killed client is still holding handles.
+
+             `Get-TreeHashes` hashes through `Get-FileHashWhenReadable`, which
+             retries a sharing violation until the file opens or 30 seconds
+             pass and then throws with the path and the wait in the message. A
+             violation there is transient by construction: the only thing that
+             had the file is the client this script started and has already
+             stopped.
+Acceptance:  The round trip passes locally, and a timeout reports itself as a
+             timeout rather than as a failure to read a file.
+
+**Done.** Both are in `scripts/interop-roundtrip.ps1`, each with the comment
+that says why the wait is on the condition.
+
+**The round trip passes**, three of three cases byte for byte, against
+`aria2 version 1.37.0`:
+
+```
+v1         pass     a6291a9a2794b3ff158e6db9d9424e6b166ddca7   490012 bytes matched
+private    pass     7240f139d5bbabedba0e2c7522bcafd6b087e8c5   490012 bytes matched
+webseed    pass     a6291a9a2794b3ff158e6db9d9424e6b166ddca7   490012 bytes matched
+```
+
+```bash
+pwsh -NoProfile -File scripts/interop-roundtrip.ps1 -TimeoutSeconds 180
+```
+
+**What is fixed and what is not.** The reporting is fixed: a leech that runs
+out of budget is now recorded as `timed_out` with its own message rather than
+crashing the script three lines later. **Why that leech needed more than 180
+seconds on that runner is not answered**, and this entry does not claim to. The
+local run above takes 2,143 milliseconds for the same case, so the budget is
+not tight by any ordinary measure. If the job goes red on a genuine timeout,
+that is a different entry and it will now say so in its own words.

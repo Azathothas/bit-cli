@@ -75,21 +75,35 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green on all **nineteen** jobs at run **32648746353**, against commit
-  `4931e66`, which closes [T-176](create-seed.md). Four runs this session and
-  one was red: **32645146193**, `Test (windows-latest)`, and that is what
-  [T-223](bench.md) is. One push follows this line, carrying the record and the
-  soak, and its run is not named here; read the current one.
-- **Soak:** the six hour run finished at 2026-08-23T15:01:32Z, 681 samples,
-  1,360 leech cycles, none failed, every named ceiling held. Its CSV and JSON
-  are committed. What its RSS slope actually says is [T-224](memory.md).
+- **CI:** the last green one is run **32648746353**, all nineteen jobs,
+  against commit `4931e66`. Five runs this session and **two were red, both
+  fixed**: **32645146193** on `Test (windows-latest)`, which is
+  [T-223](bench.md), and **32649574641** on
+  `Create round trip (windows-latest)`, which is [T-225](create-seed.md). One
+  push follows this line carrying that fix, and its run is not named here;
+  read the current one.
+- **Soak, finished:** the six hour run completed at 2026-08-23T15:01:32Z, 681
+  samples, 1,360 leech cycles, none failed, every named ceiling held. Its CSV
+  and JSON are committed. What its RSS slope actually says is
+  [T-224](memory.md).
+- **Soak, running:** the operator started a second six hour run at
+  2026-08-23T15:47:16Z, from a release build of `d3bc6a5`, and it was 23
+  samples in when this file was written. It is `bench/soak-20260823T154716064Z`
+  and **it is the reproduction [T-224](memory.md) asks for**: whether the
+  11.7 MiB step at `t+1.161h` happens again. That is answered inside the first
+  ninety minutes, so the answer may already be in the CSV when the next session
+  starts. Read it before starting a third.
+
+```bash
+pwsh -NoProfile -Command "Get-Content bench/soak-20260823T154716064Z.json | ConvertFrom-Json | Select-Object generated_at, complete, elapsed_hours, samples"
+```
 
 ```bash
 gh run list --limit 1
 ```
 
-- **Entries:** 173 items. 25 open, 1 partial, 0 blocked, 137 done, 10 deferred
-  to Phase C. 137 of 163 workable done, 26 left.
+- **Entries:** 174 items. 25 open, 1 partial, 0 blocked, 138 done, 10 deferred
+  to Phase C. 138 of 164 workable done, 26 left.
 - **Tree:** 96 Rust files, 56,704 lines of code, 14,358 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **28 patches**
@@ -99,8 +113,8 @@ gh run list --limit 1
 
 ## What the last session did
 
-**Five entries closed, three filed, and one corrected, and every one of them
-was found or shaped by running something rather than by reading it.** The operator
+**Six entries closed, four filed, and one corrected, and every one of them was
+found or shaped by running something rather than by reading it.** The operator
 ruled on the open question from the previous session, "build rather than
 delete", so the session opened with [T-219](cli-surface.md), item 2 of the
 previous work order; T-222 and T-223 came out of it, and the effort S list
@@ -310,6 +324,32 @@ that a ceiling a run passes or fails depending on how long it ran is not a
 ceiling, and a cheap first move: `soak.ps1` reports one linear fit per series
 and has no way to say there is a step in it.
 
+### [T-225](create-seed.md), P1, filed and done, and it is the second red job of the session
+
+**The push carrying the record turned `Create round trip (windows-latest)`
+red**, on a commit that changed no source the interop path touches. The message
+was `Get-FileHash: the process cannot access the file`, and the timestamps say
+what it really was: `seeder announced` at 15:49:04 and the failure at 15:52:04,
+which is exactly the `-TimeoutSeconds 180` CI passes.
+
+So the leech ran out of budget, `Invoke-Recorded` force-killed it, and the
+script hashed the output directory while `aria2c` still held the files.
+`Stop-Process -Force` returns before Windows has finished tearing a process
+down.
+
+**A slow runner became a red job with a message about the wrong thing**, which
+is the worst shape a failure can have: the next session debugs `Get-FileHash`
+rather than reading "the download did not finish in 180 seconds". Two changes,
+both waiting on the condition: the runner waits for the killed process to
+actually exit, and the hash retries a sharing violation until the file opens or
+30 seconds pass and then says so with the path.
+
+It is the seventh entry of the family [RULES.md](RULES.md) section 5 names, and
+the first in a `scripts/` acceptance rather than a `cargo` test. **What is not
+answered is why that leech needed more than 180 seconds**, and the entry says
+so: the same case takes 2,143 ms locally. A genuine timeout will now report
+itself as one.
+
 ## In progress
 
 Nothing is half-written. All five entries that closed are closed in
@@ -356,9 +396,22 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 gh run list --limit 1
 ```
 
-2. **Start the next soak before anything else, and it is the operator's
+2. **The soak, and it goes before anything else on the operator's
    instruction.** It runs for hours, so it starts first and the session works
-   while it runs. The operator will say when it has finished.
+   while it runs. The operator runs it and will say when it has finished.
+
+   **One is running right now**, started 2026-08-23T15:47:16Z from a release
+   build of `d3bc6a5`. **Check whether it is still going before doing anything
+   else**, and if it is, leave it alone, read what it has so far, and skip to
+   item 3. A second soak started beside it shares the tracker and neither
+   measures anything.
+
+```bash
+pwsh -NoProfile -Command "Get-Content bench/soak-20260823T154716064Z.json | ConvertFrom-Json | Select-Object generated_at, complete, elapsed_hours, samples"
+```
+
+   **What follows is for when there is no soak running and a fresh one is
+   wanted.**
 
    **First, make sure no soak is already running.** A previous one leaves
    `bit-cli` and `loopback-tracker` processes behind, running from a copy under
