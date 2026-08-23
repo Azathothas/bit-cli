@@ -240,6 +240,44 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         }
     }
 
+    // One more run of the same command, for the `hooks` block alone. It is
+    // omitted from a run that used no hook, so without this the contract would
+    // not describe a field the program emits. Folded into the same `kind`, and
+    // `Sample::merge` keeps the first command, so the `From` line above stays
+    // the one a reader should copy. `--on-complete` fires once per torrent, so
+    // this is one process. See `docs/hooks.md` and `TODO/cli-surface.md`,
+    // T-115.
+    let (_, out) = capture(
+        &[
+            "--json",
+            "download",
+            &torrent,
+            "--dir",
+            out_dir.to_str().unwrap(),
+            "--web-seed",
+            &source,
+            "--web-seed-mode",
+            "prefix",
+            "--web-seed-only",
+            "--allow-overwrite",
+            "--port",
+            "0",
+            "--stop-after",
+            "20s",
+            "--on-complete",
+            match cfg!(windows) {
+                true => "rem",
+                false => "true",
+            },
+        ],
+        dir.clone(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli download <TORRENT> --web-seed <URL> --json",
+        &out,
+    );
+
     // A selection whose boundary pieces straddle into files it did not choose,
     // so `torrents[].partial` and `verify`'s `not_selected` are documented
     // rather than only implemented. Its own fixture, because the one above has

@@ -376,10 +376,10 @@ Source:      the operator's brief
 Category:    cli
 Priority:    P2
 Effort:      S
-Status:      partial
+Status:      **done** 2026-08-23T08:00Z
 
-Problem:     `--on-complete` and `--on-error` run once for the whole `download`
-             run. `--on-piece-verified` does not run at all, and neither hook
+Problem:     `--on-complete` and `--on-error` ran once for the whole `download`
+             run. `--on-piece-verified` did not run at all, and neither hook
              runs from `seed`.
 Relevance:   `--on-complete` firing once per run rather than once per torrent
              is wrong for a `-j 4` invocation.
@@ -392,6 +392,74 @@ Approach:    Fire per torrent, from the same place `torrent_completed` is
 Acceptance:  `bit-cli download a.torrent b.torrent -j 2 --on-complete <CMD>`
              runs the command twice, once per torrent, with
              `BIT_CLI_INFO_HASH` differing. `docs/` lists every variable.
+
+**Done 2026-08-23T08:00Z**, both clauses, and the acceptance is a test rather
+than a run recorded here: `on_complete_fires_once_per_torrent_with_its_own_info_hash`
+downloads two torrents at `-j 2`, and the hook creates a directory named
+`on-complete-<info hash>`. Two directories, two hashes. Reading what the hook
+wrote rather than what the report says is the point: the report is the run's
+account of itself and the directories are what actually ran.
+
+**The old shape could not express a mixed run at all.** It picked one hook for
+the whole run by `report.failed`, so a run where one torrent finished and one
+did not fired `--on-error` for both or `--on-complete` for both, with the first
+torrent's info hash and the run's totals, which describes neither.
+`a_mixed_run_fires_on_complete_and_on_error` holds the fix.
+
+**`--on-piece-verified` fires now, and the entry's "probably a rate limit" is
+answered with a measurement rather than a flag.** One piece is one process and a
+process is not free: **1,025 invocations of `cmd /C rem` took 47.55 seconds on
+this machine**, 46 ms each, so the same hook on a 4 GiB torrent at a 1 MiB piece
+length is over three minutes of process startup. Two bounds rather than a rate
+limit, because a rate limit silently loses notifications and a caller cannot
+tell which:
+
+- **Its own thread.** The watch loop hands over a map and returns. Without this
+  a 46 ms hook would cap the download at about 22 pieces a second whatever the
+  network could do.
+- **A bounded queue, 1,024 deep, and what does not fit is counted.**
+  `--json` carries `hooks.skipped` and a run with any warns on stderr. Nothing
+  is dropped silently and nothing waits.
+
+`docs/hooks.md` is the second clause: every variable, what it holds, what the
+piece hook costs, and what an exit code does.
+`every_hook_variable_is_documented` fails when a variable has no row there and
+`every_variable_a_hook_sets_is_in_the_list` fails when the code and the list
+disagree **in either direction**, the same pattern
+[T-118](#t-118-the-short-flag-table-is-not-checked-in-ci) settled for
+`docs/flags.md`.
+
+**A defect the acceptance found in the hook runner itself, which had been there
+since hooks existed.** `swarm::run_hook` built `cmd /C <command>` with
+`Command::arg`. Rust quotes an argument for the C runtime's parser, and
+`cmd.exe` does not use that parser: it re-reads the command line with rules of
+its own. So a hook whose command contained a quoted path, a redirect or an `&&`
+reached `cmd` mangled and exited with "The filename, directory name, or volume
+label syntax is incorrect". The acceptance's own hook is
+`mkdir "<dir>\%BIT_CLI_HOOK%-%BIT_CLI_INFO_HASH%"`, and the first run of it
+fired twice, as asked, and **failed twice**. `raw_arg` is the fix, which is what
+`sh -c` had always effectively done on the other platform. Nothing but a hook
+with a quoted argument would have shown it.
+
+**`seed` still runs no hooks**, which is the Problem's third clause and is
+**not** done. It is not in the Acceptance and is carried as its own entry rather
+than left implied: [T-214](#t-214-seed-runs-no-hooks). `bit-cli seed` has no
+`--on-*` flag at all, so there is no flag that does nothing; what is missing is
+the feature.
+
+```
+$ cargo test -p bit-cli --lib hooks::
+test result: ok. 6 passed; 0 failed; 0 ignored; 400 filtered out
+
+$ cargo test -p bit-cli --lib on_complete_fires
+test result: ok. 1 passed; 0 failed; 0 ignored; 407 filtered out
+
+$ cargo test -p bit-cli --lib on_piece_verified_fires
+test result: ok. 1 passed; 0 failed; 0 ignored; 408 filtered out
+```
+
+`ACCEPTED_WITHOUT_A_READER` in `cli.rs` is **empty** now. It held
+`on_piece_verified` and `index_out`, and both closed on 2026-08-23.
 
 ### T-116 -O/--index-out cannot rename a file
 
@@ -1418,7 +1486,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1116` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1154` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -2860,3 +2928,50 @@ Acceptance:  A payload downloaded with `download -O 0=renamed.bin` is served by
              finding every piece, and without `-O` the same command reports the
              file missing. Both in one test, because the second is what makes
              the first mean anything.
+
+### T-214 seed runs no hooks
+
+Source:      the Problem's third clause in
+             [T-115](#t-115-hooks-do-not-fire-for-every-documented-trigger),
+             which its Acceptance did not cover
+Category:    cli
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `bit-cli seed` has no `--on-*` flag at all. `--on-complete`,
+             `--on-error` and `--on-piece-verified` are on `download` only, so
+             a long-lived seeder can tell an external system nothing about what
+             it is doing. This is a missing feature rather than a flag that
+             does nothing: there is no flag to be inert.
+Relevance:   A seeder is the shape that runs for days, which is the shape most
+             likely to want a hook. P3 because `--jsonl` already carries every
+             event a hook would fire on, so nothing is unreachable, only
+             inconvenient for a caller that wants a command rather than a
+             stream reader.
+Approach:    `crates/bit-cli/src/hooks.rs` is the machinery and it is not
+             `download`-specific: `finished_vars` takes a struct of facts
+             rather than a `TorrentReport`, and `PieceHook` takes a command.
+             What a seeding run means by each trigger is the part to decide
+             first, and it is not the same as a download's:
+
+             - **`--on-complete`** has no obvious moment. A seeder does not
+                complete. The candidates are "the hash check passed and it is
+                now serving", which is the useful one, and "the run ended",
+                which is what `--on-error`'s absence would mean.
+             - **`--on-error`** is the run failing to start or dying, which is
+                well defined.
+             - **`--on-piece-verified`** happens once during the hash check on
+                add and never again, so it would fire in a burst at the start
+                and then be silent. `--on-peer-connected` is what a seeder
+                would actually want, and it is a new trigger rather than a
+                port of an existing one.
+
+             Decide those before writing any of it, and add whatever variables
+             a seeding run needs to `hooks::VARIABLES`, which is the one list
+             both `docs/hooks.md` and the tests are held to.
+Acceptance:  `bit-cli seed <TORRENT> --data <DIR> --on-complete <CMD>` runs the
+             command once, when the payload has been checked and the listener
+             is up, with `BIT_CLI_INFO_HASH` set. `docs/hooks.md` says which
+             trigger means what on `seed`, and
+             `every_hook_variable_is_documented` still passes.

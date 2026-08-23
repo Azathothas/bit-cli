@@ -287,6 +287,9 @@ From `bit-cli download <TORRENT> --web-seed <URL> --json`.
 | `from_web_seeds.bytes` | integer |
 | `from_web_seeds.human` | string |
 | `generated_at` | string |
+| `hooks.failed` | integer |
+| `hooks.ran` | integer |
+| `hooks.skipped` | integer |
 | `kind` | string |
 | `process.cpu_ms` | integer |
 | `process.cpu_system_ms` | integer |

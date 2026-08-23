@@ -66,7 +66,7 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 ## State
 
 - **Last session:** 2026-08-23T06:14:39Z, unattended, and running.
-- **Tests:** 1,188 passing, 0 failing. 1,166 at the start, re-measured rather
+- **Tests:** 1,197 passing, 0 failing. 1,166 at the start, re-measured rather
   than carried forward. Plus **149** in the vendored trees, which the workspace
   gates do not run.
 - **Gates:** clean, on rustc 1.98.0.
@@ -82,8 +82,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 - **CI:** green at run **32620536345** against commit `a289977`, all
   **seventeen** jobs. `f055328` is on top of it and is documentation only, so it
   carries `[skip ci]` and started no run.
-- **Entries:** 162 items. 39 open, 2 partial, 0 blocked, 111 done, 10 deferred
-  to Phase C. 111 of 152 workable done, 41 left.
+- **Entries:** 163 items. 40 open, 1 partial, 0 blocked, 112 done, 10 deferred
+  to Phase C. 112 of 153 workable done, 41 left.
 - **Tree:** 92 Rust files, 52,557 lines of code, 12,567 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
@@ -200,6 +200,35 @@ file its own verifier then called missing. `verify` takes `-O` too now.
 **[T-213](cli-surface.md) filed** for the residual, measured and named with a
 line: `seed` builds its `AddOptions` at `cmd/seed.rs:260` with no `index_out`,
 so a payload downloaded with `-O` cannot be seeded from where it landed.
+
+**[T-115](cli-surface.md), P2, partial to done.** `--on-complete` and
+`--on-error` fire **once per torrent** now, and a mixed run fires both, which
+the old shape could not express at all: it picked one for the whole run by
+`report.failed` and used the first torrent's identity with the run's totals.
+`--on-piece-verified` fires for the first time.
+
+**The entry's "probably a rate limit" is answered with a measurement rather
+than a flag.** One piece is one process, and **1,025 invocations of `cmd /C
+rem` took 47.55 seconds on this machine**, 46 ms each. Two bounds instead of a
+rate limit, because a rate limit loses notifications and a caller cannot tell
+which: the hook runs on its own thread, and its queue is bounded at 1,024 with
+what does not fit **counted** into `hooks.skipped` and warned about.
+
+**A defect in the hook runner that had been there since hooks existed**, found
+by the acceptance rather than by reading. `swarm::run_hook` built `cmd /C
+<command>` with `Command::arg`, and Rust quotes for the C runtime's parser
+while `cmd.exe` uses rules of its own. Any hook with a quoted path, a redirect
+or an `&&` reached `cmd` mangled. The acceptance's own hook fired twice, as the
+entry asked, and **failed twice**. `raw_arg` is the fix.
+
+`docs/hooks.md` is new and is the Acceptance's second clause.
+`ACCEPTED_WITHOUT_A_READER` in `cli.rs` is **empty** now: it held
+`on_piece_verified` and `index_out` and both closed today.
+
+**[T-214](cli-surface.md) filed** for the Problem's third clause, which the
+Acceptance never covered: `seed` has no `--on-*` flag at all. The entry says
+what has to be decided first, because a seeder does not mean the same thing by
+"complete" that a download does.
 
 ### A defect in the tooling, found on the way
 

@@ -8,6 +8,32 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### Hooks fire once per torrent, and `--on-piece-verified` fires at all
+
+`--on-complete` and `--on-error` ran once for the whole run, with the first
+torrent's identity and the run's totals, which describes neither. They fire once
+per torrent now, and a run where one torrent finished and another did not fires
+both. `--on-piece-verified` reached no code at all and now fires once per
+verified piece, on its own thread with a bounded queue: what does not fit is
+counted into `hooks.skipped` and warned about rather than dropped or waited for.
+
+`BIT_CLI_TOTAL_BYTES` and `BIT_CLI_DOWNLOADED_BYTES` are **this torrent's** now
+rather than the run's, and the four run-level figures have their own names.
+`docs/hooks.md` lists every variable.
+
+On Windows, a hook whose command contained a quoted path, a redirect or an `&&`
+reached `cmd.exe` mangled and failed: Rust quotes an argument for the C
+runtime's parser and `cmd` uses rules of its own. See `TODO/cli-surface.md`,
+T-115.
+
+### `-O`/`--index-out` renames a file
+
+It parsed and reached no code. The requested path goes through the same plan a
+torrent path does, so it is sanitised, truncated and disambiguated: `-O` renames
+a file and cannot be used to leave the output directory. `--json` reports the
+mapping with reason `requested`. `verify` takes the same flag, so a payload
+renamed on the way down can still be checked. See `TODO/cli-surface.md`, T-116.
+
 ### `download --dry-run` writes its own document kind
 
 `kind: "download_dry_run"` rather than `kind: "download"`. A dry run and a real

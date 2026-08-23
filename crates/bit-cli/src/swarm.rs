@@ -1560,15 +1560,7 @@ pub fn peer_table(peers: &[PeerSnapshot]) -> Vec<String> {
 /// command is run as written and the facts arrive as `BIT_CLI_*` variables, so
 /// a file named `; rm -rf /` is a file name and not a command.
 pub fn run_hook(command: &str, vars: &BTreeMap<String, String>) -> Result<i32> {
-    let mut cmd = if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd");
-        c.arg("/C").arg(command);
-        c
-    } else {
-        let mut c = std::process::Command::new("sh");
-        c.arg("-c").arg(command);
-        c
-    };
+    let mut cmd = shell_command(command);
     for (key, value) in vars {
         cmd.env(key, value);
     }
@@ -1576,6 +1568,37 @@ pub fn run_hook(command: &str, vars: &BTreeMap<String, String>) -> Result<i32> {
         bit_cli_core::error::from_io(e, format!("hook `{command}` could not be run"))
     })?;
     Ok(status.code().unwrap_or(-1))
+}
+
+/// `sh -c <command>`, and the argument reaches `sh` as written.
+#[cfg(not(windows))]
+fn shell_command(command: &str) -> std::process::Command {
+    let mut c = std::process::Command::new("sh");
+    c.arg("-c").arg(command);
+    c
+}
+
+/// `cmd /C <command>`, and the argument reaches `cmd` as written.
+///
+/// **`raw_arg`, not `arg`.** Rust quotes an argument for the C runtime's own
+/// parser before handing it to `CreateProcess`, and `cmd.exe` does not use that
+/// parser: it re-reads the command line with rules of its own. A hook whose
+/// command contains a quoted path, a redirect, or an `&&` therefore reached
+/// `cmd` mangled, and the process exited with "The filename, directory name, or
+/// volume label syntax is incorrect" rather than doing what it was told.
+///
+/// Found by T-115's own acceptance, whose hook is
+/// `mkdir "<dir>\%BIT_CLI_HOOK%-%BIT_CLI_INFO_HASH%"`: the hook fired twice,
+/// as the entry asked, and failed twice. `raw_arg` hands the string to `cmd`
+/// unchanged, which is what a shell command needs and what `sh -c` has always
+/// done on the other platform.
+#[cfg(windows)]
+fn shell_command(command: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut c = std::process::Command::new("cmd");
+    c.arg("/C");
+    c.raw_arg(command);
+    c
 }
 
 /// The environment a hook receives.

@@ -13,6 +13,7 @@
 pub mod cli;
 pub mod cmd;
 pub mod env;
+pub mod hooks;
 pub mod logging;
 pub mod output;
 pub mod payload;

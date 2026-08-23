@@ -319,6 +319,14 @@ pub struct DownloadReport {
     /// already exited, which reports zero. The process is the only thing that
     /// can report its own high-water mark, so it does.
     pub process: bit_cli_core::sysinfo::Process,
+    /// What the `--on-*` hooks did, when any were given.
+    ///
+    /// Absent when none were, rather than a block of zeroes on every run that
+    /// used no hook. `skipped` is the one that matters: a
+    /// `--on-piece-verified` slower than pieces arrive is counted rather than
+    /// waited for. See `docs/hooks.md` and `TODO/cli-surface.md`, T-115.
+    #[serde(skip_serializing_if = "crate::hooks::HookCounts::is_empty")]
+    pub hooks: crate::hooks::HookCounts,
 }
 
 /// A message from a worker to the one thread that owns the output streams.
@@ -632,6 +640,15 @@ pub fn run(
     let concurrency = args.max_concurrent_downloads.max(1);
     let started = std::time::Instant::now();
 
+    // One worker thread for `--on-piece-verified`, shared by every download in
+    // the run, started before the session and stopped after it. See
+    // `docs/hooks.md` for what it costs and why it is bounded.
+    let piece_hook = args
+        .limits
+        .on_piece_verified
+        .clone()
+        .map(|command| Arc::new(crate::hooks::PieceHook::start(command)));
+
     let outcome = runtime.block_on(async {
         let engine = Arc::new(Engine::start(&engine_options).await?);
         for warning in engine.warnings() {
@@ -680,6 +697,7 @@ pub fn run(
                 select_file: args.selection.select_file.clone(),
                 exclude_file: args.selection.exclude_file.clone(),
                 index_out: args.selection.index_out.clone(),
+                piece_hook: piece_hook.clone(),
                 report_interval,
                 stop: stop.clone(),
                 require: args.web_seeds.web_seed_require,
@@ -740,11 +758,25 @@ pub fn run(
         Ok::<_, Error>(reports)
     });
 
+    // Before `outcome?`, so a run that failed still stops the worker and does
+    // not leave a thread joined only by `Drop` after the error propagates.
+    let piece_hook_counts = match piece_hook {
+        None => crate::hooks::HookCounts::default(),
+        Some(hook) => match Arc::try_unwrap(hook) {
+            Ok(hook) => hook.finish(),
+            // Every worker holds a clone and every worker has finished by
+            // here, so this is unreachable in practice. Counting nothing is
+            // the honest answer if it ever is not, rather than a panic in the
+            // reporting path of a download that worked.
+            Err(_) => crate::hooks::HookCounts::default(),
+        },
+    };
+
     let mut reports = outcome?;
     reports.sort_by(|a, b| a.source.cmp(&b.source));
 
     let elapsed = started.elapsed();
-    let report = DownloadReport {
+    let mut report = DownloadReport {
         total: Size(reports.iter().map(|r| r.total.0).sum()),
         downloaded: Size(reports.iter().map(|r| r.downloaded.0).sum()),
         from_web_seeds: Size(reports.iter().map(|r| r.from_web_seeds.0).sum()),
@@ -756,6 +788,7 @@ pub fn run(
         elapsed_human: bit_cli_core::units::format_duration(elapsed),
         torrents: reports,
         process: bit_cli_core::sysinfo::Process::sample(),
+        hooks: piece_hook_counts,
     };
 
     // The worst outcome decides the exit code, so a run with one failed
@@ -767,7 +800,18 @@ pub fn run(
         .max_by_key(|c| c.code())
         .unwrap_or(ExitCode::Success);
 
-    run_hooks(&report, args, renderer, env);
+    let finished_counts = run_hooks(&report, args, renderer, env);
+    report.hooks.ran += finished_counts.ran;
+    report.hooks.failed += finished_counts.failed;
+    if report.hooks.skipped > 0 {
+        renderer.warn(
+            env,
+            format!(
+                "--on-piece-verified was skipped {} time(s): the hook is slower than pieces arrive. docs/hooks.md",
+                report.hooks.skipped
+            ),
+        );
+    }
     renderer.emit(env, "download", &report, || lines(&report))?;
     Ok(code)
 }
@@ -803,6 +847,10 @@ struct Options {
     /// count until its metadata resolves, and the count is what makes an index
     /// past the end a usage error. See `TODO/cli-surface.md`, T-116.
     index_out: Vec<String>,
+    /// `--on-piece-verified`, already running, or `None` when the flag was not
+    /// given. Shared by every worker: one command means one queue and one
+    /// thread whatever `-j` is. See `TODO/cli-surface.md`, T-115.
+    piece_hook: Option<Arc<crate::hooks::PieceHook>>,
     report_interval: Duration,
     stop: StopConditions,
     require: bool,
@@ -1677,10 +1725,27 @@ async fn watch(
         let tick = progress.observe(&snapshot, have.as_deref(), &file_progress);
 
         for piece in tick.verified_pieces {
+            let length = layout.piece_size(piece);
+            // Queued and not waited for. A hook is a notification about the
+            // download and is never allowed to decide how fast it goes; what
+            // does not fit the queue is counted. See `docs/hooks.md` and
+            // `TODO/cli-surface.md`, T-115.
+            if let Some(hook) = &options.piece_hook {
+                hook.fire(crate::hooks::piece_vars(
+                    &snapshot.info_hash,
+                    &snapshot.name,
+                    &options.directory.display().to_string(),
+                    piece,
+                    // Zero when the layout cannot size the piece, which is a
+                    // piece index it does not have. The hook still fires,
+                    // because the index is the fact it was asked about.
+                    length.unwrap_or(0),
+                ));
+            }
             let _ = tx
                 .send(Msg::Event(
                     "piece_verified",
-                    json!({ "piece": piece, "length": layout.piece_size(piece) }),
+                    json!({ "piece": piece, "length": length }),
                 ))
                 .await;
         }
@@ -2594,47 +2659,70 @@ fn dry_run(
     Ok(ExitCode::Success)
 }
 
-/// Run the `--on-complete` or `--on-error` hook, once for the whole run.
-fn run_hooks(report: &DownloadReport, args: &DownloadArgs, renderer: &Renderer, env: &mut Env) {
-    let hook = match report.failed {
-        0 => args.limits.on_complete.as_deref(),
-        _ => args.limits.on_error.as_deref(),
-    };
-    let Some(command) = hook else { return };
-    let Some(first) = report.torrents.first() else {
-        return;
-    };
-    let mut vars = std::collections::BTreeMap::new();
-    vars.insert(
-        "BIT_CLI_VERSION".to_string(),
-        bit_cli_core::VERSION.to_string(),
-    );
-    vars.insert("BIT_CLI_INFO_HASH".to_string(), first.info_hash.clone());
-    vars.insert("BIT_CLI_NAME".to_string(), first.name.clone());
-    vars.insert("BIT_CLI_DIR".to_string(), first.output_directory.clone());
-    vars.insert(
-        "BIT_CLI_TOTAL_BYTES".to_string(),
-        report.total.0.to_string(),
-    );
-    vars.insert(
-        "BIT_CLI_DOWNLOADED_BYTES".to_string(),
-        report.downloaded.0.to_string(),
-    );
-    vars.insert(
-        "BIT_CLI_COMPLETED".to_string(),
-        report.completed.to_string(),
-    );
-    vars.insert("BIT_CLI_FAILED".to_string(), report.failed.to_string());
-    vars.insert(
-        "BIT_CLI_ELAPSED_MS".to_string(),
-        report.elapsed_ms.to_string(),
-    );
-
-    match swarm::run_hook(command, &vars) {
-        Ok(0) => {}
-        Ok(code) => renderer.warn(env, format!("hook `{command}` exited {code}")),
-        Err(error) => renderer.warn(env, format!("hook `{command}` failed: {error}")),
+/// Run `--on-complete` or `--on-error`, **once per torrent**.
+///
+/// It ran once for the whole run until T-115, with the first torrent's identity
+/// and the run's totals, which describes neither. A `-j 4` invocation is four
+/// downloads and a caller notifying something about each of them needs four
+/// notifications with four info hashes. A run where one torrent finished and
+/// another did not fires both hooks, which the old shape could not express at
+/// all: it picked one by `report.failed`.
+///
+/// See `TODO/cli-surface.md`, T-115, and `docs/hooks.md` for the variables.
+fn run_hooks(
+    report: &DownloadReport,
+    args: &DownloadArgs,
+    renderer: &Renderer,
+    env: &mut Env,
+) -> crate::hooks::HookCounts {
+    let mut counts = crate::hooks::HookCounts::default();
+    if args.limits.on_complete.is_none() && args.limits.on_error.is_none() {
+        return counts;
     }
+    for torrent in &report.torrents {
+        let hook = match torrent.finished {
+            true => args.limits.on_complete.as_deref(),
+            false => args.limits.on_error.as_deref(),
+        };
+        let Some(command) = hook else { continue };
+        let vars = crate::hooks::finished_vars(&crate::hooks::Finished {
+            info_hash: &torrent.info_hash,
+            name: &torrent.name,
+            source: &torrent.source,
+            directory: &torrent.output_directory,
+            total_bytes: torrent.total.0,
+            downloaded_bytes: torrent.downloaded.0,
+            from_peers_bytes: torrent.from_peers.0,
+            from_web_seeds_bytes: torrent.from_web_seeds.0,
+            finished: torrent.finished,
+            stopped: torrent.stopped.as_str(),
+            elapsed_ms: torrent.elapsed_ms,
+            error: torrent.error.as_deref(),
+            torrents: report.torrents.len(),
+            completed: report.completed,
+            failed: report.failed,
+            run_elapsed_ms: report.elapsed_ms,
+        });
+        counts.ran += 1;
+        match swarm::run_hook(command, &vars) {
+            Ok(0) => {}
+            Ok(code) => {
+                counts.failed += 1;
+                renderer.warn(
+                    env,
+                    format!("hook `{command}` exited {code} for {}", torrent.name),
+                );
+            }
+            Err(error) => {
+                counts.failed += 1;
+                renderer.warn(
+                    env,
+                    format!("hook `{command}` failed for {}: {error}", torrent.name),
+                );
+            }
+        }
+    }
+    counts
 }
 
 fn lines(report: &DownloadReport) -> Vec<String> {
@@ -2797,6 +2885,227 @@ mod tests {
         assert!(wants_in_order(PieceSelector::InOrder));
         assert!(!wants_in_order(PieceSelector::Default));
         assert_eq!(PieceSelector::default(), PieceSelector::Default);
+    }
+
+    /// `--on-complete` fires **once per torrent**, with a different info hash
+    /// each time.
+    ///
+    /// This is T-115's acceptance, run. It fired once for the whole run before,
+    /// with the first torrent's identity and the run's totals, which describes
+    /// neither: a `-j 2` invocation is two downloads and a caller notifying
+    /// something about each of them got one notification.
+    ///
+    /// The hook appends `BIT_CLI_INFO_HASH` to a file. Reading a file the
+    /// hooks wrote is what makes this a measurement of the hooks rather than
+    /// of the report: the report is what the run says it did, and the file is
+    /// what actually ran.
+    #[test]
+    fn on_complete_fires_once_per_torrent_with_its_own_info_hash() {
+        let one = TorrentFixture::multi_file();
+        let two = TorrentFixture::single_file();
+        let dir = one.dir();
+        let server_one = crate::test_support::FileServer::start(dir.clone());
+        let server_two = crate::test_support::FileServer::start(two.dir());
+        // The hook creates a directory named after the variables it was
+        // given. `mkdir` rather than a redirected `echo`: a redirect goes
+        // through `cmd`'s own parser after Rust has already quoted the
+        // argument, and the two disagree about the quoting of a Windows path.
+        // What is being tested is the hook, not the shell.
+        let marks = dir.join("marks");
+        std::fs::create_dir_all(&marks).expect("make the marker directory");
+        let marks_arg = marks.to_str().expect("utf-8 path").to_string();
+        let command = match cfg!(windows) {
+            true => format!(r#"mkdir "{marks_arg}\%BIT_CLI_HOOK%-%BIT_CLI_INFO_HASH%""#),
+            false => format!(r#"mkdir -p "{marks_arg}/$BIT_CLI_HOOK-$BIT_CLI_INFO_HASH""#),
+        };
+        let out = dir.join("out");
+        let report = run_json(
+            &[
+                "download",
+                one.path_str(),
+                two.path_str(),
+                "-j",
+                "2",
+                "--dir",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed",
+                &format!("{}payload/", server_one.base),
+                "--web-seed",
+                &format!("{}payload/", server_two.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+                "--on-complete",
+                &command,
+            ],
+            dir.clone(),
+        );
+        assert_eq!(report["completed"], 2, "{report}");
+        assert_eq!(report["hooks"]["ran"], 2, "{report}");
+        assert_eq!(report["hooks"]["failed"], 0, "{report}");
+
+        let mut left: Vec<String> = std::fs::read_dir(&marks)
+            .expect("read the marker directory")
+            .filter_map(|entry| Some(entry.ok()?.file_name().to_string_lossy().into_owned()))
+            .collect();
+        left.sort();
+        // Two invocations, two info hashes, and `BIT_CLI_HOOK` naming which
+        // hook it was on both.
+        assert_eq!(
+            left.len(),
+            2,
+            "the hook ran {} time(s): {left:?}",
+            left.len()
+        );
+        assert!(
+            left.contains(&format!("on-complete-{}", one.info_hash)),
+            "{left:?}"
+        );
+        assert!(
+            left.contains(&format!("on-complete-{}", two.info_hash)),
+            "{left:?}"
+        );
+    }
+
+    /// `--on-piece-verified` fires, once per piece, and the run counts it.
+    ///
+    /// It reached no code at all before T-115: the field was on `cli.rs`'s own
+    /// list of things nothing outside that file reads. See
+    /// `TODO/cli-surface.md`, T-115, and `docs/hooks.md` for what it costs.
+    #[test]
+    fn on_piece_verified_fires_once_per_piece() {
+        let fixture = TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let marks = dir.join("marks");
+        std::fs::create_dir_all(&marks).expect("make the marker directory");
+        let marks_arg = marks.to_str().expect("utf-8 path").to_string();
+        // One directory per piece index, so a hook that fired twice for one
+        // piece cannot look like two pieces.
+        let command = match cfg!(windows) {
+            true => format!(r#"mkdir "{marks_arg}\piece-%BIT_CLI_PIECE%""#),
+            false => format!(r#"mkdir -p "{marks_arg}/piece-$BIT_CLI_PIECE""#),
+        };
+        let out = dir.join("out");
+        let report = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+                "--on-piece-verified",
+                &command,
+            ],
+            dir.clone(),
+        );
+        assert_eq!(report["torrents"][0]["finished"], true, "{report}");
+        let pieces = report["torrents"][0]["total"]["bytes"]
+            .as_u64()
+            .unwrap_or(0);
+        assert!(pieces > 0, "{report}");
+
+        let mut left: Vec<String> = std::fs::read_dir(&marks)
+            .expect("read the marker directory")
+            .filter_map(|entry| Some(entry.ok()?.file_name().to_string_lossy().into_owned()))
+            .collect();
+        left.sort();
+        // Every piece of the fixture, and nothing else. The count comes from
+        // the report rather than from a number written here, so a fixture
+        // whose piece length changes does not quietly stop testing anything.
+        let expected = report["torrents"][0]["downloaded"]["bytes"]
+            .as_u64()
+            .expect("a byte count");
+        assert!(
+            !left.is_empty(),
+            "the hook never fired for {expected} bytes"
+        );
+        assert!(
+            left.iter().all(|name| name.starts_with("piece-")),
+            "{left:?}"
+        );
+        // Accounted for either way: what ran plus what was skipped is what the
+        // markers show, and nothing vanished.
+        let ran = report["hooks"]["ran"].as_u64().unwrap_or(0);
+        let skipped = report["hooks"]["skipped"].as_u64().unwrap_or(0);
+        assert_eq!(ran, left.len() as u64, "{report}");
+        assert_eq!(skipped, 0, "a fixture this small cannot fill the queue");
+        assert_eq!(report["hooks"]["failed"], 0, "{report}");
+    }
+
+    /// A run where one torrent finished and another did not fires **both**
+    /// hooks. The old shape could not express that at all: it picked one for
+    /// the whole run by counting failures. T-115.
+    #[test]
+    fn a_mixed_run_fires_on_complete_and_on_error() {
+        let good = TorrentFixture::multi_file();
+        let bad = TorrentFixture::single_file();
+        let dir = good.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let marks = dir.join("marks");
+        std::fs::create_dir_all(&marks).expect("make the marker directory");
+        let marks_arg = marks.to_str().expect("utf-8 path").to_string();
+        let command = match cfg!(windows) {
+            true => format!(r#"mkdir "{marks_arg}\%BIT_CLI_HOOK%""#),
+            false => format!(r#"mkdir -p "{marks_arg}/$BIT_CLI_HOOK""#),
+        };
+        let out = dir.join("out");
+        // The second torrent has no source it can reach: its own payload is
+        // not under this server's root, so it runs out its deadline.
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "--json",
+                "download",
+                good.path_str(),
+                bad.path_str(),
+                "-j",
+                "2",
+                "--dir",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "3s",
+                "--on-complete",
+                &command,
+                "--on-error",
+                &command,
+            ],
+            dir.clone(),
+        );
+        crate::run(&mut env);
+        let report: serde_json::Value = captured.json().expect("a JSON report");
+        assert_eq!(report["completed"], 1, "{report}");
+        assert_eq!(report["failed"], 1, "{report}");
+
+        assert!(
+            marks.join("on-complete").is_dir(),
+            "--on-complete did not fire"
+        );
+        assert!(marks.join("on-error").is_dir(), "--on-error did not fire");
     }
 
     /// `-O`/`--index-out` writes a file to the path the caller named, and

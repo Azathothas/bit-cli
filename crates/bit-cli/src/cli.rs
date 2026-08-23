@@ -2425,10 +2425,9 @@ mod tests {
         /// A name belongs here only while an entry is open that will remove
         /// it. Adding one without an entry is how a review list stops being a
         /// review.
-        const ACCEPTED_WITHOUT_A_READER: &[(&str, &str)] = &[(
-            "on_piece_verified",
-            "TODO/cli-surface.md T-115, hooks do not fire for every trigger",
-        )];
+        // Empty, and that is the state to keep it in. T-116 and T-115 were
+        // the last two rows and both closed on 2026-08-23.
+        const ACCEPTED_WITHOUT_A_READER: &[(&str, &str)] = &[];
 
         // Read the workspace source rather than `include_str!`ing a fixed
         // list, because a file added later would otherwise silently stop

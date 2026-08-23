@@ -181,7 +181,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-112](cli-surface.md) | P1 | cli | **done** | --log-file does not write or rotate anything |
 | [T-113](cli-surface.md) | P1 | cli | **done** | Metalink is not implemented |
 | [T-114](cli-surface.md) | P2 | cli | open | -i/--input-file batch input is not implemented |
-| [T-115](cli-surface.md) | P2 | cli | partial | Hooks do not fire for every documented trigger |
+| [T-115](cli-surface.md) | P2 | cli | **done** | Hooks do not fire for every documented trigger |
 | [T-116](cli-surface.md) | P3 | cli | **done** | -O/--index-out cannot rename a file |
 | [T-117](cli-surface.md) | P1 | cli | **done** | --schema-version has no schema behind it |
 | [T-118](cli-surface.md) | P3 | cli | **done** | The short-flag table is not checked in CI *(title disproved: it is, by four tests)* |
@@ -212,6 +212,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-211](bench.md) | P1 | bench | **done** | Two bench tests fail on the CI runner and pass on every local run |
 | [T-212](memory.md) | P2 | memory | open | Resolving a magnet can allocate 4 GiB across 128 peers |
 | [T-213](cli-surface.md) | P3 | cli | open | seed cannot serve a payload renamed by --index-out |
+| [T-214](cli-surface.md) | P3 | cli | open | seed runs no hooks |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -239,8 +240,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-162 items: 152 to work through, and 10 deferred to Phase C.
-39 open, 2 partial, 0 blocked, 111 done.
+163 items: 153 to work through, and 10 deferred to Phase C.
+40 open, 1 partial, 0 blocked, 112 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -499,10 +500,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 54 | 55 |
-| P2 | 21 | 2 | 0 | 37 | 60 |
-| P3 | 17 | 0 | 0 | 8 | 25 |
+| P2 | 21 | 1 | 0 | 38 | 60 |
+| P3 | 18 | 0 | 0 | 8 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **39** | **2** | **0** | **111** | **162** |
+| **All** | **40** | **1** | **0** | **112** | **163** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
