@@ -48,13 +48,34 @@ impl Report {
     }
 }
 
+/// `BIT_CLI_*` variables this program sets or reads that are not settings.
+///
+/// The hook variables are not listed here: [`crate::hooks::VARIABLES`] is the
+/// one list of those and [`reserved`] reads it, so a hook variable added there
+/// is reserved here without anybody remembering to. These two have no other
+/// list to read.
+///
+/// `BIT_CLI_TARGET` is set by the build script and is in the environment of
+/// anything `cargo` runs, so before it was reserved every run under
+/// `cargo test` failed. `BIT_CLI_UPDATE_FLAGS` is read by the short-flag test.
+const NOT_SETTINGS: &[&str] = &["BIT_CLI_TARGET", "BIT_CLI_UPDATE_FLAGS"];
+
+/// Every `BIT_CLI_*` name that is not a setting, so a run does not refuse one
+/// of its own variables as a misspelt setting.
+pub fn reserved() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = crate::hooks::VARIABLES.iter().map(|(n, _)| *n).collect();
+    out.extend_from_slice(NOT_SETTINGS);
+    out
+}
+
 /// Resolve the configuration from every layer.
 pub fn resolve(global: &Global, env: &Env) -> Result<Resolved> {
+    let reserved = reserved();
     let mut resolved = Resolved::defaults();
     if global.no_config {
         // `--no-config` skips the files but not the environment or the flags,
         // which are what the caller just typed.
-        resolved.apply_env(&env.vars)?;
+        resolved.apply_env(&env.vars, &reserved)?;
         apply_flags(&mut resolved, global);
         return Ok(resolved);
     }
@@ -67,7 +88,7 @@ pub fn resolve(global: &Global, env: &Env) -> Result<Resolved> {
         Ok(())
     };
 
-    if let Some(path) = user_config_path() {
+    if let Some(path) = user_config_path(&env.vars) {
         consider(&mut resolved, path.clone(), Origin::UserConfig { path })?;
     }
     let project = env.cwd.join(PROJECT_CONFIG);
@@ -85,7 +106,7 @@ pub fn resolve(global: &Global, env: &Env) -> Result<Resolved> {
         resolved.apply_file(&file, Origin::ExplicitConfig { path: path.clone() }, &path);
     }
 
-    resolved.apply_env(&env.vars)?;
+    resolved.apply_env(&env.vars, &reserved)?;
     apply_flags(&mut resolved, global);
     Ok(resolved)
 }
@@ -246,5 +267,226 @@ mod tests {
                 .any(|p| p.as_str().unwrap().ends_with(PROJECT_CONFIG)),
             "the project config should be listed as absent: {missing:?}"
         );
+    }
+
+    // ----------------------------------------------------------------------
+    // T-222: the configuration reaches a run, not only `config show`.
+    //
+    // Every case below drives a command that is **not** `config show`, which
+    // is the whole point: until 2026-08-23 `--config`, `--no-config`,
+    // `bit-cli.toml`, the user config file and every `BIT_CLI_*` variable
+    // changed what one command printed and nothing about what any command
+    // did.
+    //
+    // `download_directory` is the setting under test in most of them because
+    // it is the one whose effect is a file on the disk rather than a number in
+    // a report, so a case that passes cannot be passing on the report and the
+    // run disagreeing.
+    // ----------------------------------------------------------------------
+
+    /// A download that fetches its payload over HTTP from loopback, with the
+    /// arguments a case wants and the environment a case sets.
+    ///
+    /// Returns where the payload landed, or `None`, plus the exit code.
+    fn download_with(
+        cwd: &std::path::Path,
+        extra: &[&str],
+        vars: &[(&str, &str)],
+    ) -> (ExitCode, Option<PathBuf>, String) {
+        let fixture = crate::test_support::TorrentFixture::single_file();
+        let server = crate::test_support::FileServer::start(fixture.payload_dir());
+        let mut args = vec![
+            "download".to_string(),
+            fixture.path_str().to_string(),
+            "--web-seed-only".to_string(),
+            "--web-seed".to_string(),
+            format!("{}/{}", server.base, fixture.files[0].0),
+            "--port".to_string(),
+            "0".to_string(),
+        ];
+        args.extend(extra.iter().map(|a| (*a).to_string()));
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (mut env, captured) = Env::test(&borrowed, cwd);
+        for (name, value) in vars {
+            env.vars.insert((*name).to_string(), (*value).to_string());
+        }
+        let code = crate::run(&mut env);
+        let said = format!("{}{}", captured.out(), captured.err());
+        (code, None, said)
+    }
+
+    /// Where `payload.bin` landed under `root`, if it did.
+    fn landed(root: &std::path::Path) -> Option<u64> {
+        std::fs::metadata(root.join("payload.bin"))
+            .ok()
+            .map(|m| m.len())
+    }
+
+    /// The payload is 3,000 bytes, from `TorrentFixture::single_file`.
+    const PAYLOAD: u64 = 3000;
+
+    #[test]
+    fn a_project_config_decides_where_a_download_lands() {
+        let work = workspace();
+        let wanted = work.path().join("from-config");
+        std::fs::write(
+            work.path().join(PROJECT_CONFIG),
+            format!(
+                "download_directory = {:?}\n",
+                wanted.to_string_lossy().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        let (code, _, said) = download_with(work.path(), &[], &[]);
+        assert_eq!(code, ExitCode::Success, "{said}");
+        assert_eq!(landed(&wanted), Some(PAYLOAD), "{said}");
+        assert_eq!(landed(work.path()), None, "it landed in the cwd instead");
+    }
+
+    #[test]
+    fn an_environment_variable_decides_it_too() {
+        let work = workspace();
+        let wanted = work.path().join("from-env");
+        let (code, _, said) = download_with(
+            work.path(),
+            &[],
+            &[(
+                "BIT_CLI_DOWNLOAD_DIRECTORY",
+                &wanted.to_string_lossy().replace('\\', "/"),
+            )],
+        );
+        assert_eq!(code, ExitCode::Success, "{said}");
+        assert_eq!(landed(&wanted), Some(PAYLOAD), "{said}");
+    }
+
+    #[test]
+    fn an_explicit_config_beats_the_project_one_in_a_run() {
+        let work = workspace();
+        let losing = work.path().join("from-project");
+        let winning = work.path().join("from-explicit");
+        std::fs::write(
+            work.path().join(PROJECT_CONFIG),
+            format!(
+                "download_directory = {:?}\n",
+                losing.to_string_lossy().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        let explicit = work.path().join("other.toml");
+        std::fs::write(
+            &explicit,
+            format!(
+                "download_directory = {:?}\n",
+                winning.to_string_lossy().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        let (code, _, said) =
+            download_with(work.path(), &["--config", explicit.to_str().unwrap()], &[]);
+        assert_eq!(code, ExitCode::Success, "{said}");
+        assert_eq!(landed(&winning), Some(PAYLOAD), "{said}");
+        assert_eq!(landed(&losing), None, "the project config won");
+    }
+
+    #[test]
+    fn a_flag_beats_every_layer_in_a_run() {
+        let work = workspace();
+        let losing = work.path().join("from-config");
+        let winning = work.path().join("from-flag");
+        std::fs::write(
+            work.path().join(PROJECT_CONFIG),
+            format!(
+                "download_directory = {:?}\n",
+                losing.to_string_lossy().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        let (code, _, said) = download_with(
+            work.path(),
+            &["--dir", winning.to_str().unwrap()],
+            &[(
+                "BIT_CLI_DOWNLOAD_DIRECTORY",
+                &losing.to_string_lossy().replace('\\', "/"),
+            )],
+        );
+        assert_eq!(code, ExitCode::Success, "{said}");
+        assert_eq!(landed(&winning), Some(PAYLOAD), "{said}");
+        assert_eq!(landed(&losing), None, "a file beat the command line");
+    }
+
+    #[test]
+    fn no_config_turns_the_files_off_for_a_run() {
+        let work = workspace();
+        let ignored = work.path().join("from-config");
+        std::fs::write(
+            work.path().join(PROJECT_CONFIG),
+            format!(
+                "download_directory = {:?}\n",
+                ignored.to_string_lossy().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        let (code, _, said) = download_with(work.path(), &["--no-config"], &[]);
+        assert_eq!(code, ExitCode::Success, "{said}");
+        assert_eq!(landed(&ignored), None, "--no-config did not ignore it");
+        assert_eq!(landed(work.path()), Some(PAYLOAD), "{said}");
+    }
+
+    /// `--config` naming a file that is not there is the same failure on every
+    /// command. It used to be exit 8 on `config show` and exit 0, in silence,
+    /// everywhere else: the same flag with the same value, two behaviours.
+    #[test]
+    fn a_missing_explicit_config_fails_the_same_way_on_every_command() {
+        let work = workspace();
+        let missing = work.path().join("nope.toml");
+        for args in [
+            vec!["config", "show"],
+            vec!["version"],
+            vec!["info", "x.torrent"],
+        ] {
+            let mut full = vec!["--config", missing.to_str().unwrap()];
+            full.extend(args.iter().copied());
+            let (mut env, captured) = Env::test(&full, work.path());
+            let code = crate::run(&mut env);
+            assert_eq!(
+                code,
+                ExitCode::Disk,
+                "{:?} did not refuse a missing --config: {}{}",
+                args,
+                captured.out(),
+                captured.err()
+            );
+        }
+    }
+
+    /// A `BIT_CLI_*` variable this program sets itself is not a misspelt
+    /// setting. `BIT_CLI_TARGET` is in the environment of anything `cargo`
+    /// runs and `BIT_CLI_HOOK` is set for a hook, so refusing them made every
+    /// run under `cargo test` fail and would have broken a hook that runs
+    /// `bit-cli`.
+    #[test]
+    fn a_variable_this_program_sets_itself_does_not_fail_a_run() {
+        let work = workspace();
+        for (name, value) in [
+            ("BIT_CLI_HOOK", "on-complete"),
+            ("BIT_CLI_TARGET", "x86_64-pc-windows-msvc"),
+            ("BIT_CLI_INFO_HASH", "abc"),
+        ] {
+            let (mut env, captured) = Env::test(&["version"], work.path());
+            env.vars.insert(name.to_string(), value.to_string());
+            let code = crate::run(&mut env);
+            assert_eq!(
+                code,
+                ExitCode::Success,
+                "{name} was refused: {}{}",
+                captured.out(),
+                captured.err()
+            );
+        }
+        // And an actual typo is still caught.
+        let (mut env, _captured) = Env::test(&["version"], work.path());
+        env.vars
+            .insert("BIT_CLI_MAX_PEERZ".to_string(), "1".to_string());
+        assert_eq!(crate::run(&mut env), ExitCode::Config);
     }
 }

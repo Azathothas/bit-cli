@@ -34,7 +34,7 @@ path, so "silent" can be told apart from "broken".
 | `disk` | Reads, writes, flushes, and allocation, with offsets and sizes | any `download`, `verify`, or `seed` |
 | `ratelimit` | Token bucket decisions and stalls | a `download` with `--web-seed-speed-limit` |
 | `retry` | Retry attempts, backoff, and cooldown | a `download` against a source that fails transiently |
-| `config` | Resolution of every configuration value and its origin | `bit-cli config show` |
+| `config` | Resolution of every configuration value and its origin | any command: the configuration is resolved once per run |
 
 The list is `SUBSYSTEMS` in `crates/bit-cli/src/logging.rs` and it is also in
 `bit-cli version --json`, under `trace_subsystems`, so a program can read it
@@ -76,6 +76,13 @@ Both halves matter and neither is enough on its own. `bit_cli::dht` says
 whether there is a DHT at all, which the vendored crate cannot say because
 with the DHT off it writes nothing. `librqbit::peer_connection` carries the
 messages of a swarm peer, which this repository's code never sees.
+
+`config` is the one subsystem whose records are written from a single place
+rather than from wherever the fact is decided, and the ordering is why: the
+configuration decides `--log-level`, so it has to be resolved before there is
+a subscriber to write to. `Resolved::trace` runs immediately after the
+subscriber is installed, once per run, and prints every file considered and
+every setting with the layer it came from.
 
 ## Where a target is not a module path
 

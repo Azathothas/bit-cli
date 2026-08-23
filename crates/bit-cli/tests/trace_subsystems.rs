@@ -302,16 +302,15 @@ fn every_documented_subsystem_has_a_case() {
     );
 }
 
+/// Driven through `version` rather than `config show`, deliberately.
+///
+/// The configuration is resolved once per run now, by T-222, so `--trace
+/// config` works on every command. Asserting it on `config show` would pass
+/// whether that were true or not, because that command resolves the
+/// configuration itself.
 #[test]
 fn config_traces_the_resolution_and_its_origin() {
-    let seen = traced(
-        "config",
-        vec![
-            "config".to_string(),
-            "show".to_string(),
-            "--json".to_string(),
-        ],
-    );
+    let seen = traced("config", vec!["version".to_string(), "--json".to_string()]);
     assert_traced("config", &seen);
 }
 

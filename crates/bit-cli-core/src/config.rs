@@ -314,22 +314,10 @@ impl Resolved {
     /// applying layers out of order cannot produce the wrong answer.
     pub fn apply(&mut self, entries: Vec<(&str, serde_json::Value)>, origin: Origin) {
         for (name, value) in entries {
-            let held = self.settings.get(name);
-            let replace = held.is_none_or(|existing| origin.rank() >= existing.origin.rank());
-            // What `--trace config` promises: the resolution of every value
-            // and where it came from. Both outcomes are recorded, because a
-            // caller asking why a setting is not what the config file says
-            // needs to see the layer that lost as much as the one that won.
-            // See `TODO/cli-surface.md`, T-219.
-            tracing::trace!(
-                target: "bit_cli::config",
-                setting = name,
-                value = %value,
-                origin = %origin.label(),
-                held_origin = held.map(|s| s.origin.label()),
-                applied = replace,
-                "resolved"
-            );
+            let replace = self
+                .settings
+                .get(name)
+                .is_none_or(|existing| origin.rank() >= existing.origin.rank());
             if replace {
                 self.settings.insert(
                     name.to_string(),
@@ -349,29 +337,33 @@ impl Resolved {
     /// it being absent, and that is the one step of the resolution with
     /// nothing else to show for it.
     pub fn missed(&mut self, path: PathBuf) {
-        tracing::trace!(
-            target: "bit_cli::config",
-            path = %path.display(),
-            "config file absent"
-        );
         self.files_missing.push(path);
     }
 
     /// Apply a config file layer, recording that the file was read.
     pub fn apply_file(&mut self, file: &ConfigFile, origin: Origin, path: &Path) {
-        tracing::trace!(
-            target: "bit_cli::config",
-            path = %path.display(),
-            origin = %origin.label(),
-            "reading a config file"
-        );
         self.files_read.push(path.to_path_buf());
         self.apply(file.entries(), origin);
     }
 
     /// Apply environment variables, which are `BIT_CLI_` plus the upper-cased
     /// setting name.
-    pub fn apply_env(&mut self, vars: &BTreeMap<String, String>) -> Result<()> {
+    ///
+    /// `reserved` names `BIT_CLI_*` variables that are **not** settings and
+    /// must not be refused as typos. There are three kinds and all three are
+    /// this program's own: the twenty variables a hook receives, which
+    /// `bit_cli::hooks::VARIABLES` lists; `BIT_CLI_TARGET`, which the build
+    /// script sets; and `BIT_CLI_UPDATE_FLAGS`, which a test reads. The caller
+    /// assembles the list, because the hook table lives in the binary crate
+    /// and this one is below it.
+    ///
+    /// Until T-222 this ran on `bit-cli config show` alone, so the collision
+    /// was invisible. Making the configuration reach every command made every
+    /// run under `cargo test` fail on `BIT_CLI_TARGET`, and would have made a
+    /// hook that runs `bit-cli` fail on `BIT_CLI_HOOK`: the hook sets it, the
+    /// child reads it, and the child refused it as a misspelt setting. See
+    /// `TODO/cli-surface.md`, T-222.
+    pub fn apply_env(&mut self, vars: &BTreeMap<String, String>, reserved: &[&str]) -> Result<()> {
         for (name, _, _) in SETTINGS {
             let key = format!("BIT_CLI_{}", name.to_uppercase());
             if let Some(value) = vars.get(&key) {
@@ -386,6 +378,9 @@ impl Resolved {
         // production setting goes missing.
         for key in vars.keys() {
             if let Some(rest) = key.strip_prefix("BIT_CLI_") {
+                if reserved.contains(&key.as_str()) {
+                    continue;
+                }
                 let name = rest.to_lowercase();
                 if !SETTINGS.iter().any(|(known, _, _)| *known == name) {
                     return Err(Error::config(format!(
@@ -396,6 +391,72 @@ impl Resolved {
             }
         }
         Ok(())
+    }
+
+    /// Write the whole resolution to `bit_cli::config`, for `--trace config`.
+    ///
+    /// Called once, from `run`, **after** the log subscriber is installed.
+    /// That ordering is forced rather than chosen: the configuration decides
+    /// the log level, so it has to be resolved before there is anything to
+    /// write records to, and a resolver that traced as it went would emit into
+    /// a subscriber that did not exist yet. See `TODO/cli-surface.md`, T-219
+    /// and T-222.
+    ///
+    /// One record per file considered and one per setting. The absent files
+    /// are in it because a caller asking why a setting is at its default needs
+    /// to see the file that would have changed it not being there, and that is
+    /// the one step of the resolution with nothing else to show for it.
+    pub fn trace(&self) {
+        for path in &self.files_read {
+            tracing::trace!(
+                target: "bit_cli::config",
+                path = %path.display(),
+                read = true,
+                "config file"
+            );
+        }
+        for path in &self.files_missing {
+            tracing::trace!(
+                target: "bit_cli::config",
+                path = %path.display(),
+                read = false,
+                "config file"
+            );
+        }
+        for (name, setting) in &self.settings {
+            tracing::trace!(
+                target: "bit_cli::config",
+                setting = %name,
+                value = %setting.value,
+                origin = %setting.origin.label(),
+                rank = setting.origin.rank(),
+                "resolved"
+            );
+        }
+    }
+
+    /// The settings a config file or the environment set, as the setting name
+    /// and its value.
+    ///
+    /// What the caller does with them is turn each into the default of the
+    /// flag it names, which is `bit_cli::config_defaults`.
+    ///
+    /// A value whose origin is a **flag** is left out: it is already on the
+    /// command line, and handing it back as a default would be a second copy
+    /// of the same decision. A value at its built-in default is left out for
+    /// the same reason, because that is what the flag already has.
+    pub fn configured(&self) -> Vec<(&str, String)> {
+        self.settings
+            .iter()
+            .filter(|(_, setting)| (1..=4).contains(&setting.origin.rank()))
+            .map(|(name, setting)| {
+                let text = match &setting.value {
+                    serde_json::Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                };
+                (name.as_str(), text)
+            })
+            .collect()
     }
 
     /// The value of one setting, if it is set.
@@ -413,15 +474,23 @@ impl Resolved {
 }
 
 /// The default path of the user config file.
-pub fn user_config_path() -> Option<PathBuf> {
+///
+/// The variables are passed in rather than read from the process, and that is
+/// not a style choice. Configuration decides what a run does now, by T-222, so
+/// a test that resolved it against the real process environment would be
+/// reading whatever config file the machine it runs on happens to have. `Env`
+/// already carries the variables and `Env::test` carries none, so a test sees
+/// no user config unless it puts one there.
+pub fn user_config_path(vars: &BTreeMap<String, String>) -> Option<PathBuf> {
     // The platform config directory, resolved without pulling in a crate for
     // three environment variables.
     #[cfg(windows)]
-    let base = std::env::var_os("APPDATA").map(PathBuf::from);
+    let base = vars.get("APPDATA").map(PathBuf::from);
     #[cfg(not(windows))]
-    let base = std::env::var_os("XDG_CONFIG_HOME")
+    let base = vars
+        .get("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+        .or_else(|| vars.get("HOME").map(|h| PathBuf::from(h).join(".config")));
     base.map(|dir| dir.join("bit-cli").join("config.toml"))
 }
 
@@ -556,7 +625,7 @@ mod tests {
         let mut vars = BTreeMap::new();
         vars.insert("BIT_CLI_MAX_PEERS".to_string(), "77".to_string());
         let mut resolved = Resolved::defaults();
-        resolved.apply_env(&vars).unwrap();
+        resolved.apply_env(&vars, &[]).unwrap();
         assert_eq!(resolved.get("max_peers").unwrap().value, value("77"));
         assert!(matches!(
             resolved.get("max_peers").unwrap().origin,
@@ -568,7 +637,7 @@ mod tests {
     fn a_misspelled_environment_variable_is_refused_rather_than_ignored() {
         let mut vars = BTreeMap::new();
         vars.insert("BIT_CLI_MAX_PEERZ".to_string(), "77".to_string());
-        let err = Resolved::defaults().apply_env(&vars).unwrap_err();
+        let err = Resolved::defaults().apply_env(&vars, &[]).unwrap_err();
         assert_eq!(err.code(), crate::exit::ExitCode::Config);
         assert!(
             err.message().contains("BIT_CLI_MAX_PEERZ"),
@@ -582,7 +651,29 @@ mod tests {
         let mut vars = BTreeMap::new();
         vars.insert("PATH".to_string(), "/usr/bin".to_string());
         vars.insert("HOME".to_string(), "/home/x".to_string());
-        assert!(Resolved::defaults().apply_env(&vars).is_ok());
+        assert!(Resolved::defaults().apply_env(&vars, &[]).is_ok());
+    }
+
+    /// A `BIT_CLI_*` variable this program sets itself is not a misspelt
+    /// setting, and refusing one made every run under `cargo test` fail on
+    /// `BIT_CLI_TARGET`. See `TODO/cli-surface.md`, T-222.
+    #[test]
+    fn a_reserved_variable_is_not_refused_as_a_typo() {
+        let mut vars = BTreeMap::new();
+        vars.insert("BIT_CLI_HOOK".to_string(), "on-complete".to_string());
+        vars.insert("BIT_CLI_TARGET".to_string(), "x86_64".to_string());
+        assert!(
+            Resolved::defaults()
+                .apply_env(&vars, &["BIT_CLI_HOOK", "BIT_CLI_TARGET"])
+                .is_ok()
+        );
+        // And reserving one does not stop an actual typo being caught.
+        vars.insert("BIT_CLI_MAX_PEERZ".to_string(), "1".to_string());
+        assert!(
+            Resolved::defaults()
+                .apply_env(&vars, &["BIT_CLI_HOOK", "BIT_CLI_TARGET"])
+                .is_err()
+        );
     }
 
     #[test]

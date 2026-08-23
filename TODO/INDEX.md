@@ -220,7 +220,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-219](cli-surface.md) | P1 | cli | **done** | Ten of the eleven trace subsystems raise a target nothing writes to |
 | [T-220](cli-surface.md) | P2 | ci | **done** | The record gate reported on a tree the same run then rewrote |
 | [T-221](windows.md) | P1 | ci | **done** | A seeder fixture treated a bound port as a session ready to answer |
-| [T-222](cli-surface.md) | P1 | cli | open | A config file reaches `config show` and nothing else |
+| [T-222](cli-surface.md) | P1 | cli | **done** | A config file reaches `config show` and nothing else |
+| [T-223](bench.md) | P1 | bench | **done** | The leech bench reads its transfer counters before deciding to stop |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -248,8 +249,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-171 items: 161 to work through, and 10 deferred to Phase C.
-27 open, 1 partial, 0 blocked, 133 done.
+172 items: 162 to work through, and 10 deferred to Phase C.
+26 open, 1 partial, 0 blocked, 135 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -507,11 +508,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 2 | 0 | 0 | 58 | 60 |
+| P1 | 1 | 0 | 0 | 60 | 61 |
 | P2 | 13 | 1 | 0 | 49 | 63 |
 | P3 | 12 | 0 | 0 | 14 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **27** | **1** | **0** | **133** | **171** |
+| **All** | **26** | **1** | **0** | **135** | **172** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

@@ -12,6 +12,7 @@
 
 pub mod cli;
 pub mod cmd;
+pub mod config_defaults;
 pub mod env;
 pub mod hooks;
 pub mod logging;
@@ -70,6 +71,39 @@ pub fn run(env: &mut Env) -> ExitCode {
         Err(err) => return report_parse_error(env, err),
     };
 
+    // The configuration decides what a run does, not only what `config show`
+    // prints, and this is where that happens. It is resolved before the
+    // renderer and before the log subscriber because it decides `--color`,
+    // `--log-level` and `--log-format`, and it is resolved from the **first**
+    // parse because `--config` and `--no-config` are themselves flags.
+    //
+    // A resolution that failed is reported the way every other failure is,
+    // through a renderer and with the `--jsonl` stream closed after it. The
+    // renderer is built from the first parse, so its colour and format are the
+    // command line's rather than the configuration's; that is the right way
+    // round for a failure that is about the configuration.
+    let mut renderer = Renderer::new(&cli.global, env);
+    let resolved = match cmd::config::resolve(&cli.global, env) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            renderer.fail(env, &error);
+            return end_session(&mut renderer, env, error.code(), started, Some(&error));
+        }
+    };
+    // Nothing above the built-in defaults set anything: the first parse is the
+    // answer and there is no second one.
+    let defaults = config_defaults::defaults(&resolved);
+    let cli = match defaults.is_empty() {
+        true => cli,
+        false => match reparse_with_defaults(env, &defaults) {
+            Ok(cli) => cli,
+            Err(err) => return report_parse_error(env, err),
+        },
+    };
+
+    // Rebuilt, because the configuration may have set `--color`, `--json` or
+    // `--progress` and the one above was built before it was read. Nothing has
+    // been emitted through the first, so no sequence number is lost.
     let mut renderer = Renderer::new(&cli.global, env);
 
     if cli.global.schema_version {
@@ -81,6 +115,11 @@ pub fn run(env: &mut Env) -> ExitCode {
         renderer.fail(env, &error);
         return end_session(&mut renderer, env, error.code(), started, Some(&error));
     }
+    // After `install` and not before it, because the resolution is what
+    // decides the log level and so has to happen while there is nothing to
+    // write to. `--trace config` therefore works on every command rather than
+    // only on `config show`. See `TODO/cli-surface.md`, T-219 and T-222.
+    resolved.trace();
 
     let (code, error) = match dispatch(&cli, &mut renderer, env) {
         Ok(code) => (code, None),
@@ -90,6 +129,23 @@ pub fn run(env: &mut Env) -> ExitCode {
         }
     };
     end_session(&mut renderer, env, code, started, error.as_ref())
+}
+
+/// Parse again, with the configured settings as the flags' defaults.
+///
+/// The second parse is what makes a config file reach a run at all, and it is
+/// a parse rather than a pass over the parsed struct so that `clap` keeps
+/// deciding precedence: a value on the command line beats a default, which is
+/// exactly what a flag has to beat a config file. `crate::config_defaults`
+/// has the argument in full.
+fn reparse_with_defaults(
+    env: &Env,
+    defaults: &[(&'static str, String)],
+) -> Result<Cli, clap::Error> {
+    use clap::{CommandFactory, FromArgMatches};
+    let command = config_defaults::apply(Cli::command(), defaults);
+    let matches = command.try_get_matches_from(&env.args)?;
+    Cli::from_arg_matches(&matches)
 }
 
 /// Close the `--jsonl` stream with the event that says it closed.

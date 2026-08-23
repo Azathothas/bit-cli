@@ -1382,3 +1382,87 @@ runs is evidence and not a proof, and the first of the two failures was one run
 in three on a machine this is not. What makes this closable rather than
 hopeful is that both causes were found and named: neither was a tolerance, and
 both are defects a reader can check against the code.
+
+### T-223 The leech bench reads its transfer counters before deciding to stop
+
+Source:      CI run 32645146193, `Test (windows-latest)`, 2026-08-23
+Category:    bench
+Priority:    P1
+Effort:      S
+Status:      **done** 2026-08-23T15:05Z
+
+Problem:     `cmd::bench::tests::a_leech_measures_the_transfer_the_hashing_and_the_disk`
+             failed for the **third** time, and for a third distinct reason:
+
+             ```
+             assertion `left == right` failed
+               left: 1976
+              right: 3000
+             ```
+
+             1,976 is 3,000 minus 1,024, which is one block. `summary.bytes`
+             is a sum of interval deltas over the peer counters, and
+             `drive_leech` read those counters at the top of its loop body and
+             read the completion flag near the bottom. A block that landed
+             between the two was written, hashed, counted as disk work, and
+             counted as transfer **nowhere**: the loop broke on a flag that
+             already knew about work no read had taken.
+Relevance:   This is the same defect as
+             [T-149](#t-149-the-last-window-of-a-leech-bench-was-never-counted),
+             in the counter the report is named for, and T-149 is what left it
+             behind. That entry added a final read of the **storage** counters
+             after the loop and did not add one for the peer counters, so the
+             gap it closed for hashing and disk stayed open for the transfer.
+
+             It is a benchmark under-reporting its subject, which is worse
+             than a flaky test: every `bench leech` report that ended on
+             completion rather than on its deadline could be short by up to
+             one interval of transfer, while its disk and hashing totals were
+             right. A reader comparing the two would have concluded the disk
+             wrote more than arrived.
+
+             Third time for this test and third distinct cause.
+             [T-211](#t-211-two-bench-tests-fail-on-the-ci-runner-and-pass-on-every-local-run)
+             found two and named both; this is the one neither of them was.
+Approach:    Two changes, and the first is the one that makes it impossible
+             rather than unlikely.
+
+             **The completion flag is read before the counters.** `finished`
+             true then means every read below it happened after the last byte;
+             `finished` false costs nothing, because the next tick reads again.
+             There is no longer a gap for a block to fall into, and that is a
+             property of the ordering rather than of the timing.
+
+             **The transfer counters are read once more after the loop**, the
+             way T-149 made the storage counters read once more. The ordering
+             above covers the completion break; this covers the other two,
+             the deadline and the interrupt, where work can still be in flight
+             when the loop ends. The peer-accounting block becomes
+             `observe_transfer`, a free function, because it is called twice.
+Acceptance:  The test asserts an invariant the failure violated and which is
+             not a scheduling outcome, and the module runs many times under
+             thread pressure without failing.
+
+**Done.** `crates/bit-cli/src/cmd/bench.rs` carries both changes, each with the
+comment that says why the ordering is the fix rather than an ordering.
+
+**The new assertion is the useful part.** `summary.bytes >= summary.disk.write_bytes`:
+every byte on the disk came off a source, so the transfer total cannot be under
+the write total on a run that started from nothing. Unlike the equality beside
+it, nothing about scheduling can lower the left side. A block served twice
+raises it, which is [T-008](webseed.md) and legitimate. At the moment of the
+failure it was 1,976 against 3,000.
+
+**Proved by running them**, the way [T-211](#t-211-two-bench-tests-fail-on-the-ci-runner-and-pass-on-every-local-run)
+was: the whole `cmd::bench::tests` module, which is what this test contends
+with for blocking threads, **50 times at `--test-threads 8`**.
+
+```bash
+cargo test -p bit-cli --lib --no-run
+```
+
+**What is not proved, and it is the same limit T-211 recorded.** That the
+runner cannot find a fourth way. What makes this closable is that the cause is
+named and the fix is an ordering a reader can check without running anything:
+there is no window between the last counter read and the break for the
+completion path, because the flag that ends it is read first.

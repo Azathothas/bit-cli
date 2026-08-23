@@ -69,6 +69,13 @@ command line is a name that can become a command.
 
 ## The variables
 
+They share the `BIT_CLI_` prefix with the environment variables that set a
+**configuration** value, and a name in this table is never read as one. A run
+refuses a `BIT_CLI_*` name that is neither, because a typo in a deployment
+script is how a production setting goes missing, and the list below is what
+keeps a hook whose command is `bit-cli` from having the child refuse its
+parent's variables. See `TODO/cli-surface.md`, T-222.
+
 Set for every hook:
 
 | Variable | What it holds |

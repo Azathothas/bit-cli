@@ -3378,8 +3378,11 @@ offsets and sizes the description promises already are. `ratelimit` in
 `RateLimiter::take`, on every take rather than only the ones that wait, because
 "the limiter let this through" is half the answer. `retry` in both ladders and
 in `SourceStats::record_error`, which is where the budget is spent. `config` in
-`Resolved::apply`, recording the layer that **lost** as well as the one that
-won. `tracker` in `announce_on` and `scrape`, request and response. `peer`,
+`Resolved::trace`, once per run and immediately after the subscriber is
+installed, which is the one subsystem whose records cannot be written where the
+fact is decided: the configuration decides the log level, so it is resolved
+while there is still nothing to write to. `tracker` in `announce_on` and
+`scrape`, request and response. `peer`,
 `handshake` and `piece` in the web seed bridge, which is a real peer as far as
 the session is concerned. `picker` in `InOrder::advance`. `dht` in `Engine`,
 once per session, because it is the one fact the vendored crate cannot carry:
@@ -3391,8 +3394,9 @@ defaults to the module path and the modules do not divide the way the
 subsystems do: `peer_connection` holds the handshake and every wire message,
 and `torrent_state::live` holds the picker, the piece lifecycle and peer
 management. Raising the module would have made `--trace handshake` print 266
-records where 2 were asked for, on the 2 MiB fixture below. Ten calls take an explicit target instead,
-under "handshake, piece and picker tracing have no target of their own" in
+records where 2 were asked for, on the 2 MiB fixture below. Ten calls take an
+explicit target instead, under "handshake, piece and picker tracing have no
+target of their own" in
 [`patches/UPSTREAM.md`](../patches/UPSTREAM.md). Upstream's own tests were run
 and are 149 passing, unchanged.
 
@@ -3492,7 +3496,7 @@ Source:      measured while closing T-219, 2026-08-23
 Category:    cli
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done** 2026-08-23T15:20Z
 
 Problem:     `--config <PATH>` and `--no-config` are **global** flags, accepted
              on every command. They have two readers in the whole workspace,
@@ -3569,3 +3573,97 @@ bit-cli --config <missing> config show
     error: cannot read ...: The system cannot find the file specified.
     exit 8
 ```
+
+**Done.** Every layer reaches every command. A setting is the **default** of
+the flag it names, so a flag on the command line still wins and nothing in this
+repository decides precedence.
+
+**The Approach above named the wrong seam, and the work found a better one.**
+It proposed reading `clap`'s `ArgMatches::value_source` to tell a value that
+came from the command line from one that came from a default, then overwriting
+the field. That works, and it needs a branch per setting spread over `Global`,
+`LimitArgs`, `WebSeedArgs` and five command structs, with nothing checking that
+a new flag reached it.
+
+Setting `Arg::default_value` instead moves the whole question back into `clap`,
+which already knows a supplied value beats a default. So the resolution becomes
+a list of `(long flag, value)`, the command tree is walked once with
+`mut_args` and `mut_subcommand`, and the tree is parsed a second time.
+Precedence is not implemented anywhere: it falls out. The mapping table is then
+the only thing anybody has to keep true, and two tests keep it true.
+
+`crates/bit-cli/src/config_defaults.rs` is the module and it carries the
+argument in full.
+
+**The second parse is skipped when nothing configured anything**, which is
+every run with no config file and no `BIT_CLI_*` variable. A value whose origin
+is a **flag** is never handed back as a default, because it is already on the
+command line.
+
+**Three things fell out and none could be separated from it.**
+
+**`--config` on a missing file now fails the same way everywhere.** It was
+exit 8 on `config show` and exit 0, in silence, on the other fifteen commands:
+the same flag with the same value, two behaviours. The resolution happens in
+`run` now, so there is one.
+
+**`user_config_path` takes the environment instead of reading the process.**
+This is the one that would have been a defect rather than a limitation.
+Configuration decides what a run does now, so a test that resolved it against
+the real process environment would read whatever config file the machine
+happens to have, and pass or fail on that. `Env` already carries the variables
+and `Env::test` carries none, so a test sees no user config unless it puts one
+there.
+
+**A `BIT_CLI_*` variable this program sets itself is no longer refused as a
+typo, and this was found by running rather than by reading.** `apply_env`
+refuses an unknown `BIT_CLI_*` name, which is right, and it used to run on one
+command. Making it run on every command made **every run under `cargo test`
+fail**:
+
+```
+create failed: `BIT_CLI_TARGET` is not a setting; run `bit-cli config show` for the list
+```
+
+`BIT_CLI_TARGET` is set by this repository's own build script and is in the
+environment of anything `cargo` runs. The larger case is the one the test
+suite did not reach: the **twenty** variables a hook receives, which
+`hooks::VARIABLES` lists, are set by `bit-cli` itself, so a hook whose command
+is `bit-cli` would have had the child refuse its parent's variables. `resolve`
+passes a reserved list now, and it is derived from `hooks::VARIABLES` rather
+than written twice.
+
+**The acceptance, and every case drives a command that is not `config show`.**
+`download_directory` is the setting under test in most of them because its
+effect is a file on the disk rather than a number in a report:
+
+| case | what it asserts |
+| --- | --- |
+| `a_project_config_decides_where_a_download_lands` | the payload is in the configured directory and not in the working one |
+| `an_environment_variable_decides_it_too` | `BIT_CLI_DOWNLOAD_DIRECTORY` does the same |
+| `an_explicit_config_beats_the_project_one_in_a_run` | `--config` wins, and the project file's directory is empty |
+| `a_flag_beats_every_layer_in_a_run` | `--dir` beats a file and a variable together |
+| `no_config_turns_the_files_off_for_a_run` | the payload lands in the working directory |
+| `a_missing_explicit_config_fails_the_same_way_on_every_command` | exit 8 on `config show`, `version` and `info` |
+| `a_variable_this_program_sets_itself_does_not_fail_a_run` | `BIT_CLI_HOOK`, `BIT_CLI_TARGET` and `BIT_CLI_INFO_HASH` pass, and a real typo still fails |
+
+```bash
+cargo test -p bit-cli --lib cmd::config
+```
+
+```bash
+cargo test -p bit-cli --lib config_defaults
+```
+
+**What a configured boolean cannot do, and it is written down rather than
+hidden.** Three settings are `enable_*` and the flags are `--no-*`, so the
+value is inverted on the way in. `enable_dht = false` makes `--no-dht` default
+to true and there is no `--dht` to turn it back on for one run. `--no-config`
+is the escape hatch. Adding three negations is a bigger change to the surface
+than this entry is, and nothing has asked for one.
+
+**What is not covered.** A configured value that `clap` cannot parse is
+reported against the flag rather than against the file it came from: the
+message names `--max-peers` and not `bit-cli.toml`. `--trace config` shows the
+origin of every value, which is the answer, but the error itself does not carry
+it.

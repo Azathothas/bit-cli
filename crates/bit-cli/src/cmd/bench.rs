@@ -1767,6 +1767,65 @@ struct Counted {
 
 /// Run the download with the clock on.
 #[allow(clippy::too_many_lines)]
+/// Fold what every peer and bridge has delivered since the last read into the
+/// recorder.
+///
+/// A free function rather than a block inside the loop because it is called
+/// **twice**: once per interval, and once more after the loop ends. Everything
+/// the report says about the transfer is a sum of deltas, so a read that
+/// happens only inside the loop cannot see the work that ended it. See
+/// `TODO/bench.md`, T-149 and T-223.
+#[allow(clippy::too_many_arguments)]
+fn observe_transfer(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    sources: &[AttachedSource],
+    recorder: &recorder::Recorder,
+    counted: &mut BTreeMap<String, Counted>,
+    labels: &mut Vec<(usize, String, String)>,
+    next_index: &mut usize,
+) {
+    let bridge_ports = swarm::bridge_ports(sources);
+    let by_port: BTreeMap<u16, (usize, String)> = sources
+        .iter()
+        .flat_map(|source| {
+            source
+                .local_ports()
+                .into_iter()
+                .map(|port| (port, (source.index, source.url.clone())))
+        })
+        .collect();
+
+    for peer in engine.peers(handle, &bridge_ports) {
+        let port = peer
+            .addr
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse::<u16>().ok());
+        let entry = counted.entry(peer.addr.clone()).or_insert_with(|| {
+            let (index, label, kind) = match port.and_then(|port| by_port.get(&port)) {
+                Some((index, url)) => (*index, url.clone(), "web_seed"),
+                None => {
+                    let index = *next_index;
+                    *next_index += 1;
+                    (index, peer.addr.clone(), "peer")
+                }
+            };
+            if !labels.iter().any(|(i, _, _)| *i == index) {
+                labels.push((index, label, kind.to_string()));
+            }
+            Counted {
+                index,
+                ..Default::default()
+            }
+        });
+        let bytes = peer.downloaded_bytes.saturating_sub(entry.bytes);
+        let chunks = u64::from(peer.chunks).saturating_sub(entry.chunks);
+        entry.bytes = peer.downloaded_bytes;
+        entry.chunks = u64::from(peer.chunks);
+        recorder.observe_bulk(entry.index, bytes, chunks);
+    }
+}
+
 async fn drive_leech(
     engine: &Engine,
     handle: &bit_cli_core::engine::Handle,
@@ -1804,45 +1863,26 @@ async fn drive_leech(
             _ = ticker.tick() => {}
         }
 
-        let bridge_ports = swarm::bridge_ports(sources);
-        let by_port: BTreeMap<u16, (usize, String)> = sources
-            .iter()
-            .flat_map(|source| {
-                source
-                    .local_ports()
-                    .into_iter()
-                    .map(|port| (port, (source.index, source.url.clone())))
-            })
-            .collect();
+        // The completion flag is read **before** the counters, and the
+        // ordering is the fix rather than an ordering. Read after them, a
+        // block that lands between the last counter read and the flag is
+        // written, hashed, and counted as disk work while the transfer total
+        // never sees it: the loop breaks on a flag that already knows about
+        // work no read has taken. Read first, a `finished` of true means every
+        // read below it is after the last byte, and a `finished` of false
+        // costs nothing because the next tick reads again. See
+        // `TODO/bench.md`, T-223.
+        let snapshot = engine.snapshot(handle);
 
-        for peer in engine.peers(handle, &bridge_ports) {
-            let port = peer
-                .addr
-                .rsplit_once(':')
-                .and_then(|(_, port)| port.parse::<u16>().ok());
-            let entry = counted.entry(peer.addr.clone()).or_insert_with(|| {
-                let (index, label, kind) = match port.and_then(|port| by_port.get(&port)) {
-                    Some((index, url)) => (*index, url.clone(), "web_seed"),
-                    None => {
-                        let index = next_index;
-                        next_index += 1;
-                        (index, peer.addr.clone(), "peer")
-                    }
-                };
-                if !labels.iter().any(|(i, _, _)| *i == index) {
-                    labels.push((index, label, kind.to_string()));
-                }
-                Counted {
-                    index,
-                    ..Default::default()
-                }
-            });
-            let bytes = peer.downloaded_bytes.saturating_sub(entry.bytes);
-            let chunks = u64::from(peer.chunks).saturating_sub(entry.chunks);
-            entry.bytes = peer.downloaded_bytes;
-            entry.chunks = u64::from(peer.chunks);
-            recorder.observe_bulk(entry.index, bytes, chunks);
-        }
+        observe_transfer(
+            engine,
+            handle,
+            sources,
+            &recorder,
+            &mut counted,
+            &mut labels,
+            &mut next_index,
+        );
 
         let now = engine.storage_counts();
         let disk = now.since(&storage);
@@ -1869,8 +1909,6 @@ async fn drive_leech(
             );
             recorder.observe_pipeline(pipeline);
         }
-
-        let snapshot = engine.snapshot(handle);
         recorder.observe_peers(snapshot.peers.live);
         let sample = recorder.sample();
         renderer.event(env, "bench_sample", &sample)?;
@@ -1897,7 +1935,7 @@ async fn drive_leech(
         }
     }
 
-    // One last read of the storage counters before the window closes.
+    // One last read of every counter before the window closes.
     //
     // The loop reads them at the top of its body and decides whether to stop
     // at the bottom, so the work between the last read and the break is not in
@@ -1907,6 +1945,23 @@ async fn drive_leech(
     // `a_leech_measures_the_transfer_the_hashing_and_the_disk` failed on
     // whichever runner finished inside one `--metrics-interval`. See
     // TODO/bench.md, T-149.
+    //
+    // **The transfer counters need it for the same reason and did not have
+    // it**, which is TODO/bench.md T-223 and the third time this lesson has
+    // been learned. T-149 added the storage read and left the peer read in the
+    // loop, so a block that arrived between the last peer read and the break
+    // was written to disk, hashed, counted as disk work and **not** counted as
+    // transfer. The same test failed a third way on `windows-latest`, at 1,976
+    // bytes of a 3,000 byte payload, which is one 1,024 byte block short.
+    observe_transfer(
+        engine,
+        handle,
+        sources,
+        &recorder,
+        &mut counted,
+        &mut labels,
+        &mut next_index,
+    );
     let last = engine.storage_counts();
     let disk = last.since(&storage);
     recorder.observe_disk(&bit_cli_core::bench::report::Disk {
@@ -2701,6 +2756,20 @@ mod tests {
 
         let total = fixture.files[0].1.len() as u64;
         assert_eq!(doc["summary"]["bytes"]["bytes"].as_u64().unwrap(), total);
+        // Every byte on the disk came off a source, so the transfer total
+        // cannot be under the write total on a run that started from nothing.
+        // It is the invariant the third failure of this test violated, at
+        // 1,976 bytes counted against 3,000 written, and unlike the equality
+        // above it is not a scheduling outcome: a block served twice raises
+        // the left side and nothing lowers it. See `TODO/bench.md`, T-223.
+        assert!(
+            doc["summary"]["bytes"]["bytes"].as_u64().unwrap()
+                >= doc["summary"]["disk"]["write_bytes"]["bytes"]
+                    .as_u64()
+                    .unwrap(),
+            "the transfer counted less than the disk wrote: {}",
+            doc["summary"]
+        );
         assert_eq!(
             std::fs::read(out.join("payload.bin")).unwrap(),
             fixture.files[0].1,

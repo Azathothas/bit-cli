@@ -1639,7 +1639,25 @@ bit-cli config show --json
 
 prints every value with where it came from, which is what makes the tool
 debuggable in CI. A `BIT_CLI_*` variable matching no setting is an error, not a
-silent no-op, because that is how a production setting goes missing.
+silent no-op, because that is how a production setting goes missing. The
+variables `bit-cli` sets for a hook are not settings and are not refused;
+`docs/hooks.md` lists them.
+
+Every layer above reaches every command, not only `config show`: a setting
+becomes the **default** of the flag it names, so a flag on the command line
+still wins and nothing else has to decide precedence. `--trace config` prints
+the whole resolution on any run.
+
+```bash
+bit-cli download x.torrent --trace config
+```
+
+Two things follow from a setting being a default. `--config` naming a file that
+is not there is an error on every command, not only on `config show`. And the
+three `enable_*` settings are the defaults of `--no-dht`, `--no-pex` and
+`--no-lsd`, so `enable_dht = false` in a file cannot be turned back on for one
+run by a flag, because there is no `--dht`; `--no-config` is how that run
+ignores the file.
 
 ## Binding tables
 
