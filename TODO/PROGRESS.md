@@ -75,24 +75,26 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green at run **32657376953**, against commit `148d31f`. Five runs
-  this session and **none was red**, which is the first session that can say
-  so. There is a **twentieth** job now, `Soak fit`, added by
-  [T-224](memory.md). Two runs started after this line was first written,
-  **32658445998** for `5c5ae0a` and the one this session's last push starts;
-  read them rather than trusting this. The final documentation commit carries
-  a CI skip marker and starts no run.
+- **CI:** green on all **twenty** jobs at run **32659202161**, against commit
+  `531a8e3`, which is the last commit of this session carrying code. **Six runs
+  this session and not one was red**, which no session before this one could
+  say. The twentieth job is `Soak fit`, added by [T-224](memory.md). One
+  documentation commit follows this line with a CI skip marker, so it starts no
+  run.
 - **Soak, finished:** the six hour run of 2026-08-23T09:01:32Z is committed,
   681 samples, 1,360 leech cycles, none failed. Its RSS slope is
   [T-224](memory.md) and the step in it is now a column rather than an
   argument.
 - **Soak, running:** the operator's second six hour run,
   `bench/soak-20260823T154716064Z`, started 2026-08-23T15:47:16Z from a release
-  build of `d3bc6a5`. It was **329 samples and 2.92 hours in** when this file
+  build of `d3bc6a5`. It was **351 samples and 3.12 hours in** when this file
   was written and it was still going. **It crossed `t+1.161h` and did not
-  step**: largest single rise 1.48 MiB against the committed run's 11.61, and a
-  whole-run slope of about 1.1 MiB/h, which is that run's pre-step slope. Read
-  the rest of it when it finishes.
+  step**, and it is now past half the committed run's window without one:
+  `rss_bytes` 13.95 to 17.56 MiB, slope 0.94 MiB/h at r squared 0.62, largest
+  single rise **1.99 MiB** against the committed run's 11.61. That slope is the
+  committed run's pre-step slope of 1.02, which is the number two runs now
+  agree on. The committed run was near 30 MiB by this point. Read the rest when
+  it finishes and write the final numbers into [T-224](memory.md).
 
 ```bash
 pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.csv
@@ -360,7 +362,7 @@ gh run list --limit 1
    while it runs.
 
    **A six hour run started 2026-08-23T15:47:16Z was still going when this was
-   written**, at 329 samples and 2.92 hours, from a release build of `d3bc6a5`.
+   written**, at 351 samples and 3.12 hours, from a release build of `d3bc6a5`.
    **Check whether it is still running before doing anything else**, and if it
    is, leave it alone, read what it has, and go to item 3. A second soak
    started beside it shares the tracker and neither measures anything.
