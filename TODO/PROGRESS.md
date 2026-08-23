@@ -61,7 +61,7 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
   operator's word. The duration is not restated here:
   `scripts/session-report.ps1` derives it from the instant above, and a
   duration written down twice is a number two documents disagree about.
-- **Tests:** 1,266 passing, 0 failing. 1,228 at the start. Plus **149** in the
+- **Tests:** 1,271 passing, 0 failing. 1,228 at the start. Plus **149** in the
   vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
   do not run. The vendored count is unchanged by this session's patch, which
   was the point of running them.
@@ -75,19 +75,19 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green on all **nineteen** jobs at run **32647024856**, against commit
-  `f7668e2`, which closes [T-222](cli-surface.md) and [T-223](bench.md). The
-  run before it, **32645146193**, was red on `Test (windows-latest)` and that
-  is what T-223 is. One push follows this line and its run is not named here;
-  read the current one rather than trusting either.
+- **CI:** green on all **nineteen** jobs at run **32647972397**, against commit
+  `dd52713`, which closes [T-187](metainfo.md). Three runs this session and one
+  was red: **32645146193**, `Test (windows-latest)`, and that is what
+  [T-223](bench.md) is. One push follows this line and its run is not named
+  here; read the current one rather than trusting either.
 
 ```bash
 gh run list --limit 1
 ```
 
-- **Entries:** 172 items. 25 open, 1 partial, 0 blocked, 136 done, 10 deferred
-  to Phase C. 136 of 162 workable done, 26 left.
-- **Tree:** 96 Rust files, 56,600 lines of code, 14,305 of comment,
+- **Entries:** 172 items. 24 open, 1 partial, 0 blocked, 137 done, 10 deferred
+  to Phase C. 137 of 162 workable done, 25 left.
+- **Tree:** 96 Rust files, 56,704 lines of code, 14,358 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **28 patches**
   across twenty sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
@@ -96,7 +96,7 @@ gh run list --limit 1
 
 ## What the last session did
 
-**Four entries closed, two filed, and one corrected, and every one of them was
+**Five entries closed, two filed, and one corrected, and every one of them was
 found or shaped by running something rather than by reading it.** The operator
 ruled on the open question from the previous session, "build rather than
 delete", so the session opened with [T-219](cli-surface.md), item 2 of the
@@ -262,6 +262,24 @@ and fires on the one path where the raw components do reach it, `--index-out`.
 The entry names the two ways to close the rest and why neither is worth it for
 a P3 whose only cost is a missing `reasons` entry on a path that is correct.
 
+### [T-176](create-seed.md), P2, done, and the first entry this session whose premise held
+
+All three claims checked out against the tree before anything was written.
+`piece-count` fired above 100,000 and nothing below it, so the band from 65,536
+to 100,000 passed every check and produced a torrent µTorrent cannot open.
+`piece_length::validate` refused only zero, so `--piece-length 64MiB` was
+accepted in silence. And the collision check keyed one set on the lower-cased
+path, so two identical paths fired `case-collision` with a message about a
+casing difference that was not there.
+
+Ten lints to thirteen. `piece-count-unopenable` and `piece-length-too-large`
+are separate from the opinions beside them so the two clear independently, and
+the piece-length ceiling is read from `piece_length::MAX` rather than written
+again. `duplicate-path` splits off, and `case-collision` keeps its message.
+
+Five tests, and two of them assert what does **not** fire, which is the half
+the old code would have passed.
+
 ## In progress
 
 Nothing is half-written. All three entries are closed in [INDEX.md](INDEX.md)
@@ -302,17 +320,17 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 gh run list --limit 1
 ```
 
-2. **The effort S entries**, six left of the eight, and this is where the open
-   count comes down: [T-176](create-seed.md), [T-041](memory.md),
-   [T-165](peers.md), [T-033](performance.md), [T-008](webseed.md),
-   [T-103](bep-coverage.md). [T-187](metainfo.md) closed and
-   [T-173](metainfo.md) is open with its premise disproved and the seam named,
-   which is a smaller thing than the entry describes.
+2. **The effort S entries**, five left of the eight and all P2 or P3:
+   [T-041](memory.md), [T-165](peers.md), [T-033](performance.md),
+   [T-008](webseed.md), [T-103](bep-coverage.md). [T-176](create-seed.md) and
+   [T-187](metainfo.md) closed, and [T-173](metainfo.md) is open with its
+   premise disproved and the seam named, which is a smaller thing than the
+   entry describes.
 
-   **[T-176](create-seed.md) is the one to take first**, and it is the only P2
-   of the six: two of its three lints are the difference between a torrent that
-   opens everywhere and one that opens here, and the third is an error message
-   that says something false.
+   **[T-103](bep-coverage.md) is the one to take first** of the five: it is the
+   only one the ordering in [INDEX.md](INDEX.md) calls out as costing reach
+   today, because preferring the `.utf-8` spelling is a read-side rule rather
+   than the Shift-JIS work the entry leads with.
 
    **Check each against the tree before building.** That rule has now paid
    four sessions running and this session is the sharpest case yet: T-219's

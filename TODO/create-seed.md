@@ -577,7 +577,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    create
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T15:30Z
 
 Problem:     `bit-cli create` refuses on ten lints
              (`crates/bit-cli-core/src/torrent/lint.rs:26`):
@@ -655,3 +655,56 @@ Acceptance:  A payload producing 70,000 pieces fires the new lint and names
              `duplicate-path` and not `case-collision`; and two paths differing
              only in case still fire `case-collision`. Four cases, one test
              each, all clearable with `--allow`.
+
+**Done, and all three claims held against the tree**, which is the first entry
+this session where that was true. Checked before anything was written:
+`lint.rs` fired `piece-count` above 100,000 and nothing below it;
+`piece_length::validate` refused only zero while `MAX = 16 MiB` capped the
+automatic choice alone; and the collision check keyed one `BTreeSet` on the
+lower-cased path, so an exact duplicate fired `case-collision` with a message
+about case.
+
+**Two lints and one message split, ten lints to thirteen.**
+
+`piece-count-unopenable` fires above 65,535 and its message names µTorrent. It
+is a separate lint rather than a second threshold on `piece-count` because the
+two are different kinds of thing and clear independently: one is an opinion
+about how much hash data is reasonable, the other is a client that refuses the
+file. A caller who has decided to live with 200,000 pieces of hash data has not
+thereby decided to ship a torrent µTorrent cannot read.
+
+`piece-length-too-large` fires above `piece_length::MAX`, from the linter
+rather than from `validate`, so the "only zero is impossible" rule in that
+function stays true and the judgement stays where the rest of the judgement
+lives. The constant is read from `piece_length::MAX` rather than written again,
+so the automatic ceiling and the lint cannot drift.
+
+`duplicate-path` fires when the exact path repeats. Two sets rather than one,
+and `case-collision` keeps its message and now only fires when the paths
+actually differ.
+
+**Four cases, one test each, and two of them assert what does not fire**, which
+is the half that would have passed with the old code:
+
+| test | what it holds |
+| --- | --- |
+| `a_piece_count_above_65535_is_unopenable_and_says_so` | 70,000 pieces fires the new lint, **not** `piece-count`, and names µTorrent |
+| `the_two_piece_count_lints_clear_independently` | 120,000 fires both, and `--allow piece-count` leaves the other |
+| `a_piece_length_above_16_mib_is_reported` | 64 MiB fires it and exactly 16 MiB does not |
+| `two_identical_paths_are_a_duplicate_and_not_a_case_collision` | fires `duplicate-path`, not `case-collision`, and the message does not say "case" |
+| `two_paths_differing_only_in_case_still_collide` | the case that is a case collision still is one |
+
+```bash
+cargo test -p bit-cli-core --lib torrent::lint
+```
+
+**The manuals did not change and that is correct**: `--allow` takes a lint name
+as a free-form value rather than an enumerated one, so the surface is the same.
+The list a program reads is `bit-cli version --json` under `lints`, which
+reports thirteen now, and `README.md` gained a section saying why two of them
+are about what a recipient's client will refuse rather than about tidiness.
+
+**What was not taken.** `mkbrr`'s per-tracker piece-size ceilings, which the
+Approach names as where the 16 MiB number comes from in practice. That is a
+feature rather than a lint and the entry already said it was not proposed here.
+

@@ -1592,6 +1592,26 @@ which Windows is not, so they are exercised on Linux and here:
 cargo test -p bit-cli-core lint::
 ```
 
+Two paths that are byte-for-byte the same are `duplicate-path` rather than
+`case-collision`, because a message telling somebody to look for a casing
+difference that is not there costs more than no message.
+
+## Two lints are about what another client will refuse
+
+`piece-count-unopenable` and `piece-length-too-large` are not opinions about
+what is tidy. µTorrent will not open a torrent with more than 65,535 pieces,
+and piece lengths above 16 MiB have been reported to break clients, so a
+torrent that clears every other check can still be one a recipient cannot use.
+
+They are separate from `piece-count` and `piece-length-not-power-of-two`, which
+are opinions, and the split is so they clear independently: deciding to live
+with 200,000 pieces of hash data is not deciding to ship a file µTorrent cannot
+read.
+
+```bash
+bit-cli create ./payload --piece-length 64MiB --allow piece-length-too-large
+```
+
 ## Exit codes
 
 The exit code is the primary success signal. A caller branches on it without

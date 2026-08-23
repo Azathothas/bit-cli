@@ -28,8 +28,24 @@ pub enum Lint {
     PrivateNoTracker,
     /// The piece length yields a piece count that will hurt.
     PieceCount,
+    /// The piece count is above 65,535, which µTorrent will not open.
+    ///
+    /// Separate from [`Self::PieceCount`] on purpose, and the two thresholds
+    /// are different kinds of thing: that one is an opinion about how much
+    /// hash data is reasonable and this one is a client that refuses the file.
+    /// A caller who has decided to live with 200,000 pieces of hash data has
+    /// not thereby decided to ship a torrent µTorrent cannot read, so the two
+    /// clear independently. See `TODO/create-seed.md`, T-176.
+    PieceCountUnopenable,
     /// The piece length is not a power of two.
     PieceLengthNotPowerOfTwo,
+    /// The piece length is above 16 MiB, which has been reported to break
+    /// clients.
+    ///
+    /// The judgement lives here rather than in `piece_length::validate`,
+    /// which refuses only zero because only zero is impossible. See
+    /// `TODO/create-seed.md`, T-176.
+    PieceLengthTooLarge,
     /// The payload is empty.
     EmptyPayload,
     /// A file is empty. Legal, but it usually means a glob went wrong.
@@ -37,6 +53,14 @@ pub enum Lint {
     /// A path will not work on Windows: a reserved device name, a trailing dot
     /// or space, or a character NTFS refuses.
     WindowsPath,
+    /// Two files claim the exact same path, which makes the `files` list
+    /// invalid rather than merely awkward.
+    ///
+    /// Split from [`Self::CaseCollision`], which caught it by accident and
+    /// said the paths "differ only in case" when they were identical. A
+    /// reader then went looking for a casing difference that was not there.
+    /// See `TODO/create-seed.md`, T-176.
+    DuplicatePath,
     /// Two paths differ only in case, so they collide on a case-insensitive
     /// filesystem.
     CaseCollision,
@@ -54,10 +78,13 @@ impl Lint {
         match self {
             Self::PrivateNoTracker => "private-no-tracker",
             Self::PieceCount => "piece-count",
+            Self::PieceCountUnopenable => "piece-count-unopenable",
             Self::PieceLengthNotPowerOfTwo => "piece-length-not-power-of-two",
+            Self::PieceLengthTooLarge => "piece-length-too-large",
             Self::EmptyPayload => "empty-payload",
             Self::EmptyFile => "empty-file",
             Self::WindowsPath => "windows-path",
+            Self::DuplicatePath => "duplicate-path",
             Self::CaseCollision => "case-collision",
             Self::BadWebSeed => "bad-web-seed",
             Self::BadTracker => "bad-tracker",
@@ -72,10 +99,17 @@ impl Lint {
                 "A private torrent with no announce URL can never find a peer"
             }
             Self::PieceCount => "The piece length gives a piece count that will not work well",
+            Self::PieceCountUnopenable => {
+                "The piece count is above 65,535, which µTorrent will not open"
+            }
             Self::PieceLengthNotPowerOfTwo => "The piece length is not a power of two",
+            Self::PieceLengthTooLarge => {
+                "The piece length is above 16 MiB, which breaks some clients"
+            }
             Self::EmptyPayload => "The torrent contains no data",
             Self::EmptyFile => "The torrent contains a zero-length file",
             Self::WindowsPath => "A path cannot be written on Windows",
+            Self::DuplicatePath => "Two files in the torrent claim the same path",
             Self::CaseCollision => "Two paths differ only in case and collide on NTFS and APFS",
             Self::BadWebSeed => "A web seed URL is not an absolute http or https URL",
             Self::BadTracker => "A tracker URL uses a scheme clients do not announce to",
@@ -103,10 +137,13 @@ impl Lint {
     pub const ALL: &'static [Lint] = &[
         Self::PrivateNoTracker,
         Self::PieceCount,
+        Self::PieceCountUnopenable,
         Self::PieceLengthNotPowerOfTwo,
+        Self::PieceLengthTooLarge,
         Self::EmptyPayload,
         Self::EmptyFile,
         Self::WindowsPath,
+        Self::DuplicatePath,
         Self::CaseCollision,
         Self::BadWebSeed,
         Self::BadTracker,
@@ -168,7 +205,37 @@ pub fn check(candidate: &Candidate<'_>, allowed: &BTreeSet<Lint>) -> Vec<Finding
         );
     }
 
+    // A ceiling a client enforces, not an opinion about hash data. intermodal
+    // Issue 499 records that µTorrent refuses a torrent with more than 65,535
+    // pieces, so the band from 65,536 up to this repository's own 100,000
+    // threshold used to pass every check and produce a file µTorrent cannot
+    // open. See `TODO/create-seed.md`, T-176.
+    const UNOPENABLE_PIECES: u32 = 65_535;
+
+    // The practical ceiling on a piece length, from intermodal Issue 358.
+    // `piece_length::MAX` is the same number and caps only the **automatic**
+    // choice, so `--piece-length 64MiB` was accepted in silence.
+    let too_large = crate::torrent::piece_length::MAX;
+    if layout.piece_length > too_large {
+        fire(
+            Lint::PieceLengthTooLarge,
+            format!(
+                "piece length {} is above the {} clients are known to handle",
+                format_size(u64::from(layout.piece_length)),
+                format_size(u64::from(too_large))
+            ),
+        );
+    }
+
     let pieces = layout.piece_count();
+    if pieces > UNOPENABLE_PIECES {
+        fire(
+            Lint::PieceCountUnopenable,
+            format!(
+                "{pieces} pieces is above the {UNOPENABLE_PIECES} µTorrent will open; raise --piece-length"
+            ),
+        );
+    }
     if pieces > 100_000 {
         fire(
             Lint::PieceCount,
@@ -193,6 +260,7 @@ pub fn check(candidate: &Candidate<'_>, allowed: &BTreeSet<Lint>) -> Vec<Finding
     }
 
     let mut lowercased: BTreeSet<String> = BTreeSet::new();
+    let mut exact: BTreeSet<String> = BTreeSet::new();
     for file in &layout.files {
         let path = file.display_path();
         if file.length == 0 {
@@ -210,7 +278,16 @@ pub fn check(candidate: &Candidate<'_>, allowed: &BTreeSet<Lint>) -> Vec<Finding
                 ),
             );
         }
-        if !lowercased.insert(path.to_lowercase()) {
+        // Two sets, not one. Keying only on the lower-cased path caught an
+        // exact duplicate as well and told the reader the two paths "differ
+        // only in case", which is false when they are identical. See
+        // `TODO/create-seed.md`, T-176.
+        if !exact.insert(path.clone()) {
+            fire(
+                Lint::DuplicatePath,
+                format!("`{path}` is claimed by more than one file"),
+            );
+        } else if !lowercased.insert(path.to_lowercase()) {
             fire(
                 Lint::CaseCollision,
                 format!("`{path}` collides with another path that differs only in case"),
@@ -310,7 +387,7 @@ pub fn refuse(findings: &[Finding]) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::{GIB, MIB};
+    use crate::units::{GIB, KIB, MIB};
 
     fn layout(files: &[(&str, u64)], piece_length: u32) -> Layout {
         Layout::from_lengths(
@@ -541,5 +618,94 @@ mod tests {
         assert!(err.message().contains("empty-file"), "{}", err.message());
         assert!(err.message().contains("--allow"), "{}", err.message());
         assert_eq!(err.context()["lints"], serde_json::json!(["empty-file"]));
+    }
+
+    // ---------------------------------------------------------------------
+    // T-176: two lints for what a client refuses, and one message that was
+    // false. `TODO/create-seed.md` has the corpus references.
+    // ---------------------------------------------------------------------
+
+    /// The band between 65,536 pieces and this repository's own 100,000
+    /// threshold used to pass every check and produce a torrent µTorrent
+    /// cannot open.
+    #[test]
+    fn a_piece_count_above_65535_is_unopenable_and_says_so() {
+        // 70,000 pieces at 16 KiB, which is the band the entry names.
+        let layout = layout(&[("a.bin", 70_000 * 16 * KIB)], 16 * KIB as u32);
+        let findings = check_one(&layout, false, &[], &[]);
+        assert!(fired(&findings, Lint::PieceCountUnopenable), "{findings:?}");
+        // And the other threshold has not fired, because 70,000 is under it.
+        // That is the point of two lints: one is a client refusing the file
+        // and the other is an opinion about hash data.
+        assert!(!fired(&findings, Lint::PieceCount), "{findings:?}");
+        let message = findings
+            .iter()
+            .find(|f| f.lint == Lint::PieceCountUnopenable)
+            .map(|f| f.message.clone())
+            .unwrap_or_default();
+        assert!(message.contains("µTorrent"), "{message}");
+    }
+
+    /// Above 100,000 both fire, and clearing one leaves the other, which is
+    /// what "they clear independently" means.
+    #[test]
+    fn the_two_piece_count_lints_clear_independently() {
+        let layout = layout(&[("a.bin", 120_000 * 16 * KIB)], 16 * KIB as u32);
+        let findings = check_one(&layout, false, &[], &[]);
+        assert!(fired(&findings, Lint::PieceCountUnopenable), "{findings:?}");
+        assert!(fired(&findings, Lint::PieceCount), "{findings:?}");
+
+        let allowed = check(
+            &Candidate {
+                layout: &layout,
+                private: false,
+                trackers: &[],
+                web_seeds: &[],
+            },
+            &BTreeSet::from([Lint::PieceCount]),
+        );
+        assert!(fired(&allowed, Lint::PieceCountUnopenable), "{allowed:?}");
+        assert!(!fired(&allowed, Lint::PieceCount), "{allowed:?}");
+    }
+
+    /// `--piece-length 64MiB` was accepted in silence: `validate` refuses only
+    /// zero and `piece_length::MAX` caps only the automatic choice.
+    #[test]
+    fn a_piece_length_above_16_mib_is_reported() {
+        let too_large = layout(&[("a.bin", 4 * GIB)], 64 * MIB as u32);
+        let findings = check_one(&too_large, false, &[], &[]);
+        assert!(fired(&findings, Lint::PieceLengthTooLarge), "{findings:?}");
+        // And exactly 16 MiB is not too large, because the ceiling is the
+        // largest that works rather than the smallest that does not.
+        let at_the_ceiling = layout(&[("a.bin", 4 * GIB)], 16 * MIB as u32);
+        assert!(!fired(
+            &check_one(&at_the_ceiling, false, &[], &[]),
+            Lint::PieceLengthTooLarge
+        ));
+    }
+
+    /// Two identical paths are a duplicate, and the message no longer sends
+    /// the reader looking for a casing difference that is not there.
+    #[test]
+    fn two_identical_paths_are_a_duplicate_and_not_a_case_collision() {
+        let layout = layout(&[("dir/a.bin", MIB), ("dir/a.bin", MIB)], 256 * 1024);
+        let findings = check_one(&layout, false, &[], &[]);
+        assert!(fired(&findings, Lint::DuplicatePath), "{findings:?}");
+        assert!(!fired(&findings, Lint::CaseCollision), "{findings:?}");
+        let message = findings
+            .iter()
+            .find(|f| f.lint == Lint::DuplicatePath)
+            .map(|f| f.message.clone())
+            .unwrap_or_default();
+        assert!(!message.contains("case"), "{message}");
+    }
+
+    /// And the case that is a case collision still is one.
+    #[test]
+    fn two_paths_differing_only_in_case_still_collide() {
+        let layout = layout(&[("dir/README", MIB), ("dir/readme", MIB)], 256 * 1024);
+        let findings = check_one(&layout, false, &[], &[]);
+        assert!(fired(&findings, Lint::CaseCollision), "{findings:?}");
+        assert!(!fired(&findings, Lint::DuplicatePath), "{findings:?}");
     }
 }

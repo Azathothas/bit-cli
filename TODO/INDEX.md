@@ -154,7 +154,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-084](create-seed.md) | P0 | create | **done** | The create round trip has not been proven against another client |
 | [T-085](create-seed.md) | P1 | create | **done** | Creation determinism is not proven across platforms |
 | [T-175](create-seed.md) | P2 | create | open | create does not normalise NFD filenames |
-| [T-176](create-seed.md) | P2 | create | open | Three lints the corpus names are missing, and one message is wrong |
+| [T-176](create-seed.md) | P2 | create | **done** | Three lints the corpus names are missing, and one message is wrong |
 | [T-090](bench.md) | P0 | bench | done | bit-cli bench is not implemented |
 | [T-091](bench.md) | P0 | bench | **done** | Bench reports do not capture their environment |
 | [T-092](bench.md) | P1 | bench | done | bench swarm has no synthetic load generator |
@@ -250,7 +250,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 172 items: 162 to work through, and 10 deferred to Phase C.
-25 open, 1 partial, 0 blocked, 136 done.
+24 open, 1 partial, 0 blocked, 137 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -509,10 +509,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 60 | 61 |
-| P2 | 13 | 1 | 0 | 49 | 63 |
+| P2 | 12 | 1 | 0 | 50 | 63 |
 | P3 | 11 | 0 | 0 | 15 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **25** | **1** | **0** | **136** | **172** |
+| **All** | **24** | **1** | **0** | **137** | **172** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
