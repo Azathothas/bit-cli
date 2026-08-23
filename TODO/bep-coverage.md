@@ -267,8 +267,15 @@ the same fact as sending no bitfield at all. `reject request` releases the
 **whole piece** rather than the one chunk: a peer that will not serve one chunk
 of a piece is not about to serve the rest, and leaving the piece assigned to it
 stalls it just as long. `suggest piece` and `allowed fast` are understood,
-traced and not acted on, which is the posture `seedchamp` takes deliberately
-and which this entry already cited approvingly.
+traced and not acted on. That is **not** the posture this entry cited
+`seedchamp` for: seedchamp honours a `Suggest` in its picker and never sends
+one, which is the receive half acted on. This is the receive half **parsed**,
+which is a weaker thing and is worth being exact about. What it buys is that a
+peer sending either is no longer a protocol error, and what it does not buy is
+a picker that takes advice. A suggestion is advice about which piece to ask for
+and the picker here has its own order; an allowed-fast piece is one the peer
+would serve while choking, and nothing here chokes. Both would be worth acting
+on and neither is claimed to be.
 
 **One thing the send side forced.** BEP 6 makes the first message mandatory: a
 peer that negotiated it expects a bitfield, a have-all or a have-none before

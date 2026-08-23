@@ -122,12 +122,12 @@ impl<R: AsyncReadVectored + Unpin> AsyncReadVectored for Prefixed<R> {
 /// The write half.
 ///
 /// `poll_write` does not report a byte consumed until its ciphertext has
-/// reached the inner writer. Reporting earlier would be legal for
-/// `AsyncWrite`, and it is what the first draft did, but `librqbit` writes
-/// with `write_all` and never flushes: bytes left in a buffer here would sit
-/// there until the next message, and the peer would be waiting for them. The
-/// price is that this returns `Pending` under socket backpressure, which is
-/// the correct thing for it to do anyway.
+/// reached the inner writer. Reporting earlier and draining later is legal for
+/// `AsyncWrite` and is what a buffering writer normally does, and it is wrong
+/// here: `librqbit` writes with `write_all` and never flushes, so bytes left in
+/// a buffer would sit there until the next message while the peer waited for
+/// them. The price is that this returns `Pending` under socket backpressure,
+/// which is the correct thing for it to do anyway.
 pub struct EncryptedWrite<W> {
     inner: W,
     encrypt: Rc4,

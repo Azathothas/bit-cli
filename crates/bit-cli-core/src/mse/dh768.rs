@@ -39,8 +39,11 @@ const PRIME: U768 = [
 
 /// `-PRIME^-1 mod 2^64`, the Montgomery constant, by Newton iteration.
 ///
-/// Six doublings take the inverse from 2 bits to 64, which is why the loop
-/// count is six and not a guess.
+/// Each round doubles how many low bits of the inverse are correct, and the
+/// modulus is odd so the first is correct already: 1, 2, 4, 8, 16, 32, 64 is
+/// six rounds, which is why the loop count is six and not a guess.
+/// `the_montgomery_constants_are_what_they_claim` checks the result rather
+/// than the reasoning.
 const N0INV: u64 = {
     let mut inv: u64 = 1;
     let mut i = 0;

@@ -1015,9 +1015,13 @@ dependency was added and none of the corpus was copied.
 
 **One 768 bit exponentiation costs 51.4 microseconds** and a handshake needs
 two, so MSE adds about a tenth of a millisecond to a peer connection. The
-first draft used binary long division for the reduction, which is 1,536
-iterations per multiply against Montgomery's one pass; the measurement is the
-ignored `exponentiation_cost` test in `dh768.rs`.
+measurement is the ignored `exponentiation_cost` test in `dh768.rs`, which is
+there so a reader has a command rather than a remembered number.
+
+The reduction is Montgomery's. Both implementations this was read against use
+binary long division instead, which walks the 1,536 bits of the product once
+per multiply where Montgomery walks the twelve limbs once. No comparison
+between the two is claimed here, because only one of them was built.
 
 ```bash
 cargo test -p bit-cli-core --release --lib mse::dh768 -- --ignored --nocapture

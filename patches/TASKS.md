@@ -200,9 +200,9 @@ BitTorrent handshake crosses it. The implementation is
 `crates/bit-cli-core/src/mse/`, this repository's own code, where the gates
 reach it.
 
-If #633 lands, this seam is seven small hunks to weigh against it rather than a
-competing implementation, and `README.md`'s three questions can be answered
-then with the code in hand.
+If #633 lands, this seam is a change across seven files to weigh against it
+rather than a competing implementation, and `README.md`'s three questions can
+be answered then with the code in hand.
 
 **Nothing was copied.** `reference/FluxDown`'s `mse/` and
 `reference/mtorrent/mtorrent-core/src/pe/` were both read, and the protocol is

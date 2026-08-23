@@ -795,12 +795,15 @@ pub struct LimitArgs {
 
     /// Stop when the process holds more than this many handles. Off by default.
     ///
-    /// This is a backstop, not a tuning knob. A long `seed` run leaks a socket
-    /// for every peer that connects and closes before it handshakes, which is
-    /// upstream and measured in TODO/peers.md under T-020. Nothing here closes
-    /// those sockets, so a supervised deployment sets this and gets a loud
-    /// exit 16 and a restart instead of a process that quietly runs the
-    /// machine out of descriptors.
+    /// This is a backstop, not a tuning knob. A supervised deployment sets it
+    /// and gets a loud exit 16 and a restart instead of a process that quietly
+    /// runs the machine out of descriptors.
+    ///
+    /// It was written for a specific leak, one socket per peer that connected
+    /// and closed before handshaking, which `TODO/peers.md` T-020 measured and
+    /// which is fixed: six hours of `scripts/soak.ps1` see zero sockets in
+    /// `CLOSE_WAIT` at every sample. A backstop for a defect that is fixed
+    /// still earns its place, because the next one has not been found yet.
     ///
     /// Counted against the whole process, so it includes threads, sockets, and
     /// payload files. Read `cost` in the report for a healthy baseline before
@@ -1468,17 +1471,21 @@ pub struct SeedArgs {
     ///
     /// A seeder that cannot be handshaked is down, and nothing a supervisor
     /// normally watches says so: the process is alive, the port is open, and
-    /// the ratio still gets reported. `librqbit` 9.0.0's accept loop clears
-    /// one queued handshake check per connection it accepts, so a run of
-    /// peers that close before they handshake leaves a backlog and every peer
-    /// after it waits behind one. Twenty were enough to stop a seeder serving
-    /// anybody. See `TODO/peers.md`, T-020.
+    /// the ratio still gets reported.
+    ///
+    /// The failure it was written for is fixed. `librqbit` 9.0.0's accept loop
+    /// disabled its own drain arm on the first handshake check that errored,
+    /// so a run of peers closing before they handshook left a backlog and
+    /// twenty were enough to stop a seeder serving anybody; the vendored tree
+    /// handles every outcome and the backlog clears in one connection. See
+    /// `TODO/peers.md`, T-020. What the check is for now is the general
+    /// question rather than that one answer: whether this process still
+    /// answers a handshake.
     ///
     /// Each check dials this run's own listen port over loopback and completes
     /// a real handshake for a torrent it is serving. Three failures in a row
     /// stop the run with `"stopped": "listener_unhealthy"` and exit 17, which
-    /// is a restart a supervisor can act on. A check that is answered clears
-    /// one entry off the backlog, so this also costs the session one peer row
+    /// is a restart a supervisor can act on. It costs the session one peer row
     /// per check, which is dropped from the reported peer list and never
     /// counted as a swarm member.
     #[arg(long, value_name = "DUR")]

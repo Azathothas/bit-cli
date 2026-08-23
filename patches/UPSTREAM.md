@@ -163,7 +163,7 @@ pwsh -NoProfile -File scripts/check-bitfield.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-139 upstream tests pass, one of them new:
+139 upstream tests passed when this landed, one of them new:
 `test_bitfield_larger_than_max_msg_len` in `peer_binary_protocol`, which asserts
 that the fixed buffer refuses a 131,961 piece bitfield and a sized one round
 trips it.
@@ -697,7 +697,7 @@ appearing is the pass, and both need the bitfield to have crossed:
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-140 upstream tests pass, one of them new:
+140 upstream tests passed when this landed, one of them new:
 `test_read_buf_grows_for_a_message_larger_than_itself`, which asserts both
 directions, that the message is refused with the default bound and read with a
 raised one.
@@ -896,7 +896,10 @@ never advertised the extension cannot be sent one.
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-143 upstream tests pass, three of them new.
+143 upstream tests passed when this landed, three of them new. The
+current total is on `PROGRESS.md`'s state line: a number stated here is what
+it was on the day, because a section that quotes a moving total is a number
+two files disagree about.
 
 **What is proved and what is not.** The message round trips on the wire and is
 dispatched to a handler that clears the bit. It is not yet proved end to end,
@@ -1008,9 +1011,9 @@ whether to take upstream's shape from
 is the paragraph above: their shape puts the whole implementation in the tree
 this repository has to reconcile, and reconciling somebody else's crypto on
 every release is a cost paid forever for a feature that already works. If that
-pull request lands, this seam is seven small hunks to weigh against it rather
-than a competing implementation, and the decision can be taken then with the
-code in hand.
+pull request lands, this seam is a change across seven files to weigh against
+it rather than a competing implementation, and the decision can be taken then
+with the code in hand.
 
 **How it was measured.** `scripts/check-encryption.ps1`, seven phases, three
 seeders differing only in `--encryption`, and two of the seven are controls
@@ -1076,11 +1079,12 @@ leaving the piece assigned to it stalls it just as long.
 chunks without sending a `Cancel` back for each, which would be noise addressed
 to the peer that just refused.
 
-`suggest piece` and `allowed fast` are understood, traced and not acted on.
-That is a posture rather than an omission: a suggestion is advice about which
-piece to ask for and this picker has its own order, and an allowed-fast piece
-is one the peer would serve while choking, and nothing here chokes. `seedchamp`
-takes the same one deliberately.
+`suggest piece` and `allowed fast` are understood, traced and not acted on. A
+suggestion is advice about which piece to ask for and this picker has its own
+order, and an allowed-fast piece is one the peer would serve while choking, and
+nothing here chokes. Both would be worth acting on and neither is claimed to
+be: what this buys is that a peer sending either is no longer a protocol
+error.
 
 **The send side, and one thing it forced.** BEP 6 makes the first message
 mandatory: a peer that negotiated it expects a bitfield, a have-all or a
@@ -1097,9 +1101,9 @@ extension was negotiated, where it used to end the connection. Asking a partial
 seed for a piece it does not hold is a normal thing to do.
 
 **Why it has to be here.** The message ids are a private `const` block in
-`peer_binary_protocol` and the `Message` enum is closed, so a dependent crate
-cannot construct one; the reserved bit is set inside `Handshake::new`; and the
-receive side is a private method on a private type. T-100 recorded this as
+`peer_binary_protocol` and `Message` had no variant for any of the five, which
+a dependent crate cannot add; the reserved bit is set inside `Handshake::new`;
+and the receive side is a private method on a private type. T-100 recorded this as
 "part three, blocked, upstream" and named these exact two files.
 
 **A dead test found on the way, and it had been dead for a session.**

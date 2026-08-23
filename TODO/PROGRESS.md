@@ -54,8 +54,8 @@ than on anything here, which is what vendoring it was for.
   [`patches/TASKS.md`](../patches/TASKS.md) in order from section 3, MSE, which
   the session before it was told to leave alone. The session before ran
   2026-08-22T16:41:28Z to 23:05Z, unattended, 6h 24m.
-- **Tests:** 1,131 passing, 0 failing. 1,126 at the start. Plus **142** in the
-  vendored trees, which the workspace gates do not run, up from 139.
+- **Tests:** 1,165 passing, 0 failing. 1,131 at the start. Plus **149** in the
+  vendored trees, which the workspace gates do not run, up from 142.
 - **Gates:** clean, and they have a `record` gate now.
 
 ```bash
