@@ -73,6 +73,17 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - run: pwsh -NoProfile -File scripts/check-todo.ps1
 
+  # A soak report has to say when its slope is fitted across a step. Both
+  # fixtures are a committed CSV and a generated one, so this needs no
+  # toolchain and no clock, and it runs beside `record` rather than in `test`
+  # for that reason. See TODO/memory.md, T-224.
+  soak-fit:
+    name: Soak fit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: pwsh -NoProfile -File scripts/check-soak-fit.ps1
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

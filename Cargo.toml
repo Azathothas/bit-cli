@@ -27,6 +27,10 @@ clap = { version = "4.6.1", features = ["derive", "env", "wrap_help", "string"] 
 clap_complete = "4.6.1"
 clap_complete_nushell = "4.6.1"
 clap_mangen = "0.3.3"
+# The same decoder the vendored `librqbit` names a torrent's files with, so
+# a report and the run it describes cannot disagree. See `TODO/bep-coverage.md`,
+# T-103. Already in the graph through `librqbit-core`.
+encoding_rs = "0.8"
 globset = "0.4.19"
 hdrhistogram = { version = "7.5.5", default-features = false }
 ignore = "0.4.24"

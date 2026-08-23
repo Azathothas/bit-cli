@@ -293,6 +293,70 @@ impl TorrentFixture {
         }
     }
 
+    /// A torrent whose `name` and `path` are cp932, with the `.utf-8` twins a
+    /// uTorrent-created torrent carries beside them.
+    ///
+    /// The cp932 bytes are the ones `chardetng` reads as windows-1252, so
+    /// detection alone names the file `‹È.bin` and only the `.utf-8` key gets
+    /// `曲.bin`. That is the shape T-103 is about, and it is written as bytes
+    /// rather than encoded here because this repository has no cp932 encoder
+    /// and does not need one to read a torrent that has one.
+    ///
+    /// The payload is placed under the **decoded** names, because that is what
+    /// a mirror carrying this torrent's files has.
+    pub fn names_that_are_not_utf8() -> Self {
+        use std::collections::BTreeMap;
+
+        use bit_cli_core::torrent::bencode::{Value, encode};
+        use sha1::{Digest, Sha1};
+
+        const PIECE_LENGTH: usize = 1024;
+        // `音楽` and `曲.bin` in cp932.
+        const NAME: &[u8] = &[0x89, 0xB9, 0x8A, 0x79];
+        const PATH: &[u8] = &[0x8B, 0xC8, b'.', b'b', b'i', b'n'];
+
+        let payload = vec![0xD1u8; 1500];
+        let mut pieces = Vec::new();
+        for chunk in payload.chunks(PIECE_LENGTH) {
+            pieces.extend_from_slice(&Sha1::digest(chunk));
+        }
+
+        let file = Value::Dict(BTreeMap::from([
+            (b"length".to_vec(), Value::Int(payload.len() as i64)),
+            (
+                b"path".to_vec(),
+                Value::List(vec![Value::Bytes(PATH.to_vec())]),
+            ),
+            (
+                b"path.utf-8".to_vec(),
+                Value::List(vec![Value::text("曲.bin")]),
+            ),
+        ]));
+        let info = Value::Dict(BTreeMap::from([
+            (b"files".to_vec(), Value::List(vec![file])),
+            (b"name".to_vec(), Value::Bytes(NAME.to_vec())),
+            (b"name.utf-8".to_vec(), Value::text("音楽")),
+            (b"piece length".to_vec(), Value::Int(PIECE_LENGTH as i64)),
+            (b"pieces".to_vec(), Value::Bytes(pieces)),
+        ]));
+        let bytes = encode(&Value::Dict(BTreeMap::from([(b"info".to_vec(), info)])));
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().to_path_buf();
+        let torrent = root.join("names.torrent");
+        std::fs::write(&torrent, &bytes).expect("write torrent");
+
+        Self {
+            _temp: temp,
+            name: "音楽".to_string(),
+            multi_file: true,
+            root,
+            torrent,
+            info_hash: Metainfo::parse(&bytes).expect("parse").info_hash().hex(),
+            files: vec![("曲.bin".to_string(), payload)],
+        }
+    }
+
     /// [`Self::single_file`] with both web seed keys rewritten as a **bare
     /// bencoded string** rather than a list.
     ///

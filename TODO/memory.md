@@ -885,3 +885,105 @@ failed.**
 
 The run is `bench/soak-20260823T090132499Z.csv` and its summary is the `.json`
 beside it, both committed.
+
+## Half of the Acceptance is met, 2026-08-23T17:10Z, and the step did not reproduce
+
+The entry stays open, because the Acceptance has two halves joined by "and"
+and only the first is finished. What the second half now has is a measurement
+rather than a plan.
+
+### The first half is built: a report says when its slope spans a step
+
+`Get-Slope` reports `largest_rise`, `largest_rise_hours`, `largest_fall`,
+`largest_fall_hours` and `step_share` beside the fit, and the table a run
+prints carries the first three. Reading the committed run's `rss_bytes` line
+is now the whole of what this entry had to be computed by hand to say:
+
+```
+series      first   last    max per hour   r2 step up at h step down unit
+rss_bytes   13.55  35.18  39.20     3.71 0.72   11.61 1.16     -7.23 MiB
+```
+
+**`step_share` is reported and is not the number to read first.** It is
+`largest_rise` over the run's whole rise, 0.537 here, and it reads just as
+high on a short run that barely moved, where it means nothing. The magnitude
+is what separates a step from a sawtooth. The JSON notes say so where a reader
+of the report will meet it.
+
+**`soak.ps1 -ReadCsv <csv>` re-reads a finished run** through that same
+`Get-Slope`, printing the table and writing nothing, and `-ReadJson <path>`
+writes the fits beside it. A soak is six hours and its numbers are read many
+times afterwards; until now there was no way to read one except by fitting a
+line by hand, which is how this entry was written.
+
+That block sits above the `trap`, above every `Start-Child`, and above the
+`Get-NetTCPConnection` platform guard, and each of those matters: `exit` at
+script scope is a terminating error the trap rethrows, a read-only mode below
+the seeder is a soak with a report on the end of it, and the check below runs
+on Linux in CI. It was written below all three to begin with.
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T090132499Z.csv
+```
+
+`scripts/check-soak-fit.ps1` is the acceptance, and it is a CI job, `Soak fit`,
+because both fixtures are a CSV rather than a clock. Three cases: the mode
+runs and prints the columns; the committed run's step is over 8 MiB, lands
+between `t+1.0` and `t+1.3`, and is more than two hours' worth of the fitted
+slope; and a generated series rising 128 KiB every sample, at four times the
+slope and with no step, reports a largest rise of exactly one increment. That
+third case is what stops the column being the slope reported twice.
+
+**Every number it asserts on comes from `soak.ps1 -ReadJson`.** The check was
+written computing its own fit first, which would have passed against a
+`soak.ps1` that reported nothing.
+
+**Run against the defect**: with the largest-rise walk disabled, the step case
+fails on all three of its assertions and the other two still pass.
+
+```bash
+pwsh -NoProfile -File scripts/check-soak-fit.ps1
+```
+
+### The second half: the step did not happen again
+
+The operator's reproduction run, `bench/soak-20260823T154716064Z`, started
+2026-08-23T15:47:16Z from a release build of `d3bc6a5`, same workload and same
+leech rate. It crossed `t+1.161h` and **nothing stepped**:
+
+| | committed, 09:01:32Z | reproduction, 15:47:16Z |
+| --- | --- | --- |
+| samples read | 681 over 5.992 h | 161 over 1.39 h |
+| `rss_bytes` first, last | 13.55, 35.18 MiB | 13.95, 15.57 MiB |
+| slope | 3.708 MiB/h, r2 0.717 | 1.074 MiB/h, r2 0.609 |
+| largest single rise | **11.61 MiB at t+1.161 h** | **1.48 MiB at t+1.187 h** |
+| largest single fall | -7.23 MiB | -1.30 MiB |
+| rss at t+1.3 h | 27.09 MiB | 16.22 MiB |
+
+**So the step is not a property of the elapsed time or of the cycle count.**
+The entry's Approach guessed "whatever the vendored session allocates lazily
+on a threshold it crosses at around 260 completed torrents", and a second run
+at the same rate reaching the same point without allocating it rules that out
+as stated.
+
+**And the two runs agree on what the tree actually does.** The reproduction's
+whole-run slope, 1.074 MiB/h, is the committed run's **pre-step** slope, 1.020.
+The number this entry says is the honest one is the number a second run
+produces on its own.
+
+### What is left, and it is smaller than the entry
+
+The Acceptance's second half asks for the cause named with a file, **or** two
+runs at different leech rates showing the step is not tied to completed work.
+One run at the same rate is not the second of those. What would close it is
+one more run with `-Leechers` changed, which is the operator's to start for
+the reason every soak is:
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 120 -Leechers 4 -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
+```
+
+The reproduction was still running when this was written, at 161 samples of
+its 360 minutes, so it may yet step later at a point neither run has reached.
+That would be a different finding from the one filed, and the column now
+reports it without anybody fitting a line by hand.

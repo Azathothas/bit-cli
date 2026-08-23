@@ -79,7 +79,16 @@ param(
     [string]$ReportDir = "bench",
     [ValidateSet("debug", "release")]
     [string]$Profile = "release",
-    [switch]$Keep
+    [switch]$Keep,
+    # Read a CSV a finished run left behind and print its fits, without
+    # starting anything. A soak is six hours and its numbers are read many
+    # times after it, most recently by hand into TODO/memory.md, T-224. Every
+    # other parameter but -ReadJson is ignored.
+    [string]$ReadCsv,
+    # Where -ReadCsv writes the same fits as JSON. The table beside it is for a
+    # person; this is what scripts/check-soak-fit.ps1 asserts on, so the check
+    # reads this script's own numbers rather than computing its own.
+    [string]$ReadJson
 )
 
 $ErrorActionPreference = 'Stop'
@@ -116,6 +125,149 @@ function Stop-Background {
         }
     }
     $script:Background = @()
+}
+
+# ---------------------------------------------------------------------------
+# Slopes
+# ---------------------------------------------------------------------------
+#
+# Least squares against elapsed hours, so the slope reads as "per hour" and a
+# six-hour run and a twenty-minute one are comparable. R squared is reported
+# beside it because a slope through noise is not a trend, and the two numbers
+# together are what say whether the line is real.
+#
+# They are still not enough, and the run of 2026-08-23T09:01:32Z is why. Its
+# `rss_bytes` slope was 3.708 MiB/h at r squared 0.717, against a ceiling of 4,
+# and that line was fitted across a single interval where resident memory rose
+# 11.61 MiB in eight seconds and never came back. Either side of it the slope
+# is 1.02 and 1.69. A fit describes a trend; nothing in a slope and an r
+# squared can say that most of the run's rise arrived at once, and a reader
+# with only those two numbers reads a step as growth.
+#
+# So the largest single-interval change in each direction is reported beside
+# the fit, with when it happened, and `step_share` is what fraction of the
+# run's whole rise that one interval carried. `step_share` reads high on a
+# short run with little total movement, where it means nothing; it is the
+# **magnitude** that separates a step from a sawtooth, and both are printed.
+# See `TODO/memory.md`, T-224.
+
+function Get-Slope($rows, $column) {
+    $n = $rows.Count
+    if ($n -lt 2) { return $null }
+    $sumX = 0.0; $sumY = 0.0; $sumXY = 0.0; $sumXX = 0.0
+    foreach ($row in $rows) {
+        $x = [double]$row.elapsed_s / 3600.0
+        $y = [double]$row.$column
+        $sumX += $x; $sumY += $y; $sumXY += ($x * $y); $sumXX += ($x * $x)
+    }
+    $denominator = ($n * $sumXX) - ($sumX * $sumX)
+    if ([math]::Abs($denominator) -lt 1e-12) { return $null }
+    $slope = (($n * $sumXY) - ($sumX * $sumY)) / $denominator
+    $intercept = ($sumY - ($slope * $sumX)) / $n
+    $meanY = $sumY / $n
+    $ssTot = 0.0; $ssRes = 0.0
+    foreach ($row in $rows) {
+        $x = [double]$row.elapsed_s / 3600.0
+        $y = [double]$row.$column
+        $ssTot += [math]::Pow($y - $meanY, 2)
+        $ssRes += [math]::Pow($y - ($intercept + ($slope * $x)), 2)
+    }
+    $r2 = if ($ssTot -gt 0) { 1.0 - ($ssRes / $ssTot) } else { $null }
+    $values = @($rows | ForEach-Object { [double]$_.$column })
+
+    # The largest move between two consecutive samples, each way, and when.
+    # Walked once over the same rows the fit used, so the two cannot describe
+    # different windows.
+    $largestRise = 0.0; $largestRiseAt = $null
+    $largestFall = 0.0; $largestFallAt = $null
+    for ($i = 1; $i -lt $n; $i++) {
+        $delta = $values[$i] - $values[$i - 1]
+        $at = [double]$rows[$i].elapsed_s / 3600.0
+        if ($delta -gt $largestRise) { $largestRise = $delta; $largestRiseAt = $at }
+        if ($delta -lt $largestFall) { $largestFall = $delta; $largestFallAt = $at }
+    }
+    $totalRise = $values[$n - 1] - $values[0]
+    $stepShare = if ($totalRise -gt 0) { [math]::Round($largestRise / $totalRise, 3) } else { $null }
+
+    [ordered]@{
+        column             = $column
+        samples            = $n
+        first              = $values[0]
+        last               = $values[$n - 1]
+        min                = ($values | Measure-Object -Minimum).Minimum
+        max                = ($values | Measure-Object -Maximum).Maximum
+        mean               = [math]::Round(($values | Measure-Object -Average).Average, 2)
+        slope_per_hour     = [math]::Round($slope, 3)
+        r_squared          = if ($null -eq $r2) { $null } else { [math]::Round($r2, 4) }
+        largest_rise       = $largestRise
+        largest_rise_hours = if ($null -eq $largestRiseAt) { $null } else { [math]::Round($largestRiseAt, 3) }
+        largest_fall       = $largestFall
+        largest_fall_hours = if ($null -eq $largestFallAt) { $null } else { [math]::Round($largestFallAt, 3) }
+        step_share         = $stepShare
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Reading a run that already happened
+# ---------------------------------------------------------------------------
+#
+# Placed immediately after Get-Slope and before four things, each of which
+# would break it in a different way. Before the `trap`, because `exit` at
+# script scope is a terminating error and the trap rethrows it. Before every
+# `Start-Child`, because a read-only mode below those is a soak with a report
+# on the end of it. Before the `Get-NetTCPConnection` platform guard, because
+# reading a CSV needs no sockets and `scripts/check-soak-fit.ps1` runs this on
+# Linux in CI. And after `Get-Slope`, because the table has to be the one a
+# live run prints, from the same function, so a number read here and a number
+# read there cannot differ.
+
+if ($ReadCsv) {
+    if (-not (Test-Path $ReadCsv)) { Exit-With 2 "no such CSV: $ReadCsv" }
+    $read = @(Import-Csv $ReadCsv)
+    if ($read.Count -lt 2) { Exit-With 2 "$ReadCsv has $($read.Count) sample(s), which fits nothing" }
+    $readHours = [double]$read[-1].elapsed_s / 3600.0
+
+    Write-Host ""
+    Write-Host "csv:       $ReadCsv"
+    Write-Host "samples:   $($read.Count) over $([math]::Round($readHours, 3)) hours"
+    Write-Host ""
+    $readRows = [System.Collections.ArrayList]::new()
+    $readFits = [ordered]@{}
+    foreach ($column in @("rss_bytes", "peak_rss_bytes", "handles", "threads",
+            "tcp_total", "tcp_close_wait", "tcp_established")) {
+        $entry = Get-Slope $read $column
+        if (-not $entry) { continue }
+        $readFits[$column] = $entry
+        $scale = if ($column -like "*rss*") { 1MB } else { 1 }
+        $unit = if ($column -like "*rss*") { "MiB" } else { "" }
+        [void]$readRows.Add([pscustomobject][ordered]@{
+                series      = $column
+                first       = [math]::Round($entry.first / $scale, 2)
+                last        = [math]::Round($entry.last / $scale, 2)
+                max         = [math]::Round($entry.max / $scale, 2)
+                "per hour"  = [math]::Round($entry.slope_per_hour / $scale, 3)
+                "r2"        = $entry.r_squared
+                "step up"   = [math]::Round($entry.largest_rise / $scale, 2)
+                "at h"      = $entry.largest_rise_hours
+                "step down" = [math]::Round($entry.largest_fall / $scale, 2)
+                unit        = $unit
+            })
+    }
+    $readRows | Format-Table -AutoSize | Out-String | Write-Host
+    if ($ReadJson) {
+        $readReport = [ordered]@{
+            kind         = "soak_read"
+            generated_at = Get-Timestamp
+            csv          = $ReadCsv
+            samples      = $read.Count
+            hours        = [math]::Round($readHours, 4)
+            slopes       = $readFits
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $repo $ReadJson)) | Out-Null
+        $readReport | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $repo $ReadJson) -Encoding utf8
+        Write-Host "soak: wrote $ReadJson"
+    }
+    exit 0
 }
 
 trap { Stop-Background; throw }
@@ -295,51 +447,6 @@ function Start-Churn {
     } "churn"
 }
 
-# ---------------------------------------------------------------------------
-# Slopes
-# ---------------------------------------------------------------------------
-#
-# Least squares against elapsed hours, so the slope reads as "per hour" and a
-# six-hour run and a twenty-minute one are comparable. R squared is reported
-# beside it because a slope through noise is not a trend, and the two numbers
-# together are what say whether the line is real.
-
-function Get-Slope($rows, $column) {
-    $n = $rows.Count
-    if ($n -lt 2) { return $null }
-    $sumX = 0.0; $sumY = 0.0; $sumXY = 0.0; $sumXX = 0.0
-    foreach ($row in $rows) {
-        $x = [double]$row.elapsed_s / 3600.0
-        $y = [double]$row.$column
-        $sumX += $x; $sumY += $y; $sumXY += ($x * $y); $sumXX += ($x * $x)
-    }
-    $denominator = ($n * $sumXX) - ($sumX * $sumX)
-    if ([math]::Abs($denominator) -lt 1e-12) { return $null }
-    $slope = (($n * $sumXY) - ($sumX * $sumY)) / $denominator
-    $intercept = ($sumY - ($slope * $sumX)) / $n
-    $meanY = $sumY / $n
-    $ssTot = 0.0; $ssRes = 0.0
-    foreach ($row in $rows) {
-        $x = [double]$row.elapsed_s / 3600.0
-        $y = [double]$row.$column
-        $ssTot += [math]::Pow($y - $meanY, 2)
-        $ssRes += [math]::Pow($y - ($intercept + ($slope * $x)), 2)
-    }
-    $r2 = if ($ssTot -gt 0) { 1.0 - ($ssRes / $ssTot) } else { $null }
-    $values = @($rows | ForEach-Object { [double]$_.$column })
-    [ordered]@{
-        column         = $column
-        samples        = $n
-        first          = $values[0]
-        last           = $values[$n - 1]
-        min            = ($values | Measure-Object -Minimum).Minimum
-        max            = ($values | Measure-Object -Maximum).Maximum
-        mean           = [math]::Round(($values | Measure-Object -Average).Average, 2)
-        slope_per_hour = [math]::Round($slope, 3)
-        r_squared      = if ($null -eq $r2) { $null } else { [math]::Round($r2, 4) }
-    }
-}
-
 # What the seeder says it cost, so the sampler can be checked against the
 # subject. A sampler that disagrees with the process is measuring something
 # else.
@@ -494,6 +601,7 @@ function Write-SoakSummary([bool]$Complete) {
         notes            = @(
             "The subject is the seeder. rss_bytes and handles are read from outside with Get-Process, and the seeder's own progress events carry the same two figures, so self_reported is the cross-check rather than a second measurement.",
             "slope_per_hour is least squares against elapsed hours. r_squared beside it says whether the line is a trend or noise: a large slope with a low r squared is a spike, not growth.",
+            "largest_rise and largest_fall are the biggest move between two consecutive samples, with the elapsed hour each happened at, and step_share is largest_rise over the run's whole rise. They are here because a slope and an r squared cannot say that a fit spans a step: the run of 2026-08-23T09:01:32Z read 3.708 MiB/h at r squared 0.717 across one interval that rose 11.61 MiB and never came back. Read the magnitude first; step_share is high and meaningless on a run that barely moved. See TODO/memory.md, T-224.",
             "peak_rss_bytes is a high-water mark rather than a level, so its slope is bounded below by zero and says nothing on its own. rss_bytes is the series that can fall as well as rise, and it is the one a leak shows in.",
             "The loopback tracker never expires a peer, so under -Workload announce or all the peer list handed to the seeder grows for the whole run. That is deliberate: it is the shape a busy tracker has, and it is the path T-040's report points at.",
             "complete is false while the run is still sampling. This file is rewritten after every sample, so a run that is killed leaves the report it had reached rather than nothing at all."
@@ -648,12 +756,15 @@ Write-Host ""
     $entry = $slopes[$_]
     if (-not $entry) { return }
     [pscustomobject][ordered]@{
-        series     = $_
-        first      = $entry.first
-        last       = $entry.last
-        max        = $entry.max
-        "per hour" = $entry.slope_per_hour
-        "r2"       = $entry.r_squared
+        series      = $_
+        first       = $entry.first
+        last        = $entry.last
+        max         = $entry.max
+        "per hour"  = $entry.slope_per_hour
+        "r2"        = $entry.r_squared
+        "step up"   = $entry.largest_rise
+        "at h"      = $entry.largest_rise_hours
+        "step down" = $entry.largest_fall
     }
 } | Format-Table -AutoSize | Out-String | Write-Host
 Write-Host "leech cycles: $leechDone completed, $leechFailed failed. churn bursts: $churnRuns."

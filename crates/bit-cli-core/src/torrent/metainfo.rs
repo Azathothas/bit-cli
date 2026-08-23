@@ -140,6 +140,53 @@ pub struct Info {
     pub source: Option<String>,
     /// Whether a BEP 52 `meta version` key is present, and its value.
     pub meta_version: Option<i64>,
+    /// How the names above were decoded. See [`NameEncoding`].
+    pub name_encoding: NameEncoding,
+}
+
+/// How a torrent's `name` and `path` keys were turned into text.
+///
+/// BEP 3 does not say what encoding a name is in, and real torrents carry
+/// Shift-JIS, CP1251 and worse. Two rules decide it, in this order, and both
+/// are the vendored `librqbit`'s so that what this reports and what a run
+/// writes to disk cannot disagree. See `TODO/bep-coverage.md`, T-103.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct NameEncoding {
+    /// The encoding detected over the raw `name` and `path` bytes, by WHATWG
+    /// label: `UTF-8` for a torrent written the ordinary way.
+    pub detected: &'static str,
+    /// Whether a `.utf-8` key was present, held valid UTF-8, and was preferred
+    /// over the raw key beside it.
+    pub utf8_keys: bool,
+}
+
+impl Default for NameEncoding {
+    fn default() -> Self {
+        Self {
+            detected: "UTF-8",
+            utf8_keys: false,
+        }
+    }
+}
+
+impl NameEncoding {
+    /// Whether this says anything a reader of an ordinary torrent needs.
+    ///
+    /// A torrent whose names are UTF-8 and which carries no `.utf-8` key had
+    /// nothing decided about it, and a line saying so on every report would be
+    /// noise on almost every torrent there is.
+    pub fn is_plain(&self) -> bool {
+        self.detected == "UTF-8" && !self.utf8_keys
+    }
+
+    /// One line for a terminal.
+    pub fn describe(&self) -> String {
+        match (self.utf8_keys, self.detected) {
+            (true, "UTF-8") => "UTF-8, from the `.utf-8` keys".to_string(),
+            (true, other) => format!("UTF-8, from the `.utf-8` keys; the raw keys are {other}"),
+            (false, other) => format!("{other}, detected"),
+        }
+    }
 }
 
 impl Info {
@@ -354,8 +401,15 @@ impl Metainfo {
     }
 
     /// The `comment` field.
+    ///
+    /// `comment.utf-8` wins where a creator wrote both, on the same rule the
+    /// names follow. parse-torrent
+    /// [issue 177](https://github.com/webtorrent/parse-torrent/issues/177) is
+    /// where that key is recorded. See `TODO/bep-coverage.md`, T-103.
     pub fn comment(&self) -> Option<String> {
-        self.root.get("comment").and_then(Value::as_text)
+        utf8_twin(self.root.get("comment.utf-8"))
+            .and_then(|twin| twin.into_iter().next())
+            .or_else(|| self.root.get("comment").and_then(Value::as_text))
     }
 
     /// The `created by` field.
@@ -441,6 +495,57 @@ impl Metainfo {
     }
 }
 
+/// The `.utf-8` twin of a name or a path, when there is one and it holds what
+/// it says it holds.
+///
+/// uTorrent writes `name` in the creator's local encoding and `name.utf-8`
+/// beside it, and the same per file. Neither key is in BEP 3 and both are
+/// universal in practice, so the rule every other reader settled on is the one
+/// used here: if the `.utf-8` variant exists, prefer it. A variant that is not
+/// valid UTF-8 is a creator that wrote the key without meaning it, and the raw
+/// key with the detected encoding is the better answer for that torrent.
+fn utf8_twin(value: Option<&Value>) -> Option<Vec<String>> {
+    let parts: Vec<&[u8]> = match value? {
+        Value::Bytes(bytes) => vec![bytes.as_slice()],
+        Value::List(items) => items.iter().map(Value::as_bytes).collect::<Option<_>>()?,
+        _ => return None,
+    };
+    if parts.is_empty() {
+        return None;
+    }
+    parts
+        .into_iter()
+        .map(|part| std::str::from_utf8(part).ok().map(str::to_string))
+        .collect()
+}
+
+/// Every raw `name` and `path` byte string in an `info` dictionary, in the
+/// order the detector is fed them.
+///
+/// The `.utf-8` twins are left out on purpose: they are UTF-8 by definition,
+/// so feeding them would let a correctly written twin talk the detector out of
+/// the encoding the raw keys are actually in.
+fn raw_name_bytes(info: &Value) -> Vec<&[u8]> {
+    let mut parts: Vec<&[u8]> = Vec::new();
+    if let Some(name) = info.get("name").and_then(Value::as_bytes) {
+        parts.push(name);
+    }
+    if let Some(files) = info.get("files").and_then(Value::as_list) {
+        for file in files {
+            let Some(components) = file.get("path").and_then(Value::as_list) else {
+                continue;
+            };
+            parts.extend(components.iter().filter_map(Value::as_bytes));
+        }
+    }
+    parts
+}
+
+/// Decode one raw byte string with an encoding, the way the run does.
+fn decode_with(encoding: &'static encoding_rs::Encoding, bytes: &[u8]) -> String {
+    encoding.decode(bytes).0.into_owned()
+}
+
 fn parse_info(root: &Value) -> Result<Info> {
     let info = root
         .get("info")
@@ -450,10 +555,24 @@ fn parse_info(root: &Value) -> Result<Info> {
             .with("key", key.to_string())
     };
 
-    let name = info
-        .get("name")
-        .and_then(Value::as_text)
-        .ok_or_else(|| missing("name"))?;
+    // The encoding is settled before anything is decoded, because it is
+    // detected over the whole dictionary rather than per key, and because the
+    // vendored `librqbit` settles it the same way over the same bytes. Two
+    // decoders that disagree are what T-103 was filed about.
+    let detected = librqbit_core::torrent_metainfo::detect_encoding_of(raw_name_bytes(info));
+    let mut utf8_keys = false;
+
+    let name = match utf8_twin(info.get("name.utf-8")) {
+        Some(twin) => {
+            utf8_keys = true;
+            twin.into_iter().next().unwrap_or_default()
+        }
+        None => info
+            .get("name")
+            .and_then(Value::as_bytes)
+            .map(|bytes| decode_with(detected, bytes))
+            .ok_or_else(|| missing("name"))?,
+    };
     let piece_length = info
         .get("piece length")
         .and_then(Value::as_int)
@@ -491,11 +610,24 @@ fn parse_info(root: &Value) -> Result<Info> {
                     .get("length")
                     .and_then(Value::as_int)
                     .ok_or_else(|| Error::source_resolution("a file entry has no `length`"))?;
-                let path: Vec<String> = entry
-                    .get("path")
-                    .map(Value::as_text_list)
-                    .filter(|p| !p.is_empty())
-                    .ok_or_else(|| Error::source_resolution("a file entry has no `path`"))?;
+                let path: Vec<String> = match utf8_twin(entry.get("path.utf-8")) {
+                    Some(twin) => {
+                        utf8_keys = true;
+                        twin
+                    }
+                    None => entry
+                        .get("path")
+                        .and_then(Value::as_list)
+                        .map(|components| {
+                            components
+                                .iter()
+                                .filter_map(Value::as_bytes)
+                                .map(|bytes| decode_with(detected, bytes))
+                                .collect::<Vec<String>>()
+                        })
+                        .filter(|p: &Vec<String>| !p.is_empty())
+                        .ok_or_else(|| Error::source_resolution("a file entry has no `path`"))?,
+                };
                 files.push(InfoFile {
                     path,
                     length: u64::try_from(length).map_err(|_| {
@@ -549,6 +681,10 @@ fn parse_info(root: &Value) -> Result<Info> {
             .is_some_and(|v| v != 0),
         source: info.get("source").and_then(Value::as_text),
         meta_version: info.get("meta version").and_then(Value::as_int),
+        name_encoding: NameEncoding {
+            detected: detected.name(),
+            utf8_keys,
+        },
     })
 }
 
@@ -945,5 +1081,228 @@ mod tests {
             meta.creation_date().unwrap().iso(),
             "2026-08-19T11:52:03.000Z"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // T-103: what a name that is not UTF-8 becomes.
+    //
+    // Every case below is checked against the vendored `librqbit` as well as
+    // against a literal, by `the_two_decoders_in_this_tree_agree`. Two
+    // decoders is what the entry was filed about: this parser used
+    // `String::from_utf8_lossy` and the session named the same files through
+    // `librqbit`'s detected encoding, so `info`, `files` and `webseed list`
+    // described a torrent the same run then wrote under different names.
+    // ---------------------------------------------------------------------
+
+    /// The cp932 bytes for the text, which is what a Japanese creator's
+    /// torrent carries where BEP 3 says nothing about encoding.
+    fn cp932(text: &str) -> Vec<u8> {
+        const TABLE: &[(&str, &[u8])] = &[
+            ("音楽", &[0x89, 0xB9, 0x8A, 0x79]),
+            ("曲.bin", &[0x8B, 0xC8, b'.', b'b', b'i', b'n']),
+            (
+                "フォルダ",
+                &[0x83, 0x74, 0x83, 0x48, 0x83, 0x8B, 0x83, 0x5F],
+            ),
+            (
+                "ファイル.bin",
+                &[
+                    0x83, 0x74, 0x83, 0x40, 0x83, 0x43, 0x83, 0x8B, b'.', b'b', b'i', b'n',
+                ],
+            ),
+            ("あ.bin", &[0x82, 0xA0, b'.', b'b', b'i', b'n']),
+            ("い.bin", &[0x82, 0xA2, b'.', b'b', b'i', b'n']),
+        ];
+        TABLE
+            .iter()
+            .find(|(key, _)| *key == text)
+            .map(|(_, bytes)| bytes.to_vec())
+            .unwrap_or_else(|| panic!("no cp932 bytes recorded for {text}"))
+    }
+
+    /// A multi-file torrent whose `name` and `path` are raw bytes, with the
+    /// `.utf-8` twins written beside them when `twins` says so.
+    fn raw_names(name: &[u8], path: &[u8], twins: Option<(&str, &str)>) -> Vec<u8> {
+        let mut file = vec![
+            ("length", Value::Int(1000)),
+            ("path", Value::List(vec![Value::Bytes(path.to_vec())])),
+        ];
+        let mut info = vec![
+            ("name", Value::Bytes(name.to_vec())),
+            ("piece length", Value::Int(1024)),
+            ("pieces", Value::Bytes(vec![0u8; 20])),
+        ];
+        if let Some((name_utf8, path_utf8)) = twins {
+            info.push(("name.utf-8", Value::text(name_utf8)));
+            file.push(("path.utf-8", Value::List(vec![Value::text(path_utf8)])));
+        }
+        info.push(("files", Value::List(vec![dict(file)])));
+        bencode::encode(&dict(vec![("info", dict(info))]))
+    }
+
+    #[test]
+    fn a_name_that_is_not_utf8_is_decoded_rather_than_replaced() {
+        let bytes = raw_names(&cp932("フォルダ"), &cp932("ファイル.bin"), None);
+        let meta = Metainfo::parse(&bytes).expect("parses");
+        assert_eq!(meta.info().name, "フォルダ");
+        assert_eq!(meta.info().files[0].path, vec!["ファイル.bin".to_string()]);
+        assert_eq!(meta.info().name_encoding.detected, "Shift_JIS");
+        assert!(!meta.info().name_encoding.utf8_keys);
+    }
+
+    /// The half of T-103 that is worth the most, and the reason it is a rule
+    /// rather than a better detector. `音楽` in cp932 is four bytes that
+    /// `chardetng` reads as windows-1252, so detection alone produces `‰¹Šy`.
+    /// The creator wrote the answer down in `name.utf-8` and this prefers it.
+    #[test]
+    fn the_utf8_keys_win_where_detection_alone_is_wrong() {
+        let name = cp932("音楽");
+        let path = cp932("曲.bin");
+
+        let detected_only = Metainfo::parse(&raw_names(&name, &path, None)).expect("parses");
+        assert_eq!(detected_only.info().name_encoding.detected, "windows-1252");
+        assert_eq!(detected_only.info().name, "‰¹Šy");
+
+        let with_twins =
+            Metainfo::parse(&raw_names(&name, &path, Some(("音楽", "曲.bin")))).expect("parses");
+        assert_eq!(with_twins.info().name, "音楽");
+        assert_eq!(with_twins.info().files[0].path, vec!["曲.bin".to_string()]);
+        assert!(with_twins.info().name_encoding.utf8_keys);
+    }
+
+    /// A `.utf-8` key that does not hold UTF-8 is a creator that wrote the key
+    /// without meaning it, and trusting it would be worse than the raw key.
+    #[test]
+    fn a_utf8_key_that_is_not_utf8_is_not_preferred() {
+        let name = cp932("フォルダ");
+        let path = cp932("ファイル.bin");
+        let mut info = vec![
+            ("name", Value::Bytes(name.clone())),
+            // The same cp932 bytes, under the key that promises UTF-8.
+            ("name.utf-8", Value::Bytes(name)),
+            ("piece length", Value::Int(1024)),
+            ("pieces", Value::Bytes(vec![0u8; 20])),
+            (
+                "files",
+                Value::List(vec![dict(vec![
+                    ("length", Value::Int(1000)),
+                    ("path", Value::List(vec![Value::Bytes(path.clone())])),
+                    ("path.utf-8", Value::List(vec![Value::Bytes(path)])),
+                ])]),
+            ),
+        ];
+        info.sort_by_key(|(k, _)| *k);
+        let bytes = bencode::encode(&dict(vec![("info", dict(info))]));
+        let meta = Metainfo::parse(&bytes).expect("parses");
+        assert!(!meta.info().name_encoding.utf8_keys);
+        assert_eq!(meta.info().name, "フォルダ");
+    }
+
+    /// Two files whose raw bytes differ used to decode to the same string of
+    /// replacement characters, so `files` reported one path twice and nothing
+    /// downstream could tell them apart.
+    #[test]
+    fn two_paths_that_differ_in_the_raw_bytes_stay_two_paths() {
+        let bytes = bencode::encode(&dict(vec![(
+            "info",
+            dict(vec![
+                (
+                    "files",
+                    Value::List(vec![
+                        dict(vec![
+                            ("length", Value::Int(1000)),
+                            ("path", Value::List(vec![Value::Bytes(cp932("あ.bin"))])),
+                        ]),
+                        dict(vec![
+                            ("length", Value::Int(1000)),
+                            ("path", Value::List(vec![Value::Bytes(cp932("い.bin"))])),
+                        ]),
+                    ]),
+                ),
+                ("name", Value::text("collide")),
+                ("piece length", Value::Int(1024)),
+                ("pieces", Value::Bytes(vec![0u8; 40])),
+            ]),
+        )]));
+        let meta = Metainfo::parse(&bytes).expect("parses");
+        let paths: Vec<&String> = meta.info().files.iter().map(|f| &f.path[0]).collect();
+        assert_ne!(paths[0], paths[1], "two files decoded to one path");
+    }
+
+    /// The ordinary torrent says nothing, because a line on every report about
+    /// an encoding nobody chose is noise.
+    #[test]
+    fn a_plain_utf8_torrent_reports_no_name_encoding() {
+        let meta = Metainfo::parse(&multi_file()).expect("parses");
+        assert!(meta.info().name_encoding.is_plain());
+    }
+
+    #[test]
+    fn comment_utf8_wins_over_comment() {
+        let bytes = bencode::encode(&dict(vec![
+            ("comment", Value::Bytes(vec![0xC0, 0xEE])),
+            ("comment.utf-8", Value::text("сообщение")),
+            (
+                "info",
+                dict(vec![
+                    ("length", Value::Int(1000)),
+                    ("name", Value::text("payload.bin")),
+                    ("piece length", Value::Int(1024)),
+                    ("pieces", Value::Bytes(vec![0u8; 20])),
+                ]),
+            ),
+        ]));
+        let meta = Metainfo::parse(&bytes).expect("parses");
+        assert_eq!(meta.comment().as_deref(), Some("сообщение"));
+    }
+
+    /// The test the entry exists for: this parser and the one the session
+    /// downloads through must name the same file the same way, on the same
+    /// bytes. Anything else and `files` describes a torrent the run does not
+    /// write. It is asserted over every shape above rather than one, because
+    /// the two implementations are separate and only a comparison keeps them
+    /// together.
+    #[test]
+    fn the_two_decoders_in_this_tree_agree() {
+        let cases: Vec<(&str, Vec<u8>)> = vec![
+            ("plain", multi_file()),
+            (
+                "shift-jis",
+                raw_names(&cp932("フォルダ"), &cp932("ファイル.bin"), None),
+            ),
+            (
+                "detection is wrong",
+                raw_names(&cp932("音楽"), &cp932("曲.bin"), None),
+            ),
+            (
+                "the utf-8 keys",
+                raw_names(&cp932("音楽"), &cp932("曲.bin"), Some(("音楽", "曲.bin"))),
+            ),
+        ];
+        for (label, bytes) in cases {
+            let ours = Metainfo::parse(&bytes).expect("parses here");
+            let theirs = librqbit_core::torrent_metainfo::torrent_from_bytes(&bytes)
+                .expect("parses there")
+                .info
+                .data
+                .validate()
+                .expect("validates");
+
+            let their_paths: Vec<Vec<String>> = theirs
+                .iter_file_details()
+                .map(|file| file.filename.to_vec())
+                .collect();
+            let our_paths: Vec<Vec<String>> =
+                ours.info().files.iter().map(|f| f.path.clone()).collect();
+            assert_eq!(our_paths, their_paths, "{label}: file paths disagree");
+
+            if ours.info().multi_file {
+                assert_eq!(
+                    Some(ours.info().name.as_str()),
+                    theirs.name().as_deref(),
+                    "{label}: torrent names disagree"
+                );
+            }
+        }
     }
 }

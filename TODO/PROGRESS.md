@@ -57,10 +57,10 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-23T13:20:47Z, unattended, and it was ended on the
-  operator's word. The duration is not restated here:
-  `scripts/session-report.ps1` derives it from the instant above, and a
-  duration written down twice is a number two documents disagree about.
+- **Last session:** 2026-08-23T16:18:55Z, unattended, and running now. The
+  duration is not restated here: `scripts/session-report.ps1` derives it from
+  the instant above, and a duration written down twice is a number two
+  documents disagree about.
 - **Tests:** 1,271 passing, 0 failing. 1,228 at the start. Plus **149** in the
   vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
   do not run. The vendored count is unchanged by this session's patch, which
@@ -102,14 +102,34 @@ pwsh -NoProfile -Command "Get-Content bench/soak-20260823T154716064Z.json | Conv
 gh run list --limit 1
 ```
 
-- **Entries:** 174 items. 25 open, 1 partial, 0 blocked, 138 done, 10 deferred
-  to Phase C. 138 of 164 workable done, 26 left.
+- **Entries:** 175 items. 25 open, 1 partial, 0 blocked, 139 done, 10 deferred
+  to Phase C. 139 of 165 workable done, 26 left.
 - **Tree:** 96 Rust files, 56,704 lines of code, 14,358 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
-- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **28 patches**
-  across twenty sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
+- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **31 patches**
+  across twenty-one sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
   `scripts/vendor-status.ps1` exits 0.
 - **Version:** `bit-cli` 0.2.0, unchanged.
+
+## What this session is doing
+
+Written before the work, by [RULES.md](RULES.md) section 1 step 4. It is
+replaced by "What the last session did" when the session ends.
+
+1. Baseline re-measured: gates clean at 1,271 tests on rustc 1.98.0,
+   `check-todo.ps1` agrees, and CI run **32650336109** is green against
+   `0ad5792`. The commit after it, `e756289`, carries a CI skip marker.
+2. **The soak that was running is left alone.** It was 61 samples and 0.53
+   hours in at 16:18:59Z. It crosses `t+1.161h` at about 16:57Z, which is when
+   [T-224](memory.md)'s question can be answered from its CSV.
+3. **[T-103](bep-coverage.md)**, the effort S entry item 3 of the last order
+   names first. Measure before building: what `crates/bit-cli-core/src/torrent/
+   metainfo.rs` does with a non-UTF-8 `path`, and whether `name.utf-8` and
+   `path.utf-8` are read at all.
+4. **[T-224](memory.md)**'s cheap half, `scripts/soak.ps1` reporting a step
+   rather than one linear fit, which is also what reads item 2's run.
+5. The rest of the effort S list: [T-041](memory.md), [T-165](peers.md),
+   [T-033](performance.md), [T-008](webseed.md).
 
 ## What the last session did
 

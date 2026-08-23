@@ -52,6 +52,26 @@ pub struct Report {
     /// dropped. See `TODO/metainfo.md`, T-172.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encoding: Option<bit_cli_core::torrent::bencode::Encoding>,
+    /// How this torrent's `name` and `path` keys were turned into text.
+    ///
+    /// Absent for the ordinary torrent, whose names are UTF-8 and where there
+    /// was nothing to choose. Present when the names were decoded through a
+    /// detected encoding, or when a `.utf-8` key was preferred over the raw
+    /// key beside it. Either way the same rule named the files this run would
+    /// write, so this is what the paths above are in rather than a guess about
+    /// them. See `TODO/bep-coverage.md`, T-103.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_encoding: Option<bit_cli_core::torrent::NameEncoding>,
+}
+
+/// The name encoding, when it says something the ordinary torrent's does not.
+///
+/// Shared by `info` and `files` so the two cannot start disagreeing about when
+/// the line is worth printing. See `TODO/bep-coverage.md`, T-103.
+pub fn reportable_name_encoding(
+    encoding: bit_cli_core::torrent::NameEncoding,
+) -> Option<bit_cli_core::torrent::NameEncoding> {
+    (!encoding.is_plain()).then_some(encoding)
 }
 
 impl Report {
@@ -83,6 +103,7 @@ impl Report {
                 true => None,
                 false => Some(meta.encoding().clone()),
             },
+            name_encoding: reportable_name_encoding(info.name_encoding),
         }
     }
 
@@ -103,6 +124,9 @@ impl Report {
             ),
             field("private", self.private),
         ];
+        if let Some(encoding) = &self.name_encoding {
+            out.push(field("names", encoding.describe()));
+        }
         if let Some(comment) = &self.comment {
             out.push(field("comment", comment));
         }
@@ -161,6 +185,35 @@ pub fn run(
 mod tests {
     use super::*;
     use crate::test_support::{TorrentFixture, run_ok};
+
+    /// `TODO/bep-coverage.md`, T-103. The names in this torrent are cp932 and
+    /// the report used to show one replacement character per byte, while the
+    /// same run wrote the files under the decoded names. Both halves are
+    /// asserted: the name, and the line that says how it was arrived at.
+    #[test]
+    fn a_torrent_whose_names_are_not_utf8_reports_them_and_says_how() {
+        let fixture = TorrentFixture::names_that_are_not_utf8();
+        let doc = crate::test_support::run_json(&["info", fixture.path_str()], fixture.dir());
+        assert_eq!(doc["name"], "音楽");
+        assert_eq!(doc["name_encoding"]["utf8_keys"], true);
+        assert_eq!(doc["name_encoding"]["detected"], "windows-1252");
+
+        let text = run_ok(&["info", fixture.path_str()], fixture.dir());
+        assert!(text.contains("音楽"), "{text}");
+        assert!(text.contains("`.utf-8` keys"), "{text}");
+    }
+
+    /// The other half of the same rule: an ordinary torrent says nothing,
+    /// because a line about an encoding nobody chose is noise on every report.
+    #[test]
+    fn an_ordinary_torrent_carries_no_name_encoding() {
+        let fixture = TorrentFixture::multi_file();
+        let doc = crate::test_support::run_json(&["info", fixture.path_str()], fixture.dir());
+        assert!(
+            doc.get("name_encoding").is_none(),
+            "a plain UTF-8 torrent reported an encoding: {doc}"
+        );
+    }
 
     /// A torrent written the way uTorrent/2210 wrote the one in intermodal
     /// issue 454: keys out of order, and a trailing newline for good measure.

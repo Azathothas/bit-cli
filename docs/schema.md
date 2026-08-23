@@ -68,6 +68,8 @@ From `bit-cli info <TORRENT> --json`.
 | `magnet` | string |
 | `multi_file` | bool |
 | `name` | string |
+| `name_encoding.detected` | string |
+| `name_encoding.utf8_keys` | bool |
 | `nodes[]` | array |
 | `piece_count` | integer |
 | `piece_length.bytes` | integer |
@@ -77,6 +79,7 @@ From `bit-cli info <TORRENT> --json`.
 | `source_kind` | string |
 | `total.bytes` | integer |
 | `total.human` | string |
+| `trackers[]` | array |
 | `trackers[][]` | string |
 | `web_seeds[]` | string |
 
@@ -112,6 +115,8 @@ From `bit-cli files <TORRENT> --json`.
 | `info_hash` | string |
 | `kind` | string |
 | `name` | string |
+| `name_encoding.detected` | string |
+| `name_encoding.utf8_keys` | bool |
 | `schema_version` | string |
 | `total.bytes` | integer |
 | `total.human` | string |

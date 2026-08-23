@@ -513,7 +513,7 @@ Source:      https://github.com/ikatson/rqbit/issues/452 (closed, 2025-07-09)
 Category:    bep
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T17:10Z
 
 Problem:     `add_torrent` failed with "cannot decode filename bit as UTF-8" on
              a torrent with a non-UTF-8 path.
@@ -559,6 +559,137 @@ prefer the `.utf-8` variants on read (small, and the win is immediate), and
 decide what a non-UTF-8 path becomes on the way to a filesystem and to a
 percent-encoded URL (larger, and it interacts with the path planner
 [T-071](windows.md) already built).
+
+**Done 2026-08-23T17:10Z, and the entry's own title is what the measurement
+disproved.** Nothing is refused. Every fixture below parses, exits 0, and
+reports a name. The defect is different and worse than a refusal: **this tree
+had two decoders and the reports used the wrong one.**
+
+`crates/bit-cli-core/src/torrent/bencode.rs`'s `Value::as_text` decoded with
+`String::from_utf8_lossy`, and `info`, `files`, `magnet` and `webseed list`
+all read through it. The session that actually downloads reads through the
+vendored `librqbit`, whose `detect_encoding` runs `chardetng`. So the two
+disagreed on every torrent whose names are not UTF-8, and both were reachable
+from one run.
+
+**Measured before anything was written**, on a torrent with `name` `フォルダ`
+and `path` `ファイル.bin` in cp932, served from `loopback-fileserver`:
+
+| what said it | said |
+| --- | --- |
+| `bit-cli info`, `name` | `�t�H���_` |
+| `bit-cli files`, `path` | `�t�@�C��.bin` |
+| `bit-cli webseed list`, the URL | `/%EF%BF%BD%EF%BF%BD.../%EF%BF%BD....bin` |
+| `bit-cli download`, `name` | `フォルダ` |
+| the URL that run requested | `/%E3%83%95%E3%82%A9%E3%83%AB%E3%83%80/...` |
+| what landed on disk | `フォルダ/ファイル.bin` |
+
+**`webseed list` is the sharp one.** `man/bit-cli.json` describes it as
+"Resolve every binding and print the exact URL each file maps to", with no
+network. For this torrent it printed a URL of `%EF%BF%BD` runs, which is a 404
+on every mirror there is, and which is not the URL the same binary requested
+thirty seconds later. That is this tool's reason for existing answering
+incorrectly.
+
+**Two files collapsed onto one path.** `あ.bin` and `い.bin` in cp932 are
+distinct byte strings that `from_utf8_lossy` maps to the same `��.bin`, so
+`files` listed one path twice and nothing downstream could tell the two apart.
+
+### What was built
+
+**One decoding rule, in one place, called from both sides.** The vendored
+`detect_encoding` keeps its behaviour and loses its body to
+`detect_encoding_of`, a free function over an iterator of byte slices;
+`bit-cli`'s `parse_info` calls the same function over the same raw `name` and
+`path` bytes. Agreement is by construction rather than by care.
+
+**The `.utf-8` keys are preferred, on both sides.** uTorrent writes `name` in
+the creator's local encoding and `name.utf-8` beside it, and the same per
+file; intermodal [issue 534](https://github.com/casey/intermodal/issues/534)
+is the report and preferring the twin is what anacrolix's `Info.BestName()`
+and `parse-torrent` already do. `Metainfo` reads `name.utf-8`, `path.utf-8`
+and `comment.utf-8`, and the vendored `TorrentMetaV1Info` and
+`TorrentMetaV1File` gained `name_utf8` and `path_utf8` so the download names
+files the same way. A twin that is not valid UTF-8 is ignored, because a
+creator who wrote the key without meaning it has said nothing.
+
+Doing only the outside half would have re-created the defect with the sides
+swapped. `patches/UPSTREAM.md` carries the section.
+
+**The detector is fed the raw keys only.** A correctly written `.utf-8` twin
+would otherwise talk `chardetng` out of the encoding the raw keys are in.
+
+**`info` and `files` say which encoding named the files**, which is the last
+line of the Acceptance. `name_encoding` carries `detected`, a WHATWG label,
+and `utf8_keys`, and it is **absent** on a torrent whose names are UTF-8 and
+which had nothing to choose, because a line on every report about a decision
+nobody made is noise. `docs/schema.md` documents both fields, and
+`schema_gen.rs` drives the new fixture so they are covered rather than
+described.
+
+### Why the `.utf-8` rule is a rule and not a better detector
+
+`chardetng` is right often enough that one example proves nothing, so fourteen
+names across six encodings were tried and **the guess was wrong for six**:
+
+```
+cp932   音楽      -> ‰¹Šy      windows-1252
+cp932   ＡＢＣ    -> 俙俛俠     GBK
+big5    測試      -> 덜먼       EUC-KR
+cp932   release / 字.bin   -> release / Žš.bin   windows-1252
+cp1251  release / я.bin    -> release / ÿ.bin    windows-1252
+big5    release / 檔.bin   -> release / 읠.bin   EUC-KR
+```
+
+The last three are the common real shape and the worst case: an ASCII release
+name dominates the detector's input, and every non-ASCII filename under it
+comes out wrong. The `.utf-8` key is written down rather than guessed, which
+is why it wins.
+
+`音楽` with `曲.bin` is the committed fixture,
+`TorrentFixture::names_that_are_not_utf8`, for exactly that reason: detection
+alone gives `‰¹Šy` and `‹È.bin`, and the twins give the right answer.
+
+### What holds it
+
+Eight cases in `crates/bit-cli-core/src/torrent/metainfo.rs` and four across
+`info`, `files` and `webseed list`. The one that matters most is
+`the_two_decoders_in_this_tree_agree`: it parses the same bytes with both
+implementations and compares every file path and the torrent name over four
+shapes. **Run against the defect**, with the multi-file half of the vendored
+patch reverted, it fails and names both sides:
+
+```
+the utf-8 keys: file paths disagree
+  left: [["曲.bin"]]
+ right: [["‹È.bin"]]
+```
+
+```bash
+cargo test -p bit-cli-core --lib torrent::metainfo
+```
+
+```bash
+cargo test -p bit-cli --lib a_url_is_composed_from_the_decoded_path
+```
+
+Upstream's own tests were run because the change is in their tree: 149
+passing, unchanged.
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+```
+
+### What is not closed, and it is not this entry
+
+The second half the entry splits itself into, "what a non-UTF-8 path becomes
+on the way to a filesystem", is closed for the reporting side and was never
+open for the writing side: the path planner already folds and disambiguates,
+and the two cp932 names that used to collide now decode to distinct strings,
+so they land as two files rather than one plus a rename. What remains is that
+a wrong detection produces a wrong-but-reversible name on disk, and no rule
+can do better without a key the torrent does not carry. That is the case the
+`.utf-8` preference exists for.
 
 ### T-167 BEP 54 lt_donthave is not implemented
 

@@ -152,6 +152,13 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
     let dir = fixture.dir();
     let payload = fixture.payload_dir();
 
+    // A second torrent, for the fields only a torrent whose names are not
+    // UTF-8 produces. Both runs merge into the same document kind, so this
+    // costs two commands and documents two fields that `multi_file` can never
+    // reach. See `TODO/bep-coverage.md`, T-103.
+    let named = TorrentFixture::names_that_are_not_utf8();
+    let named_torrent = named.path_str().to_string();
+
     // The commands that touch nothing.
     for (label, args) in [
         (
@@ -165,6 +172,14 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         (
             "bit-cli files <TORRENT> --against <OTHER> --json",
             vec!["--json", "files", &torrent, "--against", &torrent],
+        ),
+        (
+            "bit-cli info <TORRENT> --json, where the names are not UTF-8",
+            vec!["--json", "info", &named_torrent],
+        ),
+        (
+            "bit-cli files <TORRENT> --json, where the names are not UTF-8",
+            vec!["--json", "files", &named_torrent],
         ),
         (
             "bit-cli magnet <TORRENT> --json",

@@ -946,6 +946,35 @@ mod tests {
     use crate::test_support::{TorrentFixture, run_err, run_json, run_json_code, run_ok};
     use bit_cli_core::ExitCode;
 
+    /// `TODO/bep-coverage.md`, T-103, and the half that costs bytes rather
+    /// than legibility. `webseed list` exists to print the exact URL each file
+    /// maps to, and this torrent's names are not UTF-8. Composing from the
+    /// lossy decode produced a path of `%EF%BF%BD` runs, which is a 404 on
+    /// every mirror there is, and which is not what the same run requested.
+    #[test]
+    fn a_url_is_composed_from_the_decoded_path_rather_than_the_lossy_one() {
+        let fixture = TorrentFixture::names_that_are_not_utf8();
+        let doc = run_json(
+            &[
+                "webseed",
+                "list",
+                fixture.path_str(),
+                "--web-seed",
+                "https://mirror.example.com/pub/",
+            ],
+            fixture.dir(),
+        );
+        let url = doc["sources"][0]["urls"][0]["url"].as_str().expect("a URL");
+        assert_eq!(
+            url,
+            "https://mirror.example.com/pub/%E9%9F%B3%E6%A5%BD/%E6%9B%B2.bin"
+        );
+        assert!(
+            !url.contains("%EF%BF%BD"),
+            "the URL carries a replacement character: {url}"
+        );
+    }
+
     #[test]
     fn list_resolves_the_torrents_own_web_seed_by_default() {
         let fixture = TorrentFixture::multi_file();

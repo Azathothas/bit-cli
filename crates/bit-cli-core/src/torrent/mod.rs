@@ -16,4 +16,4 @@ pub mod piece_length;
 pub use create::{CreateOptions, Created, InputFile};
 pub use lint::Lint;
 pub use magnet::Magnet;
-pub use metainfo::{Info, InfoFile, InfoHash, Metainfo};
+pub use metainfo::{Info, InfoFile, InfoHash, Metainfo, NameEncoding};

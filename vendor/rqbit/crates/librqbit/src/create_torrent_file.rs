@@ -135,6 +135,9 @@ async fn create_torrent_raw<'a>(
                 output_files.push(TorrentMetaV1File {
                     length,
                     path,
+                    // Nothing created here needs a `.utf-8` twin: the raw key
+                    // is already UTF-8. See `TODO/bep-coverage.md`, T-103.
+                    path_utf8: None,
                     attr: None,
                     sha1: None,
                     symlink_path: None,
@@ -160,6 +163,7 @@ async fn create_torrent_raw<'a>(
     Ok(CreateTorrentRawResult {
         info: TorrentMetaV1Info {
             name: Some(name),
+            name_utf8: None,
             pieces: piece_hashes.into(),
             piece_length,
             length: if single_file_mode { Some(length) } else { None },

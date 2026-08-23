@@ -1547,7 +1547,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1296` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1311` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -3670,3 +3670,81 @@ reported against the flag rather than against the file it came from: the
 message names `--max-peers` and not `bit-cli.toml`. `--trace config` shows the
 origin of every value, which is the answer, but the error itself does not carry
 it.
+
+### T-226 `download --out` is parsed and never read
+
+Source:      measured while opening T-103, 2026-08-23
+Category:    cli
+Priority:    P1
+Effort:      S
+Status:      open
+
+Problem:     `bit-cli download -o/--out <PATH>` is declared at
+             `crates/bit-cli/src/cli.rs:934` as
+             `SelectionArgs::out: Option<PathBuf>` and **nothing in the
+             workspace reads it**. A run passes it and the payload lands where
+             it would have landed anyway: under the download directory, in a
+             directory named after the torrent.
+Relevance:   It is the sixth entry of the flag-does-nothing shape, after
+             [T-181](#t-181-four-flags-are-accepted-in-silence-and-reach-no-code),
+             T-183, T-185, [T-219](#t-219-ten-of-the-eleven-trace-subsystems-raise-a-target-nothing-writes-to)
+             and [T-222](#t-222-a-config-file-reaches-config-show-and-nothing-else),
+             and it is the plainest of the six: the field has no reader at
+             all, where T-222's had one and T-219's names raised a target.
+
+             `man/bit-cli.json` documents it as "Write the payload here
+             instead of using the torrent's name", so a caller reading the
+             manual and passing `-o` gets a successful run that wrote
+             somewhere else. There is no warning and the exit code is 0.
+Approach:    The machinery is already there and `seed` already uses it.
+             `AddOptions::output_folder` at
+             `crates/bit-cli-core/src/engine.rs:179` is the per-add override,
+             and `add_inner` at `:727` turns `Some(folder)` into exactly that
+             directory with `subfolder: false`, which is what stops the
+             torrent's name being appended. So:
+
+             - **multi-file**: `output_folder = PATH`, and every file lands
+               under `PATH` rather than under `<dir>/<name>`.
+             - **single-file**: the payload is one file, so `PATH` names the
+               file. That is `output_folder = PATH.parent()` plus the
+               `index_out` override for index 0 set to `PATH.file_name()`,
+               both of which `AddOptions` already carries.
+
+             Two things have to be decided rather than assumed, and neither is
+             covered by the existing flags:
+
+             - **`--out` with more than one source.** `SelectionArgs` applies
+               to every source in the run, so two torrents would be told to
+               write to the same path. Refuse it as a usage error before the
+               session starts, the way `plan_selection` refuses an index past
+               the end at `crates/bit-cli/src/cmd/download.rs:2665`.
+             - **`--out` beside `--dir`.** `--dir` is the run's output
+               directory and `--out` is one payload's destination. Resolving
+               `--out` against `--dir` keeps both meaningful and makes
+               neither silently inert.
+Acceptance:  `download --out` writes the payload at the named path for a
+             single-file torrent and for a multi-file one, `--out` with two
+             sources is a usage error before anything is added, and the
+             report's `output_directory` says where it actually went.
+
+**Measured, 2026-08-23, before anything was written.** Two runs against a
+loopback file server, `--web-seed-only`, from a release build of `d3bc6a5`.
+
+| torrent | flag | `output_directory` in the report | where the payload landed |
+| --- | --- | --- | --- |
+| single-file `single.bin` | `--out .tmp/t103/renamed.bin` | the working directory | `single.bin` in the working directory |
+| multi-file `plain/inner.bin` | `--out .tmp/t103/o1` | the working directory | `plain/inner.bin` in the working directory |
+| single-file `single.bin` | `--dir .tmp/t103/o2` | `.tmp/t103/o2` | `.tmp/t103/o2/single.bin` |
+
+`--dir` is in the third row to show the difference is `--out`'s and not the
+harness's.
+
+**Run against the defect, which is what proves there is no reader rather than
+that one grep missed it.** The field was renamed to `out_probe_unread`, with
+`long = "out"` kept so the surface did not move, and
+`cargo check --workspace --all-targets` finished clean. A field nothing names
+cannot be being read.
+
+```bash
+cargo check --workspace --all-targets
+```

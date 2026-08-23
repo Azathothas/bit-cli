@@ -330,6 +330,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "encoding_rs",
  "globset",
  "hdrhistogram",
  "ignore",

@@ -636,7 +636,7 @@ It was true when the entry was written on 2026-08-21 and stopped being true on
 `vendor/rqbit/crates/librqbit/src/storage/filesystem/opened_file.rs:94`, in this
 repository, and it now carries the guard. That is
 [`patches/UPSTREAM.md`](../patches/UPSTREAM.md)'s eighteenth section and patch
-`patches/rqbit/0012-crates-librqbit-src-storage-filesystem-opened_file.rs.patch`.
+`patches/rqbit/0014-crates-librqbit-src-storage-filesystem-opened_file.rs.patch`.
 
 **"This is on the payload write path for every download" is false**, and it is
 the more useful correction. There is exactly one `add_torrent` call in the

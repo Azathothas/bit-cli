@@ -55,6 +55,16 @@ pub struct Report {
     pub name: String,
     pub total: Size,
     pub file_count: usize,
+    /// How this torrent's `name` and `path` keys were turned into text.
+    ///
+    /// Absent for the ordinary torrent, whose names are UTF-8 and where there
+    /// was nothing to choose. Present when the names were decoded through a
+    /// detected encoding, or when a `.utf-8` key was preferred over the raw
+    /// key beside it. Either way the same rule named the files this run would
+    /// write, so this is what the paths above are in rather than a guess about
+    /// them. See `TODO/bep-coverage.md`, T-103.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_encoding: Option<bit_cli_core::torrent::NameEncoding>,
     pub files: Vec<FileRow>,
 }
 
@@ -75,6 +85,10 @@ impl Report {
             })
             .collect();
         let mut out = table(&["INDEX", "SIZE", "SHARE", "PIECES", "PATH"], &rows);
+        if let Some(encoding) = &self.name_encoding {
+            out.push(String::new());
+            out.push(format!("names decoded as {}", encoding.describe()));
+        }
 
         // A second section rather than a sixth column: a file can match
         // several files in several torrents, and one row per match reads
@@ -211,6 +225,7 @@ pub fn run(
         name: meta.info().name.clone(),
         total: Size(total),
         file_count: files.len(),
+        name_encoding: crate::cmd::info::reportable_name_encoding(meta.info().name_encoding),
         files,
     };
     renderer.emit(env, "files", &report, || report.lines())?;
@@ -221,6 +236,20 @@ pub fn run(
 mod tests {
     use super::*;
     use crate::test_support::{TorrentFixture, run_err, run_json, run_ok};
+
+    /// `TODO/bep-coverage.md`, T-103, on the command whose whole output is
+    /// paths.
+    #[test]
+    fn a_path_that_is_not_utf8_is_listed_decoded() {
+        let fixture = TorrentFixture::names_that_are_not_utf8();
+        let doc = run_json(&["files", fixture.path_str()], fixture.dir());
+        assert_eq!(doc["files"][0]["path"], "曲.bin");
+        assert_eq!(doc["name_encoding"]["utf8_keys"], true);
+
+        let text = run_ok(&["files", fixture.path_str()], fixture.dir());
+        assert!(text.contains("曲.bin"), "{text}");
+        assert!(text.contains("names decoded as"), "{text}");
+    }
 
     #[test]
     fn files_lists_every_file_with_its_index() {
