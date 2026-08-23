@@ -207,48 +207,95 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogFile {
     }
 }
 
+/// One subsystem `--trace` can raise.
+#[derive(Debug, Clone, Copy)]
+pub struct Subsystem {
+    /// The name a caller types after `--trace`.
+    pub name: &'static str,
+    /// What turning it on shows. One line, and it is the same sentence the
+    /// manuals carry.
+    pub description: &'static str,
+    /// Every `tracing` target the name raises.
+    ///
+    /// More than one, because the facts a subsystem covers are not all decided
+    /// in one place. `bit_cli::<name>` is where this repository's own code
+    /// emits; the `librqbit*` entries are where the vendored session emits the
+    /// same kind of fact, and both are code this repository owns. A name whose
+    /// facts are decided entirely in one of the two has one target.
+    ///
+    /// Every target here is checked by `a_run_emits_on_every_subsystem`: a
+    /// name that raises something nothing writes to is what
+    /// `TODO/cli-surface.md` T-219 was.
+    pub targets: &'static [&'static str],
+}
+
 /// Subsystems that can be traced independently.
-pub const SUBSYSTEMS: &[(&str, &str)] = &[
-    (
-        "peer",
-        "Wire messages: type, index, begin, length, direction, peer id",
-    ),
-    ("handshake", "Peer handshakes and extension negotiation"),
-    (
-        "tracker",
-        "Announce and scrape requests and responses in full",
-    ),
-    ("dht", "DHT queries, responses, and routing table changes"),
-    (
-        "http",
-        "Web seed requests and responses, status, headers, ranges, redirects, TLS",
-    ),
-    (
-        "piece",
-        "Piece request, receipt, verification result, and timing",
-    ),
-    ("picker", "Why a piece was requested from a given source"),
-    (
-        "disk",
-        "Reads, writes, flushes, and allocation, with offsets and sizes",
-    ),
-    ("ratelimit", "Token bucket decisions and stalls"),
-    ("retry", "Retry attempts, backoff, and cooldown"),
-    (
-        "config",
-        "Resolution of every configuration value and its origin",
-    ),
+pub const SUBSYSTEMS: &[Subsystem] = &[
+    Subsystem {
+        name: "peer",
+        description: "Wire messages: type, index, begin, length, direction, peer id",
+        targets: &["bit_cli::peer", "librqbit::peer_connection"],
+    },
+    Subsystem {
+        name: "handshake",
+        description: "Peer handshakes and extension negotiation",
+        targets: &["bit_cli::handshake", "librqbit::handshake"],
+    },
+    Subsystem {
+        name: "tracker",
+        description: "Announce and scrape requests and responses in full",
+        targets: &["bit_cli::tracker", "librqbit_tracker_comms"],
+    },
+    Subsystem {
+        name: "dht",
+        description: "DHT queries, responses, and routing table changes",
+        targets: &["bit_cli::dht", "librqbit_dht"],
+    },
+    Subsystem {
+        name: "http",
+        description: "Web seed requests and responses, status, headers, ranges, redirects, TLS",
+        targets: &["bit_cli::http"],
+    },
+    Subsystem {
+        name: "piece",
+        description: "Piece request, receipt, verification result, and timing",
+        targets: &["bit_cli::piece", "librqbit::piece"],
+    },
+    Subsystem {
+        name: "picker",
+        description: "Why a piece was requested from a given source",
+        targets: &["bit_cli::picker", "librqbit::picker"],
+    },
+    Subsystem {
+        name: "disk",
+        description: "Reads, writes, flushes, and allocation, with offsets and sizes",
+        targets: &["bit_cli::disk"],
+    },
+    Subsystem {
+        name: "ratelimit",
+        description: "Token bucket decisions and stalls",
+        targets: &["bit_cli::ratelimit"],
+    },
+    Subsystem {
+        name: "retry",
+        description: "Retry attempts, backoff, and cooldown",
+        targets: &["bit_cli::retry"],
+    },
+    Subsystem {
+        name: "config",
+        description: "Resolution of every configuration value and its origin",
+        targets: &["bit_cli::config"],
+    },
 ];
 
 /// Check a subsystem name.
-pub fn parse_subsystem(name: &str) -> Result<&'static str> {
+pub fn parse_subsystem(name: &str) -> Result<&'static Subsystem> {
     let name = name.trim();
     SUBSYSTEMS
         .iter()
-        .find(|(known, _)| *known == name)
-        .map(|(known, _)| *known)
+        .find(|known| known.name == name)
         .ok_or_else(|| {
-            let known: Vec<&str> = SUBSYSTEMS.iter().map(|(n, _)| *n).collect();
+            let known: Vec<&str> = SUBSYSTEMS.iter().map(|s| s.name).collect();
             Error::usage(format!(
                 "`{name}` is not a trace subsystem (known: {})",
                 known.join(", ")
@@ -259,17 +306,23 @@ pub fn parse_subsystem(name: &str) -> Result<&'static str> {
 
 /// Build the `tracing` filter directive for the given flags.
 ///
-/// The global level applies to everything, then each traced subsystem is
-/// raised to `trace` on its own target. The result is one directive string,
-/// which is exactly what `EnvFilter` takes.
+/// The global level applies to everything, then each traced subsystem raises
+/// every target it names. The result is one directive string, which is exactly
+/// what `EnvFilter` takes.
+///
+/// Deduplication is on the **target** rather than on the subsystem name, so
+/// two names that share one raise it once. The order is the order the names
+/// were given, and within a name the order [`Subsystem::targets`] lists.
 pub fn filter_directive(global: &Global) -> Result<String> {
     let level = global.log_level.raised(global.verbose);
     let mut parts = vec![level.directive().to_string()];
     let mut seen = BTreeSet::new();
     for requested in &global.trace {
         let subsystem = parse_subsystem(requested)?;
-        if seen.insert(subsystem) {
-            parts.push(format!("bit_cli::{subsystem}=trace"));
+        for target in subsystem.targets {
+            if seen.insert(*target) {
+                parts.push(format!("{target}=trace"));
+            }
         }
     }
     Ok(parts.join(","))
@@ -388,8 +441,38 @@ mod tests {
         let directive = filter_directive(&global(&["--trace", "http,piece,picker"])).unwrap();
         assert_eq!(
             directive,
-            "warn,bit_cli::http=trace,bit_cli::piece=trace,bit_cli::picker=trace"
+            "warn,bit_cli::http=trace,bit_cli::piece=trace,librqbit::piece=trace,\
+             bit_cli::picker=trace,librqbit::picker=trace"
         );
+    }
+
+    /// A subsystem raises every target it names, in the order it names them.
+    ///
+    /// This is the half of T-219 a unit test can hold: the directive covers
+    /// the vendored session as well as this repository's own code. The other
+    /// half, that something writes to each of them, is
+    /// `a_run_emits_on_every_subsystem`.
+    #[test]
+    fn a_subsystem_raises_every_target_it_names() {
+        let directive = filter_directive(&global(&["--trace", "peer"])).unwrap();
+        assert_eq!(
+            directive,
+            "warn,bit_cli::peer=trace,librqbit::peer_connection=trace"
+        );
+    }
+
+    /// Two names that shared a target would raise it once. None do today, and
+    /// the check is here so that adding one is a decision rather than a
+    /// duplicate directive nobody notices.
+    #[test]
+    fn a_target_two_subsystems_share_is_raised_once() {
+        let every: Vec<&str> = SUBSYSTEMS.iter().map(|s| s.name).collect();
+        let directive = filter_directive(&global(&["--trace", &every.join(",")])).unwrap();
+        let mut targets: Vec<&str> = directive.split(',').skip(1).collect();
+        let before = targets.len();
+        targets.sort_unstable();
+        targets.dedup();
+        assert_eq!(before, targets.len(), "{directive}");
     }
 
     #[test]
@@ -403,6 +486,28 @@ mod tests {
         let err = filter_directive(&global(&["--trace", "nope"])).unwrap_err();
         assert_eq!(err.code(), bit_cli_core::ExitCode::Usage);
         assert!(err.message().contains("http"), "{}", err.message());
+    }
+
+    /// Every target is a plausible one: non-empty, and prefixed by a crate
+    /// this workspace or its vendored trees own. A typo in a target name is
+    /// invisible at runtime, because `EnvFilter` accepts any string and simply
+    /// matches nothing, which is exactly the failure T-219 was.
+    #[test]
+    fn every_target_names_a_crate_this_repository_owns() {
+        for subsystem in SUBSYSTEMS {
+            assert!(
+                !subsystem.targets.is_empty(),
+                "{} raises nothing",
+                subsystem.name
+            );
+            for target in subsystem.targets {
+                assert!(
+                    target.starts_with("bit_cli::") || target.starts_with("librqbit"),
+                    "{}: {target} is not in a crate this repository owns",
+                    subsystem.name
+                );
+            }
+        }
     }
 
     #[test]
@@ -424,11 +529,18 @@ mod tests {
 
     #[test]
     fn every_subsystem_is_documented_and_uniquely_named() {
-        let names: BTreeSet<&str> = SUBSYSTEMS.iter().map(|(n, _)| *n).collect();
+        let names: BTreeSet<&str> = SUBSYSTEMS.iter().map(|s| s.name).collect();
         assert_eq!(names.len(), SUBSYSTEMS.len());
-        for (name, description) in SUBSYSTEMS {
-            assert!(!description.is_empty(), "{name} has no description");
-            assert_eq!(parse_subsystem(name).unwrap(), *name);
+        for subsystem in SUBSYSTEMS {
+            assert!(
+                !subsystem.description.is_empty(),
+                "{} has no description",
+                subsystem.name
+            );
+            assert_eq!(
+                parse_subsystem(subsystem.name).unwrap().name,
+                subsystem.name
+            );
         }
     }
 

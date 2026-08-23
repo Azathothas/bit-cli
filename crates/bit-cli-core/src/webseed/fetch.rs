@@ -417,6 +417,18 @@ impl SourceStats {
         self.requests.fetch_add(1, Ordering::Relaxed);
         self.errors.fetch_add(1, Ordering::Relaxed);
         let consecutive = self.consecutive_errors.fetch_add(1, Ordering::Relaxed) + 1;
+        // The cooldown half of what `--trace retry` promises, and the reason
+        // it is here rather than at the call site: the error budget is spent
+        // in three places and tripped in one. See `TODO/cli-surface.md`,
+        // T-219.
+        tracing::trace!(
+            target: "bit_cli::retry",
+            consecutive,
+            max_errors,
+            cooldown_ms = cooldown.as_millis() as u64,
+            tripped = consecutive >= max_errors,
+            "error budget"
+        );
         if consecutive < max_errors {
             return false;
         }
@@ -431,6 +443,34 @@ impl SourceStats {
         self.cooldowns.fetch_add(1, Ordering::Relaxed);
         true
     }
+}
+
+/// One rung of a retry ladder, for `--trace retry`.
+///
+/// Both ladders call it, and they are the same shape with different request
+/// kinds, so the record says which. Emitted before the backoff is slept rather
+/// than after: a caller watching a source that never comes back needs to see
+/// how long the run is about to wait, and a record written after the sleep is
+/// the one that never arrives. See `TODO/cli-surface.md`, T-219.
+fn trace_retry(
+    kind: &str,
+    url: &str,
+    attempt: u32,
+    of: u32,
+    backoff: Duration,
+    last: &Option<FetchError>,
+) {
+    tracing::trace!(
+        target: "bit_cli::retry",
+        kind,
+        url = %url,
+        attempt,
+        of,
+        backoff_ms = backoff.as_millis() as u64,
+        status = ?last.as_ref().and_then(FetchError::status),
+        reason = ?last.as_ref().map(ToString::to_string),
+        "retrying"
+    );
 }
 
 /// A byte-rate cap for one source.
@@ -477,18 +517,34 @@ impl RateLimiter {
 
     /// Wait until `bytes` may be requested.
     async fn take(&self, bytes: u64) {
-        let wait = {
+        let (wait, left) = {
             let mut bucket = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let now = tokio::time::Instant::now();
             let refill = now.duration_since(bucket.last).as_secs_f64() * self.rate;
             bucket.tokens = (bucket.tokens + refill).min(self.rate);
             bucket.last = now;
             bucket.tokens -= bytes as f64;
-            match bucket.tokens < 0.0 {
+            let wait = match bucket.tokens < 0.0 {
                 true => Duration::from_secs_f64(-bucket.tokens / self.rate),
                 false => Duration::ZERO,
-            }
+            };
+            (wait, bucket.tokens)
         };
+        // What `--trace ratelimit` promises: the bucket decision and the
+        // stall. Emitted for every take rather than only for the ones that
+        // wait, because "the limiter let this through immediately" is the
+        // answer a caller asking why a run is slow needs just as much as the
+        // waits are. `stalled` is the field to filter on. See
+        // `TODO/cli-surface.md`, T-219.
+        tracing::trace!(
+            target: "bit_cli::ratelimit",
+            bytes,
+            rate = self.rate as u64,
+            tokens_left = left as i64,
+            wait_micros = wait.as_micros() as u64,
+            stalled = !wait.is_zero(),
+            "took tokens"
+        );
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
         }
@@ -814,6 +870,7 @@ impl Fetcher {
         for attempt in 0..=limits.retries {
             if attempt > 0 {
                 self.stats.retries.fetch_add(1, Ordering::Relaxed);
+                trace_retry("BEP 17", url, attempt, limits.retries, backoff, &last);
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(16));
             }
@@ -1148,6 +1205,7 @@ impl Fetcher {
                 if let Some(code) = last.as_ref().and_then(FetchError::status) {
                     self.stats.record_retry_status(code);
                 }
+                trace_retry("ranged GET", url, attempt, limits.retries, backoff, &last);
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(16));
             }

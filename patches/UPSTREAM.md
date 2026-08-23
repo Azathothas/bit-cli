@@ -117,10 +117,10 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/peer_connection.rs
              vendor/rqbit/crates/librqbit/src/peer_info_reader/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
-             patches/rqbit/0007-crates-librqbit-src-peer_info_reader-mod.rs.patch
-             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0022-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0008-crates-librqbit-src-peer_info_reader-mod.rs.patch
+             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0023-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    ours. A defect in their code, so a release may fix it
              independently; check at the next one.
 Added:       2026-08-22T13:52Z
@@ -206,7 +206,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0025-package-lock.json.patch
+             patches/rqbit/0026-package-lock.json.patch
 Upstream:    ours by construction. It is a consequence of our exclusion list
              rather than a defect, so no release retires it
 Added:       2026-08-22T13:47Z
@@ -263,7 +263,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```
 Unblocks:    T-020, TODO/peers.md, the record's only open P0
 Files:       vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0010-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0011-crates-librqbit-src-session.rs.patch
 Upstream:    ours. It is rqbit#311 (https://github.com/ikatson/rqbit/issues/311),
              open, so a release may carry a fix of their own.
 Added:       2026-08-22T14:37Z
@@ -337,8 +337,8 @@ issue is the one to check this patch against.
 Unblocks:    T-040, TODO/memory.md, the record's other P0
 Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0019-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0020-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    ours. It is rqbit#525 (https://github.com/ikatson/rqbit/issues/525),
              open, so a release may carry a fix of their own.
 Added:       2026-08-22T15:30Z
@@ -413,8 +413,8 @@ the one to check this patch against.
 Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
-             patches/rqbit/0010-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0024-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0011-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0025-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    ours. It is rqbit#537 (https://github.com/ikatson/rqbit/issues/537),
              open, so a release may carry a fix of their own.
 Added:       2026-08-22T17:26Z
@@ -512,7 +512,7 @@ that closes that issue is the one to check this patch against.
 ```
 Unblocks:    T-210, TODO/peers.md, and T-132 could not work without it
 Files:       vendor/rqbit/crates/librqbit/src/peer_connection.rs
-             patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-peer_connection.rs.patch
 Upstream:    ours. A defect in their code, so a release may fix it
              independently; check at the next one.
 Added:       2026-08-22T17:55Z
@@ -577,8 +577,8 @@ records an incoming peer under the peer id it sent takes this patch with it.
 Unblocks:    T-132, TODO/multi-source.md
 Files:       vendor/rqbit/crates/librqbit/src/limits.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0005-crates-librqbit-src-limits.rs.patch
-             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0006-crates-librqbit-src-limits.rs.patch
+             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-mod.rs.patch
 Upstream:    ours, and shaped for this repository rather than for anyone else.
              No release retires it.
 Added:       2026-08-22T17:55Z
@@ -766,10 +766,10 @@ Files:       vendor/rqbit/crates/librqbit/src/lib.rs
              vendor/rqbit/crates/librqbit/src/session.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/initializing.rs
              vendor/rqbit/crates/rqbit/src/main.rs, which builds the struct
-             patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
-             patches/rqbit/0010-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0014-crates-librqbit-src-torrent_state-initializing.rs.patch
-             patches/rqbit/0023-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0005-crates-librqbit-src-lib.rs.patch
+             patches/rqbit/0011-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0015-crates-librqbit-src-torrent_state-initializing.rs.patch
+             patches/rqbit/0024-crates-rqbit-src-main.rs.patch
 Upstream:    ours. Two thirds is a seam and a feature; the third part, the
              validate_fastresume key, is a defect a release may fix on its own
 Added:       2026-08-22T19:28Z
@@ -843,7 +843,7 @@ reconciliation.
 ```
 Unblocks:    T-025, TODO/peers.md
 Files:       vendor/rqbit/crates/librqbit/src/http_api_types.rs
-             patches/rqbit/0003-crates-librqbit-src-http_api_types.rs.patch
+             patches/rqbit/0004-crates-librqbit-src-http_api_types.rs.patch
 Upstream:    ours. A one line omission in their code, so a release may add the
              export on its own
 Added:       2026-08-22T19:38Z
@@ -976,13 +976,13 @@ Files:       vendor/rqbit/crates/librqbit/src/stream_transform.rs (new)
              vendor/rqbit/crates/librqbit/src/peer_connection.rs
              vendor/rqbit/crates/librqbit/src/session.rs
              vendor/rqbit/crates/rqbit/src/main.rs
-             patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
-             patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
-             patches/rqbit/0010-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0012-crates-librqbit-src-stream_connect.rs.patch
-             patches/rqbit/0013-crates-librqbit-src-stream_transform.rs.patch
-             patches/rqbit/0020-crates-librqbit-src-type_aliases.rs.patch
-             patches/rqbit/0023-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0005-crates-librqbit-src-lib.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0011-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0013-crates-librqbit-src-stream_connect.rs.patch
+             patches/rqbit/0014-crates-librqbit-src-stream_transform.rs.patch
+             patches/rqbit/0021-crates-librqbit-src-type_aliases.rs.patch
+             patches/rqbit/0024-crates-rqbit-src-main.rs.patch
 Upstream:    ours. A seam rather than a fix, and no release will carry this
              shape of it
 Added:       2026-08-23T02:52Z
@@ -1083,10 +1083,10 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/peer_connection.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/mod.rs
-             patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
-             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0019-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
-             patches/rqbit/0022-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0007-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0020-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0023-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    ours. It is rqbit#584 (https://github.com/ikatson/rqbit/issues/584),
              open, so a release may carry an implementation of their own.
 Added:       2026-08-23T03:55Z
@@ -1213,7 +1213,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 Unblocks:    nothing on its own. It is nzbd's 0005 read and taken in part, and
              TODO/trackers.md is where the tracker entries live.
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
-             patches/rqbit/0024-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0025-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    ours. nzbd has a draft of the same bound, unsent, at
              contrib/rqbit/TRACKER_REQUEST_BUDGET_PR.md in that repository, so
              a release may carry a bound from that direction rather than ours.
@@ -1275,8 +1275,8 @@ Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/stats/atomic.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/stats/snapshot.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0019-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0020-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    ours. Two counters and one bounded list on a private method, so a
              release may expose the reason its own way; check at the next one.
 Added:       2026-08-23T05:19Z
@@ -1321,7 +1321,7 @@ cargo test -p bit-cli --lib a_peer_that_leaves_is_reported
 ```
 Unblocks:    T-178, TODO/windows.md
 Files:       vendor/rqbit/crates/librqbit/src/storage/filesystem/opened_file.rs
-             patches/rqbit/0011-crates-librqbit-src-storage-filesystem-opened_file.rs.patch
+             patches/rqbit/0012-crates-librqbit-src-storage-filesystem-opened_file.rs.patch
 Upstream:    ours. A four line guard on their own loop, and the read side of it
              is already theirs, so a release may add the write side its own
              way; check at the next one.
@@ -1397,4 +1397,79 @@ are clean.
 
 ```bash
 RUSTFLAGS="-D warnings" cargo +beta clippy --workspace --all-targets --all-features
+```
+
+---
+
+## librqbit: handshake, piece and picker tracing have no target of their own
+
+```
+Unblocks:    T-219, TODO/cli-surface.md
+Files:       vendor/rqbit/crates/librqbit/src/peer_connection.rs
+             vendor/rqbit/crates/librqbit/src/file_ops.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
+             patches/rqbit/0007-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0003-crates-librqbit-src-file_ops.rs.patch
+             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-mod.rs.patch
+Upstream:    ours. Nothing upstream is wrong: a target defaults to the module
+             path, which is the right default for a library. A release could
+             split these targets for its own reasons and would then retire the
+             patch; check the three call sites at the next reconciliation.
+Added:       2026-08-23T14:10Z
+```
+
+Ten `trace!` and `debug!` calls take an explicit `target:` instead of the
+module path they defaulted to. Nothing else changes: not a level, not a field,
+not a message, not a line of control flow.
+
+- `peer_connection.rs`, three calls, to `librqbit::handshake`: the incoming
+  connection, the `connected` record after the handshake is read, and the
+  extended handshake going out. The `connected` record also gains
+  `supports_extended` and `supports_fast`, which the function already had in
+  locals and which are the result of the negotiation the record is about.
+- `file_ops.rs`, two calls, and `torrent_state/live/mod.rs`, four, to
+  `librqbit::piece`: the hash matching, a piece marked as needed again, the
+  chunk marking result, a piece completed, a piece someone else completed, and
+  a piece downloaded and verified.
+- `torrent_state/live/mod.rs`, four calls, to `librqbit::picker`: choked with
+  nothing to acquire, a piece reserved, a piece stolen, and nothing to request.
+
+**Why it has to be here.** Because a `tracing` target defaults to the module
+path, and the modules do not divide the way the subsystems do. `--trace
+handshake` and `--trace peer` both resolve to `librqbit::peer_connection`,
+which holds the handshake and every wire message in one module, so the narrower
+of the two names would print the wider one's traffic: on the 2 MiB fixture
+below that is 2 records against 266. `--trace picker` and `--trace piece` both resolve to
+`librqbit::torrent_state::live`, which holds the picker, the piece lifecycle
+and peer management together. A subsystem that raises a target carrying three
+other subsystems is not a subsystem, and `--trace` exists to raise one thing
+and leave the rest alone.
+
+Doing it outside the tree is not possible: a target is decided at the callsite,
+and there is no wrapper, layer or filter that can split one module's records
+into three by anything other than matching their message text.
+
+**How it was proved.** `crates/bit-cli/tests/trace_subsystems.rs` drives the
+real binary once per subsystem and asserts a record on a target that subsystem
+raises. Two of its cases assert the vendored targets specifically:
+`handshake_traces_the_negotiation` requires `librqbit::handshake`, and
+`tracker_covers_the_session_announce_as_well` requires
+`librqbit_tracker_comms::tracker_comms`, which needed no patch. Measured on
+one 2 MiB `download` with each name traced in turn:
+
+```
+--trace handshake   librqbit::handshake=2          bit_cli::handshake=3
+--trace peer        librqbit::peer_connection=266  bit_cli::peer=133
+--trace piece       librqbit::piece=153            bit_cli::piece=128
+--trace picker      librqbit::picker=9             bit_cli::picker=1
+```
+
+```bash
+cargo test -p bit-cli --test trace_subsystems
+```
+
+Upstream's own tests were run, because the change is in their tree:
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```

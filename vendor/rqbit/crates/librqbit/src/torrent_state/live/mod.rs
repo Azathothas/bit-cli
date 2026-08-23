@@ -1525,7 +1525,7 @@ impl PeerHandler {
     /// Returns the piece index to download, or None if no pieces are available.
     fn acquire_next_piece(&self) -> crate::Result<Option<ValidPieceIndex>> {
         if self.is_choked() {
-            debug!("we are choked, can't acquire piece");
+            debug!(target: "librqbit::picker", "we are choked, can't acquire piece");
             return Ok(None);
         }
 
@@ -1562,11 +1562,11 @@ impl PeerHandler {
 
                 match result {
                     AcquireResult::Reserved(piece) => {
-                        trace!("reserved piece {}", piece);
+                        trace!(target: "librqbit::picker", "reserved piece {}", piece);
                         Ok(Some(piece))
                     }
                     AcquireResult::Stolen { piece, from_peer } => {
-                        debug!("stole piece {} from {}", piece, from_peer);
+                        debug!(target: "librqbit::picker", "stole piece {} from {}", piece, from_peer);
                         // Store steal info to process after releasing peer lock to avoid deadlock
                         steal_info = Some((from_peer, piece));
                         Ok(Some(piece))
@@ -1921,7 +1921,7 @@ impl PeerHandler {
             let next = match self.acquire_next_piece()? {
                 Some(next) => next,
                 None => {
-                    debug!("no pieces to request");
+                    debug!(target: "librqbit::picker", "no pieces to request");
                     match aframe!(tokio::time::timeout(
                         // Half of default rw timeout not to race with it.
                         Duration::from_secs(5),
@@ -2145,17 +2145,17 @@ impl PeerHandler {
             let full_piece_download_time = {
                 let mut g = state.lock_write("mark_chunk_downloaded");
                 let chunk_marking_result = g.get_pieces_mut()?.mark_chunk_downloaded(piece);
-                trace!(?piece, chunk_marking_result=?chunk_marking_result);
+                trace!(target: "librqbit::piece", ?piece, chunk_marking_result=?chunk_marking_result);
 
                 match chunk_marking_result {
                     Some(ChunkMarkingResult::Completed) => {
-                        trace!("piece={} done, will write and checksum", piece.index);
+                        trace!(target: "librqbit::piece", "piece={} done, will write and checksum", piece.index);
                         // Remove from inflight to prevent others from stealing it during hash check.
                         g.get_pieces_mut()?.take_inflight(chunk_info.piece_index)
                     }
                     Some(ChunkMarkingResult::PreviouslyCompleted) => {
                         // TODO: we might need to send cancellations here.
-                        debug!("piece={} was done by someone else, ignoring", piece.index);
+                        debug!(target: "librqbit::piece", "piece={} was done by someone else, ignoring", piece.index);
                         return Ok(());
                     }
                     Some(ChunkMarkingResult::NotCompleted) => None,
@@ -2217,7 +2217,7 @@ impl PeerHandler {
                     counters.on_piece_completed(piece_len, full_piece_download_time);
                     state.peers.reset_peer_backoff(addr);
 
-                    trace!(piece = index, "successfully downloaded and verified");
+                    trace!(target: "librqbit::piece", piece = index, "successfully downloaded and verified");
 
                     state.on_piece_completed(chunk_info.piece_index)?;
 

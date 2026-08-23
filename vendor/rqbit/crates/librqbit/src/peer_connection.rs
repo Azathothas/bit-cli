@@ -214,6 +214,7 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
         }
 
         trace!(
+            target: "librqbit::handshake",
             "incoming connection: id={:?}",
             try_decode_peer_id(incoming.handshake.peer_id)
         );
@@ -342,8 +343,11 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
             let fast_negotiated = h.supports_fast();
             self.handler.on_fast_negotiated(fast_negotiated);
             trace!(
+                target: "librqbit::handshake",
                 peer_id=?h.peer_id,
                 decoded_id=?try_decode_peer_id(h.peer_id),
+                supports_extended=handshake_supports_extended,
+                supports_fast=fast_negotiated,
                 "connected",
             );
             if h.info_hash != self.info_hash {
@@ -403,7 +407,7 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
                 .update_my_extended_handshake(&mut my_extended)
                 .map_err(Error::Anyhow)?;
             let my_extended = Message::Extended(ExtendedMessage::Handshake(my_extended));
-            trace!("sending extended handshake: {:?}", &my_extended);
+            trace!(target: "librqbit::handshake", "sending extended handshake: {:?}", &my_extended);
             let esz = my_extended.serialize(&mut *write_buf, &Default::default)?;
             with_timeout(
                 "writing extended handshake",

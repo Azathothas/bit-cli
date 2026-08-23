@@ -314,10 +314,22 @@ impl Resolved {
     /// applying layers out of order cannot produce the wrong answer.
     pub fn apply(&mut self, entries: Vec<(&str, serde_json::Value)>, origin: Origin) {
         for (name, value) in entries {
-            let replace = self
-                .settings
-                .get(name)
-                .is_none_or(|existing| origin.rank() >= existing.origin.rank());
+            let held = self.settings.get(name);
+            let replace = held.is_none_or(|existing| origin.rank() >= existing.origin.rank());
+            // What `--trace config` promises: the resolution of every value
+            // and where it came from. Both outcomes are recorded, because a
+            // caller asking why a setting is not what the config file says
+            // needs to see the layer that lost as much as the one that won.
+            // See `TODO/cli-surface.md`, T-219.
+            tracing::trace!(
+                target: "bit_cli::config",
+                setting = name,
+                value = %value,
+                origin = %origin.label(),
+                held_origin = held.map(|s| s.origin.label()),
+                applied = replace,
+                "resolved"
+            );
             if replace {
                 self.settings.insert(
                     name.to_string(),
@@ -330,8 +342,29 @@ impl Resolved {
         }
     }
 
+    /// Record a config file that was looked for and is not there.
+    ///
+    /// A layer, like the ones that were found: a caller debugging why a
+    /// setting is at its default needs to see the file that would have changed
+    /// it being absent, and that is the one step of the resolution with
+    /// nothing else to show for it.
+    pub fn missed(&mut self, path: PathBuf) {
+        tracing::trace!(
+            target: "bit_cli::config",
+            path = %path.display(),
+            "config file absent"
+        );
+        self.files_missing.push(path);
+    }
+
     /// Apply a config file layer, recording that the file was read.
     pub fn apply_file(&mut self, file: &ConfigFile, origin: Origin, path: &Path) {
+        tracing::trace!(
+            target: "bit_cli::config",
+            path = %path.display(),
+            origin = %origin.label(),
+            "reading a config file"
+        );
         self.files_read.push(path.to_path_buf());
         self.apply(file.entries(), origin);
     }

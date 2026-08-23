@@ -967,6 +967,20 @@ impl SafeStorage {
         if outcome.is_ok() {
             self.metrics.add_write(buf.len() as u64, started.elapsed());
         }
+        // `--trace disk` promises offsets and sizes, and this is the call that
+        // has both. It is on the payload write path, so it is one `trace!`
+        // with no formatting of its own: when the subsystem is off, the macro
+        // is a level check. `TODO/bench.md` T-094 measured what a trace that
+        // does fire costs. See `TODO/cli-surface.md`, T-219.
+        tracing::trace!(
+            target: "bit_cli::disk",
+            file = file_id,
+            offset,
+            len = buf.len(),
+            micros = started.elapsed().as_micros() as u64,
+            error = outcome.as_ref().err().map(|e| e.to_string()),
+            "write"
+        );
         outcome
     }
 
@@ -1032,16 +1046,39 @@ impl SafeStorage {
     /// of writeback outstanding would otherwise charge them to the next step.
     /// See `TODO/disk-io.md`, T-017.
     pub fn flush_all(&self) -> anyhow::Result<()> {
+        let started = Instant::now();
         // Held runs first: syncing a handle that has bytes still in a buffer
         // would report a device that is up to date and leave them behind.
-        self.flush_runs(self.coalesce.take_all())?;
+        let held = self.coalesce.take_all();
+        let runs = held.len();
+        self.flush_runs(held)?;
+        let mut synced = 0usize;
         for (index, slot) in self.files.iter().enumerate() {
             if slot.path.as_os_str().is_empty() {
                 continue;
             }
-            slot.try_with(Intent::Write, "flush", |file| file.sync_all())
-                .map_err(|e| anyhow::anyhow!("cannot flush file {index}: {e}"))?;
+            // `None` is a file with no writable handle open, which is a file
+            // with nothing outstanding: counted as skipped rather than as
+            // flushed, so the number in the trace is syncs that happened.
+            if slot
+                .try_with(Intent::Write, "flush", |file| file.sync_all())
+                .map_err(|e| anyhow::anyhow!("cannot flush file {index}: {e}"))?
+                .is_some()
+            {
+                synced += 1;
+            }
         }
+        // The flush half of what `--trace disk` promises. One record for the
+        // whole call rather than one per file: a flush is a thing the caller
+        // asked for once, and a run of them per file would drown the reads and
+        // writes this subsystem exists to show.
+        tracing::trace!(
+            target: "bit_cli::disk",
+            runs,
+            files = synced,
+            micros = started.elapsed().as_micros() as u64,
+            "flush"
+        );
         Ok(())
     }
 
@@ -1121,6 +1158,15 @@ impl TorrentStorage for SafeStorage {
             self.metrics.add_read(len, started.elapsed());
             note_read(started, file_id, offset, len);
         }
+        tracing::trace!(
+            target: "bit_cli::disk",
+            file = file_id,
+            offset,
+            len,
+            micros = started.elapsed().as_micros() as u64,
+            error = outcome.as_ref().err().map(|e| e.to_string()),
+            "read"
+        );
         outcome
     }
 
@@ -1251,6 +1297,19 @@ impl TorrentStorage for SafeStorage {
         let outcome = self.with(file_id, Intent::Write, "reserve space for", |file| {
             crate::alloc::reserve(file, length, self.allocation)
         })?;
+        // The allocation half of what `--trace disk` promises. `used` is what
+        // happened rather than what was asked for: the two differ where the
+        // platform has no interface for the strategy, and that difference is
+        // the thing a caller turns this on to see. See `crate::alloc`.
+        tracing::trace!(
+            target: "bit_cli::disk",
+            file = file_id,
+            length,
+            requested = outcome.requested.as_str(),
+            used = outcome.used.as_str(),
+            note = outcome.note.as_deref(),
+            "allocate"
+        );
         if !outcome.as_asked() {
             self.note(format!(
                 "--file-allocation {} is not available here, so {} was used instead: {}",

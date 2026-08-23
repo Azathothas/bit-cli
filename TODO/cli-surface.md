@@ -3286,7 +3286,7 @@ Source:      measured while closing [T-094](bench.md), 2026-08-23
 Category:    cli
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done** 2026-08-23T14:10Z
 
 Problem:     `--trace <SUBSYSTEM>` builds one `tracing` directive per name,
              `bit_cli::<subsystem>=trace`, and `logging.rs`'s `SUBSYSTEMS`
@@ -3341,6 +3341,111 @@ Acceptance:  A test drives one command per documented subsystem with that
              `SUBSYSTEMS`, from the help and from the manuals in the same
              change. The list a caller reads matches the list that works.
 
+**Done.** All eleven emit, and the acceptance is
+`crates/bit-cli/tests/trace_subsystems.rs`: fifteen cases, one per subsystem
+plus four that hold the edges. It drives the **binary** rather than `run`,
+because the subscriber is process-global and `logging::install` is
+best-effort by design, so an in-process assertion would be reading whichever
+test won the race to install one.
+
+**The measurement inverted the fix, and it is the reason this took a day rather
+than a week.** The entry says ten subsystems raise a target nothing writes to,
+which is true, and it reads as ten subsystems' worth of instrumentation to
+write. One `-vvv` run says otherwise: **10,986 records over nineteen targets**,
+and nine of the ten subsystems already had their facts on a target `--trace`
+did not name.
+
+```
+librqbit::peer_connection              4108
+librqbit::torrent_state::live          2154
+librqbit::file_ops                     2114
+librqbit::chunk_tracker                2048
+librqbit_dht::dht                       221
+bit_cli::http                            32
+librqbit_tracker_comms::tracker_comms     1
+```
+
+So the fix is two halves rather than one. `SUBSYSTEMS` is a struct now, and a
+name carries **the targets it raises** rather than one derived from its
+spelling: `bit_cli::<name>` where this repository's own code writes, plus the
+vendored target that carries the same fact. `filter_directive` emits one
+directive per target and dedupes on the target, so two names sharing one raise
+it once.
+
+**Eleven emission points were written and ten vendored trace calls retargeted.**
+`disk` in `SafeStorage`'s read, write, flush and allocate, which is where the
+offsets and sizes the description promises already are. `ratelimit` in
+`RateLimiter::take`, on every take rather than only the ones that wait, because
+"the limiter let this through" is half the answer. `retry` in both ladders and
+in `SourceStats::record_error`, which is where the budget is spent. `config` in
+`Resolved::apply`, recording the layer that **lost** as well as the one that
+won. `tracker` in `announce_on` and `scrape`, request and response. `peer`,
+`handshake` and `piece` in the web seed bridge, which is a real peer as far as
+the session is concerned. `picker` in `InOrder::advance`. `dht` in `Engine`,
+once per session, because it is the one fact the vendored crate cannot carry:
+with the DHT off it writes nothing, and no records and the flag does nothing
+look the same from outside.
+
+**The vendored half is a patch and it is not cosmetic.** A `tracing` target
+defaults to the module path and the modules do not divide the way the
+subsystems do: `peer_connection` holds the handshake and every wire message,
+and `torrent_state::live` holds the picker, the piece lifecycle and peer
+management. Raising the module would have made `--trace handshake` print 266
+records where 2 were asked for, on the 2 MiB fixture below. Ten calls take an explicit target instead,
+under "handshake, piece and picker tracing have no target of their own" in
+[`patches/UPSTREAM.md`](../patches/UPSTREAM.md). Upstream's own tests were run
+and are 149 passing, unchanged.
+
+**The acceptance run.** `scripts/check-trace.ps1` takes the numbers again and
+fails when a subsystem writes on none of the targets it raises. One 2 MiB
+fixture, one run per name:
+
+```
+peer        399 records   bit_cli::peer=133     librqbit::peer_connection=266
+handshake     5           bit_cli::handshake=3  librqbit::handshake=2
+tracker       2           bit_cli::tracker=2
+dht           1           bit_cli::dht=1
+http          1           bit_cli::http=1
+piece       281           bit_cli::piece=128    librqbit::piece=153
+picker       10           bit_cli::picker=1     librqbit::picker=9
+disk         82           bit_cli::disk=82
+ratelimit     1           bit_cli::ratelimit=1
+retry         6           bit_cli::retry=6
+config        3           bit_cli::config=3
+```
+
+And the headline, on the same fixture: the ten names the entry was filed about
+now write **743** lines of stderr where they wrote **0**, and an untraced run
+still writes none, which is the other half of the promise.
+
+```bash
+pwsh -NoProfile -File scripts/check-trace.ps1 -Json bench/trace.json
+```
+
+The evidence is `bench/trace-subsystems-20260823T140418847Z.json`.
+
+**Run against the defect.** With `bit_cli::disk` renamed to `bit_cli::disk_gone`
+at all four storage call sites, the `disk` case fails with the message the
+caller would have needed: `--trace disk raises ["bit_cli::disk"] and nothing
+wrote to any of them. Targets seen on this run: {"bit_cli::disk_gone"}`. That
+is exactly the state the whole surface was in.
+
+**One target is asserted by measurement rather than by the test**, and the test
+says so: `librqbit_dht`. Every trace in the vendored DHT crate is on a query, a
+response or a routing table change, and all three need the public DHT, so a
+test that asserted one would be asserting that a CI runner can reach the
+internet. The `-vvv` run above is the evidence: 221 records.
+
+[`docs/trace.md`](../docs/trace.md) is what a caller reads: what each name
+shows, a command that puts it in the path so silence can be told apart from a
+defect, the targets each raises, and the three things adding one needs.
+
+**What it cost to find, and what it did not.** Nothing here needed a corpus and
+nothing needed a design. It needed one command: a run with `-vvv` and
+`--log-format json`, counting the `target` field. That is the same rule
+[T-184](disk-io.md) and [T-172](metainfo.md) wrote down.
+
+
 ### T-220 The record gate reported on a tree the same run then rewrote
 
 Source:      CI run 32637486414, `Record`, 2026-08-23
@@ -3380,3 +3485,87 @@ that closed [T-191](bench.md) printed `record ok` and CI then failed on
 `cli-surface.md:1550 cites schema_gen.rs:1286 ... which is at :1296`. With the
 gate moved, the same tree fails locally, on the same line, before a commit
 exists.
+
+### T-222 A config file reaches `config show` and nothing else
+
+Source:      measured while closing T-219, 2026-08-23
+Category:    cli
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     `--config <PATH>` and `--no-config` are **global** flags, accepted
+             on every command. They have two readers in the whole workspace,
+             `crates/bit-cli/src/cmd/config.rs:54` and `:80`, and both are
+             inside `resolve`, whose only caller is `bit-cli config show` at
+             `crates/bit-cli/src/cmd/config.rs:125`.
+
+             So `bit-cli.toml`, the user config file, `--config`, and every
+             `BIT_CLI_*` variable change what `bit-cli config show` prints and
+             change nothing about what any other command does.
+Relevance:   `README.md` documents the whole precedence chain as the tool's
+             configuration, six layers, highest wins. `docs/trace.md` now
+             documents `--trace config` as the resolution of every
+             configuration value and its origin, which is honest only because
+             the resolution happens in one command.
+
+             It is the fifth entry of the flag-does-nothing shape, after
+             [T-181](#t-181-four-flags-are-accepted-in-silence-and-reach-no-code),
+             T-183, T-185 and T-219, and it is the one with the largest
+             documented surface behind it: **22** settings in
+             `config::SETTINGS`, each with a default and a description, none of
+             which any run reads.
+
+             Neither the audit that found T-181's four flags nor the `clap`
+             tree test would see it, and this is a sixth distinct shape: the
+             field has a reader, the reader succeeds, and the value it produces
+             is read by `config show` alone, out of sixteen top-level
+             commands.
+Approach:    Measured before anything is designed, and the measurement is in
+             the record below rather than in a paragraph.
+
+             The work is to call `cmd::config::resolve` once in `run`, before
+             `dispatch`, and to have the flag defaults come from it. That is a
+             decision per setting rather than one change: `download_directory`
+             is `--dir`'s default, `max_peers` is `--max-peers`'s, and a flag
+             that was given on the command line has to keep winning, which is
+             what `Origin::rank` already encodes and `clap` does not know
+             about. `clap`'s `ArgMatches::value_source` says whether a value
+             came from the command line or from a default, which is the seam.
+
+             Two smaller things fall out and should not be separated from it.
+             `--config` naming a file that does not exist is an error on
+             `config show` and accepted in silence on every other command, so
+             the same flag with the same value has two behaviours. And
+             `--no-config` on any other command is a no-op, so a caller
+             protecting a CI run from a stray `bit-cli.toml` is protected by
+             the defect rather than by the flag.
+Acceptance:  A test per layer, driving a command that is not `config show`: a
+             `bit-cli.toml` naming a `download_directory` puts the payload
+             there, a `BIT_CLI_*` variable does the same, `--config` beats
+             both, a command-line flag beats all three, and `--no-config`
+             turns the files off. Plus: `--config` naming a missing file is the
+             same exit code on every command.
+
+**Measured, and it is where the entry came from.** A `bit-cli.toml` naming a
+`download_directory` and `max_peers = 7`, in the working directory:
+
+```
+bit-cli config show      download_directory = <configured>   (project_config)
+                         max_peers          = 7              (project_config)
+                         files_read         = .../work/bit-cli.toml
+
+bit-cli download ...     exit 0, completed
+                         payload in the configured directory? False
+                         payload in the working directory?    True
+```
+
+And the same flag, two behaviours:
+
+```
+bit-cli --config <missing> info      exit 0
+bit-cli --config <missing> download  exit 0
+bit-cli --config <missing> config show
+    error: cannot read ...: The system cannot find the file specified.
+    exit 8
+```

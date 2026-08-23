@@ -874,6 +874,18 @@ async fn serve(
             let message = Message::deserialize(&frame, &[])
                 .map_err(|e| BridgeError::Link(format!("bad message: {e:?}")))?
                 .0;
+            // The inbound half of `--trace peer`: every message the session
+            // sent this bridge, with its length, before anything decides what
+            // to do about it. A message the arms below drop is still a message
+            // that arrived, and a trace that only showed the handled ones
+            // would be the wrong answer to "why did nothing happen".
+            tracing::trace!(
+                target: "bit_cli::peer",
+                message = ?message,
+                len = frame.len(),
+                direction = "in",
+                "message"
+            );
             match message {
                 Message::Request(request) => {
                     if request.length > MAX_REQUEST_LEN {
@@ -1049,6 +1061,17 @@ async fn handshake(
     let ours = Handshake::new(params.info_hash, peer_id);
     let mut buf = [0u8; HANDSHAKE_LEN];
     let len = ours.serialize_unchecked_len(&mut buf);
+    // What `--trace handshake` promises, outbound half. This bridge is a real
+    // peer as far as the session is concerned, so this is a real handshake:
+    // the id it will be known by, the info hash it claims, and the extension
+    // bits it sets. See `TODO/cli-surface.md`, T-219.
+    tracing::trace!(
+        target: "bit_cli::handshake",
+        peer_id = %peer_id.as_string(),
+        info_hash = %params.info_hash.as_string(),
+        direction = "out",
+        "handshake"
+    );
     write
         .write_all(&buf[..len])
         .await
@@ -1057,6 +1080,15 @@ async fn handshake(
     loop {
         match Handshake::deserialize(frames.buffered()) {
             Ok((theirs, size)) => {
+                tracing::trace!(
+                    target: "bit_cli::handshake",
+                    peer_id = %theirs.peer_id.as_string(),
+                    info_hash = %theirs.info_hash.as_string(),
+                    supports_fast = theirs.supports_fast(),
+                    supports_extended = theirs.supports_extended(),
+                    direction = "in",
+                    "handshake"
+                );
                 if theirs.info_hash != params.info_hash {
                     return Err(BridgeError::Link(
                         "session sent a different infohash".into(),
@@ -1099,7 +1131,27 @@ async fn send_greeting(
         true => Message::HaveAll,
         false => Message::Bitfield(ByteBuf(&bits)),
     };
+    // The extension negotiation half of what `--trace handshake` promises.
+    // `upload_only` is the BEP 21 flag the dictionary carries and it is the
+    // one field of it that changes what the session does with this peer.
+    tracing::trace!(
+        target: "bit_cli::handshake",
+        upload_only = !params.is_complete(),
+        extensions = 0,
+        bytes = out.len(),
+        direction = "out",
+        "extended handshake"
+    );
     for message in [announce, Message::Unchoke] {
+        // The greeting is wire traffic, so it goes to `peer` rather than to
+        // `handshake`: the two subsystems split at the point where the
+        // connection is negotiated and messages start.
+        tracing::trace!(
+            target: "bit_cli::peer",
+            message = ?message,
+            direction = "out",
+            "message"
+        );
         out.extend_from_slice(&serialize(&message, bits.len())?);
     }
     write
@@ -1337,6 +1389,22 @@ async fn serve_block(
     )
     .await;
     status.request_settled(started.elapsed());
+    // What `--trace piece` promises: the request, its receipt, and the timing,
+    // for the one piece path this repository's own code decides. The clock is
+    // the one `request_settled` is charged, so the number here and the
+    // pipeline number in the report are the same number. See
+    // `TODO/cli-surface.md`, T-219.
+    let (index, begin, length) = key;
+    tracing::trace!(
+        target: "bit_cli::piece",
+        piece = index,
+        begin,
+        length,
+        offset,
+        micros = started.elapsed().as_micros() as u64,
+        error = ?outcome.as_ref().err().map(|e| e.reason.as_str()),
+        "served a block"
+    );
     outcome
 }
 

@@ -62,7 +62,7 @@ pub fn resolve(global: &Global, env: &Env) -> Result<Resolved> {
     let consider = |resolved: &mut Resolved, path: PathBuf, origin: Origin| -> Result<()> {
         match ConfigFile::read_optional(&path)? {
             Some(file) => resolved.apply_file(&file, origin, &path),
-            None => resolved.files_missing.push(path),
+            None => resolved.missed(path),
         }
         Ok(())
     };

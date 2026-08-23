@@ -439,6 +439,7 @@ impl Engine {
         // settled on. See `TODO/peers.md`, T-163.
         let encryption = Arc::new(crate::mse::MseTransform::new(options.encryption));
 
+        trace_dht(options.enable_dht);
         let opts = SessionOptions {
             blocklist_url: _blocklist.as_ref().map(|(_, url)| url.clone()),
             dht: options.enable_dht.then(dht_config),
@@ -1335,6 +1336,24 @@ fn dht_config() -> DhtSessionConfig {
         persistence: None,
         ..Default::default()
     }
+}
+
+/// What this process decided about the DHT, for `--trace dht`.
+///
+/// The subsystem's other target is `librqbit_dht`, which carries the queries,
+/// the responses and the routing table. This is the one fact that target
+/// cannot carry: whether there is a DHT at all. A run with `--no-dht` or
+/// `--web-seed-only` emits nothing from the vendored crate because nothing
+/// runs, and "no records" is indistinguishable from "the flag does nothing",
+/// which is the state `TODO/cli-surface.md` T-219 was filed about. So the
+/// decision is recorded here, once per session, before it is acted on.
+fn trace_dht(enabled: bool) {
+    tracing::trace!(
+        target: "bit_cli::dht",
+        enabled,
+        persistence = false,
+        "session dht"
+    );
 }
 
 /// Write the blocked ranges where `librqbit` will read them, as a `file:` URL.

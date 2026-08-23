@@ -70,7 +70,10 @@ impl Report {
                 .collect(),
             trace_subsystems: crate::logging::SUBSYSTEMS
                 .iter()
-                .map(|(name, description)| SubsystemRow { name, description })
+                .map(|s| SubsystemRow {
+                    name: s.name,
+                    description: s.description,
+                })
                 .collect(),
             composition_modes: bit_cli_core::webseed::Mode::ALL
                 .iter()

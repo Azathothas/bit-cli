@@ -95,6 +95,36 @@ impl Event {
 /// clamps to exactly this for the same reason.
 pub const UNKNOWN_LEFT: u64 = i64::MAX as u64;
 
+/// What one tracker said, for `--trace tracker`.
+///
+/// The inbound half of the exchange, and it is one function because an
+/// announce and a scrape return the same type and a caller reading a trace
+/// wants the two side by side. `invalid_peers` is in it because an entry the
+/// tracker sent that is not a peer is exactly the thing a report of a smaller
+/// swarm than expected turns out to be. See `TODO/trackers.md`, T-180.
+fn trace_response(kind: &str, result: &TrackerResult) {
+    tracing::trace!(
+        target: "bit_cli::tracker",
+        kind,
+        url = %result.url,
+        tier = result.tier,
+        protocol = %result.protocol,
+        ok = result.ok,
+        elapsed_ms = result.elapsed_ms,
+        http_status = ?result.http_status,
+        seeders = ?result.seeders,
+        leechers = ?result.leechers,
+        completed = ?result.completed,
+        interval_s = ?result.interval_s,
+        min_interval_s = ?result.min_interval_s,
+        peers = result.peers.len(),
+        invalid_peers = result.invalid_peers.len(),
+        warning = ?result.warning,
+        failure = ?result.failure,
+        "response"
+    );
+}
+
 /// What to tell the tracker about this client.
 #[derive(Debug, Clone)]
 pub struct Announce {
@@ -329,6 +359,26 @@ impl Client {
         family: Option<Family>,
     ) -> TrackerResult {
         let started = Instant::now();
+        // What `--trace tracker` promises, outbound half. The request in full
+        // means the fields that decide what the tracker records: `left`, whose
+        // unknown case goes out as `UNKNOWN_LEFT` rather than zero, the event,
+        // the port it is registering, and the family the connection will go
+        // out over, which is the address the tracker learns. See
+        // `TODO/trackers.md` T-180 and T-022, and `TODO/cli-surface.md` T-219.
+        tracing::trace!(
+            target: "bit_cli::tracker",
+            url = %url,
+            tier,
+            protocol = protocol_of(url),
+            family = ?family,
+            event = ?request.event.as_str(),
+            port = request.port,
+            left = ?request.left,
+            uploaded = request.uploaded,
+            downloaded = request.downloaded,
+            numwant = request.numwant,
+            "announce"
+        );
         let outcome = match protocol_of(url) {
             "udp" => self.udp(url, request, false, family).await,
             "http" | "https" => self.http_announce(url, request, family).await,
@@ -336,7 +386,7 @@ impl Client {
                 "{url}: `{other}` is not a tracker protocol"
             ))),
         };
-        match outcome {
+        let result = match outcome {
             Ok(mut result) => {
                 result.url = url.to_string();
                 result.tier = tier;
@@ -350,7 +400,9 @@ impl Client {
                 result.family = family;
                 result
             }
-        }
+        };
+        trace_response("announce", &result);
+        result
     }
 
     /// Scrape one tracker.
@@ -370,6 +422,15 @@ impl Client {
     ) -> TrackerResult {
         let started = Instant::now();
         let endpoint = at.unwrap_or(url);
+        tracing::trace!(
+            target: "bit_cli::tracker",
+            url = %url,
+            endpoint = %endpoint,
+            tier,
+            protocol = protocol_of(endpoint),
+            named = at.is_some(),
+            "scrape"
+        );
         let outcome = match protocol_of(endpoint) {
             "udp" => self.udp(endpoint, request, true, None).await,
             "http" | "https" => match at.map(str::to_string).or_else(|| scrape_url(endpoint)) {
@@ -382,7 +443,7 @@ impl Client {
                 "{endpoint}: `{other}` is not a tracker protocol"
             ))),
         };
-        match outcome {
+        let result = match outcome {
             Ok(mut result) => {
                 result.url = url.to_string();
                 result.tier = tier;
@@ -390,7 +451,9 @@ impl Client {
                 result
             }
             Err(error) => TrackerResult::failed(url, tier, started.elapsed(), error.to_string()),
-        }
+        };
+        trace_response("scrape", &result);
+        result
     }
 
     async fn http_announce(

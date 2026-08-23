@@ -122,6 +122,20 @@ impl InOrder {
         if let Some((_, stream)) = self.current.as_mut() {
             stream.seek(std::io::SeekFrom::Start(within)).await?;
         }
+        // What `--trace picker` promises, for the half this repository decides.
+        // The one lever there is over `librqbit`'s order is where this window
+        // sits, so a record that says which piece it moved to and which it
+        // came from is the whole of "why was this piece asked for next". The
+        // rest of the decision is the session's, and `librqbit::picker` is the
+        // other target the subsystem raises. See `TODO/cli-surface.md`, T-219.
+        tracing::trace!(
+            target: "bit_cli::picker",
+            piece,
+            was = ?self.at,
+            file = index,
+            within,
+            "moved the priority window"
+        );
         self.at = Some(piece);
         Ok(Some(piece))
     }

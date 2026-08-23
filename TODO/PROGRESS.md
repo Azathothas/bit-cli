@@ -39,10 +39,8 @@ is regenerated with `pwsh -NoProfile -File scripts/check-man.ps1 -Fix`.
 
 **Nothing in `patches/` is ever offered upstream, and this repository is the
 only one an agent may write to.** [RULES.md](RULES.md) section 6 carries the
-first and section 6a the second. A previous revision of this file listed
-"Offer the patches upstream" as work; it was wrong, and the operator has now
-given the instruction twice. `patches/UPSTREAM.md`'s `Upstream:` field answers
-"could a release retire this patch on its own?" and nothing else.
+first and section 6a the second. `patches/UPSTREAM.md`'s `Upstream:` field
+answers "could a release retire this patch on its own?" and nothing else.
 
 **The six hour soak is run by the operator, in a foreground terminal.** No agent
 session lasts six hours, and a session ending kills the process it started. The
@@ -52,26 +50,21 @@ the operator's run leaves behind, not to start one.
 ## `patches/TASKS.md` is finished, and the fork is maintenance now
 
 Twelve of its thirteen rows are done and the thirteenth is not waiting on a
-seam any more. That file's own closing section says the signal to look for is
-"no entry in the table at the top of this file is still waiting on a seam", and
-that is now true: [T-102](bep-coverage.md), BEP 55, waits on a measurement its
-own acceptance asks for and on a fixture that can produce an unreachable peer,
-neither of which is `librqbit`'s to give.
-
-So this session's work order is derived from [INDEX.md](INDEX.md)'s four
-questions again, not from `patches/TASKS.md`, and the vendored trees become
-what `patches/README.md` describes: run `scripts/upstream-scan.ps1` on a version
+seam any more. So the work order is derived from [INDEX.md](INDEX.md)'s four
+questions, not from `patches/TASKS.md`, and the vendored trees are what
+`patches/README.md` describes: run `scripts/upstream-scan.ps1` on a version
 bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-23T08:57:40Z, unattended, and it was ended on the
+- **Last session:** 2026-08-23T13:20:47Z, unattended, and it was ended on the
   operator's word. The duration is not restated here:
   `scripts/session-report.ps1` derives it from the instant above, and a
   duration written down twice is a number two documents disagree about.
-- **Tests:** 1,228 passing, 0 failing. 1,204 at the start. Plus **149** in the
+- **Tests:** 1,246 passing, 0 failing. 1,228 at the start. Plus **149** in the
   vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
-  do not run.
+  do not run. The vendored count is unchanged by this session's patch, which
+  was the point of running them.
 - **Gates:** clean, on rustc 1.98.0.
 
 ```bash
@@ -83,202 +76,120 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```
 
 - **CI:** green on all **nineteen** jobs at run **32638490147**, against commit
-  `9d5eb41`, which is the last commit of the session. Seventeen jobs until this
-  session: [T-150](cli-surface.md) added `Clippy (tracking stable)` and
-  `Clippy (tracking beta)`.
+  `9d5eb41`, which is the last commit of the **previous** session. This
+  session's own run is newer and is named in the next revision of this file;
+  read the current one rather than trusting either.
 
-  **One job went red and it is fixed.** Run **32637486414** failed `Record` on
-  a `TODO/` citation that the same local `gates.ps1 -Fix` run had approved and
-  then moved: the record gate ran before `cargo fmt --all` rewrote the file.
-  That is [T-220](cli-surface.md), and the gate runs after the two that rewrite
-  now.
+```bash
+gh run list --limit 1
+```
 
-  **Nothing went red that was not meant to.** Run **32631078557** carries the
-  demonstration T-150's acceptance asked for: the run's own conclusion is
-  `success` with `Clippy (tracking beta)` failing, because the tracking job
-  does not block. What it found is [T-218](cli-surface.md), fixed two pushes
-  later, and the run above is green on all nineteen including that job.
-- **Entries:** 170 items. 27 open, 1 partial, 0 blocked, 132 done, 10 deferred
-  to Phase C. 132 of 160 workable done, 28 left.
-- **Tree:** 94 Rust files, 55,328 lines of code, 13,775 of comment,
+- **Entries:** 171 items. 27 open, 1 partial, 0 blocked, 133 done, 10 deferred
+  to Phase C. 133 of 161 workable done, 28 left.
+- **Tree:** 95 Rust files, 56,006 lines of code, 14,009 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
-- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **27 patches**
-  across nineteen sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
+- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **28 patches**
+  across twenty sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
   `scripts/vendor-status.ps1` exits 0.
 - **Version:** `bit-cli` 0.2.0, unchanged.
 
 ## What the last session did
 
-**Fifteen entries closed, four filed, and nine of the fifteen had a premise
-the measurement disproved.** That is the highest proportion any session has
-had, and every one of them was found by running something rather than by
-reading it.
+**One entry closed, one filed, and the closing measurement inverted the work.**
+The operator ruled on the open question from the previous session, "build
+rather than delete", and the whole session is [T-219](cli-surface.md), item 2
+of the previous work order.
 
-The work order was taken in its order: items 1 and 2, then the `ci` and
-`windows` group, the `trackers` and `dht` groups, the three entries the
-previous session filed, and two from the effort S list.
+### [T-219](cli-surface.md), P1, effort M, done
 
-### The premise corrections, because they are most of the session
+`--trace` documented eleven subsystems and ten of them raised a `tracing`
+target nothing wrote to. All eleven emit now.
 
-- **[T-178](windows.md)** said `bit-cli` cannot fix a `librqbit` loop and that
-  the loop is on the payload write path. Neither is true: the trees are
-  vendored, and the one `add_torrent` call in the workspace installs
-  `SafeStorageFactory`, whose own copy of that loop had carried the guard since
-  the day before the entry was filed.
-- **[T-075](windows.md)** asked for two documented forms to be run. Running
-  them is what the entry was for: one does not exist on the host it is for and
-  the other silently corrupts the data.
-- **[T-150](cli-surface.md)** said the case for pinning is strongest for the
-  lint job. `RUSTFLAGS: -D warnings` is set for the whole workflow, so every
-  job that compiles is a lint gate.
-- **[T-180](trackers.md)** was filed as an undecided question and was a live
-  defect: every magnet this tool announced said `left=0`, which means seed.
-- **[T-050](dht.md)** supposed a short run "may still write" a cache. It wrote
-  one, into **another program's** directory.
-- **[T-051](dht.md)** said the run waits on a deadline. It failed in 0.01
-  seconds, with the wrong exit code and a message naming a `librqbit` field.
-- **[T-213](cli-surface.md)** predicted "the flag and the test". The flag broke
-  the resolver that finds the payload, and `verify` had the same defect with a
-  test that passed anyway.
-- **[T-214](cli-surface.md)** said "there is no flag to be inert". There were
-  three, on four commands.
-- **[T-094](bench.md)** said `--trace http` records every request in memory and
-  proposed measuring it with `bench webseed`. It is a log filter, and
-  `bench webseed` has its own HTTP client, so that command's traced runs are
-  comparisons of a run with itself.
+**The premise held and the fix was not the one the entry described.** The entry
+reads as ten subsystems' worth of instrumentation to write. One run with `-vvv`
+and `--log-format json`, counting the `target` field, says otherwise:
+**10,986 records over nineteen targets**, and nine of the ten already had their
+facts on a target `--trace` did not name. `librqbit::peer_connection` 4,108,
+`librqbit::torrent_state::live` 2,154, `librqbit::file_ops` 2,114,
+`librqbit_dht::dht` 221, `bit_cli::http` 32.
 
-### Item 3, the `ci` and `windows` group
+So a subsystem carries **the targets it raises** now rather than one derived
+from its spelling. `SUBSYSTEMS` is a struct, `filter_directive` emits one
+directive per target and dedupes on the target, and each name raises
+`bit_cli::<name>` where this repository's own code writes plus the vendored
+target that carries the same fact.
 
-**[T-178](windows.md), P3, done.** The Windows positioned-write loop takes its
-write as an argument now, so a double can return `Ok(0)`, and the error names
-the offset and the bytes left. Five tests. **Run against the defect**: with the
-guard replaced by `continue` the test does not fail, it hangs, and was killed
-at 90 seconds. The vendored loop carries the guard too, mirroring the read-side
-guard upstream already wrote, as patch 26.
+**Eleven emission points written**, in `SafeStorage`'s read, write, flush and
+allocate; `RateLimiter::take`; both retry ladders and `SourceStats::record_error`;
+`Resolved::apply`, which records the layer that lost as well as the one that
+won; `Client::announce_on` and `scrape`; the web seed bridge's handshake,
+messages and served blocks; `InOrder::advance`; and `Engine`, once per session,
+for whether there is a DHT at all.
 
-**[T-075](windows.md), P2, done.** `scripts/check-redirect.ps1` builds a
-torrent named `café-λ-日本.bin` and runs seven ways of capturing `--json` on
-both hosts. `[Console]::OutputEncoding` and `$OutputEncoding` are two settings
-and neither defaults to UTF-8: on this machine both hosts read at `IBM437` and
-5.1 writes `us-ascii` into a native command. `| ConvertFrom-Json`, which the
-README recommended, returns a name that is not the name, **and the JSON still
-parses**. `utf8NoBOM` does not exist before PowerShell 6. The README now
-carries the recipe and the table, and `bench/redirect-*.json` are the runs.
+**Ten vendored trace calls retargeted**, and it is not cosmetic. A `tracing`
+target defaults to the module path and the modules do not divide the way the
+subsystems do: `peer_connection` holds the handshake and every wire message, so
+`--trace handshake` would have printed 266 records where 2 were asked for.
+`patches/UPSTREAM.md` has the section. Upstream's own tests were run: 149
+passing, unchanged.
 
-**[T-150](cli-surface.md), P2, done.** `RUST_GATE` pins all seven gating jobs
-and `release.yml` takes it too. `clippy-next` tracks `stable` and `beta`
-without blocking. `check-todo.ps1` fails when two workflows disagree about the
-pin or when a job floats without `continue-on-error`, and **both checks were
-run against the defect they claim to catch**.
+**Measured, on one 2 MiB fixture, one run per name.** The ten names the entry
+was filed about write **743** lines of stderr where they wrote **0**. An
+untraced run still writes none.
 
-### The tracking job earned itself in one afternoon
+```bash
+pwsh -NoProfile -File scripts/check-trace.ps1 -Json bench/trace.json
+```
 
-**[T-218](cli-surface.md), filed and done.** `beta` found
-`Atomic::fetch_update` deprecated in 1.99, which `-D warnings` makes an error.
-Running the acceptance **the way CI runs it** found a second one in
-`vendor/librqbit-utp`: `use std::{f64, ...}` imports the module, so
-`f64::INFINITY` resolves to the legacy constant. Both fixed, neither by taking
-the new name: `try_update` does not exist on the MSRV.
+**Run against the defect.** With `bit_cli::disk` renamed at all four storage
+call sites the `disk` case fails, naming the target it expected and the one it
+found. That is exactly the state the whole surface was in.
 
-### Item 4, the `trackers` and `dht` groups
+The acceptance is `crates/bit-cli/tests/trace_subsystems.rs`, fifteen cases,
+driving the **binary** rather than `run`: the subscriber is
+process-global and `logging::install` is best-effort by design, so an
+in-process assertion would be reading whichever test won the race to install
+one. [`docs/trace.md`](../docs/trace.md) is what a caller reads.
 
-**[T-180](trackers.md), P2, done.** `Announce::left` is `Option<u64>`, which is
-what turned the second call site into a compile error. Unknown goes out as
-`i64::MAX`, and the corpus decided that value: `torrent/tracker/http/http.go:36`
-carries the two failures that rule out the alternatives, both from a real
-tracker. Inbound, a negative count is `None` rather than zero. `peers: [42]`
-was already survived and never mentioned; five shapes are named now.
+### [T-222](cli-surface.md) filed, P1, effort M
 
-**[T-065](trackers.md), P3, done.** `--scrape-url`. It names one endpoint, so a
-run with several trackers is refused rather than reporting one answer as many.
+**A config file reaches `config show` and nothing else**, and it is the fifth
+flag-does-nothing entry after T-181, T-183, T-185 and T-219. `--config` and
+`--no-config` are global flags with two readers in the workspace, both inside
+`cmd/config.rs`'s `resolve`, whose only caller is `config show`.
 
-**[T-063](trackers.md), P3, done.** Decided rather than built: parallel,
-everywhere, with the reasoning in [`docs/trackers.md`](../docs/trackers.md).
-The corpus note calling the download path "forced" no longer holds, because the
-`HashSet` that flattens the tiers is in a tree this repository owns.
+Measured rather than read: a `bit-cli.toml` naming a `download_directory` shows
+up in `config show` under `project_config`, and a `download` in the same
+directory writes to the working directory instead. The same flag also has two
+behaviours: `--config` naming a missing file is exit 8 on `config show` and
+exit 0, in silence, on every other command.
 
-**[T-050](dht.md), P2, done.** `DhtSessionConfig::default()` persists, and the
-path is `com.rqbit.dht`, so `bit-cli` was rewriting
-`%LOCALAPPDATA%/rqbit/dht/cache/dht.json`. One 90 second run took it from
-95,248 bytes to 81,752. With `persistence: None` the same run leaves it byte
-for byte and second for second.
-
-**[T-051](dht.md), P2, done.** A magnet with no way to fetch metadata is exit 2
-before the session is built, and the message says what to do. The check is on
-the condition rather than on `--web-seed-only`, and `--peer` keeps a run alive
-because BEP 9 carries metadata from a peer.
-
-### Item 5, the three the previous session filed
-
-**[T-213](cli-surface.md), P3, done.** `-O` on `seed`, and the resolver that
-finds a multi-file payload now looks for file 0 where the caller said it would
-be. `verify` had the same defect.
-
-**[T-214](cli-surface.md), P3, done.** `--on-complete` on `seed` fires once,
-when the payload has passed its hash check and the listener is up. The three
-hook flags are a `HookArgs` struct now; `peers`, `bench leech` and `bench seed`
-refuse them instead of ignoring them. `docs/hooks.md` has both tables.
-
-**[T-212](memory.md)** is untouched and still waits on a fixture of stalling
-peers, which nothing this session needed.
-
-### Item 6, two from the effort S list
-
-**[T-191](bench.md), P2, done.** `fold_document` refuses to fold a document
-under a `kind` another **command** already claimed, and both directions are
-tested: the `seed` pair fails, and one command run two ways still merges.
-
-**[T-094](bench.md), P2, done.** Measured on `download --web-seed-only`, where
-the trace fires. Three configurations, up to 16,384 trace lines: in every one
-the difference between the arms is smaller than the plain arm's own run-to-run
-spread, and in one the traced arm used less memory.
-
-**[T-219](cli-surface.md) filed, P1**, and it is the largest flag-does-nothing
-found so far: ten of the eleven documented `--trace` subsystems raise a target
-nothing writes to. Measured on one run tracing all ten: zero lines of stderr,
-against 257 for `http` on the same run.
-
-### Two red jobs at the end of the session, and both are fixed
-
-**[T-220](cli-surface.md), filed and done.** `gates.ps1` ran the `record` gate
-before `man` and `fmt`, both of which rewrite files under `-Fix`. A local run
-printed `record ok` and `all gates pass`; the push went red on `Record`,
-because `cargo fmt --all` had moved a cited line by ten **in the same run that
-had just approved it**. The gate runs after both now. Same shape as the
-`check-man.ps1 -Fix` defect found earlier the same day.
-
-**[T-221](windows.md), filed and done.** The push carrying that fix turned
-`Test (ubuntu-latest)` red on a seeder fixture, having changed no source at
-all. The peer waited for the listener and connected **once**: a bound port is
-not a session ready to answer for that info hash, so an early connect is
-accepted and dropped. It retries inside the patience it already had now. That
-is the **sixth** test of this kind and the second in one day, and
-[T-216](windows.md) fixed this very test three hours earlier without covering
-this path.
+`README.md` documents the whole six-layer precedence chain as the tool's
+configuration. Twenty-two settings in `config::SETTINGS` have a default and a
+description and no run reads any of them.
 
 ## In progress
 
-Nothing is half-written. Every entry this session touched is closed in
-[INDEX.md](INDEX.md) with its acceptance run recorded.
+Nothing is half-written. [T-219](cli-surface.md) is closed in
+[INDEX.md](INDEX.md) with its acceptance run recorded and its evidence
+committed at `bench/trace-subsystems-20260823T140418847Z.json`.
 
-- **[T-219](cli-surface.md)** is filed, open, P1, effort M, and is the one
-  thing this session found and did not fix. It names the two subsystems that
-  are cheap and the ones that need a seam in `vendor/`.
-- **[T-212](memory.md)** is open and unchanged.
+- **[T-222](cli-surface.md)** is filed, open, P1, effort M, and is the one
+  thing this session found and did not fix.
+- **[T-212](memory.md)** is open and unchanged, still waiting on a fixture of
+  stalling peers.
 - **[T-102](bep-coverage.md)** is open and **[T-164](peers.md)** is partial,
   the only partial left.
 
 ## Start here next session
 
-**The shape of the work order is the operator's, from three sessions ago.** Not
+**The shape of the work order is the operator's, from four sessions ago.** Not
 priority first. Clear as many small entries as possible, so the open count
 comes down, and then take the bigger ones a **category at a time**.
 
-**Item 2 below is the one place this order departs from that shape**, and it
-does it deliberately: [T-219](cli-surface.md) is effort M rather than S, and it
-is taken first because it is P1, because it is ten documented capabilities that
-do nothing, and because it is measured and ready to start. A session that would
-rather hold the shape takes item 4 first and loses nothing by it.
+Item 2 is the one place this order departs from that shape, and for the same
+reason the last one did: a P1 that is measured and ready to start outranks the
+shape.
 
 The counts are derived from the rows rather than from memory:
 
@@ -287,22 +198,21 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 ```
 
 1. **Re-measure the baseline rather than trusting the one above**, which is
-   what [RULES.md](RULES.md) section 1 step 5 asks for. Every run this session
-   started has been read and the last is green on all nineteen jobs, so there
-   is no red job waiting and nothing to chase. One documentation commit sits on
-   top of `9d5eb41` carrying a skip marker, so it started no run.
+   what [RULES.md](RULES.md) section 1 step 5 asks for. Read the run this
+   session's push started: the CI line above names the previous session's run,
+   because this file was written before the push.
 
 ```bash
 gh run list --limit 1
 ```
 
-2. **[T-219](cli-surface.md), P1, effort M.** Ten documented `--trace`
-   subsystems that raise a target nothing writes to. It is the biggest thing
-   open, it is measured, and its Approach names the order: `ratelimit` and
-   `retry` need no seam, `disk` goes through `SafeStorage::write_through`, and
-   `piece` and `picker` are decided in the vendored session and are their own
-   work. Its acceptance is a test per subsystem, so the list a caller reads and
-   the list that works cannot drift again.
+2. **[T-222](cli-surface.md), P1, effort M.** A config file reaches
+   `config show` and nothing else. It is measured, its Approach names the seam
+   (`clap`'s `ArgMatches::value_source`, so a flag given on the command line
+   keeps beating a file), and its Acceptance is a test per layer driving a
+   command that is not `config show`. Two smaller things fall out of it and are
+   named in the entry: `--config` on a missing file has two behaviours, and
+   `--no-config` is a no-op everywhere but one command.
 3. **The six hour soak, and it is the operator's to run.** No agent session
    lasts six hours and a session ending kills the process it started. In a
    dedicated foreground terminal, from the repository root:
@@ -325,14 +235,14 @@ pwsh -NoProfile -Command "Get-ChildItem bench/soak-*.json | Sort-Object LastWrit
    result at that window: +0.622 MiB/h at r squared 0.105 is noise fitted to a
    line. **A slope needs a window long enough to have one**, and the tree has
    moved a long way since, so restart rather than resume.
-4. **The rest of the effort S entries**, eight rather than the ten the last
-   work order listed, because [T-094](bench.md) and [T-191](bench.md) closed:
-   [T-176](create-seed.md), [T-173](metainfo.md), [T-187](metainfo.md),
-   [T-041](memory.md), [T-165](peers.md), [T-033](performance.md),
-   [T-008](webseed.md), [T-103](bep-coverage.md). **Check each against the tree
-   before building**: nine of this session's thirteen said something the tree
-   did not do, and every one of those was found by running a command rather
-   than by reading.
+4. **The effort S entries**, eight of them: [T-176](create-seed.md),
+   [T-173](metainfo.md), [T-187](metainfo.md), [T-041](memory.md),
+   [T-165](peers.md), [T-033](performance.md), [T-008](webseed.md),
+   [T-103](bep-coverage.md). **Check each against the tree before building.**
+   That rule has now paid four sessions running, and this session is the
+   sharpest case yet: T-219's premise was true and its Approach was still
+   wrong, because nobody had counted what a run already emits. One command
+   answered it.
 5. **[T-212](memory.md)**, whenever a fixture of stalling peers is being built
    anyway.
 6. **Then, a category at a time.** `bep-coverage.md` has the most left and the
@@ -346,21 +256,11 @@ opened, filed or commented on either, by [RULES.md](RULES.md) section 6a.
 
 ## Open questions for the operator
 
-**One, and it is a scope question rather than a blocker.**
+**None.** The one this file carried last session, whether to build `--trace`
+out or delete the ten names, was ruled on: build. It is done, and
+[T-219](cli-surface.md) is closed rather than left open for a residue.
 
-[T-219](cli-surface.md) is P1 and effort M, and its Acceptance offers two ways
-out per subsystem: emit on the target, or stop documenting it. The cheap answer
-is to delete ten names from `SUBSYSTEMS` and the manuals, which takes an hour
-and makes the surface honest. The expensive one is to make each subsystem emit
-what its sentence promises, which is where the value is and which needs a seam
-in `vendor/` for `piece` and `picker`.
-
-**The recommendation is to build rather than delete**, in the order the entry
-names, because `--trace` is the only debugging surface this tool has and
-`--jsonl` does not cover `disk`, `picker` or `ratelimit`. A session can start
-with `ratelimit`, `retry` and `disk`, which need nothing from `vendor/`, and
-the entry stays open for the rest. If the operator wants the surface honest
-sooner, deleting the ten names first and re-adding each as it lands is the
-other order and costs nothing that cannot be undone.
-
-The soak is item 3 and remains the operator's to run.
+One thing worth the operator's eye rather than a decision: [T-222](cli-surface.md)
+means `bit-cli.toml` and every `BIT_CLI_*` variable currently change nothing
+about a run. If anything on this machine or in a script depends on one, it has
+never worked, and item 2 is what makes it start working.

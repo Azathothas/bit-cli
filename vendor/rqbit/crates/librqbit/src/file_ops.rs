@@ -164,6 +164,7 @@ impl<'a> FileOps<'a> {
 
             if some_files_broken {
                 trace!(
+                    target: "librqbit::piece",
                     "piece {} had errors, marking as needed",
                     piece_info.piece_index
                 );
@@ -240,7 +241,7 @@ impl<'a> FileOps<'a> {
             .compare_hash(piece_index.get(), h.finish())
         {
             Some(true) => {
-                trace!("piece={} hash matches", piece_index);
+                trace!(target: "librqbit::piece", "piece={} hash matches", piece_index);
                 Ok(true)
             }
             Some(false) => {
