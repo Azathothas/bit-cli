@@ -1090,14 +1090,62 @@ Acceptance:  `ci.yml` names a version for the gating lint job, a second job
              tracks `stable` without blocking, and this entry records a run
              where the tracking job is red and the gate is green.
 
-**Not done, and open on purpose.** The three lints are fixed, so the tree is
-green on both toolchains today and there is nothing to demonstrate the split
-against. Doing it now would mean adding a job whose whole point cannot be shown
-until the next Rust release. The three fixes are recorded under
-[T-144](#t-144-the-msrv-job-fails-the-tree-needs-a-newer-rustc-than-it-claims),
-because raising the MSRV is what unlocked two of the four lints this round;
-this one is the third and came from the toolchain rather than the manifest,
-which is precisely the distinction the entry is about.
+**The split is built. The entry stays open until the run that shows it, which
+is the third clause of its own Acceptance.**
+
+**The previous revision of this paragraph said there was nothing to demonstrate
+against, and that was true of `stable` and false of the next toolchain.** One
+command settled it, and it is the command the new job runs:
+
+```
+$ cargo +beta clippy --workspace --all-targets --all-features -- -D warnings
+error: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`:
+       renamed to `try_update` for consistency
+  --> crates/bit-cli-core/src/webseed/bridge.rs:450:14
+```
+
+`rustc 1.99.0-beta.1`, on a tree that is clean on 1.98.0. That is the entry's
+own scenario six weeks before it becomes everybody's problem, and it is
+[T-218](#t-218-the-next-stable-release-fails-the-build-on-a-method-the-bridge-calls)
+now. So the demonstration is a real finding rather than a defect introduced to
+prove a point, which is what waiting was for.
+
+**The Approach undercounted the blast radius, and the measurement is what
+shows it.** It says the case for pinning is "strongest for the job that runs
+lints with `-D warnings`" and weakest for `Format`, `Test` and `Build`. But
+`RUSTFLAGS: -D warnings` is set at the top of `ci.yml` for the **whole
+workflow**, so every job that compiles is a lint gate: the error above is a
+`rustc` deprecation, not a clippy lint, and `cargo test` and `cargo build` fail
+on it identically. Pinning only `Clippy` would have left six jobs floating and
+fixed nothing.
+
+**What landed:**
+
+- **`RUST_GATE`**, one named version, in `ci.yml`'s `env` beside the flag that
+  makes it necessary. All seven gating jobs take it. `release.yml` takes it too
+  and carries its own copy, because a workflow cannot read another one's `env`,
+  and a release is the one build that has to be reproducible.
+- **`clippy-next`**, `continue-on-error: true`, a matrix of `stable` and
+  `beta`. `stable` is the leg this entry's Acceptance names. `beta` is the one
+  that is useful, because by the time `stable` reports a lint the release has
+  already happened. It runs `clippy`, which compiles every target, so it covers
+  what `test` and `build` would find on the same toolchain.
+- **A check, so neither property is left to a review.**
+  `scripts/check-todo.ps1` fails when two workflows name different versions for
+  `RUST_GATE`, and when a job installs `stable`, `beta` or `nightly` without
+  carrying `continue-on-error: true`. Reintroducing a floating gate is one line
+  in a diff and looks like every other job.
+
+**The check was run against both defects it claims to catch**, which is
+[T-217](../TODO/windows.md#t-217-the-text-gate-caught-one-control-byte-and-not-the-other-twenty-eight)'s
+lesson. With `fmt` put back on `stable` it reports
+``ci.yml:56 : job `fmt` installs `stable` ...``; with `release.yml` moved to
+`1.97.1` it reports `the workflows disagree about RUST_GATE`. The tracking job,
+which floats on purpose, is reported by neither.
+
+**What is left is the run.** The Acceptance asks this entry to record one where
+the tracking job is red and the gate is green, and that run is the push that
+carries this change.
 
 ### T-151 Only one of the three release targets was checked for static linking
 
@@ -3022,3 +3070,60 @@ Acceptance:  `bit-cli seed <TORRENT> --data <DIR> --on-complete <CMD>` runs the
              is up, with `BIT_CLI_INFO_HASH` set. `docs/hooks.md` says which
              trigger means what on `seed`, and
              `every_hook_variable_is_documented` still passes.
+
+### T-218 The next stable release fails the build on a method the bridge calls
+
+Source:      measured on `beta` while closing [T-150](#t-150-clippy-pins-a-floating-toolchain-so-a-rust-release-can-turn-the-tree-red), 2026-08-23
+Category:    ci
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `rustc 1.99.0-beta.1` deprecates
+             `std::sync::atomic::Atomic::<u64>::fetch_update`, renamed to
+             `try_update`. `crates/bit-cli-core/src/webseed/bridge.rs:450`
+             calls it:
+
+             ```
+             error: use of deprecated method
+                 `std::sync::atomic::Atomic::<u64>::fetch_update`:
+                 renamed to `try_update` for consistency
+               --> crates/bit-cli-core/src/webseed/bridge.rs:450:14
+                 = note: `-D deprecated` implied by `-D warnings`
+             ```
+Relevance:   `-D warnings` is set for the whole CI workflow, so this is an
+             error rather than a warning, and it is not confined to the lint
+             job: `cargo test` and `cargo build` fail on it identically. On the
+             day 1.99 becomes stable, every job that was still tracking
+             `stable` would go red at once, on a commit nobody touched.
+
+             It is the exact shape T-150 was filed for, arriving six weeks
+             early because that entry's tracking job is now there to see it.
+             T-150 recorded that the split could not be demonstrated because
+             nothing was red on the next toolchain; this is what was red.
+Approach:    Not `try_update`, and that is the whole decision. It does not
+             exist on the pinned 1.98.0 and it does not exist on the MSRV,
+             1.88, which [RULES.md](RULES.md) section 6 says is measured rather
+             than chosen. Taking the new name would raise the MSRV by eleven
+             releases to silence a lint.
+
+             The call is a saturating decrement of a counter and nothing else:
+
+             ```rust
+             self.in_flight
+                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                     Some(n.saturating_sub(1))
+                 })
+                 .ok();
+             ```
+
+             `fetch_update` is a compare-exchange loop with a closure. Writing
+             the loop is four more lines, is what the method compiles to, and
+             is not deprecated on any release this repository supports. An
+             `#[allow(deprecated)]` is the other candidate and is worse: it
+             silences the tracking job for that call site permanently, so the
+             next rename in the same file arrives unannounced.
+Acceptance:  `cargo +beta clippy --workspace --all-targets --all-features --
+             -D warnings` is clean, `cargo check` on 1.88 still passes, and a
+             test holds the saturating behaviour the closure carried, which
+             nothing does today.

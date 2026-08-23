@@ -119,8 +119,8 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0007-crates-librqbit-src-peer_info_reader-mod.rs.patch
-             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0021-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0022-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    ours. A defect in their code, so a release may fix it
              independently; check at the next one.
 Added:       2026-08-22T13:52Z
@@ -206,7 +206,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0024-package-lock.json.patch
+             patches/rqbit/0025-package-lock.json.patch
 Upstream:    ours by construction. It is a consequence of our exclusion list
              rather than a defect, so no release retires it
 Added:       2026-08-22T13:47Z
@@ -337,8 +337,8 @@ issue is the one to check this patch against.
 Unblocks:    T-040, TODO/memory.md, the record's other P0
 Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0018-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0019-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    ours. It is rqbit#525 (https://github.com/ikatson/rqbit/issues/525),
              open, so a release may carry a fix of their own.
 Added:       2026-08-22T15:30Z
@@ -414,7 +414,7 @@ Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0023-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0024-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    ours. It is rqbit#537 (https://github.com/ikatson/rqbit/issues/537),
              open, so a release may carry a fix of their own.
 Added:       2026-08-22T17:26Z
@@ -578,7 +578,7 @@ Unblocks:    T-132, TODO/multi-source.md
 Files:       vendor/rqbit/crates/librqbit/src/limits.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0005-crates-librqbit-src-limits.rs.patch
-             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
 Upstream:    ours, and shaped for this repository rather than for anyone else.
              No release retires it.
 Added:       2026-08-22T17:55Z
@@ -768,8 +768,8 @@ Files:       vendor/rqbit/crates/librqbit/src/lib.rs
              vendor/rqbit/crates/rqbit/src/main.rs, which builds the struct
              patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0013-crates-librqbit-src-torrent_state-initializing.rs.patch
-             patches/rqbit/0022-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0014-crates-librqbit-src-torrent_state-initializing.rs.patch
+             patches/rqbit/0023-crates-rqbit-src-main.rs.patch
 Upstream:    ours. Two thirds is a seam and a feature; the third part, the
              validate_fastresume key, is a defect a release may fix on its own
 Added:       2026-08-22T19:28Z
@@ -979,10 +979,10 @@ Files:       vendor/rqbit/crates/librqbit/src/stream_transform.rs (new)
              patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0011-crates-librqbit-src-stream_connect.rs.patch
-             patches/rqbit/0012-crates-librqbit-src-stream_transform.rs.patch
-             patches/rqbit/0019-crates-librqbit-src-type_aliases.rs.patch
-             patches/rqbit/0022-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0012-crates-librqbit-src-stream_connect.rs.patch
+             patches/rqbit/0013-crates-librqbit-src-stream_transform.rs.patch
+             patches/rqbit/0020-crates-librqbit-src-type_aliases.rs.patch
+             patches/rqbit/0023-crates-rqbit-src-main.rs.patch
 Upstream:    ours. A seam rather than a fix, and no release will carry this
              shape of it
 Added:       2026-08-23T02:52Z
@@ -1084,9 +1084,9 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/mod.rs
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
-             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0018-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
-             patches/rqbit/0021-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0019-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0022-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    ours. It is rqbit#584 (https://github.com/ikatson/rqbit/issues/584),
              open, so a release may carry an implementation of their own.
 Added:       2026-08-23T03:55Z
@@ -1213,7 +1213,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 Unblocks:    nothing on its own. It is nzbd's 0005 read and taken in part, and
              TODO/trackers.md is where the tracker entries live.
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
-             patches/rqbit/0023-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0024-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    ours. nzbd has a draft of the same bound, unsent, at
              contrib/rqbit/TRACKER_REQUEST_BUDGET_PR.md in that repository, so
              a release may carry a bound from that direction rather than ours.
@@ -1275,8 +1275,8 @@ Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/stats/atomic.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/stats/snapshot.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0018-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0019-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    ours. Two counters and one bounded list on a private method, so a
              release may expose the reason its own way; check at the next one.
 Added:       2026-08-23T05:19Z
@@ -1312,4 +1312,50 @@ T-024's own wording.
 
 ```bash
 cargo test -p bit-cli --lib a_peer_that_leaves_is_reported
+```
+
+---
+
+## librqbit: a Windows write that makes no progress loops forever
+
+```
+Unblocks:    T-178, TODO/windows.md
+Files:       vendor/rqbit/crates/librqbit/src/storage/filesystem/opened_file.rs
+             patches/rqbit/0011-crates-librqbit-src-storage-filesystem-opened_file.rs.patch
+Upstream:    ours. A four line guard on their own loop, and the read side of it
+             is already theirs, so a release may add the write side its own
+             way; check at the next one.
+Added:       2026-08-23T09:32Z
+```
+
+`pwrite_all` on Windows loops because `seek_write` may write fewer bytes than
+it was given. It subtracted what was written from what is left and had no
+branch for a write that reported success having written nothing: `remaining`
+then never decreases and the loop asks again forever, on the thread that owns
+that write. `WriteFile` succeeding with zero bytes written is rare and is not
+impossible, and a full volume, a disconnected network share or a filter driver
+can each produce one. The guard returns `std::io::ErrorKind::WriteZero`, which
+is what `write_all` in the standard library returns for the same thing, and the
+message names the offset and how many bytes were left.
+
+`pread_exact`, twenty lines above it in the same file, already refuses the
+read side of exactly this shape with `UnexpectedEof`. This is the write side of
+a guard upstream wrote, not a new idea imposed on their code.
+
+**Why it has to be here.** Because it is their loop. Nothing outside the crate
+can reach it: `OurFileExt` is `pub` but the loop is the body of the trait
+implementation for `std::fs::File`, so a caller gets the loop or writes its
+own.
+
+**What holds it, and what does not.** This half is proved by reading and is
+deliberately the smaller half. `bit-cli` never reaches this function: the one
+`add_torrent` call in the workspace, `crates/bit-cli-core/src/engine.rs:760`,
+installs `SafeStorageFactory` on every add, so every payload byte the tool
+writes goes through `crates/bit-cli-core/src/storage.rs` instead. That copy of
+the same loop carries the same guard and five tests, including one that drives
+it with a write that returns `Ok(0)` and asserts it is asked exactly once. See
+T-178, which records what happens with the guard removed.
+
+```bash
+cargo test -p bit-cli-core --lib a_write_that_makes_no_progress
 ```

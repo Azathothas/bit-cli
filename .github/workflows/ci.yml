@@ -30,6 +30,20 @@ env:
   # `patches/UPSTREAM.md` is where each one is recorded. See
   # `docs/vendoring.md`.
   RUSTFLAGS: -D warnings
+  # The toolchain every gating job installs. A named version rather than
+  # `stable`, because `stable` moves and `-D warnings` above turns anything a
+  # new release starts warning about into a failed job on a commit nobody
+  # touched. Bumping this is a commit with a message, the same as the MSRV.
+  #
+  # `Clippy (tracking ...)` below is what says when to bump it: it runs the
+  # same lint on `stable` and on `beta` and is allowed to fail. Read it before
+  # raising this, because what it reports is what raising it will cost.
+  #
+  # The flag is why every job is pinned rather than only the lint job. It is
+  # set for the whole workflow, so `cargo test` and `cargo build` fail on a new
+  # warning exactly as `cargo clippy` does: there is no such thing here as a
+  # job that only compiles. See TODO/cli-surface.md, T-150.
+  RUST_GATE: "1.98.0"
 
 jobs:
   fmt:
@@ -39,7 +53,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_GATE }}
           components: rustfmt
       - run: cargo fmt --all --check
 
@@ -66,9 +80,37 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_GATE }}
           components: clippy
       - uses: Swatinem/rust-cache@v2.9.2
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # What the next two toolchains want, six weeks before one of them is the
+  # only one there is. It never blocks: a lint that arrives with a release is
+  # a thing to fix on purpose, not a thing to discover from a red job on an
+  # unrelated push. `beta` is the useful leg, because by the time `stable`
+  # reports a lint the release has already happened.
+  #
+  # Red here is not an emergency and is not ignored either: it gets a TODO/
+  # entry naming the file and the line, and that entry is what has to close
+  # before RUST_GATE moves past the release that produced it.
+  clippy-next:
+    name: Clippy (tracking ${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2.9.2
+      # `clippy` compiles every target, so this covers what `cargo test` and
+      # `cargo build` would find on the same toolchain as well as the lints.
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
@@ -82,7 +124,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_GATE }}
       # The TLS and SHA-1 backends assemble their own primitives, and NASM is
       # not on the Windows runner by default.
       # Ours, not ilammy/setup-nasm: that action is unmaintained, still runs
@@ -129,7 +171,7 @@ jobs:
         run: pwsh -NoProfile -File scripts/setup-nasm.ps1
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_GATE }}
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
       # The workflow-level RUSTFLAGS replaces the per-target rustflags in
@@ -171,7 +213,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_GATE }}
       - uses: Swatinem/rust-cache@v2.9.2
       # `--features cli` because cargo-about 0.9 gates its own binary behind
       # it, and `cargo install` without it compiles the crate, installs
@@ -240,7 +282,7 @@ jobs:
         run: choco install aria2 --no-progress -y
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_GATE }}
       - uses: Swatinem/rust-cache@v2.9.2
       - run: cargo build --workspace --bins --examples --locked
       # Everything binds 127.0.0.1: the tracker, the web seed, the seeder, and
@@ -270,7 +312,7 @@ jobs:
         run: pwsh -NoProfile -File scripts/setup-nasm.ps1
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_GATE }}
       - uses: Swatinem/rust-cache@v2.9.2
       # The same payload has to produce a byte-identical .torrent on both
       # platforms. Path separator and ordering bugs are exactly what this

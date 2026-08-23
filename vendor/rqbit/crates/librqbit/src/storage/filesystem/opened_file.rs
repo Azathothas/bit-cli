@@ -93,6 +93,22 @@ impl OurFileExt for File {
         let mut offset = offset;
         while remaining > 0 {
             let written = self.seek_write(&buf[..remaining], offset)?;
+            // A write that reports success having written nothing leaves
+            // `remaining` where it was, so the loop asks again forever on the
+            // thread that owns the write. A full volume, a disconnected share
+            // or a filter driver can each produce one. `pread_exact` above
+            // already refuses the same shape on the read side; this is the
+            // write side of it, and `WriteZero` is what `write_all` returns
+            // for it. See `TODO/windows.md`, T-178.
+            if written == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    format!(
+                        "the write made no progress at offset {offset}, with {remaining} bytes left"
+                    ),
+                )
+                .into());
+            }
             remaining -= written;
             offset += written as u64;
             buf = &buf[written..];

@@ -144,9 +144,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-072](windows.md) | P0 | windows | **done** | Case-colliding paths silently overwrite |
 | [T-073](windows.md) | P1 | windows | **done** | Long paths are not tested |
 | [T-074](windows.md) | P1 | windows | **done** | A false hash-check pass on empty files |
-| [T-075](windows.md) | P2 | windows | open | PowerShell redirection encoding is not documented |
+| [T-075](windows.md) | P2 | windows | **done** | PowerShell redirection encoding is not documented |
 | [T-076](windows.md) | P2 | windows | **done** | seed and verify do not report renamed paths |
-| [T-178](windows.md) | P3 | windows | open | librqbit's Windows pwrite_all can spin forever on a zero-byte write |
+| [T-178](windows.md) | P3 | windows | **done** | librqbit's Windows pwrite_all can spin forever on a zero-byte write |
 | [T-080](create-seed.md) | P1 | create | **done** | librqbit's create_torrent writes an extra piece hash |
 | [T-081](create-seed.md) | P1 | create | open | BEP 52 v2 and hybrid torrents are not implemented |
 | [T-082](create-seed.md) | P2 | seeding | open | BEP 16 superseeding is not implemented |
@@ -216,6 +216,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-215](webseed.md) | P1 | bench | **done** | A third bench webseed test asserted a loaded runner cannot fail |
 | [T-216](windows.md) | P1 | ci | **done** | A seeder test waited longer for a listener than the run was allowed to live |
 | [T-217](windows.md) | P2 | ci | **done** | The text gate caught one control byte and not the other twenty-eight |
+| [T-218](cli-surface.md) | P2 | ci | open | The next stable release fails the build on a method the bridge calls |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -243,8 +244,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-166 items: 156 to work through, and 10 deferred to Phase C.
-38 open, 1 partial, 0 blocked, 117 done.
+167 items: 157 to work through, and 10 deferred to Phase C.
+37 open, 1 partial, 0 blocked, 119 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -503,10 +504,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 56 | 57 |
-| P2 | 20 | 1 | 0 | 40 | 61 |
-| P3 | 17 | 0 | 0 | 9 | 26 |
+| P2 | 20 | 1 | 0 | 41 | 62 |
+| P3 | 16 | 0 | 0 | 10 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **38** | **1** | **0** | **117** | **166** |
+| **All** | **37** | **1** | **0** | **119** | **167** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

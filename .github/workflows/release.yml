@@ -14,6 +14,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # The same pin CI's gating jobs take, and it has to be the same value:
+  # `scripts/check-todo.ps1` fails when the workflows disagree about it. What
+  # it is for and how it moves is written where it is set, in `ci.yml`. A
+  # release is the one build that has to be reproducible, so the compiler that
+  # makes it is named rather than picked up from whatever shipped that week.
+  RUST_GATE: "1.98.0"
 
 jobs:
   # Nothing is published before the same gate CI applies. A tagged release
@@ -26,7 +32,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_GATE }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2.9.2
       - run: cargo fmt --all --check
@@ -71,7 +77,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_GATE }}
           targets: ${{ matrix.target }}
 
       # No packaged b3sum on Windows, and the checksums are BLAKE3 on every

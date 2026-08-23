@@ -1385,13 +1385,56 @@ terminal is.
 
 PowerShell surfaces the exit code in `$LASTEXITCODE`, not `$?`.
 
-Windows PowerShell 5.1 writes UTF-16LE through `>` and `Out-File`, which breaks
-piping JSON into `jq`. Pipe directly, or name the encoding on PowerShell 7:
+`bit-cli` writes UTF-8 with no BOM to stdout whatever the console code page is.
+Getting those bytes into a file or a parser is the caller's half, and on Windows
+that is two settings rather than one:
+
+| | |
+| --- | --- |
+| `[Console]::OutputEncoding` | how the host decodes what a program wrote |
+| `$OutputEncoding` | how the host encodes what it sends into one |
+
+**Neither defaults to UTF-8.** Measured on Windows 11: both hosts read at the
+console code page, `IBM437` here, and Windows PowerShell 5.1 writes `us-ascii`
+into a native command. A torrent whose name is `café-λ-日本.bin` comes back
+with a different name, and the JSON still parses, so nothing says so.
+
+Set both once per session, and every form below is exact:
 
 ```powershell
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
 bit-cli info album.torrent --json | ConvertFrom-Json
-bit-cli info album.torrent --json | Out-File -Encoding utf8NoBOM info.json
 ```
+
+Or keep the bytes out of the pipeline altogether, which needs nothing set:
+
+```powershell
+cmd /c "bit-cli info album.torrent --json > info.json"
+```
+
+What each form does, measured against a name no code page holds:
+
+| form | 5.1 | 7.6.5 | |
+| --- | --- | --- | --- |
+| `cmd /c "... > file"` | exact | exact | copies bytes, decodes nothing |
+| `> file` | no | exact | 5.1 writes UTF-16LE, and `jq` reads none of it |
+| `\| ConvertFrom-Json` | no | no | exact once both encodings are set |
+| `\| Set-Content -Encoding utf8` | no | no | exact once both encodings are set. 5.1 adds a BOM |
+| `\| Out-File -Encoding utf8NoBOM` | no such value | no | `utf8NoBOM` arrived in PowerShell 6 |
+
+Every row of both columns comes from one command, and it takes two seconds:
+
+```powershell
+pwsh -NoProfile -File scripts/check-redirect.ps1
+```
+
+```powershell
+powershell -NoProfile -File scripts/check-redirect.ps1
+```
+
+It builds its own torrent, runs all seven forms, and prints which ones give the
+bytes back. It judges nothing: what it measures is a property of the host.
 
 ## Paths
 

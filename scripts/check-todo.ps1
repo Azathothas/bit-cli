@@ -600,6 +600,79 @@ if (Test-Path $workflowDir) {
 }
 
 # ---------------------------------------------------------------------------
+# 8b: the pinned toolchain, and the jobs allowed to float off it
+# ---------------------------------------------------------------------------
+#
+# T-150. `RUSTFLAGS: -D warnings` is set for the whole CI workflow, so every
+# job that compiles is a lint gate, and a job that installs `stable` is a gate
+# that moves on its own: a commit green when it was written goes red six weeks
+# later with nobody having touched it. `RUST_GATE` is the named version they
+# all take instead.
+#
+# Two things can quietly undo that and both are mechanical, so neither is left
+# to a review:
+#
+#   1. Two workflows naming different versions. The pin lives in `ci.yml` and
+#      in `release.yml` because a workflow cannot read another one's `env`, and
+#      a number written twice is a number two files disagree about.
+#   2. A new job pinning `stable` again. That is one line in a pull request and
+#      it looks exactly like every other job.
+#
+# A floating toolchain is allowed in a job that carries `continue-on-error:
+# true`, which is what `Clippy (tracking ...)` is: it reports what the next
+# release will want and blocks nothing.
+
+if (Test-Path $workflowDir) {
+    $gates = @{}
+    foreach ($wf in Get-ChildItem -Path $workflowDir -Filter *.yml -File) {
+        $lines = [System.IO.File]::ReadAllLines($wf.FullName)
+
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^\s*RUST_GATE:\s*"?(?<v>[0-9][A-Za-z0-9._-]*)"?\s*$') {
+                $gates[$wf.Name] = $Matches['v']
+            }
+        }
+
+        # Which jobs may float. A job starts at two spaces of indent and runs
+        # until the next one, so `continue-on-error` is read per job rather
+        # than per file: one exempt job must not exempt the file.
+        $jobName = $null
+        $floats = @{}
+        $jobOf = @{}
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            if ($line -match '^  (?<j>[A-Za-z0-9_-]+):\s*$') {
+                $jobName = $Matches['j']
+                $floats[$jobName] = $false
+                continue
+            }
+            if (-not $jobName) { continue }
+            if ($line -match '^\s*continue-on-error:\s*true\s*$') { $floats[$jobName] = $true }
+            if ($line -match '^\s*toolchain:\s*(?<t>\S+)') {
+                $value = $Matches['t'].Trim('"', "'")
+                if ($value -in @('stable', 'beta', 'nightly')) {
+                    $jobOf["$($wf.Name):$($i + 1)"] = @{ job = $jobName; toolchain = $value }
+                }
+            }
+        }
+        foreach ($where in $jobOf.Keys) {
+            $hit = $jobOf[$where]
+            if (-not $floats[$hit.job]) {
+                Problem "toolchain-pin" ("$where : job ``$($hit.job)`` installs ``$($hit.toolchain)``, which moves " +
+                    "on its own, and does not carry ``continue-on-error: true``. Take the RUST_GATE pin " +
+                    "or mark the job as not blocking. See TODO/cli-surface.md, T-150.")
+            }
+        }
+    }
+
+    $distinct = @($gates.Values | Sort-Object -Unique)
+    if ($distinct.Count -gt 1) {
+        $named = ($gates.Keys | Sort-Object | ForEach-Object { "$_ says $($gates[$_])" }) -join ', '
+        Problem "toolchain-pin" "the workflows disagree about RUST_GATE: $named"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 9: TODO/PROGRESS.md, the only file the next session is told to read
 # ---------------------------------------------------------------------------
 #

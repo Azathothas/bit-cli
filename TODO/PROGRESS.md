@@ -65,10 +65,11 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-23T06:14:39Z, unattended, and it ran to 08:40Z. It
-  was ended on the operator's word. The duration is not restated here:
-  `scripts/session-report.ps1` derives it from the instant above, and a
-  duration written down twice is a number two documents disagree about.
+- **Last session:** 2026-08-23T08:57:40Z, unattended, and running. The one
+  before it started at 2026-08-23T06:14:39Z and was ended on the operator's
+  word. The duration is not restated here: `scripts/session-report.ps1` derives
+  it from the instant above, and a duration written down twice is a number two
+  documents disagree about.
 - **Tests:** 1,204 passing, 0 failing. 1,166 at the start. Plus **149** in the
   vendored trees, which the workspace gates do not run.
 - **Gates:** clean, on rustc 1.98.0.
@@ -93,12 +94,12 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
   `Test (ubuntu-latest)` at run 32627489685. Neither was a defect in `bit-cli`:
   both were tests asserting something about the runner. That is now the fourth
   and fifth of that kind.
-- **Entries:** 166 items. 38 open, 1 partial, 0 blocked, 117 done, 10 deferred
-  to Phase C. 117 of 156 workable done, 39 left.
+- **Entries:** 167 items. 37 open, 1 partial, 0 blocked, 119 done, 10 deferred
+  to Phase C. 119 of 157 workable done, 38 left.
 - **Tree:** 94 Rust files, 54,369 lines of code, 13,312 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
-- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
-  across seventeen sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
+- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **26 patches**
+  across eighteen sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
   `scripts/vendor-status.ps1` exits 0.
 - **Version:** `bit-cli` 0.2.0, unchanged.
 
@@ -362,11 +363,29 @@ handshake", which was true of all three.
 
 Nothing is half-written.
 
-- **The push carrying T-161, T-216, T-217 and the two script fixes** is the last
-  of the session and its CI run has not been read. That is item 1 below.
+**What this session is doing**, written before doing it, by
+[RULES.md](RULES.md) section 1 step 4. The work order below is the previous
+session's and this session takes it in its order:
+
+- **Item 1 is done.** The baseline above was re-measured rather than trusted:
+  gates clean at 1,204 tests on rustc 1.98.0, `check-todo.ps1` agrees with the
+  rows, `vendor-status.ps1` exits 0, and run **32629207782** is green on all
+  seventeen jobs with the two commits above it carrying a skip marker.
+- **Item 2 is the operator's** and is printed below rather than started.
+- **Item 3, the `ci` and `windows` group**: [T-150](cli-surface.md) in
+  `.github/workflows/ci.yml`, [T-075](windows.md) in `README.md`, and
+  [T-178](windows.md), whose premise is stale because the trees are vendored
+  now, in `vendor/rqbit/crates/librqbit/src/storage/filesystem/opened_file.rs`
+  and `crates/bit-cli-core/src/storage/`.
+- **Item 4, the `trackers` and `dht` group**: [T-180](trackers.md),
+  [T-063](trackers.md), [T-065](trackers.md), [T-050](dht.md),
+  [T-051](dht.md).
+- Then items 5 and 6 as far as they go.
+
+Open before this session and unchanged by it so far:
+
 - **[T-212](memory.md)**, **[T-213](cli-surface.md)**, **[T-214](cli-surface.md)**
-  are filed and open. All three came out of this session's own work and each
-  names what it needs.
+  came out of the previous session's own work and each names what it needs.
 - **[T-102](bep-coverage.md)** is open and **[T-164](peers.md)** is partial, the
   only partial left.
 

@@ -334,7 +334,7 @@ Source:      rule 0.3
 Category:    windows
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T10:05Z
 
 Problem:     On Windows PowerShell 5.1, `>` and `Out-File` write UTF-16LE,
              which breaks piping JSON into `jq`. `bit-cli` writes UTF-8 without
@@ -346,6 +346,66 @@ Approach:    Document the working invocations in the README: pipe directly to
              `ConvertFrom-Json`, and use `-Encoding utf8NoBOM` when redirecting
              on PowerShell 7.
 Acceptance:  The README carries both forms and both have been run.
+
+**Done, and running the two forms is what disproved the Approach.** The README
+carried both of them before this entry was opened. Nobody had run either, and
+the acceptance is the half that says why that matters: **one of the two does
+not exist on the host it is for, and the other silently corrupts the data.**
+
+`scripts/check-redirect.ps1` is the acceptance. It builds a torrent named
+`café-λ-日本.bin`, four characters no single code page holds, runs seven forms
+against it, and compares what comes back with the bytes `bit-cli` wrote. It
+judges nothing and is not in the gates: what it measures is a property of the
+host.
+
+| form | 5.1 | 7.6.5 |
+| --- | --- | --- |
+| `cmd /c "... > file"` | exact | exact |
+| `> file` | UTF-16LE, `jq` reads none of it | exact |
+| `| ConvertFrom-Json` | wrong name, parses fine | wrong name, parses fine |
+| `| Set-Content -Encoding utf8` | wrong name | wrong name |
+| `| Out-File -Encoding utf8NoBOM` | no such value | wrong name |
+
+**The Problem named one setting and there are two.** `[Console]::OutputEncoding`
+decides how the host decodes what a program wrote, and `$OutputEncoding` decides
+how it encodes what it sends into one. Neither defaults to UTF-8: measured here,
+both hosts read at the console code page, `IBM437`, and 5.1 writes `us-ascii`
+into a native command. That is why `| ConvertFrom-Json`, which this entry
+recommended as the safe form, returns a name that is not the name.
+
+**And it parses.** Every byte of `IBM437` maps to some character, so the
+corruption produces valid JSON with a valid string in it. There is no error, no
+replacement character in the structure, and no exit code. A caller checking that
+`ConvertFrom-Json` succeeded has checked nothing about the bytes.
+
+**`utf8NoBOM` is not a value 5.1 has.** It arrived in PowerShell 6. The host
+answers with a parameter validation error listing the eight it does have, so
+that form fails loudly rather than quietly, which makes it the better of the
+two failures.
+
+**What the README says now**: set both encodings once per session, or keep the
+bytes out of the pipeline with `cmd`'s redirection, which copies and decodes
+nothing. Both are measured on both hosts, in the same table, with the command
+that reproduces it.
+
+```
+$ pwsh -NoProfile -File scripts/check-redirect.ps1
+host 7.6.5 Core, console reads ibm437, writes utf-8 into a program
+> file                                       yes
+cmd /c "... > file"                          yes
+| ConvertFrom-Json                           NO     it parsed, and the name is not the name
+| ConvertFrom-Json, encodings set            yes
+
+$ powershell -NoProfile -File scripts/check-redirect.ps1
+host 5.1.26100.9168 Desktop, console reads IBM437, writes us-ascii into a program
+> file                                       NO     jq: parse error: Invalid numeric literal at line 1, column 3
+cmd /c "... > file"                          yes
+| ConvertFrom-Json                           NO     it parsed, and the name is not the name
+| ConvertFrom-Json, encodings set            yes
+```
+
+Both runs are committed: `bench/redirect-pwsh7.json` and
+`bench/redirect-ps51.json`.
 
 **A second redirection trap, and it has moved.** Every `check-*.ps1` in this
 repository runs `bit-cli` through `Start-Process` with redirect files rather
@@ -495,7 +555,7 @@ Source:      `reference/RESEARCH.md` section D, checked against the pinned crate
 Category:    windows
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T09:35Z
 
 Problem:     `librqbit` 9.0.0's Windows `pwrite_all`, at
              `storage/filesystem/opened_file.rs:87-101` in the registry copy,
@@ -564,6 +624,62 @@ Acceptance:  A test double whose write returns `Ok(0)` causes the run to fail
              the error says which file and offset. Windows only, so the test is
              `#[cfg(windows)]` and the guard is in `bit-cli`'s wrapper rather
              than conditional on a librqbit version.
+
+**Done, and two of the premises above are wrong.** Both were measured before a
+line was written, which is what [RULES.md](RULES.md) section 5 asks for when an
+entry describes what the code already does, and between them they invert what
+the work was.
+
+**"This is a one-line upstream change and `bit-cli` cannot make it" is stale.**
+It was true when the entry was written on 2026-08-21 and stopped being true on
+2026-08-22, when `librqbit` was vendored. The loop is
+`vendor/rqbit/crates/librqbit/src/storage/filesystem/opened_file.rs:94`, in this
+repository, and it now carries the guard. That is
+[`patches/UPSTREAM.md`](../patches/UPSTREAM.md)'s eighteenth section and patch
+`patches/rqbit/0011-crates-librqbit-src-storage-filesystem-opened_file.rs.patch`.
+
+**"This is on the payload write path for every download" is false**, and it is
+the more useful correction. There is exactly one `add_torrent` call in the
+workspace, `crates/bit-cli-core/src/engine.rs:760`, and it installs
+`SafeStorageFactory` on every add, so every payload byte goes through
+`crates/bit-cli-core/src/storage.rs` and none through the vendored file. The
+copy that does run **already refused a zero-length write**, with the same
+`WriteZero` the entry's Approach proposes, since commit `3203d4c` on
+2026-08-20: the day before this entry was filed, from work that had nothing to
+do with it. An entry written from a crate the tool does not call described a
+defect the tool did not have.
+
+**What was actually missing was the half the Acceptance names.** The error said
+`the write made no progress` and nothing else, so a caller learned which file
+from the wrapper around it and never learned where in the file. It now reads
+`cannot write to <path>: the write made no progress at offset 65536, with 8
+bytes left`, and the offset is the part that says whether the write was at the
+start of a piece or in the middle of one.
+
+**And there was no test, because a real file cannot be asked to return
+`Ok(0)`.** The loop takes the write as an argument now,
+`write_all_positioned` beside `read_exact_positioned` in
+`crates/bit-cli-core/src/storage.rs:1565`, so a double can. Five tests:
+the write that makes no progress, the read that returns nothing, a short write
+and a short read each continuing from the offset they reached, and the one that
+drives `SafeStorage::with` so the message a caller sees carries the path and
+the offset together.
+
+**The bound is a call count rather than a clock.** The guard's whole purpose is
+that the loop cannot ask again, so `calls == 1` is the condition, and
+[RULES.md](RULES.md) section 5's rule about a test that waits on a guessed
+duration does not get a chance to bite.
+
+**The test was run against the defect, and this is what that costs.** With the
+`0` arm replaced by `continue`, the test does not fail: it hangs, and was still
+running when it was killed at 90 seconds. That is the signature the Relevance
+above describes, a thread that stops making progress without failing, and it is
+why the assertion is on the call count instead of on the error alone.
+
+```
+$ cargo test -p bit-cli-core --lib storage::
+test result: ok. 37 passed; 0 failed; 0 ignored; 668 filtered out
+```
 
 ### T-216 A seeder test waited longer for a listener than the run was allowed to live
 

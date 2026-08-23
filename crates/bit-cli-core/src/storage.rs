@@ -1510,28 +1510,87 @@ pub fn pread_exact(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<
     file.read_exact_at(buf, offset)
 }
 
+/// The loop that makes a positioned read exact, with the read itself passed
+/// in.
+///
 /// Windows has no `pread`. `seek_read` takes the offset per call and may
 /// return a short read, so the loop is what makes it exact. A short read that
 /// returns nothing is end of file, and treating that as a read of zeroes is
 /// how a hash check passes over a file that is not there.
+///
+/// Taking the read as an argument is what makes the refusal testable. No real
+/// file can be asked to return `Ok(0)` on demand, so the one case the guard
+/// exists for is the one case a test with a real file cannot reach. See
+/// `TODO/windows.md`, T-178.
 #[cfg(windows)]
-pub fn pread_exact(file: &File, mut offset: u64, mut buf: &mut [u8]) -> std::io::Result<()> {
-    use std::os::windows::fs::FileExt;
+fn read_exact_positioned(
+    mut offset: u64,
+    mut buf: &mut [u8],
+    mut read: impl FnMut(&mut [u8], u64) -> std::io::Result<usize>,
+) -> std::io::Result<()> {
     while !buf.is_empty() {
-        match file.seek_read(buf, offset)? {
+        match read(buf, offset)? {
             0 => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
-                    "the file ended before the read was satisfied",
+                    format!(
+                        "the file ended before the read was satisfied: {} more bytes wanted at offset {offset}",
+                        buf.len()
+                    ),
                 ));
             }
-            read => {
-                offset += read as u64;
-                buf = &mut buf[read..];
+            n => {
+                offset += n as u64;
+                buf = &mut buf[n..];
             }
         }
     }
     Ok(())
+}
+
+/// The loop that makes a positioned write whole, with the write itself passed
+/// in.
+///
+/// `seek_write` may write fewer bytes than it was given, so the loop is what
+/// makes it all-or-error. A write that reports success having written nothing
+/// is the case with no progress in it: a full volume, a disconnected share or
+/// a filter driver can all produce one, and a loop that subtracts zero from
+/// what is left never ends. The thread that owns the write then stops making
+/// progress without failing, which is an outage no health check sees. See
+/// `TODO/windows.md`, T-178.
+///
+/// `WriteZero` is the standard library's own name for it, which is what
+/// `write_all` returns in the same situation.
+#[cfg(windows)]
+fn write_all_positioned(
+    mut offset: u64,
+    mut buf: &[u8],
+    mut write: impl FnMut(&[u8], u64) -> std::io::Result<usize>,
+) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        match write(buf, offset)? {
+            0 => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    format!(
+                        "the write made no progress at offset {offset}, with {} bytes left",
+                        buf.len()
+                    ),
+                ));
+            }
+            n => {
+                offset += n as u64;
+                buf = &buf[n..];
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn pread_exact(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    read_exact_positioned(offset, buf, |at, from| file.seek_read(at, from))
 }
 
 #[cfg(unix)]
@@ -1541,23 +1600,9 @@ pub fn pwrite_all(file: &File, offset: u64, buf: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
-pub fn pwrite_all(file: &File, mut offset: u64, mut buf: &[u8]) -> std::io::Result<()> {
+pub fn pwrite_all(file: &File, offset: u64, buf: &[u8]) -> std::io::Result<()> {
     use std::os::windows::fs::FileExt;
-    while !buf.is_empty() {
-        match file.seek_write(buf, offset)? {
-            0 => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::WriteZero,
-                    "the write made no progress",
-                ));
-            }
-            written => {
-                offset += written as u64;
-                buf = &buf[written..];
-            }
-        }
-    }
-    Ok(())
+    write_all_positioned(offset, buf, |from, at| file.seek_write(from, at))
 }
 
 #[cfg(test)]
@@ -2202,5 +2247,105 @@ mod tests {
         assert_eq!(open.len(), 1);
         open.closed(9);
         assert_eq!(open.len(), 1, "closing one that was never open is a no-op");
+    }
+
+    /// A write that reports success having written nothing ends the loop.
+    ///
+    /// The bound is the call count rather than a clock: the guard's whole
+    /// purpose is that the loop cannot ask again, so one call and a returned
+    /// error is the condition. Without the guard the count is unbounded and
+    /// this test does not fail, it hangs, which is exactly what the defect
+    /// looks like in a run. See `TODO/windows.md`, T-178.
+    #[cfg(windows)]
+    #[test]
+    fn a_write_that_makes_no_progress_fails_instead_of_asking_again() {
+        let mut calls = 0usize;
+        let error = write_all_positioned(4096, &[7u8; 16384], |_buf, _at| {
+            calls += 1;
+            Ok(0)
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 1, "the loop asked again after no progress");
+        assert_eq!(error.kind(), std::io::ErrorKind::WriteZero);
+        let message = error.to_string();
+        assert!(message.contains("offset 4096"), "{message}");
+        assert!(message.contains("16384 bytes left"), "{message}");
+    }
+
+    /// The same for the read side, where the zero means end of file.
+    #[cfg(windows)]
+    #[test]
+    fn a_read_that_returns_nothing_is_the_end_of_the_file() {
+        let mut calls = 0usize;
+        let mut buf = [0u8; 32];
+        let error = read_exact_positioned(512, &mut buf, |_buf, _at| {
+            calls += 1;
+            Ok(0)
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 1);
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+        let message = error.to_string();
+        assert!(message.contains("offset 512"), "{message}");
+        assert!(message.contains("32 more bytes wanted"), "{message}");
+    }
+
+    /// A short write is asked again, from where it left off.
+    ///
+    /// This is what the loop is for, and it is the half a guard on `Ok(0)`
+    /// must not break: the offsets each call sees are what say the guard did
+    /// not turn a partial write into a failure.
+    #[cfg(windows)]
+    #[test]
+    fn a_short_write_continues_from_the_offset_it_reached() {
+        let mut seen: Vec<(usize, u64)> = Vec::new();
+        write_all_positioned(1000, &[0u8; 10], |buf, at| {
+            seen.push((buf.len(), at));
+            Ok(buf.len().min(4))
+        })
+        .unwrap();
+        assert_eq!(seen, vec![(10, 1000), (6, 1004), (2, 1008)]);
+    }
+
+    /// A short read is asked again, from where it left off, and fills the buffer.
+    #[cfg(windows)]
+    #[test]
+    fn a_short_read_continues_from_the_offset_it_reached() {
+        let mut seen: Vec<(usize, u64)> = Vec::new();
+        let mut buf = [0u8; 10];
+        read_exact_positioned(1000, &mut buf, |dst, at| {
+            seen.push((dst.len(), at));
+            let n = dst.len().min(4);
+            dst[..n].fill(9);
+            Ok(n)
+        })
+        .unwrap();
+        assert_eq!(seen, vec![(10, 1000), (6, 1004), (2, 1008)]);
+        assert_eq!(buf, [9u8; 10]);
+    }
+
+    /// The message the caller sees names the file as well as the offset.
+    ///
+    /// [`SafeStorage::with`] is the seam that adds the path, and it takes the
+    /// operation as a closure, so this drives the real error path with a
+    /// write that fails the way a stuck device fails. T-178's acceptance asks
+    /// for both halves in one message and this is where they meet.
+    #[cfg(windows)]
+    #[test]
+    fn the_error_a_stuck_write_produces_names_the_file_and_the_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = storage_at(dir.path(), &["payload.bin"], 4);
+        let error = storage
+            .with(0, Intent::Write, "write to", |_file| {
+                write_all_positioned(65536, &[0u8; 8], |_buf, _at| Ok(0))
+            })
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("payload.bin"), "{error}");
+        assert!(error.contains("offset 65536"), "{error}");
+        assert!(error.contains("8 bytes left"), "{error}");
     }
 }
