@@ -46,6 +46,21 @@ pub struct Root {
 /// Neither holding it leaves `base` as the answer, because a payload that is
 /// not there is no evidence for either spelling.
 pub fn resolve(base: &Path, layout: &Layout) -> Root {
+    resolve_with(base, layout, &std::collections::BTreeMap::new())
+}
+
+/// The same, for a payload some of whose files were renamed on the way in.
+///
+/// `-O 0=renamed.bin` is the flag that moves the file this looks for, so a
+/// resolver that only knows the torrent's own paths reports "not found" for
+/// both candidates and falls back to `base`. On a multi-file torrent that is
+/// the parent of the directory the payload is actually in, and every file is
+/// then looked for one level too high. See `TODO/cli-surface.md`, T-213.
+pub fn resolve_with(
+    base: &Path,
+    layout: &Layout,
+    index_out: &std::collections::BTreeMap<usize, String>,
+) -> Root {
     let base = base.to_path_buf();
     let Some(first) = layout.files.first() else {
         return Root {
@@ -54,12 +69,19 @@ pub fn resolve(base: &Path, layout: &Layout) -> Root {
             other: None,
         };
     };
-    let holds = |root: &Path| {
-        first
+    // Where file 0 is on disk: the caller's path when they gave one, and the
+    // torrent's otherwise. A renamed file lands at the root of the output
+    // directory, which is what the path plan does with it.
+    let holds = |root: &Path| match index_out.get(&0) {
+        Some(requested) => requested
+            .split('/')
+            .fold(root.to_path_buf(), |a, c| a.join(c))
+            .exists(),
+        None => first
             .path
             .iter()
             .fold(root.to_path_buf(), |a, c| a.join(c))
-            .exists()
+            .exists(),
     };
 
     // Only a multi-file torrent has a directory of its own. A single-file

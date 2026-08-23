@@ -1464,6 +1464,16 @@ pub struct SeedArgs {
     #[arg(long, value_name = "PATH")]
     pub data: Option<PathBuf>,
 
+    /// Serve this file from this path, as INDEX=PATH.
+    ///
+    /// The same flag `download` writes with and `verify` reads with, and for
+    /// the same reason: a payload fetched with `download -O 0=renamed.bin` is
+    /// on disk under a name only the caller knows, and a seeder that looks
+    /// where the torrent said finds nothing there. See
+    /// `TODO/cli-surface.md`, T-213.
+    #[arg(short = 'O', long, value_name = "INDEX=PATH")]
+    pub index_out: Vec<String>,
+
     /// Hash-check before announcing.
     ///
     /// `full` is what happens today whatever this says: the session hash-checks

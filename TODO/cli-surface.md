@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2558` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2336` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2372` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2067` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2568` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2346` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2382` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2077` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2558` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2568` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -3006,7 +3006,7 @@ Source:      found closing [T-116](#t-116--o--index-out-cannot-rename-a-file)
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T11:45Z
 
 Problem:     `download -O 0=renamed.bin` writes the first file to
              `renamed.bin`, and `bit-cli seed` against that directory looks for
@@ -3034,6 +3034,42 @@ Acceptance:  A payload downloaded with `download -O 0=renamed.bin` is served by
              finding every piece, and without `-O` the same command reports the
              file missing. Both in one test, because the second is what makes
              the first mean anything.
+
+**Done, and the Approach's "the work is the flag and the test" was wrong by one
+function.** The flag went on, the plan carried the override, the report's
+`renamed` array said `disc 1/a.flac -> renamed.bin`, and the seeder held
+**zero of 2,000 bytes**. Every piece of this torrent touches the first file, so
+nothing verified.
+
+**`payload::resolve` is what the flag broke.** `--data` may name the parent of
+a multi-file payload or the torrent's own directory, and the way those are told
+apart is by looking for **the torrent's first file** under each. `-O 0=...` is
+the flag that moves exactly that file, so neither candidate held it, the
+resolver fell back to the base, and every file was then looked for one
+directory too high. The fix is `resolve_with`, which looks for file 0 where the
+caller said it would be.
+
+**`verify` had the same defect and its own test passed anyway**, which is the
+part worth keeping. [T-116](#t-116--o--index-out-cannot-rename-a-file)'s test
+points `--data` straight at the torrent directory, and from there the fallback
+lands on the right answer by accident. Pointing at the parent, which is the
+other spelling that flag pair is documented to accept, found nothing. Both
+commands take `resolve_with` now and the test carries the second spelling.
+
+**What the second half of the acceptance measures.** Without `-O`, the same
+command against the same directory reports `complete: false` and fewer than
+2,000 bytes held. That is what says the first half is about the flag rather
+than about the fixture.
+
+**The deferred question is still deferred.** The Approach asks whether
+`bit-cli files` should report the on-disk path a given `-O` would produce.
+Nothing here needed it and no measurement asks for it, so it is not built. It
+would be a new entry rather than a clause of this one.
+
+```
+$ cargo test -p bit-cli --lib index_out
+test result: ok. 6 passed; 0 failed; 0 ignored; 418 filtered out
+```
 
 ### T-214 seed runs no hooks
 

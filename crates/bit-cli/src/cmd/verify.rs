@@ -270,8 +270,8 @@ pub fn run(
     let meta = load_local(&kind, env)?;
     let layout = meta.layout();
 
-    let root = resolve_root(args, global, env, &meta);
     let index_out = crate::selection::index_out(&args.index_out, Some(layout.files.len()))?;
+    let root = resolve_root(args, global, env, &meta, &index_out);
     let mut reader = PayloadReader::new(&layout, root.clone(), &index_out);
 
     let files: Vec<FileResult> = layout
@@ -419,10 +419,21 @@ pub fn run(
 /// torrent, so `--data` pointing at the parent and pointing at the directory
 /// itself both have to work. Whichever contains the first file wins.
 ///
-/// The rule itself is [`crate::payload::resolve`], shared with `seed`, which
-/// had a different one and reported a seeder holding nothing. See
+/// The rule itself is [`crate::payload::resolve_with`], shared with `seed`,
+/// which had a different one and reported a seeder holding nothing. See
 /// `TODO/cli-surface.md`, T-186.
-fn resolve_root(args: &VerifyArgs, global: &Global, env: &Env, meta: &Metainfo) -> PathBuf {
+///
+/// `-O` is passed through because the file this looks for is the file that
+/// flag renames. Without it a caller who points `--data` at the parent of a
+/// renamed payload is answered with the parent, and every file is then looked
+/// for one directory too high. See `TODO/cli-surface.md`, T-213.
+fn resolve_root(
+    args: &VerifyArgs,
+    global: &Global,
+    env: &Env,
+    meta: &Metainfo,
+    index_out: &std::collections::BTreeMap<usize, String>,
+) -> PathBuf {
     let base = args
         .data
         .clone()
@@ -430,7 +441,7 @@ fn resolve_root(args: &VerifyArgs, global: &Global, env: &Env, meta: &Metainfo) 
         .map(|p| env.resolve(&p))
         .unwrap_or_else(|| env.cwd.clone());
 
-    crate::payload::resolve(&base, &meta.layout()).path
+    crate::payload::resolve_with(&base, &meta.layout(), index_out).path
 }
 
 /// The path helper is also useful to callers checking a single file.

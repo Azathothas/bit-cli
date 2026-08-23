@@ -578,6 +578,7 @@ Effects: `read_only`.
 | `--on-error <COMMAND>` | string |  |  | Run this command on failure |
 | `--on-piece-verified <COMMAND>` | string |  |  | Run this command after every verified piece. High frequency |
 | `--data <PATH>` | string |  |  | Where the payload already lives. Defaults to --dir |
+| `--index-out <INDEX=PATH>`, `-O` | array |  |  | Serve this file from this path, as INDEX=PATH |
 | `--verify <MODE>` | string | `full`, `quick`, `none` | `full` | Hash-check before announcing |
 | `--fastresume` | boolean |  | `false` | Reuse the previous run's hash check when the payload has not changed |
 | `--fastresume-dir <DIR>` | string |  |  | Where the resume cache lives. Default: .bit-cli-resume beside the data |

@@ -61,7 +61,7 @@ in `cli.rs` to stop it.
 | `-h` | `--help` | global | `-h` help | Universal. |
 | `-j` | `--max-concurrent-downloads` | download | `-j` max concurrent downloads | Same letter, narrower meaning: `bit-cli` has no queue across invocations, so this is parallelism inside one run. |
 | `-l` | `--log-file` | global | `-l` log | Same concept. |
-| `-O` | `--index-out` | download | `-O` index out | Same concept, zero-based like every other index flag here. The path is a request: it is sanitised and disambiguated like a torrent path, so it cannot escape the output directory. |
+| `-O` | `--index-out` | download, verify, seed | `-O` index out | Same concept, zero-based like every other index flag here. The path is a request: it is sanitised and disambiguated like a torrent path, so it cannot escape the output directory. The three commands are one payload read three ways: `download` writes it there, `verify` reads it back from there, and `seed` serves it from there. |
 | `-o` | `--out` | download | `-o` out | Same concept. |
 | `-o` | `--output` | create, edit, man | unclaimed in this position | `-` means stdout, following `intermodal`. |
 | `-q` | `--quiet` | global | `-q` quiet | Same concept. |

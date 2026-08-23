@@ -1149,7 +1149,7 @@ A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-`
 .SH NAME
 bit\-cli\-seed \- Seed existing data in the foreground
 .SH SYNOPSIS
-\fBbit\-cli\-seed\fR [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-encryption\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-on\-complete\fR] [\fB\-\-on\-error\fR] [\fB\-\-on\-piece\-verified\fR] [\fB\-\-data\fR] [\fB\-\-verify\fR] [\fB\-\-fastresume\fR] [\fB\-\-fastresume\-dir\fR] [\fB\-\-superseed\fR] [\fB\-\-announce\-only\fR] [\fB\-\-port\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-pex\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-report\-interval\fR] [\fB\-\-exit\-when\-idle\fR] [\fB\-\-listener\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-seed\fR [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-encryption\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-on\-complete\fR] [\fB\-\-on\-error\fR] [\fB\-\-on\-piece\-verified\fR] [\fB\-\-data\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-\-verify\fR] [\fB\-\-fastresume\fR] [\fB\-\-fastresume\-dir\fR] [\fB\-\-superseed\fR] [\fB\-\-announce\-only\fR] [\fB\-\-port\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-pex\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-report\-interval\fR] [\fB\-\-exit\-when\-idle\fR] [\fB\-\-listener\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Seed existing data in the foreground
 .SH OPTIONS
@@ -1287,6 +1287,11 @@ Run this command after every verified piece. High frequency
 .TP
 \fB\-\-data\fR \fI<PATH>\fR
 Where the payload already lives. Defaults to \-\-dir
+.TP
+\fB\-O\fR, \fB\-\-index\-out\fR \fI<INDEX=PATH>\fR
+Serve this file from this path, as INDEX=PATH.
+
+The same flag `download` writes with and `verify` reads with, and for the same reason: a payload fetched with `download \-O 0=renamed.bin` is on disk under a name only the caller knows, and a seeder that looks where the torrent said finds nothing there. See `TODO/cli\-surface.md`, T\-213.
 .TP
 \fB\-\-verify\fR \fI<MODE>\fR [default: full]
 Hash\-check before announcing.

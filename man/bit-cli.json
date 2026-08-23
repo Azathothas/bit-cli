@@ -2565,6 +2565,13 @@
           "value_name": "PATH"
         },
         {
+          "description": "Serve this file from this path, as INDEX=PATH",
+          "name": "--index-out",
+          "short": "-O",
+          "type": "array",
+          "value_name": "INDEX=PATH"
+        },
+        {
           "default": "full",
           "description": "Hash-check before announcing",
           "enum": [

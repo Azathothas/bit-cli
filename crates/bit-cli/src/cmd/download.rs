@@ -3661,6 +3661,25 @@ mod tests {
         assert_eq!(told["renamed"][0]["disk_path"], "renamed.bin", "{told}");
         assert_eq!(told["renamed"][0]["reasons"][0], "requested", "{told}");
 
+        // The same thing said from one directory up. `--data` may name the
+        // parent or the torrent's own directory, and the renamed file is what
+        // the resolver looks for to tell them apart, so this is the spelling
+        // that used to be answered with the parent and then find nothing.
+        // See `TODO/cli-surface.md`, T-213.
+        let from_parent = run_json(
+            &[
+                "verify",
+                fixture.path_str(),
+                "--data",
+                out.to_str().expect("utf-8 path"),
+                "-O",
+                "0=renamed.bin",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(from_parent["complete"], true, "{from_parent}");
+        assert_eq!(from_parent["pieces_bad"], 0, "{from_parent}");
+
         // Not told, and the file is not where the torrent says it is. The run
         // fails, so the document is `hash_mismatch` and the report is nested
         // under it, which is the shape `verify` has always written for a

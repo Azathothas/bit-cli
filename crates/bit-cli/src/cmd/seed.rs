@@ -167,9 +167,13 @@ pub fn run(
     // session has already decided where to look, so it keeps `--data` as
     // given. Nothing is lost: a magnet has nothing on disk to be pointed at
     // two ways.
+    let index_out = crate::selection::index_out(
+        &args.index_out,
+        meta.as_ref().map(|meta| meta.layout().files.len()),
+    )?;
     let root = meta
         .as_ref()
-        .map(|meta| crate::payload::resolve(&base, &meta.layout()));
+        .map(|meta| crate::payload::resolve_with(&base, &meta.layout(), &index_out));
     let directory = root
         .as_ref()
         .map_or_else(|| base.clone(), |r| r.path.clone());
@@ -270,6 +274,11 @@ pub fn run(
             // which has no layout to resolve against yet. See
             // `TODO/cli-surface.md`, T-186.
             output_folder: payload_root.clone(),
+            // Where the bytes actually are, when the caller renamed them on
+            // the way in. Empty for an ordinary payload, and then the plan is
+            // the one the torrent describes. See `TODO/cli-surface.md`,
+            // T-213.
+            index_out: index_out.clone(),
             trackers: trackers.clone(),
             disable_trackers: trackers.as_ref().is_some_and(Vec::is_empty),
             tracker_interval: swarm::optional_duration(
@@ -864,6 +873,62 @@ mod tests {
     /// the other reported `have: 0` with "this is a partial seed", which is
     /// the right observation with the wrong reason, and created an empty tree
     /// one level deeper on its way to saying it.
+    /// A payload renamed on the way in is served from where it landed.
+    ///
+    /// `download -O 0=renamed.bin` writes the first file under a name only the
+    /// caller knows, and a seeder that looks where the torrent said finds
+    /// nothing. Both halves are here because the second is what makes the
+    /// first mean anything: told, every byte is present; not told, the same
+    /// command holds less than the payload. See `TODO/cli-surface.md`, T-213.
+    #[test]
+    fn a_file_renamed_by_index_out_is_seeded_from_where_it_landed() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let data = fixture.dir().join("data");
+        fixture.place(&data, &[]);
+
+        // Rename on disk what `-O 0=renamed.bin` would have written, which is
+        // the state a download with that flag leaves behind.
+        let root = data.join(&fixture.name);
+        let first = root.join(&fixture.files[0].0);
+        let renamed = root.join("renamed.bin");
+        std::fs::create_dir_all(renamed.parent().unwrap()).unwrap();
+        std::fs::rename(&first, &renamed).expect("rename the payload file");
+
+        let seed = |extra: &[&str]| {
+            let mut argv = vec![
+                "seed",
+                fixture.path_str(),
+                "--data",
+                data.to_str().unwrap(),
+                "--port",
+                "0",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--stop-after",
+                "1s",
+            ];
+            argv.extend_from_slice(extra);
+            crate::test_support::run_json_code(
+                &argv,
+                fixture.dir(),
+                // Nothing connects, so the run stops on its deadline.
+                ExitCode::Timeout,
+            )
+        };
+
+        let told = seed(&["-O", "0=renamed.bin"]);
+        assert_eq!(told["complete"], true, "{told}");
+        assert_eq!(told["have"]["bytes"], 2000, "{told}");
+
+        let untold = seed(&[]);
+        assert_eq!(untold["complete"], false, "{untold}");
+        assert!(
+            untold["have"]["bytes"].as_u64().unwrap_or(2000) < 2000,
+            "a seeder told nothing about the rename claimed the whole payload: {untold}"
+        );
+    }
+
     #[test]
     fn either_spelling_of_data_seeds_the_same_payload() {
         let fixture = crate::test_support::TorrentFixture::multi_file();
