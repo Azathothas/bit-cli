@@ -1418,8 +1418,9 @@ Upstream:    ours. Nothing upstream is wrong: a target defaults to the module
 Added:       2026-08-23T14:10Z
 ```
 
-Ten `trace!` and `debug!` calls take an explicit `target:` instead of the
-module path they defaulted to. Nothing else changes: not a level, not a field,
+Thirteen `trace!` and `debug!` calls take an explicit `target:` instead of the
+module path they defaulted to: three on `librqbit::handshake`, six on
+`librqbit::piece`, four on `librqbit::picker`. Nothing else changes: not a level, not a field,
 not a message, not a line of control flow.
 
 - `peer_connection.rs`, three calls, to `librqbit::handshake`: the incoming

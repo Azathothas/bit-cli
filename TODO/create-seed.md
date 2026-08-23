@@ -656,8 +656,10 @@ Acceptance:  A payload producing 70,000 pieces fires the new lint and names
              only in case still fire `case-collision`. Four cases, one test
              each, all clearable with `--allow`.
 
-**Done, and all three claims held against the tree**, which is the first entry
-this session where that was true. Checked before anything was written:
+**Done, and all three claims held against the tree.** It is the one entry this
+session whose **Approach** survived contact as well as its premise: T-219's and
+T-222's premises held and their Approaches did not, and T-173's premise did
+not. Checked before anything was written:
 `lint.rs` fired `piece-count` above 100,000 and nothing below it;
 `piece_length::validate` refused only zero while `MAX = 16 MiB` capped the
 automatic choice alone; and the collision check keyed one `BTreeSet` on the

@@ -785,3 +785,103 @@ run: churn strands sockets at about 30,000 handles an hour, which is T-020's
 shape and swamps every other series. And the bound is 1,024 rows for one
 torrent; a session holding many torrents has that many times the torrent count,
 which is bounded but not small. Nothing measures the multi-torrent case yet.
+
+### T-224 The six hour soak's RSS slope is one step and a sawtooth, not a leak
+
+Source:      the operator's six hour soak, 2026-08-23T09:01:32Z
+Category:    memory
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     The first soak to reach its full six hour window reports
+             **3.708 MiB/h at r squared 0.717** for `rss_bytes`, against a
+             ceiling of 4. The verdict is "every named ceiling held", and it
+             did, with a 7 percent margin.
+
+             **That number is a line fitted through a step.** At sample 132,
+             `t+1.161h`, resident memory goes from 15.8 MiB to 27.5 MiB in one
+             eight second interval and never returns below 27.5 for the
+             remaining 4.8 hours. Threads and handles do not step with it: 35
+             to 28 and 209 to 188 across the same boundary, which is the
+             ordinary oscillation both show all run. So roughly **11.7 MiB is
+             allocated once and retained**, at leech cycle 264 of 1,360.
+
+             Fitted either side of that step the slope is a different thing:
+
+             ```
+             whole run    n=681   3.708 MiB/h   r2 0.717
+             before step  n=132   1.020 MiB/h   r2 0.484
+             after step   n=549   1.690 MiB/h   r2 0.621
+             from t+2h    n=457   1.371 MiB/h   r2 0.418
+             ```
+
+             **And what is left after the step is a sawtooth rather than
+             growth.** From `t+2h` the series has mean 33.8 MiB, standard
+             deviation 2.4, and range 27.6 to 39.2. Fifty-two samples fall by
+             more than 3 MiB and forty-nine rise by more than 3. A series that
+             gives back what it takes, 52 times, is an allocator or a cache
+             with a high-water mark, not a leak.
+Relevance:   Three things, and the third is why this is filed rather than
+             noted.
+
+             **The reported number is wrong about the mechanism**, and it is
+             the same mistake [INDEX.md](INDEX.md) already records for the
+             earlier `steady` soak: a slope fitted across a discontinuity
+             describes neither side of it. That run was noise read as a trend;
+             this one is a step read as a trend. `soak.ps1` reports one linear
+             fit per series and has no way to say "there is a step here".
+
+             **The margin is not what it looks like.** 3.708 against a ceiling
+             of 4 reads as "close, watch it". Take the step out and the run is
+             at 1.0 to 1.7 MiB/h, which is comfortably inside. Leave the step
+             in and a run one hour longer would have reported a **lower**
+             slope, because the step's contribution to the fit shrinks as the
+             window grows. A ceiling a run passes or fails depending on how
+             long it ran is not a ceiling.
+
+             **The step itself is the finding.** 11.7 MiB retained, once, is
+             larger than anything [T-040](#t-040-memory-and-descriptors-grow-without-bound-over-a-long-run)
+             measured and it is not explained by handles, threads or sockets,
+             all of which are flat across it.
+Approach:    Two pieces, and the first is cheap.
+
+             **Make `soak.ps1` report the step.** A single linear fit is the
+             wrong summary for a series with a discontinuity in it. The
+             cheapest honest addition is a largest-single-interval-change
+             column beside each slope, and a note when that change is more
+             than some fraction of the whole run's rise, which here would be
+             11.6 of 22.7 MiB. The fit stays; what changes is that a reader is
+             told not to trust it alone. That alone would have made this entry
+             unnecessary to write by hand.
+
+             **Then find the step.** It is at a wall clock rather than at a
+             round number of cycles, so start by asking whether it reproduces:
+             a two hour run at the same leech rate should cross it. If it
+             does, the candidates in order of size are the piece cache, the
+             window cache [T-041](#t-041-per-source-window-cache-is-bounded-but-not-measured)
+             says is bounded but not measured, and whatever the vendored
+             session allocates lazily on a threshold it crosses at around 260
+             completed torrents.
+Acceptance:  `soak.ps1` reports the largest single-interval change per series
+             and says when a slope is fitted across one. And either the step
+             reproduces at a known cause, named with a file, or two runs at
+             different leech rates show it is not tied to completed work, in
+             which case the entry says so and closes on the measurement.
+
+**What did hold, and it is worth separating from the above.** Every ceiling
+passed on its own terms, and two of the three passed with no argument at all.
+
+| series | per hour | ceiling | verdict |
+| --- | --- | --- | --- |
+| `rss_bytes` | 3.708 MiB | 4 MiB | held, and this entry is about how |
+| `handles` | 0.44 | 20 | held, r squared 0.00, flat |
+| `tcp_close_wait` | 0.00 | 1 | **zero at every one of 681 samples** |
+
+`tcp_close_wait` is [T-020](peers.md) staying fixed over six hours and 1,360
+completed leech cycles, which is the longest window it has been held over.
+Threads are flat at r squared 0.00. **1,360 leech cycles completed and none
+failed.**
+
+The run is `bench/soak-20260823T090132499Z.csv` and its summary is the `.json`
+beside it, both committed.

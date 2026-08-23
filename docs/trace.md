@@ -63,7 +63,7 @@ because this repository put them there.
 | `config` | `bit_cli::config` |
 
 `librqbit::handshake`, `librqbit::piece` and `librqbit::picker` are not module
-paths. They are explicit targets on ten trace calls in
+paths. They are explicit targets on thirteen trace calls in
 `vendor/rqbit/crates/librqbit`, added so that a name means one thing:
 `peer_connection` carries the handshake and the wire messages in the same
 module, and `torrent_state::live` carries the picker, the piece lifecycle and

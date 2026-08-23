@@ -75,18 +75,21 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green on all **nineteen** jobs at run **32647972397**, against commit
-  `dd52713`, which closes [T-187](metainfo.md). Three runs this session and one
-  was red: **32645146193**, `Test (windows-latest)`, and that is what
-  [T-223](bench.md) is. One push follows this line and its run is not named
-  here; read the current one rather than trusting either.
+- **CI:** green on all **nineteen** jobs at run **32648746353**, against commit
+  `4931e66`, which closes [T-176](create-seed.md). Four runs this session and
+  one was red: **32645146193**, `Test (windows-latest)`, and that is what
+  [T-223](bench.md) is. One push follows this line, carrying the record and the
+  soak, and its run is not named here; read the current one.
+- **Soak:** the six hour run finished at 2026-08-23T15:01:32Z, 681 samples,
+  1,360 leech cycles, none failed, every named ceiling held. Its CSV and JSON
+  are committed. What its RSS slope actually says is [T-224](memory.md).
 
 ```bash
 gh run list --limit 1
 ```
 
-- **Entries:** 172 items. 24 open, 1 partial, 0 blocked, 137 done, 10 deferred
-  to Phase C. 137 of 162 workable done, 25 left.
+- **Entries:** 173 items. 25 open, 1 partial, 0 blocked, 137 done, 10 deferred
+  to Phase C. 137 of 163 workable done, 26 left.
 - **Tree:** 96 Rust files, 56,704 lines of code, 14,358 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **28 patches**
@@ -96,8 +99,8 @@ gh run list --limit 1
 
 ## What the last session did
 
-**Five entries closed, two filed, and one corrected, and every one of them was
-found or shaped by running something rather than by reading it.** The operator
+**Five entries closed, three filed, and one corrected, and every one of them
+was found or shaped by running something rather than by reading it.** The operator
 ruled on the open question from the previous session, "build rather than
 delete", so the session opened with [T-219](cli-surface.md), item 2 of the
 previous work order; T-222 and T-223 came out of it, and the effort S list
@@ -122,16 +125,16 @@ directive per target and dedupes on the target, and each name raises
 `bit_cli::<name>` where this repository's own code writes plus the vendored
 target that carries the same fact.
 
-**Eleven emission points written**, in `SafeStorage`'s read, write, flush and
-allocate; `RateLimiter::take`; both retry ladders and
-`SourceStats::record_error`; `Resolved::trace`; `Client::announce_on` and
-`scrape`; the web seed bridge's handshake, messages and served blocks;
-`InOrder::advance`; and `Engine`, once per session, for whether there is a DHT
-at all.
+**Ten subsystems given somewhere to write**, `http` being the one that already
+had one: `SafeStorage`'s read, write, flush and allocate; `RateLimiter::take`;
+both retry ladders and `SourceStats::record_error`; `Resolved::trace`;
+`Client::announce_on` and `scrape`; the web seed bridge's handshake, messages
+and served blocks; `InOrder::advance`; and `Engine`, once per session, for
+whether there is a DHT at all.
 
-**Ten vendored trace calls retargeted**, and it is not cosmetic. A `tracing`
-target defaults to the module path and the modules do not divide the way the
-subsystems do: `peer_connection` holds the handshake and every wire message, so
+**Thirteen vendored trace calls retargeted**, and it is not cosmetic. A
+`tracing` target defaults to the module path and the modules do not divide the
+way the subsystems do: `peer_connection` holds the handshake and every wire message, so
 `--trace handshake` would have printed 266 records where 2 were asked for.
 `patches/UPSTREAM.md` has the section. Upstream's own tests were run: 149
 passing, unchanged.
@@ -221,7 +224,7 @@ subsystem is off: `tracing` does not evaluate a record's fields unless
 something is listening. The commit was simply the first run since the last
 green one.
 
-### The effort S list, item 2 of the order, and both entries were wrong
+### Item 2 of the order, the effort S list: three taken, and two carried something untrue
 
 **[T-187](metainfo.md), P3, done.** Non-canonical integers stay refused, which
 is the outcome the entry said it most likely had. Nothing was re-fetched to
@@ -262,9 +265,12 @@ and fires on the one path where the raw components do reach it, `--index-out`.
 The entry names the two ways to close the rest and why neither is worth it for
 a P3 whose only cost is a missing `reasons` entry on a path that is correct.
 
-### [T-176](create-seed.md), P2, done, and the first entry this session whose premise held
+### [T-176](create-seed.md), P2, done, and the one entry whose Approach also survived
 
-All three claims checked out against the tree before anything was written.
+All three claims checked out against the tree before anything was written, and
+so did the Approach, which is what separates it from the other four: T-219's
+and T-222's premises held and their Approaches did not, and T-173's premise did
+not.
 `piece-count` fired above 100,000 and nothing below it, so the band from 65,536
 to 100,000 passed every check and produced a torrent µTorrent cannot open.
 `piece_length::validate` refused only zero, so `--piece-length 64MiB` was
@@ -280,11 +286,35 @@ again. `duplicate-path` splits off, and `case-collision` keeps its message.
 Five tests, and two of them assert what does **not** fire, which is the half
 the old code would have passed.
 
+### The six hour soak finished, and its headline number is wrong about the mechanism
+
+**The operator's run completed its full window for the first time**: 681
+samples over 359 minutes, 1,360 leech cycles, none failed. Every named ceiling
+held. `tcp_close_wait` was **zero at every one of the 681 samples**, which is
+[T-020](peers.md) staying fixed over the longest window it has had, and handles
+and threads are flat at r squared 0.00.
+
+**`rss_bytes` reports 3.708 MiB/h at r squared 0.717 against a ceiling of 4,
+and that fit spans a step.** At `t+1.161h` resident memory goes from 15.8 MiB
+to 27.5 MiB in one eight second interval and never returns below 27.5. Threads
+and handles do not step with it. Fitted either side, the slope is 1.020 MiB/h
+before and 1.690 after; from `t+2h` it is 1.371 at r squared 0.418.
+
+**And what is left after the step is a sawtooth.** From `t+2h` the series has
+mean 33.8 MiB and standard deviation 2.4, with 49 samples rising more than
+3 MiB and 52 falling more than 3. A series that gives back what it takes 52
+times is a high-water mark, not a leak.
+
+That is [T-224](memory.md), filed, P2. It carries the numbers, the argument
+that a ceiling a run passes or fails depending on how long it ran is not a
+ceiling, and a cheap first move: `soak.ps1` reports one linear fit per series
+and has no way to say there is a step in it.
+
 ## In progress
 
-Nothing is half-written. All three entries are closed in [INDEX.md](INDEX.md)
-with their acceptance runs recorded, and T-219's evidence is committed at
-`bench/trace-subsystems-20260823T140418847Z.json`.
+Nothing is half-written. All five entries that closed are closed in
+[INDEX.md](INDEX.md) with their acceptance runs recorded, and T-219's evidence
+is committed at `bench/trace-subsystems-20260823T140418847Z.json`.
 
 - **[T-173](metainfo.md)** is open with its premise disproved, the correction
   written under it, and the seam named with a file and a line. What is left is
@@ -301,9 +331,15 @@ priority first. Clear as many small entries as possible, so the open count
 comes down, and then take the bigger ones a **category at a time**.
 
 **Nothing departs from that shape this time.** The last two orders each put one
-measured P1 above it, and both of those are closed. Twenty-six entries are
-open and one is P1, so the shape and the priority now agree: item 2 is the
-effort S list.
+measured P1 above it, and both of those are closed. Twenty-five entries are
+open and the only P1 left is [T-081](create-seed.md), BEP 52, which is effort L
+and belongs in item 6's category pass rather than at the top of a list whose
+purpose is bringing the open count down. So the shape and the priority agree:
+item 3 is the effort S list.
+
+**The soak is item 2 and it goes first**, on the operator's instruction: it
+runs for hours, so it starts before anything else and the session works while
+it runs. Reading the one that already finished is item 4.
 
 The counts are derived from the rows rather than from memory:
 
@@ -320,7 +356,53 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 gh run list --limit 1
 ```
 
-2. **The effort S entries**, five left of the eight and all P2 or P3:
+2. **Start the next soak before anything else, and it is the operator's
+   instruction.** It runs for hours, so it starts first and the session works
+   while it runs. The operator will say when it has finished.
+
+   **First, make sure no soak is already running.** A previous one leaves
+   `bit-cli` and `loopback-tracker` processes behind, running from a copy under
+   `.tmp/`, which is why `gates.ps1` reports leaving them alone rather than
+   killing them. Kill them before starting a new one, or the two runs share a
+   tracker and neither measures anything:
+
+```bash
+pwsh -NoProfile -Command "Get-Process bit-cli,loopback-tracker,loopback-churn -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\.tmp\*' } | Stop-Process -Force"
+```
+
+   **Then build a fresh binary from the tree the session is about to work on**,
+   because a soak measures whatever it was handed and a stale binary measures
+   the last session:
+
+```bash
+cargo build --release --bins --examples
+```
+
+   **Then print this in chat for the operator to run**, in a dedicated
+   foreground terminal from the repository root. Six hours and the same three
+   ceilings as the run that is committed, so the two are comparable:
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
+```
+
+   **Then wait for it to start, record it, and move on.** It writes
+   `bench/soak-<stamp>.csv` and rewrites `bench/soak-<stamp>.json` after every
+   sample, so a file appearing is the signal that it is running. Poll for one
+   newer than the build, write its stamp into this file under the state
+   section, and then go to item 3. Do **not** start it from inside a session:
+   a session ending kills the process it started, which is why the operator
+   runs it.
+
+```bash
+pwsh -NoProfile -Command "Get-ChildItem bench/soak-*.json | Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content | ConvertFrom-Json | Select-Object generated_at, complete, elapsed_hours, samples"
+```
+
+   **What this run is for** is [T-224](memory.md)'s first question: does the
+   11.7 MiB step at `t+1.161h` reproduce? It is answered inside the first
+   ninety minutes, so the answer is available long before the window closes.
+
+3. **The effort S entries**, five left of the eight and all P2 or P3:
    [T-041](memory.md), [T-165](peers.md), [T-033](performance.md),
    [T-008](webseed.md), [T-103](bep-coverage.md). [T-176](create-seed.md) and
    [T-187](metainfo.md) closed, and [T-173](metainfo.md) is open with its
@@ -338,31 +420,37 @@ gh run list --limit 1
    counted what a run already emits, and T-222's filed Approach named a seam a
    better one replaced. One command answered both.
 
-3. **The six hour soak, and it is the operator's to run.** No agent session
-   lasts six hours and a session ending kills the process it started. In a
-   dedicated foreground terminal, from the repository root:
+4. **[T-224](memory.md), P2, effort M.** The six hour soak that just finished
+   **is committed**, so
+   this is reading it rather than running it. Its headline slope, 3.708 MiB/h
+   against a ceiling of 4, is a line fitted across an 11.7 MiB step at
+   `t+1.161h`; either side of the step it is 1.0 to 1.7 MiB/h. The entry has
+   the numbers and the argument.
+
+   **The cheap half first**, and it is worth doing even if the step is never
+   found: `soak.ps1` reports one linear fit per series and cannot say there is
+   a discontinuity in it, so a reader has no way to know the number is a fit
+   across a step. A largest-single-interval-change column beside each slope
+   would have made this entry unnecessary to write by hand.
+
+   The run is committed, so nothing has to be re-run to start:
 
 ```bash
-pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
+pwsh -NoProfile -Command "Get-Content bench/soak-20260823T090132499Z.json | ConvertFrom-Json | Select-Object generated_at, complete, elapsed_hours, samples"
 ```
 
-   **How a later session reads it.** The run writes `bench/soak-<stamp>.csv`
-   one row per sample and rewrites `bench/soak-<stamp>.json` after every
-   sample, so a run still going has both. `"complete": true` in the JSON is the
-   only thing that says the window finished.
+   **Another six hour run is not needed to make progress.** The entry's first
+   question is whether the step reproduces, and a **two hour** run at the same
+   leech rate crosses `t+1.161h` with room to spare. That is the operator's to
+   start, in a foreground terminal, for the same reason the six hour one was:
 
 ```bash
-pwsh -NoProfile -Command "Get-ChildItem bench/soak-*.json | Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content | ConvertFrom-Json | Select-Object generated_at, complete, elapsed_hours, samples"
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 120 -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
 ```
 
-   The last run reached 1.32 hours of six with 145 samples, zero `CLOSE_WAIT`
-   at every one and 288 leech cycles with none failed. The RSS slope is not a
-   result at that window: +0.622 MiB/h at r squared 0.105 is noise fitted to a
-   line. **A slope needs a window long enough to have one**, and the tree has
-   moved a long way since, so restart rather than resume.
-4. **[T-212](memory.md)**, whenever a fixture of stalling peers is being built
+5. **[T-212](memory.md)**, whenever a fixture of stalling peers is being built
    anyway.
-5. **Then, a category at a time.** `bep-coverage.md` has the most left and the
+6. **Then, a category at a time.** `bep-coverage.md` has the most left and the
    most shared machinery. After it, `dht.md`.
 
 **Two corpus sources the list above may want**, both already on this machine
@@ -373,21 +461,55 @@ opened, filed or commented on either, by [RULES.md](RULES.md) section 6a.
 
 ## Open questions for the operator
 
-**None.** The one this file carried last session, whether to build `--trace`
-out or delete the ten names, was ruled on: build. It is done and
-[T-219](cli-surface.md) is closed rather than left open for a residue.
+**Two decisions this session made on its own and would take a ruling on.**
+Neither blocks anything: both are closed in the record with the reasoning, and
+either can be reopened by saying so.
 
-**Two things worth the operator's eye rather than a decision**, both from
-[T-222](cli-surface.md), and both are behaviour changes rather than fixes to
-something that was failing.
+**One. Should the vendored tree be patched so a dropped path component can be
+reported?** [T-173](metainfo.md) is open on exactly this. `path: ["", "foo"]`
+lands correctly at `foo`, but the drop is invisible: `SafeStorage` plans from
+the session's `file_infos`, whose `relative_filename` is a `PathBuf` that lost
+the empty component before this repository saw it. Closing it needs either a
+patch to `librqbit_core` so `FileDetails` carries the raw components, or
+`SafeStorage` planning from this repository's own metainfo parse.
+
+**The recommendation is to leave it**, which is what this session did. It is a
+P3 whose only cost is a missing `reasons` entry on a path that is already
+correct, and the second option is much larger than it sounds because the
+session's file list is also what the piece-to-file mapping is keyed on. The
+entry carries both routes if that is wrong.
+
+**Two. Should `path: ["", "foo"]` beside `path: ["foo"]` be renamed rather
+than refused?** Today the whole torrent is refused, by `librqbit_core`'s
+`validate`, before this repository's planner runs. [T-072](windows.md)'s
+precedent says two entries distinct in the metainfo should both land.
+
+**The recommendation is to keep the refusal**, which is what this session did,
+and the reason is consistency with a decision made the same afternoon:
+[T-187](metainfo.md) kept a strict rule because no instance is in evidence, and
+relaxing this one would be the same argument answered the other way. The
+citation behind it is a parser's issue tracker, not a torrent anybody has.
+`an_entry_that_collapses_onto_another_is_refused_whole` pins the behaviour, so
+relaxing it later is a decision made against a failing test rather than a
+change nobody notices.
+
+## Two behaviour changes worth the operator's eye
+
+Not decisions. Both are from [T-222](cli-surface.md) and both change what an
+existing command does.
 
 `bit-cli.toml`, the user config file at the platform config directory, and
 every `BIT_CLI_*` variable now change what a run does. Until this session they
 changed what `bit-cli config show` printed and nothing else, so a file that has
 been sitting on this machine has never had an effect and will have one on the
 next run. `bit-cli config show` says what is in force and where each value came
-from, and `--no-config` turns the files off.
+from, `--trace config` shows the whole resolution on any command, and
+`--no-config` turns the files off.
 
 `--config` naming a file that is not there is an error on every command now.
 It was exit 8 on `config show` and exit 0, in silence, on the other fifteen, so
 a script that passed a stale path and did not notice will start noticing.
+
+**The question this file carried last session is answered.** Whether to build
+`--trace` out or delete the ten names: the operator ruled build, it is done,
+and [T-219](cli-surface.md) is closed rather than left open for a residue.

@@ -3372,7 +3372,8 @@ vendored target that carries the same fact. `filter_directive` emits one
 directive per target and dedupes on the target, so two names sharing one raise
 it once.
 
-**Eleven emission points were written and ten vendored trace calls retargeted.**
+**Ten subsystems were given somewhere to write and thirteen vendored trace
+calls retargeted**, `http` being the one that already had a target of its own.
 `disk` in `SafeStorage`'s read, write, flush and allocate, which is where the
 offsets and sizes the description promises already are. `ratelimit` in
 `RateLimiter::take`, on every take rather than only the ones that wait, because
@@ -3394,8 +3395,8 @@ defaults to the module path and the modules do not divide the way the
 subsystems do: `peer_connection` holds the handshake and every wire message,
 and `torrent_state::live` holds the picker, the piece lifecycle and peer
 management. Raising the module would have made `--trace handshake` print 266
-records where 2 were asked for, on the 2 MiB fixture below. Ten calls take an
-explicit target instead, under "handshake, piece and picker tracing have no
+records where 2 were asked for, on the 2 MiB fixture below. Thirteen calls
+take an explicit target instead, under "handshake, piece and picker tracing have no
 target of their own" in
 [`patches/UPSTREAM.md`](../patches/UPSTREAM.md). Upstream's own tests were run
 and are 149 passing, unchanged.
@@ -3500,9 +3501,11 @@ Status:      **done** 2026-08-23T15:20Z
 
 Problem:     `--config <PATH>` and `--no-config` are **global** flags, accepted
              on every command. They have two readers in the whole workspace,
-             `crates/bit-cli/src/cmd/config.rs:54` and `:80`, and both are
+             `crates/bit-cli/src/cmd/config.rs:75` and `:101`, and both are
              inside `resolve`, whose only caller is `bit-cli config show` at
-             `crates/bit-cli/src/cmd/config.rs:125`.
+             `crates/bit-cli/src/cmd/config.rs:146`. The three line numbers are
+             where they are **after** this entry closed and the file grew; the
+             readers themselves are `global.no_config` and `global.config`.
 
              So `bit-cli.toml`, the user config file, `--config`, and every
              `BIT_CLI_*` variable change what `bit-cli config show` prints and

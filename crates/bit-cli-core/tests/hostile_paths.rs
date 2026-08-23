@@ -422,7 +422,7 @@ async fn two_one_file_torrents_with_the_same_file_name_do_not_collide() {
 /// **The drop is not reported, and the reason is a seam rather than an
 /// oversight.** `SafeStorage` plans from `TorrentMetadata::file_infos`, whose
 /// `relative_filename` is a `PathBuf` the vendored session has already built
-/// (`crates/bit-cli-core/src/storage.rs:426`), and `PathBuf::push` drops an
+/// (`crates/bit-cli-core/src/storage.rs:427`), and `PathBuf::push` drops an
 /// empty component on the way in. So by the time this repository's planner
 /// sees the path there is nothing left to drop and nothing to report.
 /// `Reason::DroppedComponent` exists and fires on the one path where the raw

@@ -457,7 +457,7 @@ nobody notices.
 **What is left open is smaller than the entry and is a seam.** The drop is not
 reported. `SafeStorage` plans from `TorrentMetadata::file_infos`, whose
 `relative_filename` is a `PathBuf` the vendored session has already built
-(`crates/bit-cli-core/src/storage.rs:426`), and `PathBuf::push` drops an empty
+(`crates/bit-cli-core/src/storage.rs:427`), and `PathBuf::push` drops an empty
 component on the way in. By the time this repository's planner sees the path
 there is nothing left to drop, so it cannot report what it never saw.
 
