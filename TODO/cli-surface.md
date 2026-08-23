@@ -1547,7 +1547,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1206` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1286` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -3279,3 +3279,64 @@ $ RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --all-features
 
 `rustc 1.99.0-beta.1` and the pinned `1.98.0`. The vendored trees still pass
 their own tests, 149 in `rqbit` and 76 in `librqbit-utp`.
+
+### T-219 Ten of the eleven trace subsystems raise a target nothing writes to
+
+Source:      measured while closing [T-094](bench.md), 2026-08-23
+Category:    cli
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     `--trace <SUBSYSTEM>` builds one `tracing` directive per name,
+             `bit_cli::<subsystem>=trace`, and `logging.rs`'s `SUBSYSTEMS`
+             documents eleven of them: `peer`, `handshake`, `tracker`, `dht`,
+             `http`, `piece`, `picker`, `disk`, `ratelimit`, `retry`, `config`.
+
+             **Only `http` matches anything.** It is the one target any code in
+             this repository names, at
+             `crates/bit-cli-core/src/webseed/fetch.rs:1370`. Every other
+             directive names a module path that does not exist: a record
+             emitted from `cmd/peers.rs` has the target `bit_cli::cmd::peers`,
+             which `bit_cli::peer` does not match, and there is no
+             `bit_cli::disk`, `bit_cli::piece` or `bit_cli::config` module at
+             all.
+Relevance:   Eleven names, ten of which do nothing, and all eleven documented
+             in `--help`, in all three manuals, and with a sentence each saying
+             what they carry. `disk` promises "reads, writes, flushes, and
+             allocation, with offsets and sizes". A caller debugging a stalled
+             write turns it on, gets nothing, and concludes there were no
+             writes.
+
+             It is the same shape as
+             [T-181](#t-181-four-flags-are-read-and-never-acted-on),
+             [T-183](#t-183---seed-ratio-and---seed-time-are-read-and-never-used),
+             [T-185](#t-185---exclude-file-on-its-own-selects-nothing-and-downloads-everything)
+             and [T-214](#t-214-seed-runs-no-hooks), and it is the largest of
+             them: ten flags' worth of documented capability.
+Approach:    The measurement first, because it decides the size. One run of
+             `download --web-seed-only` over a 1 GiB payload, tracing all ten:
+
+             ```
+             --trace peer,handshake,tracker,dht,piece,picker,disk,ratelimit,retry,config
+                 0 lines of stderr
+             --trace http
+                 257 lines
+             ```
+
+             Then, per subsystem, either emit on that target or stop
+             documenting it. Emitting is `tracing::trace!(target:
+             "bit_cli::<name>", ...)` at the places that already know the
+             facts, which is where the work is: `piece` and `picker` are
+             decided in the vendored session rather than here, and a target
+             this repository controls has to be named from code it owns, so
+             some of them need a seam in `vendor/` and are their own work.
+
+             **`ratelimit` and `retry` are the cheap two**: both are decided in
+             `bit-cli-core` and neither needs a seam. `disk` is next: every
+             write already goes through `SafeStorage::write_through`.
+Acceptance:  A test drives one command per documented subsystem with that
+             subsystem traced and asserts at least one record on that target,
+             and any subsystem that cannot be made to emit is removed from
+             `SUBSYSTEMS`, from the help and from the manuals in the same
+             change. The list a caller reads matches the list that works.

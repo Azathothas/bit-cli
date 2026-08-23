@@ -466,7 +466,7 @@ Source:      found closing [T-189](#t-189-the-bench-reports-are-not-in-the-schem
 Category:    bench
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T12:25Z
 
 Problem:     `bit-cli seed <TORRENT> --json` writes a document with
              `kind: "seed"`, holding `data_directory`, `complete` and who
@@ -495,6 +495,38 @@ Approach:    Decide whether the report's discriminator should be the bench
 Acceptance:  Two runs whose documents share a `kind` cannot merge into one
              schema section without something failing, and a test names the
              pair.
+
+**Done, and the wire format is unchanged**, which is the second of the two
+options the Approach names and the one it prefers. Changing `Kind::as_str`
+would break the report format for every consumer to fix a hazard no consumer
+has met: `report_version` exists for a break worth making and this is not one.
+
+**What fails now.** `fold_document` refuses to fold a document under a `kind`
+another **command** already claimed. The discriminator is the leading words of
+the sample's label, so `bit-cli trackers <TORRENT> --json` and
+`bit-cli trackers <TORRENT> --scrape --json` are one command run two ways and
+still merge, which they have to: that is how an optional field gets into the
+contract at all. `bit-cli seed` and `bit-cli bench seed` are two commands and
+are refused, by name, with what to do about it.
+
+**Both directions are tested**, because a guard that refuses everything is the
+same defect wearing a different hat:
+`two_commands_cannot_claim_one_document_kind` is the pair this entry is about,
+and `the_same_command_with_different_flags_merges` is the case that must keep
+working. The first is a `#[should_panic]`, so without the guard it fails rather
+than passing quietly.
+
+**The hazard was one call away, and this session walked past it twice.**
+[T-065](../TODO/trackers.md#t-065-scrape-is-only-implemented-for-the-bep-48-url-convention)
+added a second `trackers` sample to the generator on 2026-08-23, which is
+exactly the shape that would have merged had it been a different command. It is
+the same command, so it merges correctly, and nothing would have said which of
+the two it was.
+
+```
+$ cargo test -p bit-cli --lib schema
+test result: ok. 11 passed; 0 failed; 0 ignored; 417 filtered out
+```
 
 ### T-091 Bench reports do not capture their environment
 
@@ -1010,7 +1042,7 @@ Source:      the operator's brief
 Category:    bench
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T12:45Z
 
 Problem:     "Tracing never changes behaviour or timing in a way that
              invalidates a measurement. If enabling a trace costs measurable
@@ -1027,6 +1059,56 @@ Acceptance:  Both numbers recorded here, and if the cost is measurable, the
 The report already carries `environment.tracing_enabled` and
 `environment.trace_subsystems`, so a report taken with a trace on is
 distinguishable from one taken without. The measurement itself is what is left.
+
+**Measured, and both of the entry's premises are wrong.**
+
+**"`--trace http` records every request in memory" is not what it does.** It is
+a log filter. `filter_directive` raises the `bit_cli::http` target to `trace`
+and `record()` in `webseed/fetch.rs` emits one line per ranged GET to stderr,
+and to `--log-file` when one is set. Nothing is retained, so there is no
+in-memory growth to measure and none was measured.
+
+**And the command the Approach names cannot answer the question.**
+`bench webseed` builds its own `reqwest::Client` at
+`crates/bit-cli-core/src/bench/webseed.rs:383` and never goes through
+`webseed::fetch`, so `--trace http` produces **no records at all** there.
+Measured: a traced `bench webseed` run writes one line of stderr, the one
+naming the report it wrote. Five traced runs against five plain ones were five
+comparisons of a run with itself, which is what the first version of this
+measurement did.
+
+`scripts/check-trace-cost.ps1` measures `download --web-seed-only` instead,
+where the trace fires, alternating the arms so drift falls on both. Three
+configurations, five runs per arm except the middle one, which is seven:
+
+| payload | chunk | trace lines | throughput cost | peak RSS cost | plain spread |
+| --- | --- | --- | --- | --- | --- |
+| 512 MiB | 1 MiB | 512 | 0.3% | **-3.5 MiB** | 5.0% |
+| 1 GiB | 1 MiB | 1,024 | 1.0% | **-7.0 MiB** | 4.2% |
+| 1 GiB | 64 KiB | 16,384 | 2.1% | +5.3 MiB | 60% |
+
+The cost is the best traced run against the best plain one, and the spread is
+the plain arm's own range as a share of its best. **In every configuration the
+difference between the arms is smaller than that spread**, and in two of the
+three the traced arm's peak RSS was **lower**, which is what noise looks like
+rather than a saving. So the answer to "does enabling a trace cost measurable
+throughput" is no, on this machine, up to 16,384 lines in four seconds. The
+acceptance's condition is not met, and its consequent is already true anyway:
+the report carries `tracing_enabled` and `trace_subsystems` whatever the
+answer.
+
+**What the numbers do not cover.** stderr went to a file in every run, which is
+the cheap destination and the normal one. A console is slower and a slow one
+would show. The cost also scales with lines rather than with bytes, so a run
+with small chunks pays more per byte: that is what the 64 KiB row is, and its
+spread is why it says nothing more precise.
+
+`bench/trace-cost-512m-20260823.json`, `bench/trace-cost-20260823.json` and
+`bench/trace-cost-64k-20260823.json` are the three runs, one per row.
+
+**One thing found on the way is a separate defect and has its own entry.** Ten
+of the eleven documented `--trace` subsystems raise a target nothing emits on.
+[T-219](cli-surface.md#t-219-ten-of-the-eleven-trace-subsystems-raise-a-target-nothing-writes-to).
 
 ### T-148 The peer probe test asserted an exit code inside its own retry loop
 

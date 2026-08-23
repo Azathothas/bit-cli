@@ -159,9 +159,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-091](bench.md) | P0 | bench | **done** | Bench reports do not capture their environment |
 | [T-092](bench.md) | P1 | bench | done | bench swarm has no synthetic load generator |
 | [T-189](bench.md) | P2 | bench | done | The bench reports are not in the schema contract |
-| [T-191](bench.md) | P2 | bench | open | Two different documents answer to kind seed |
+| [T-191](bench.md) | P2 | bench | **done** | Two different documents answer to kind seed |
 | [T-093](bench.md) | P2 | bench | **done** | --baseline comparison is not implemented |
-| [T-094](bench.md) | P2 | bench | open | Trace output has no measured cost |
+| [T-094](bench.md) | P2 | bench | **done** | Trace output has no measured cost |
 | [T-148](bench.md) | P2 | bench | **done** | The peer probe test asserted an exit code inside its own retry loop |
 | [T-149](bench.md) | P1 | bench | **done** | The last window of a leech bench was never counted |
 | [T-152](bench.md) | P1 | bench | **done** | A disk bench shorter than one sample interval reported no series at all |
@@ -217,6 +217,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-216](windows.md) | P1 | ci | **done** | A seeder test waited longer for a listener than the run was allowed to live |
 | [T-217](windows.md) | P2 | ci | **done** | The text gate caught one control byte and not the other twenty-eight |
 | [T-218](cli-surface.md) | P2 | ci | **done** | The next stable release fails the build on a method the bridge calls |
+| [T-219](cli-surface.md) | P1 | cli | open | Ten of the eleven trace subsystems raise a target nothing writes to |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -244,8 +245,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-167 items: 157 to work through, and 10 deferred to Phase C.
-28 open, 1 partial, 0 blocked, 128 done.
+168 items: 158 to work through, and 10 deferred to Phase C.
+27 open, 1 partial, 0 blocked, 130 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -503,11 +504,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 1 | 0 | 0 | 56 | 57 |
-| P2 | 15 | 1 | 0 | 46 | 62 |
+| P1 | 2 | 0 | 0 | 56 | 58 |
+| P2 | 13 | 1 | 0 | 48 | 62 |
 | P3 | 12 | 0 | 0 | 14 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **28** | **1** | **0** | **128** | **167** |
+| **All** | **27** | **1** | **0** | **130** | **168** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

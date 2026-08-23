@@ -40,12 +40,50 @@ fn observe_document(into: &mut BTreeMap<String, Sample>, command: &str, out: &st
     fold_document(into, command, &value);
 }
 
+/// Which command a sample's label names, without its arguments.
+///
+/// `bit-cli trackers <TORRENT> --json` and
+/// `bit-cli trackers <TORRENT> --scrape --json` are the same command run two
+/// ways and their fields belong in one section. `bit-cli seed` and
+/// `bit-cli bench seed` are two commands whose documents both say
+/// `kind: "seed"`, and merging those would describe a document that exists
+/// nowhere. The difference is the leading words, before the first argument or
+/// flag. See `TODO/bench.md`, T-191.
+fn producer(label: &str) -> String {
+    label
+        .split_whitespace()
+        .take_while(|word| {
+            !word.starts_with('<') && !word.starts_with('-') && !word.starts_with('[')
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The half of [`observe_document`] that works on a value already parsed.
+///
+/// **Two commands cannot share a `kind` here.** The map is keyed by `kind`, so
+/// folding two different documents under one name would union their field
+/// lists into a single section and the file would claim a document nothing
+/// writes. Nothing would fail, which is why this does: `bit-cli seed` and
+/// `bit-cli bench seed` both write `kind: "seed"` today, and this generator is
+/// one `observe_report` call away from merging them. See `TODO/bench.md`,
+/// T-191.
 fn fold_document(into: &mut BTreeMap<String, Sample>, command: &str, value: &serde_json::Value) {
     let Some(kind) = value.get("kind").and_then(|k| k.as_str()) else {
         return;
     };
     let flattened = fields(value);
+    if let Some(existing) = into.get(kind)
+        && producer(&existing.command) != producer(command)
+    {
+        panic!(
+            "two commands write `kind: \"{kind}\"`: `{}` and `{command}`. \
+             Folding both in would describe a document neither one writes. \
+             Give one of them its own discriminator, or leave the second out \
+             of the generator. See TODO/bench.md, T-191.",
+            existing.command
+        );
+    }
     into.entry(kind.to_string())
         .and_modify(|sample| sample.merge(flattened.clone()))
         .or_insert_with(|| Sample {
@@ -1012,6 +1050,58 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
 
 #[cfg(test)]
 mod tests {
+    /// Two commands whose documents share a `kind` cannot merge silently.
+    ///
+    /// `bit-cli seed --json` writes `data_directory`, `complete` and who
+    /// connected. `bit-cli bench seed --json` writes `report_version`,
+    /// `parameters` and `summary`. They share the discriminator and nothing
+    /// else, so a generator that folded both in would render one section
+    /// listing every field of both, and `docs/schema.md` would describe a
+    /// document that exists nowhere. Nothing failed before this. See
+    /// `TODO/bench.md`, T-191.
+    #[test]
+    #[should_panic(expected = "two commands write `kind: \"seed\"`")]
+    fn two_commands_cannot_claim_one_document_kind() {
+        let mut documents: BTreeMap<String, Sample> = BTreeMap::new();
+        fold_document(
+            &mut documents,
+            "bit-cli seed <TORRENT> --data <DIR> --json",
+            &serde_json::json!({"kind": "seed", "complete": true}),
+        );
+        fold_document(
+            &mut documents,
+            "bit-cli bench seed <TORRENT> --json",
+            &serde_json::json!({"kind": "seed", "report_version": 1}),
+        );
+    }
+
+    /// One command run two ways is one document, and still merges.
+    #[test]
+    fn the_same_command_with_different_flags_merges() {
+        let mut documents: BTreeMap<String, Sample> = BTreeMap::new();
+        fold_document(
+            &mut documents,
+            "bit-cli trackers <TORRENT> --tracker <URL> --json",
+            &serde_json::json!({"kind": "trackers", "announced_port": 6881}),
+        );
+        fold_document(
+            &mut documents,
+            "bit-cli trackers <TORRENT> --scrape --scrape-url <URL> --json",
+            &serde_json::json!({"kind": "trackers", "scrape_url": "http://x/s"}),
+        );
+        let sample = documents.get("trackers").expect("one section");
+        assert!(
+            sample.fields.contains_key("announced_port"),
+            "{:?}",
+            sample.fields
+        );
+        assert!(
+            sample.fields.contains_key("scrape_url"),
+            "{:?}",
+            sample.fields
+        );
+    }
+
     use super::*;
 
     fn schema_path() -> std::path::PathBuf {
