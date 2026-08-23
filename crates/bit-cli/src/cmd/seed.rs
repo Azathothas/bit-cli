@@ -619,6 +619,9 @@ mod tests {
             client: Some("rqbit".into()),
             connection: Some("tcp".into()),
             encryption: Some("rc4".into()),
+            choked: 0,
+            unchoked: 0,
+            disconnects: Vec::new(),
             direction: "incoming",
             downloaded_bytes: 0,
             uploaded_bytes: uploaded,
@@ -1111,6 +1114,118 @@ mod tests {
                     >= process["rss_bytes"].as_u64().unwrap_or(0),
                 "peak below current in {event}"
             );
+        }
+    }
+
+    /// A peer that connects and leaves is reported with **why** and **when**.
+    ///
+    /// `TODO/peers.md` T-024: the report said a peer was `dead` and nothing
+    /// else, because `librqbit`'s peer snapshot carried no disconnect cause and
+    /// `on_peer_died` threw the one it had away. "Why did this peer stop taking
+    /// bytes" had no answer.
+    ///
+    /// The peer here is a raw socket that completes a BEP 3 handshake and
+    /// closes, which is the cheapest thing that produces a real reason: the
+    /// seeder's next read fails and that failure is what gets recorded. What is
+    /// asserted is that the reason is a real one rather than a stand-in, which
+    /// is the acceptance's own wording.
+    #[test]
+    fn a_peer_that_leaves_is_reported_with_a_reason_and_a_time() {
+        use std::io::{Read, Write};
+
+        let fixture = crate::test_support::TorrentFixture::single_file();
+        let data = fixture.dir().join("served");
+        fixture.place(&data, &[]);
+
+        // The info hash comes from the tool rather than from a literal, so a
+        // fixture change cannot leave this handshaking for the wrong torrent.
+        let info =
+            crate::test_support::run_json(&["info", fixture.path_str(), "--json"], fixture.dir());
+        let info_hash: Vec<u8> = {
+            let hex = info["info_hash"].as_str().expect("info_hash").to_string();
+            (0..hex.len() / 2)
+                .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("hex"))
+                .collect()
+        };
+
+        let port = crate::test_support::free_port();
+        let peer = std::thread::spawn(move || {
+            if !crate::test_support::wait_for_listener(port, std::time::Duration::from_secs(20)) {
+                return false;
+            }
+            let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+                return false;
+            };
+            let mut handshake = Vec::with_capacity(68);
+            handshake.push(19u8);
+            handshake.extend_from_slice(b"BitTorrent protocol");
+            handshake.extend_from_slice(&[0u8; 8]);
+            handshake.extend_from_slice(&info_hash);
+            handshake.extend_from_slice(b"-bitCLItest000000001");
+            if stream.write_all(&handshake).is_err() {
+                return false;
+            }
+            // Read theirs back, so the connection is established from both
+            // ends before it is dropped. Without this the seeder may never
+            // reach the live state and there is nothing to disconnect from.
+            let mut theirs = [0u8; 68];
+            let read = stream.read_exact(&mut theirs).is_ok();
+            drop(stream);
+            read
+        });
+
+        // The run length rather than a wait on the peer: the peer connects the
+        // moment the listener is up, which is a loopback round trip, and the
+        // assertion below is on the report rather than on the timing.
+        // Exit 9 is what `--stop-after` produces: the run was cut short rather
+        // than finished, and that is the expected outcome for a seeder with a
+        // deadline. The report is still written.
+        let report = crate::test_support::run_json_code(
+            &[
+                "seed",
+                fixture.path_str(),
+                "--data",
+                data.to_str().unwrap(),
+                "--port",
+                &port.to_string(),
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--stop-after",
+                "15s",
+            ],
+            fixture.dir(),
+            bit_cli_core::exit::ExitCode::Timeout,
+        );
+        assert!(
+            peer.join().unwrap_or(false),
+            "the peer never completed a handshake, so nothing disconnected"
+        );
+
+        let peers = report["peers"].as_array().expect("peers");
+        let with_history: Vec<_> = peers
+            .iter()
+            .filter(|p| p["disconnects"].as_array().is_some_and(|d| !d.is_empty()))
+            .collect();
+        assert!(
+            !with_history.is_empty(),
+            "no peer row carries a disconnect: {peers:?}"
+        );
+
+        for row in &with_history {
+            for event in row["disconnects"].as_array().expect("disconnects") {
+                let at = event["at"].as_str().expect("at");
+                assert!(
+                    at.ends_with('Z') && at.len() >= 20,
+                    "the time is not ISO 8601 UTC: {at}"
+                );
+                let reason = event["reason"].as_str().expect("reason");
+                assert!(!reason.is_empty(), "an empty reason is not a reason");
+                assert_ne!(
+                    reason, "gone",
+                    "the acceptance asks for a real reason rather than a stand-in"
+                );
+            }
         }
     }
 

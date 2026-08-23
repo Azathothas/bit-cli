@@ -105,7 +105,7 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0007-crates-librqbit-src-peer_info_reader-mod.rs.patch
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0019-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0021-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0022-package-lock.json.patch
+             patches/rqbit/0024-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -317,7 +317,7 @@ Unblocks:    T-040, TODO/memory.md, the record's other P0
 Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0018-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T15:30Z
 ```
@@ -390,7 +390,7 @@ Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0021-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0023-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T17:26Z
 ```
@@ -740,7 +740,7 @@ Files:       vendor/rqbit/crates/librqbit/src/lib.rs
              patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
              patches/rqbit/0013-crates-librqbit-src-torrent_state-initializing.rs.patch
-             patches/rqbit/0020-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0022-crates-rqbit-src-main.rs.patch
 Upstream:    not offered yet, and the first two thirds of it should be
 Added:       2026-08-22T19:28Z
 ```
@@ -945,8 +945,8 @@ Files:       vendor/rqbit/crates/librqbit/src/stream_transform.rs (new)
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
              patches/rqbit/0011-crates-librqbit-src-stream_connect.rs.patch
              patches/rqbit/0012-crates-librqbit-src-stream_transform.rs.patch
-             patches/rqbit/0017-crates-librqbit-src-type_aliases.rs.patch
-             patches/rqbit/0020-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0019-crates-librqbit-src-type_aliases.rs.patch
+             patches/rqbit/0022-crates-rqbit-src-main.rs.patch
 Upstream:    not offered, and it is a seam rather than a fix
 Added:       2026-08-23T02:52Z
 ```
@@ -1047,8 +1047,8 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/mod.rs
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
-             patches/rqbit/0019-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0018-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0021-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be. It is
              rqbit#584 (https://github.com/ikatson/rqbit/issues/584), open.
 Added:       2026-08-23T03:55Z
@@ -1175,7 +1175,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 Unblocks:    nothing on its own. It is nzbd's 0005 read and taken in part, and
              TODO/trackers.md is where the tracker entries live.
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
-             patches/rqbit/0021-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0023-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    not offered yet. It should be, and nzbd's own draft is written:
              see contrib/rqbit/TRACKER_REQUEST_BUDGET_PR.md in that repository.
 Added:       2026-08-23T04:35Z
@@ -1225,3 +1225,52 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 **What is not proved.** That a hostile tracker is refused, because there is no
 fixture that is one. `loopback-tracker` answers correctly by construction, and
 the three bounds are asserted on the functions rather than through a socket.
+
+---
+
+## librqbit: a peer row says a peer is dead and never why
+
+```
+Unblocks:    T-024, TODO/peers.md
+Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/mod.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/stats/atomic.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/stats/snapshot.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
+             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0018-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+Upstream:    not offered yet, and it should be. It is two counters and one
+             bounded list, and the reason was already in hand.
+Added:       2026-08-23T05:19Z
+```
+
+Two questions a peer row could not answer, and the second is the one that
+stings: **`on_peer_died` takes the reason as an `Option<Error>` and threw it
+away.** The state went to `Dead` and the snapshot said `dead`, which is a fact
+about the row rather than about what happened.
+
+- **`Peer::disconnects`**, a bounded `VecDeque` of `(when, why)`, newest last.
+  Four per peer, because a flapping peer produces one per flap and the peer
+  table holds 1,024 rows, so this is the second factor in a product that has to
+  stay small. The reason is truncated at 200 bytes: an `anyhow` chain can be a
+  paragraph and the first line is the part that says what happened. `None` for
+  a connection that ended with no error, which is a peer that hung up cleanly
+  and is a different fact from a peer whose reason is unknown.
+- **`times_choked` and `times_unchoked`** on the counters, bumped in
+  `on_i_am_choked` and `on_i_am_unchoked`. A peer that chokes goes quiet and
+  looks exactly like one that is slow, and these are the two numbers that tell
+  them apart.
+
+**Why it has to be here.** `on_peer_died` is a private method, `Peer` is
+`pub(crate)`, and `PeerStats` is what a dependent crate is given. There is no
+seam that would let the reason out.
+
+**How it was measured.** `a_peer_that_leaves_is_reported_with_a_reason_and_a_time`
+in `crates/bit-cli/src/cmd/seed.rs`. A raw socket completes a BEP 3 handshake
+against a running `bit-cli seed --json` and closes, and the report carries the
+row with an ISO 8601 time and the reason the read actually failed with. What is
+asserted is that the reason is a real one rather than a stand-in, which is
+T-024's own wording.
+
+```bash
+cargo test -p bit-cli --lib a_peer_that_leaves_is_reported
+```

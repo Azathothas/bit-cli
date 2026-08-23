@@ -782,7 +782,7 @@ Source:      the operator's brief
 Category:    peers
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**, 2026-08-23T05:19Z
 
 Problem:     `bit-cli seed --json` reports per-peer address, client, direction,
              bytes in each direction, verified pieces, chunks, errors, and
@@ -799,6 +799,52 @@ Approach:    `PeerCounters` in `librqbit` carries `times_stolen_from_me` and
 Acceptance:  `bit-cli seed --json` carries a `disconnects` array per peer with
              a timestamp and a reason, and the reason is a real one rather than
              "gone".
+
+**Closed 2026-08-23, and the Approach's second option was not needed.** It said
+to add the counters upstream "or infer disconnects from a peer leaving the
+snapshot between two ticks and record that as the weaker answer it is". The
+trees are vendored, so the first option was available, and the weaker answer
+was not taken.
+
+**The reason was already in hand and was being thrown away.**
+`on_peer_died(&self, error: Option<crate::Error>)` had it, set the state to
+`Dead`, and dropped it. So a report could say a peer was `dead`, which is a
+fact about the row rather than about what happened.
+
+- **`peers[].disconnects`**, newest last, each with `at` in ISO 8601 UTC and
+  `reason`. Bounded at four per peer: a flapping peer produces one per flap and
+  the session keeps 1,024 peer rows, so this is the second factor in a product
+  that has to stay small, and the reason is truncated at 200 bytes because an
+  `anyhow` chain can be a paragraph.
+- **`peers[].choked` and `peers[].unchoked`**, counted in `on_i_am_choked` and
+  `on_i_am_unchoked`. A peer that chokes goes quiet and looks exactly like one
+  that is slow; these are the two numbers that tell them apart.
+
+**A connection the peer closed cleanly reports `closed by the peer`** rather
+than an empty string. That is a real reason and it is a different fact from a
+reason nobody recorded, which is why `librqbit` keeps it as `None` and this
+crate names it.
+
+**Measured, and the reason is the one the read actually failed with.**
+`a_peer_that_leaves_is_reported_with_a_reason_and_a_time` in
+`crates/bit-cli/src/cmd/seed.rs`: a raw socket completes a BEP 3 handshake
+against a running `bit-cli seed --json` and closes.
+
+```json
+{"at":"2026-08-23T05:17:45.446Z","reason":"error writing: An established connection was aborted by the software in your host machine. (os error 10053)"}
+```
+
+The info hash comes from `bit-cli info --json` rather than from a literal, so a
+fixture change cannot leave the test handshaking for the wrong torrent, and the
+peer thread returns whether it completed the exchange so a run where nothing
+connected fails as that rather than as a missing field.
+
+**What this does not carry.** A choke **history** with timestamps, which the
+title asks for and the Acceptance does not. Two counters answer "did this peer
+choke us, and how often"; they do not answer "when". Nothing here needed the
+second, and adding a bounded event list per peer for it is the same shape as
+`disconnects` if something ever does. Said here rather than left as a title
+that promises more than the entry delivered.
 
 ### T-025 PeerStatsFilterState is not exported, so the filter is built by JSON
 

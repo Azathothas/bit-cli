@@ -24,12 +24,63 @@ pub(crate) type InflightRequest = ChunkInfo;
 pub(crate) type PeerRx = UnboundedReceiver<WriterRequest>;
 pub(crate) type PeerTx = UnboundedSender<WriterRequest>;
 
+/// Why one connection to a peer ended, and when.
+///
+/// Added by this fork. `on_peer_died` already had the reason as an
+/// `Option<Error>` and threw it away, so a report could say a peer was `dead`
+/// and never why. See `TODO/peers.md` T-024.
+#[derive(Debug, Clone)]
+pub(crate) struct Disconnect {
+    /// Milliseconds since the Unix epoch, so a caller can print it in any
+    /// format without this crate choosing one.
+    pub at_unix_ms: u64,
+    /// What ended it, or `None` where the connection closed with no error,
+    /// which is a peer that hung up cleanly.
+    pub reason: Option<String>,
+}
+
+/// How many disconnects one peer row remembers.
+///
+/// A flapping peer produces one per flap and the peer table holds 1,024 rows,
+/// so this is the second factor in a product that has to stay small. Four
+/// times 1,024 reasons, each truncated, is the bound. Newest last.
+pub(crate) const MAX_REMEMBERED_DISCONNECTS: usize = 4;
+
+/// Longest reason string kept. An `anyhow` chain can be a paragraph and the
+/// first line is the part that says what happened.
+pub(crate) const MAX_DISCONNECT_REASON_LEN: usize = 200;
+
 #[derive(Debug)]
 pub(crate) struct Peer {
     pub addr: SocketAddr,
     state: PeerState,
     pub stats: stats::atomic::PeerStats,
     pub outgoing_address: Option<SocketAddr>,
+    /// Bounded, newest last. See [`MAX_REMEMBERED_DISCONNECTS`].
+    pub disconnects: std::collections::VecDeque<Disconnect>,
+}
+
+impl Peer {
+    /// Remember why a connection ended, dropping the oldest when full.
+    pub fn record_disconnect(&mut self, reason: Option<String>) {
+        let reason = reason.map(|mut r| {
+            if r.len() > MAX_DISCONNECT_REASON_LEN {
+                r.truncate(MAX_DISCONNECT_REASON_LEN);
+            }
+            r
+        });
+        let at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0);
+        while self.disconnects.len() >= MAX_REMEMBERED_DISCONNECTS {
+            self.disconnects.pop_front();
+        }
+        self.disconnects.push_back(Disconnect {
+            at_unix_ms,
+            reason,
+        });
+    }
 }
 
 impl Peer {
@@ -49,6 +100,7 @@ impl Peer {
             state,
             stats: Default::default(),
             outgoing_address: None,
+            disconnects: Default::default(),
         }
     }
 
@@ -58,6 +110,7 @@ impl Peer {
             outgoing_address: Some(addr),
             stats: Default::default(),
             state: Default::default(),
+            disconnects: Default::default(),
         }
     }
 

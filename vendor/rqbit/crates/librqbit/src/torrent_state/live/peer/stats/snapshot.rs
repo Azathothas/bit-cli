@@ -21,6 +21,22 @@ pub struct PeerCounters {
     pub total_piece_download_ms: u64,
     pub times_stolen_from_me: u32,
     pub times_i_stole: u32,
+    /// Added by this fork. See `TODO/peers.md` T-024.
+    pub times_choked: u32,
+    pub times_unchoked: u32,
+}
+
+/// Why one connection to this peer ended, and when.
+///
+/// Added by this fork. Bounded and newest last: a flapping peer produces one
+/// per flap and the peer table holds a thousand rows.
+#[derive(Serialize)]
+pub struct PeerDisconnect {
+    /// Milliseconds since the Unix epoch.
+    pub at_unix_ms: u64,
+    /// `None` where the connection closed with no error, which is a peer that
+    /// hung up cleanly rather than a peer whose reason is unknown.
+    pub reason: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -29,6 +45,8 @@ pub struct PeerStats {
     pub state: &'static str,
     pub conn_kind: Option<ConnectionKind>,
     pub client_name: Option<String>,
+    /// Added by this fork. Newest last, at most a handful.
+    pub disconnects: Vec<PeerDisconnect>,
 }
 
 impl From<&super::atomic::PeerCountersAtomic> for PeerCounters {
@@ -50,6 +68,8 @@ impl From<&super::atomic::PeerCountersAtomic> for PeerCounters {
             total_piece_download_ms: counters.total_piece_download_ms.load(Ordering::Relaxed),
             times_i_stole: counters.times_i_stole.load(Ordering::Relaxed),
             times_stolen_from_me: counters.times_stolen_from_me.load(Ordering::Relaxed),
+            times_choked: counters.times_choked.load(Ordering::Relaxed),
+            times_unchoked: counters.times_unchoked.load(Ordering::Relaxed),
         }
     }
 }
@@ -68,6 +88,14 @@ impl From<&Peer> for PeerStats {
                 PeerState::Live(l) => l.client_name.clone(),
                 _ => None,
             },
+            disconnects: peer
+                .disconnects
+                .iter()
+                .map(|d| PeerDisconnect {
+                    at_unix_ms: d.at_unix_ms,
+                    reason: d.reason.clone(),
+                })
+                .collect(),
         }
     }
 }

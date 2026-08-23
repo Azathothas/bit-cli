@@ -51,8 +51,9 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-23T01:53:05Z, unattended, running.
-- **Tests:** 1,165 passing, 0 failing. 1,131 at the start. Plus **149** in the
+- **Last session:** 2026-08-23T01:53:05Z, unattended, SESSION_ELAPSED. It was
+  ended on the operator's word rather than by running out of work.
+- **Tests:** 1,166 passing, 0 failing. 1,131 at the start. Plus **149** in the
   vendored trees, which the workspace gates do not run, up from 142.
 - **Gates:** clean.
 
@@ -66,12 +67,12 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 
 - **CI:** green at run **32618552099** against commit `9ddafaa`, all
   **seventeen** jobs, and that commit is this session's last change to source.
-- **Entries:** 161 items. 45 open, 2 partial, 0 blocked, 104 done, 10 deferred
-  to Phase C. 104 of 151 workable done, 47 left.
+- **Entries:** 161 items. 44 open, 2 partial, 0 blocked, 105 done, 10 deferred
+  to Phase C. 105 of 151 workable done, 46 left.
 - **Tree:** 92 Rust files, 52,440 lines of code, 12,530 of
   comment, `scc --no-cocomo crates/`. Excludes `vendor/`.
-- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **23 patches**
-  across sixteen sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
+- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
+  across eighteen sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
   `scripts/vendor-status.ps1` exits 0.
 - **Version:** `bit-cli` 0.2.0, unchanged.
 
@@ -205,10 +206,55 @@ The create-determinism fixture hash is unchanged, which is that test's whole
 point: the bytes this platform writes are the same after five dependency bumps.
 All five pull requests are closed.
 
-### The soak
+### The soak, cut short at 1.32 hours
 
-Running at the time this was written; the result and the report path go here
-before the session ends.
+**It did not finish and the record says so.** `scripts/soak.ps1` was started
+with ceilings rather than with the numbers merely recorded, which is what
+[T-040](memory.md) closing made possible, and the session ended before its six
+hours were up. `bench/soak-20260823T040627780Z.csv` has 145 samples over
+**1.32 hours**, and no JSON summary, because the script writes that at the end.
+
+| | |
+| --- | --- |
+| leech cycles | **288 completed, 0 failed** |
+| `CLOSE_WAIT` | **0 at all 145 samples** |
+| RSS | 13.58 MiB to 15.20 MiB, slope **+0.622 MiB/h at r squared 0.105** |
+| handles | 203 to 215, slope not usable at r squared 0.014 |
+| peak RSS | 21.43 MiB |
+
+**Two of those five rows mean something and three do not, at this window
+length.** Zero `CLOSE_WAIT` at every sample and zero failed cycles out of 288
+are statements a 1.32 hour run can make: they are counts rather than fits. The
+RSS slope is not, and the last session already wrote down why in T-040's own
+words: an interim read at 5.06 hours gave +1.45 MiB/h at r squared 0.107, which
+is noise fitted to a line, and 0.105 here is the same shape. **A slope needs a
+window long enough to have a shape**, and this one does not.
+
+So what this run says is that a session which changed the peer connection path
+in four places did not break the seeder and did not leak a socket in 288
+cycles. What it does not say is anything about the memory slope. A full six
+hours against this tree is the first item in the next session's list.
+
+### The reason a peer died was already in hand
+
+**[T-024](peers.md), P2, done**, taken after `patches/TASKS.md` ran out. Its
+Approach offered two routes and said the second was the weaker one: add the
+counters upstream, "or infer disconnects from a peer leaving the snapshot
+between two ticks". The trees are vendored, so the first was available.
+
+`on_peer_died` takes the reason as an `Option<Error>` and **threw it away**, so
+a report could say a peer was `dead`, which is a fact about the row rather than
+about what happened. `peers[].disconnects` carries it now with an ISO 8601
+time, bounded at four per peer, and `peers[].choked` and `peers[].unchoked`
+tell a peer that stopped being allowed to send from one that is slow.
+
+```json
+{"at":"2026-08-23T05:17:45.446Z","reason":"error writing: An established connection was aborted by the software in your host machine. (os error 10053)"}
+```
+
+The entry's title asks for a choke **history** and its Acceptance does not; two
+counters answer "how often" and not "when", and the entry says so rather than
+leaving a title that promises more than it delivered.
 
 ### What review 1 found
 
@@ -232,30 +278,61 @@ Nothing is half-written.
 
 ## Start here next session
 
-`patches/TASKS.md` is finished, so this is derived from [INDEX.md](INDEX.md)'s
-four questions again rather than from it. Re-derive rather than trusting this
-list if the argument in `INDEX.md` has moved.
+**The operator changed the shape of the work order for this one.** Not priority
+first. Clear as many small entries as possible, so the open count comes down,
+and then take the bigger ones a **category at a time**: all of `bep`, or all of
+`dht`, in one session rather than one entry from each.
+
+The reading taken of "provided they depend on a high priority task that's still
+open": an easy win is one that is **not** waiting on an open high-priority
+entry. That is nearly all of them, and it is worth saying why rather than
+asserting it. **There is no open P0 and exactly one open P1**, `T-081`, BEP 52
+v2 and hybrid torrents, effort XL. The only open entry that waits on it is
+[T-134](bep-coverage.md), v1 and v2 info hash reconciliation. Everything else
+below is unblocked.
+
+**27 entries are open at effort S**, none of them P0 or P1. Derived from the
+`Effort:` line of every open or partial entry, not from memory:
+
+```bash
+pwsh -NoProfile -File scripts/check-todo.ps1
+```
 
 1. **Read the CI run named above before anything else.**
-2. **[T-212](memory.md)**, P2, filed this session and the only entry whose
-   numbers are arithmetic rather than measurement. It needs a fixture swarm of
-   peers that answer an extended handshake with a large `metadata_size` and
-   then stall; `crates/bit-cli-core/src/bench/swarm.rs` already builds
-   synthetic peers and is where one would go. The bound is
-   `vendor/rqbit/crates/librqbit/src/dht_utils.rs:42` and
-   `vendor/rqbit/crates/librqbit/src/peer_info_reader/mod.rs:87`.
-3. **[T-024](peers.md)**, P2, per-peer choke and unchoke history, which needs no
-   corpus.
-4. **`0012-bound-peer-response-backlog`**, which is read and not taken: the
-   session's own writer channel is unbounded and a peer can queue piece
-   responses faster than a slow socket drains them. It belongs to
-   [T-040](memory.md)'s family and needs its own entry and its own measurement
-   before the patch. Corpus: `contrib/rqbit/` in
-   <https://github.com/pjunod/nzbd>, MIT OR Apache-2.0, fetched per session
-   rather than kept.
-5. **`0014`'s doubled recursive DHT request**, which is a defect rather than a
-   bound and has not been checked against 9.0.1. Same corpus.
-6. **Offer the patches upstream.** Sixteen sections in
+2. **A full six hour `scripts/soak.ps1` against this tree**, started first
+   because it outlasts most of a session and `gates.ps1` leaves it alone. This
+   session's was cut to 1.32 hours and its RSS slope is not usable at that
+   window. Ceilings that held for 1.32 hours and are worth keeping:
+   `-RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1`.
+3. **The `cli` group, eight entries at effort S**, which is the largest single
+   category of easy wins and the one where a reader sees the result:
+   [T-115](cli-surface.md) partial, [T-136](cli-surface.md),
+   [T-154](cli-surface.md), [T-116](cli-surface.md), [T-118](cli-surface.md),
+   [T-155](cli-surface.md), [T-156](cli-surface.md), [T-159](cli-surface.md).
+   Two of them, T-118 and T-159, are about the help output itself, so
+   `scripts/check-man.ps1 -Fix` follows both.
+4. **The `ci` and `windows` groups, four entries at effort S**:
+   [T-150](cli-surface.md), [T-161](cli-surface.md), [T-075](windows.md),
+   [T-178](windows.md). T-150 and T-161 are workflow edits, so they need a real
+   run to prove them and cannot go in a `-NoCi` push.
+5. **The `trackers` and `dht` groups, five entries at effort S**:
+   [T-180](trackers.md), [T-063](trackers.md), [T-065](trackers.md),
+   [T-050](dht.md), [T-051](dht.md).
+6. **The rest of the effort S entries**, ten of them, in
+   `bench`, `create`, `metainfo`, `memory`, `peers`, `performance`, `webseed`
+   and `bep`: [T-094](bench.md), [T-191](bench.md), [T-176](create-seed.md),
+   [T-173](metainfo.md), [T-187](metainfo.md), [T-041](memory.md),
+   [T-165](peers.md), [T-033](performance.md), [T-008](webseed.md),
+   [T-103](bep-coverage.md).
+7. **Then, a category at a time.** `bep-coverage.md` is the one with the most
+   left and the most shared machinery, and this session did three of its
+   entries in a row for exactly that reason. After it, `dht.md`.
+8. **[T-212](memory.md)** whenever the fixture for it is being built anyway. It
+   is the only entry in the record whose numbers are arithmetic rather than
+   measurement, and it needs a swarm of peers that answer an extended handshake
+   with a large `metadata_size` and then stall.
+   `crates/bit-cli-core/src/bench/swarm.rs` already builds synthetic peers.
+9. **Offer the patches upstream.** Eighteen sections in
    [`patches/UPSTREAM.md`](../patches/UPSTREAM.md) and not one has been
    offered. [T-020](peers.md) is
    [rqbit#311](https://github.com/ikatson/rqbit/issues/311),
@@ -267,17 +344,30 @@ list if the argument in `INDEX.md` has moved.
    [rqbit#584](https://github.com/ikatson/rqbit/issues/584), and the rest carry
    a one line reproduction each.
 
+**Two corpus sources the list above may want**, both already on this machine
+and neither needing a fetch: `reference/RESEARCH.md` sections C and D, which is
+where seventeen of the T-163 to T-182 block came from, and `contrib/rqbit/` in
+<https://github.com/pjunod/nzbd>, MIT OR Apache-2.0, which is fetched per
+session rather than kept and whose `0012` and `0014` are read and not taken.
+
 ## Open questions for the operator
 
-None outstanding. The operator gave two instructions at the start and both are
-done.
+One, and it is named rather than asked, because the session ended before it
+could be answered.
+
+- **The soak did not finish.** It was cut to 1.32 hours by the session ending,
+  and at that window its RSS slope is noise. Nothing is known about the memory
+  slope of a tree that changed the peer connection path four times. It is the
+  first item in the list above and it needs six hours of somebody's session.
+
+The operator's two instructions at the start are otherwise done.
 
 - **Finish `patches/TASKS.md`.** Done, including section 3, MSE, which the
   session before this one was told to leave alone. Twelve of thirteen rows are
   done and the thirteenth, [T-102](bep-coverage.md), is no longer waiting on a
   seam.
-- **The soak, and the dependabot pull requests until CI is green.** Both done,
-  and all five pull requests are closed as applied.
+- **The dependabot pull requests until CI is green.** Done, and all five are
+  closed as applied.
 
 One thing worth a decision rather than a question, recorded so the next session
 does not re-take it: **`--encryption` defaults to `prefer`**, which changes what

@@ -1372,6 +1372,12 @@ impl PeerHandler {
                 return Ok(());
             }
         };
+        // Added by this fork. The reason was already in hand and was thrown
+        // away, so a report could say a peer was `dead` and never why. See
+        // TODO/peers.md T-024.
+        pe.value_mut()
+            .record_disconnect(error.as_ref().map(|e| format!("{e:#}")));
+
         let prev = pe.value_mut().take_state(peers);
 
         match prev {
@@ -1997,6 +2003,10 @@ impl PeerHandler {
     }
 
     fn on_i_am_choked(&self) {
+        // Counted, so "why did this peer stop taking bytes" has an answer in
+        // the report. A peer that chokes goes quiet and looks exactly like one
+        // that is slow. See TODO/peers.md T-024.
+        self.counters.times_choked.fetch_add(1, Ordering::Relaxed);
         self.lock_flow_control("i_am_choked = true").i_am_choked = true;
         self.notify_request_slots_changed();
     }
@@ -2008,6 +2018,7 @@ impl PeerHandler {
 
     fn on_i_am_unchoked(&self) {
         trace!("we are unchoked");
+        self.counters.times_unchoked.fetch_add(1, Ordering::Relaxed);
         self.lock_flow_control("i_am_choked = false").i_am_choked = false;
         self.notify_request_slots_changed();
     }

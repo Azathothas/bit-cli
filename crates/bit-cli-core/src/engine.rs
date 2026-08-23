@@ -325,9 +325,33 @@ pub struct PeerSnapshot {
     /// Mean time to download one piece from this peer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mean_piece_ms: Option<u64>,
+    /// How often this peer choked us, and how often it unchoked us again.
+    ///
+    /// A peer that chokes goes quiet and looks exactly like one that is slow,
+    /// so these are the two numbers that tell "stopped sending" from "stopped
+    /// being allowed to send". See `TODO/peers.md`, T-024.
+    pub choked: u32,
+    pub unchoked: u32,
+    /// Why each connection to this peer ended, newest last.
+    ///
+    /// Empty for a peer that has not disconnected. Bounded: a flapping peer
+    /// produces one per flap and the session keeps a thousand peer rows.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub disconnects: Vec<PeerDisconnect>,
     /// Whether this is one of our own web seed bridges rather than a swarm
     /// member. A bridge is not a peer and must never be counted as one.
     pub web_seed: bool,
+}
+
+/// Why one connection to a peer ended.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerDisconnect {
+    /// When, in ISO 8601 UTC with millisecond precision.
+    pub at: String,
+    /// What ended it. A connection the peer closed cleanly has no error and
+    /// reports `closed by the peer`, which is a real reason rather than a
+    /// stand-in for a missing one.
+    pub reason: String,
 }
 
 /// A running torrent.
@@ -790,6 +814,20 @@ impl Engine {
                         / u64::from(counters.downloaded_and_checked_pieces)
                 });
                 let encryption = negotiated.get(&addr).map(|m| (*m).to_string());
+                let disconnects = peer
+                    .disconnects
+                    .iter()
+                    .map(|d| PeerDisconnect {
+                        at: crate::time::Timestamp::from_system_time(
+                            std::time::UNIX_EPOCH + std::time::Duration::from_millis(d.at_unix_ms),
+                        )
+                        .iso(),
+                        reason: d
+                            .reason
+                            .clone()
+                            .unwrap_or_else(|| "closed by the peer".to_string()),
+                    })
+                    .collect();
                 PeerSnapshot {
                     web_seed: is_own_loopback_port(&addr, bridge_ports),
                     addr,
@@ -797,6 +835,9 @@ impl Engine {
                     client: peer.client_name,
                     connection: peer.conn_kind.map(|k| format!("{k:?}").to_lowercase()),
                     encryption,
+                    choked: counters.times_choked,
+                    unchoked: counters.times_unchoked,
+                    disconnects,
                     direction: match counters.incoming_connections > 0 {
                         true => "incoming",
                         false => "outgoing",

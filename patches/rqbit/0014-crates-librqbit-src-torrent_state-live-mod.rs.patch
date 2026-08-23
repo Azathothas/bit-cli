@@ -5,7 +5,7 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/crates/librqbit/src/torrent_state/live/mod.rs b/crates/librqbit/src/torrent_state/live/mod.rs
-index b4146d8..113a587 100644
+index b4146d8..1781e17 100644
 --- a/crates/librqbit/src/torrent_state/live/mod.rs
 +++ b/crates/librqbit/src/torrent_state/live/mod.rs
 @@ -89,7 +89,7 @@ use crate::{
@@ -205,7 +205,20 @@ index b4146d8..113a587 100644
      fn should_transmit_have(&self, id: ValidPieceIndex) -> bool {
          if self.state.shared.options.disable_upload() {
              return false;
-@@ -1508,6 +1614,18 @@ impl PeerHandler {
+@@ -1266,6 +1372,12 @@ impl PeerHandler {
+                 return Ok(());
+             }
+         };
++        // Added by this fork. The reason was already in hand and was thrown
++        // away, so a report could say a peer was `dead` and never why. See
++        // TODO/peers.md T-024.
++        pe.value_mut()
++            .record_disconnect(error.as_ref().map(|e| format!("{e:#}")));
++
+         let prev = pe.value_mut().take_state(peers);
+ 
+         match prev {
+@@ -1508,6 +1620,18 @@ impl PeerHandler {
              .get_chunks()?
              .is_chunk_ready_to_upload(&chunk_info)
          {
@@ -224,7 +237,7 @@ index b4146d8..113a587 100644
              anyhow::bail!(
                  "got request for a chunk that is not ready to upload. chunk {:?}",
                  chunk_info
-@@ -1554,6 +1672,134 @@ impl PeerHandler {
+@@ -1554,6 +1678,134 @@ impl PeerHandler {
          self.on_bitfield_notify.notify_waiters();
      }
  
@@ -359,7 +372,7 @@ index b4146d8..113a587 100644
      fn on_bitfield(&self, bitfield: ByteBufOwned) -> anyhow::Result<()> {
          if bitfield.as_ref().len() != self.state.lengths.piece_bitfield_bytes() {
              anyhow::bail!(
-@@ -1693,15 +1939,20 @@ impl PeerHandler {
+@@ -1693,15 +1945,20 @@ impl PeerHandler {
  
                  aframe!(self.wait_for_request_slot()).await;
  
@@ -382,3 +395,22 @@ index b4146d8..113a587 100644
                          .await?;
                  }
  
+@@ -1746,6 +2003,10 @@ impl PeerHandler {
+     }
+ 
+     fn on_i_am_choked(&self) {
++        // Counted, so "why did this peer stop taking bytes" has an answer in
++        // the report. A peer that chokes goes quiet and looks exactly like one
++        // that is slow. See TODO/peers.md T-024.
++        self.counters.times_choked.fetch_add(1, Ordering::Relaxed);
+         self.lock_flow_control("i_am_choked = true").i_am_choked = true;
+         self.notify_request_slots_changed();
+     }
+@@ -1757,6 +2018,7 @@ impl PeerHandler {
+ 
+     fn on_i_am_unchoked(&self) {
+         trace!("we are unchoked");
++        self.counters.times_unchoked.fetch_add(1, Ordering::Relaxed);
+         self.lock_flow_control("i_am_choked = false").i_am_choked = false;
+         self.notify_request_slots_changed();
+     }

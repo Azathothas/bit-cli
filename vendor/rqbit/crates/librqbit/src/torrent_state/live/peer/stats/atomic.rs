@@ -23,6 +23,13 @@ pub(crate) struct PeerCountersAtomic {
     pub total_piece_download_ms: AtomicU64,
     pub times_stolen_from_me: AtomicU32,
     pub times_i_stole: AtomicU32,
+    /// Added by this fork. How often this peer choked and unchoked us.
+    ///
+    /// "Why did this peer stop taking bytes" had no answer in a report before:
+    /// a peer that chokes goes quiet and looks identical to one that is slow.
+    /// See `TODO/peers.md` T-024.
+    pub times_choked: AtomicU32,
+    pub times_unchoked: AtomicU32,
 }
 
 impl PeerCountersAtomic {
