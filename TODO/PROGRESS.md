@@ -66,7 +66,7 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 ## State
 
 - **Last session:** 2026-08-23T06:14:39Z, unattended, and running.
-- **Tests:** 1,171 passing, 0 failing. 1,166 at the start, re-measured rather
+- **Tests:** 1,176 passing, 0 failing. 1,166 at the start, re-measured rather
   than carried forward. Plus **149** in the vendored trees, which the workspace
   gates do not run.
 - **Gates:** clean, on rustc 1.98.0.
@@ -82,8 +82,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 - **CI:** green at run **32620536345** against commit `a289977`, all
   **seventeen** jobs. `f055328` is on top of it and is documentation only, so it
   carries `[skip ci]` and started no run.
-- **Entries:** 161 items. 41 open, 2 partial, 0 blocked, 108 done, 10 deferred
-  to Phase C. 108 of 151 workable done, 43 left.
+- **Entries:** 161 items. 39 open, 2 partial, 0 blocked, 110 done, 10 deferred
+  to Phase C. 110 of 151 workable done, 41 left.
 - **Tree:** 92 Rust files, 52,557 lines of code, 12,567 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
@@ -158,6 +158,31 @@ walked the flags and asked the table about each, so a row for a flag that no
 longer exists passed. And `-h` was never checked in either direction, because
 `clap` creates `--help` while **building** a command and `Cli::command()` hands
 back one that is not built.
+
+**[T-155](cli-surface.md), P3, done.** `one_inner` returned for
+`--hash-check-only` above the block that built the `metalink` report, so a
+Metalink run with that flag said nothing about the document at all. It is
+`apply_metalink` now, called at both exits. Over a complete payload the answer
+is the strongest one available: the digest computed and matched, 2,097,152
+bytes, `bench/metalink-20260823T071256391Z.json` case `hash_check_only`.
+
+**The test was checked against the defect rather than assumed to cover it.**
+With the call removed from that exit it fails on `no metalink block`. A test
+written for a fixed defect and never run against the defect is a test that may
+be asserting something else.
+
+**[T-154](cli-surface.md), P2, done.** A Metalink named by URL is
+`Kind::MetalinkUrl` now, not a torrent URL that fails on a bencode parse. The
+acceptance ran against the live mirror: `real_by_url` beside `real_as_served` in
+`bench/metalink-real-20260823T071745617Z.json`, same exit code and the same
+message character for character, from a document `MirrorBrain` generated per
+request.
+
+**Two things the entry did not say.** The extension is read from the URL's
+**path**, so `?file=r.meta4` is a query naming a file and not a statement about
+what the URL serves. And the redirect decision the Approach said was owed turned
+out not to be: nothing on either path resolves a mirror URL relative to
+anything, so a fetched document is treated exactly as a saved one.
 
 ### A defect in the tooling, found on the way
 

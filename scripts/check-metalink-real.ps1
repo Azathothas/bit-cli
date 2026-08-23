@@ -25,10 +25,14 @@
 # internet from the mirror list the mirror chose, and the checksum it is
 # verified against is the one The Document Foundation published.
 #
-# Four cases:
+# Five cases:
 #
 #   real_as_served     The `.meta4` exactly as the mirror generated it. Exit 4,
 #                      and the message names the mirror count.
+#   real_by_url        The same document named by its URL rather than by the
+#                      saved copy, which is how a MirrorBrain document is
+#                      normally met. Same exit code and same reason as
+#                      real_as_served. This is T-154's acceptance.
 #   real_v3_as_served  The same file as Metalink 3, which the same instance
 #                      also generates. The version 3 path against a document
 #                      nobody here wrote.
@@ -217,6 +221,42 @@ else {
     }
 }
 $cases += [pscustomobject][ordered]@{ case = "real_as_served"; exit_code = $run.exit_code; note = ($run.stderr -split "`n")[0] }
+
+# ---------------------------------------------------------------------------
+# real_by_url: the same document, named by its URL rather than by a saved copy
+# ---------------------------------------------------------------------------
+#
+# This is T-154's acceptance, and it is the strongest form available: the URL
+# is a live MirrorBrain instance generating the document per request, so the
+# run fetches a document nobody here wrote or saved.
+#
+# What is asserted is that it behaves as the saved copy does. Both reach the
+# same outcome for the same reason, and `real_as_served` two cases up is the
+# saved copy of the same URL, so the comparison is against a run in this same
+# report rather than against a remembered one.
+#
+# The document is generated per request, so the two are not guaranteed to be
+# byte-identical: an instance may rotate its mirror list between two requests.
+# The exit code and the reason are what must match, and the mirror count is
+# reported rather than judged for exactly that reason.
+
+Write-Step "case real_by_url"
+$byUrl = Invoke-Download "real_by_url" $Meta4Url @()
+if ($byUrl.exit_code -ne $run.exit_code) {
+    Add-Failure "real_by_url" "exited $($byUrl.exit_code) and the saved copy exited $($run.exit_code). stderr: $($byUrl.stderr)"
+}
+if ($torrentNodes.Count -eq 0) {
+    # The URL was recognised as a metalink if and only if the message is about
+    # the document. Classified as a torrent URL, which is what it was before
+    # T-154, the failure is a bencode parse error instead.
+    if ($byUrl.stderr -notmatch 'no torrent') {
+        Add-Failure "real_by_url" "the message is not about the metalink, so the URL was not recognised as one: $($byUrl.stderr)"
+    }
+    if ($byUrl.stderr -match 'bencode') {
+        Add-Failure "real_by_url" "the URL was handed to the session as a .torrent: $($byUrl.stderr)"
+    }
+}
+$cases += [pscustomobject][ordered]@{ case = "real_by_url"; exit_code = $byUrl.exit_code; note = ($byUrl.stderr -split "`n")[0] }
 
 Write-Step "case real_v3_as_served"
 $runV3 = Invoke-Download "real_v3_as_served" $asServedV3 @()

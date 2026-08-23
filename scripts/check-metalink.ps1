@@ -13,7 +13,7 @@
 # **Metalink** is the document that is wrong. Saying which of the two is wrong
 # is the reason to carry both.
 #
-# Ten cases, all served from a loopback file server:
+# Twelve cases, all served from a loopback file server:
 #
 #   v4_ok               RFC 5854 `.meta4`. The torrent comes from the
 #                       `<metaurl>`, the `<url>` mirrors serve every byte, and
@@ -23,6 +23,9 @@
 #                       for the torrent, `<verification><hash type="sha256">`
 #                       for the checksum, and `preference` running the other
 #                       way from `priority`.
+#   url_source          The same v4_ok document named by URL rather than by
+#                       path. The report is compared field by field with the
+#                       saved copy's. See T-154.
 #   bad_checksum        The document's sha-256 is wrong. The payload completes
 #                       and passes the torrent's piece hashes, so the run exits
 #                       7 and the report carries both digests.
@@ -37,6 +40,10 @@
 #   torrent_fallback    Two `<metaurl>`s where the preferred one 404s. The
 #                       second is used and the report records the first.
 #   truncated           A document that stops mid-element. Refused, exit 4.
+#   hash_check_only     --hash-check-only over the payload v4_ok already
+#                       downloaded. The metalink block is reported at that exit
+#                       too, with the size comparison and either a checked
+#                       digest or a not_checked reason. See T-155.
 #   dry_run             No network at all: the document's own claims are
 #                       reported and the torrent is not fetched. The file
 #                       server is stopped first, so a run that reached for it
@@ -312,6 +319,65 @@ foreach ($pair in @(@("v4_ok", "4"), @("v3_ok", "3"))) {
     }
 }
 
+# --- the same document, named by URL ----------------------------------------
+#
+# Every real Metalink is served over HTTP: MirrorBrain generates one per
+# request, so a URL is how a caller normally meets one and a saved `.meta4` is
+# what you get after keeping a copy. Before T-154 the http:// prefix was
+# checked before the extension, so this was classified as a torrent URL, handed
+# to the session as a `.torrent`, and failed on the bencode parse with a
+# message about the torrent.
+#
+# What is asserted is that it behaves **exactly** as the same bytes on disk do:
+# the same block, field by field, against the v4_ok case above.
+
+Write-Step "case url_source (the v4_ok document, served)"
+Copy-Item -LiteralPath $documents.v4_ok -Destination (Join-Path $serve "release.meta4") -Force
+$meta4Url = "$base/release.meta4"
+$run = Invoke-Download "url_source" $meta4Url @()
+$urlMetalink = Get-Metalink $run
+$urlTorrent = if ($run.report -and $run.report.torrents) { $run.report.torrents[0] } else { $null }
+if ($run.exit_code -ne 0) { Add-Failure "url_source" "exited $($run.exit_code), expected 0. stderr: $($run.stderr)" }
+if (-not $urlMetalink) { Add-Failure "url_source" "the report carries no metalink block, so the URL was not recognised as a metalink" }
+if ($urlTorrent) {
+    if ($urlTorrent.source -ne $meta4Url) { Add-Failure "url_source" "source=$($urlTorrent.source), expected $meta4Url" }
+    if (-not $urlTorrent.finished) { Add-Failure "url_source" "the download did not finish" }
+    if ($urlTorrent.from_web_seeds.bytes -ne $payloadLength) {
+        Add-Failure "url_source" "HTTP sources served $($urlTorrent.from_web_seeds.bytes) of $payloadLength bytes"
+    }
+}
+$landed = Join-Path $run.directory "release.bin"
+if (-not (Test-Path $landed)) { Add-Failure "url_source" "no payload at $landed" }
+elseif ((Get-FileHash -Algorithm SHA256 -Path $landed).Hash.ToLower() -ne $sha256) {
+    Add-Failure "url_source" "the payload on disk does not hash to the source payload"
+}
+# Field by field against the saved copy, which is what "behaves exactly as the
+# same document saved to disk does" means. Compared as compressed JSON so a
+# field added later is compared too, without this list going stale.
+#
+# `checksum.path` is the one field that must differ and is not a behavioural
+# difference: each case downloads into its own `out/<name>`, so the two point
+# at two copies of the same bytes. It is blanked for the comparison and checked
+# on its own, which is stronger than leaving it out: a run whose payload landed
+# somewhere else entirely would pass the comparison and fail here.
+function Get-ComparableMetalink($block) {
+    $json = $block | ConvertTo-Json -Depth 8
+    $copy = $json | ConvertFrom-Json
+    if ($copy.checksum) { $copy.checksum.path = "<output directory>" }
+    $copy | ConvertTo-Json -Depth 8 -Compress
+}
+$savedMetalink = ($cases | Where-Object { $_.case -eq "v4_ok" }).metalink
+if ($savedMetalink -and $urlMetalink) {
+    $a = Get-ComparableMetalink $savedMetalink
+    $b = Get-ComparableMetalink $urlMetalink
+    if ($a -ne $b) { Add-Failure "url_source" "the metalink block differs from the saved copy's.`n  saved: $a`n  url:   $b" }
+    $checkedPath = $urlMetalink.checksum.path
+    if ($checkedPath -ne $landed) {
+        Add-Failure "url_source" "the checksum was computed over $checkedPath, expected the payload this case wrote at $landed"
+    }
+}
+$cases += [pscustomobject][ordered]@{ case = "url_source"; exit_code = $run.exit_code; metalink = $urlMetalink }
+
 # The ftp: mirror belongs to the v4 document only, and it must have been
 # counted rather than registered: a source this cannot fetch from is worse
 # than one it never had.
@@ -418,6 +484,67 @@ $run = Invoke-Download "truncated" $documents.truncated @()
 if ($run.exit_code -eq 0) { Add-Failure "truncated" "exited 0, and the document stops mid-element" }
 if ($run.stderr -notmatch 'truncated') { Add-Failure "truncated" "the message does not say the document is truncated: $($run.stderr)" }
 $cases += [pscustomobject][ordered]@{ case = "truncated"; exit_code = $run.exit_code; metalink = $null }
+
+# --- --hash-check-only over a payload that is already complete --------------
+#
+# It runs against `out/v4_ok`, which the first case downloaded and verified, so
+# the payload on disk is complete before this starts. That is the case worth
+# checking: the hash check proves the bytes against the torrent, and the
+# metalink block then proves the same bytes against the document, which is the
+# strongest thing this flag can report.
+#
+# Before T-155 this reported nothing about the document at all, because
+# `one_inner` returned for `--hash-check-only` above the block that builds it.
+# The size comparison in particular is computed before that return and was then
+# thrown away.
+#
+# The file server is still up here, deliberately: `--hash-check-only` still has
+# to fetch the `.torrent` the `<metaurl>` names before it can check anything
+# against it. Stopping the server is the next case's business.
+
+Write-Step "case hash_check_only (over the completed v4_ok payload)"
+$hcoOut = Join-Path $Root "hash_check_only.out"
+$hcoErr = Join-Path $Root "hash_check_only.err"
+$hcoProcess = Start-Process -FilePath $bitCli `
+    -ArgumentList @("--json", "download", $documents.v4_ok, "--dir", (Join-Path $Root "out/v4_ok"),
+        "--hash-check-only", "--timeout", "${TimeoutSeconds}s") `
+    -PassThru -NoNewWindow -RedirectStandardOutput $hcoOut -RedirectStandardError $hcoErr
+$hcoProcess.WaitForExit($TimeoutSeconds * 1000 + 30000) | Out-Null
+$hcoCode = $hcoProcess.ExitCode
+$hco = $null
+$hcoText = if (Test-Path $hcoOut) { Get-Content $hcoOut -Raw } else { "" }
+if ($hcoText.Trim()) { try { $hco = $hcoText | ConvertFrom-Json } catch { } }
+$hcoMetalink = $null
+if ($hcoCode -ne 0) { Add-Failure "hash_check_only" "exited $hcoCode, expected 0. stderr: $(Get-Content $hcoErr -Raw)" }
+if (-not $hco) { Add-Failure "hash_check_only" "no JSON document" }
+else {
+    $row = $hco.torrents[0]
+    $hcoMetalink = $row.metalink
+    if (-not $row.finished) { Add-Failure "hash_check_only" "finished=$($row.finished), and the payload was downloaded and verified by the v4_ok case" }
+    if (-not $hcoMetalink) { Add-Failure "hash_check_only" "the report carries no metalink block, which is the whole of T-155" }
+    else {
+        if ($hcoMetalink.agreement.size_agrees -ne $true) {
+            Add-Failure "hash_check_only" "agreement.size_agrees=$($hcoMetalink.agreement.size_agrees), expected true"
+        }
+        if ($hcoMetalink.agreement.metalink_size -ne $payloadLength) {
+            Add-Failure "hash_check_only" "agreement.metalink_size=$($hcoMetalink.agreement.metalink_size), expected $payloadLength"
+        }
+        if (-not $hcoMetalink.torrent_url) { Add-Failure "hash_check_only" "no torrent_url, so the document's own claims were not reported" }
+        if ($hcoMetalink.mirrors_listed -lt 1) { Add-Failure "hash_check_only" "mirrors_listed=$($hcoMetalink.mirrors_listed), expected at least 1" }
+        # Either a digest that was computed, or a reason it was not. A checksum
+        # that was not computed is not a checksum that passed, which is the
+        # rule the whole metalink block is written under.
+        $checksum = $hcoMetalink.checksum
+        if (-not $checksum) { Add-Failure "hash_check_only" "no checksum block" }
+        elseif ($null -eq $checksum.matched -and -not $checksum.not_checked) {
+            Add-Failure "hash_check_only" "the checksum was neither checked nor given a not_checked reason"
+        }
+        elseif ($checksum.matched -eq $false) {
+            Add-Failure "hash_check_only" "the checksum did not match, and v4_ok's document is the correct one"
+        }
+    }
+}
+$cases += [pscustomobject][ordered]@{ case = "hash_check_only"; exit_code = $hcoCode; metalink = $hcoMetalink }
 
 # --- a dry run reads the document and touches nothing -----------------------
 #

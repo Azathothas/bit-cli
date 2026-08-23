@@ -401,6 +401,7 @@ From `bit-cli download <TORRENT> --web-seed <URL> --dry-run --json`.
 | `torrents[].coverage.covered_bytes` | integer |
 | `torrents[].coverage.uncovered_bytes` | integer |
 | `torrents[].coverage.uncovered_pieces[]` | array |
+| `torrents[].document_needs_network` | bool |
 | `torrents[].info_hash` | string |
 | `torrents[].kind` | string |
 | `torrents[].metalink` | null |

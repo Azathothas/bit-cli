@@ -37,6 +37,13 @@ pub enum Kind {
     InfoHash(InfoHash),
     /// A local Metalink.
     Metalink(PathBuf),
+    /// An HTTP(S) URL pointing at a Metalink.
+    ///
+    /// Every real Metalink is served over HTTP, and `MirrorBrain` generates one
+    /// on demand for any file it publishes, so a URL is how a caller normally
+    /// meets one. A local `.meta4` is what you get after saving it by hand.
+    /// See `TODO/cli-surface.md`, T-154.
+    MetalinkUrl(String),
     /// Standard input.
     Stdin,
 }
@@ -59,7 +66,14 @@ impl Kind {
         }
         let lower = trimmed.to_ascii_lowercase();
         if lower.starts_with("http://") || lower.starts_with("https://") {
-            return Ok(Self::Url(trimmed.to_string()));
+            // The extension is read from the **path**, not from the whole
+            // string. `?file=x.meta4` is a query naming a file and
+            // `#release.meta4` is a fragment, and neither says what the URL
+            // itself serves. See `TODO/cli-surface.md`, T-154.
+            return Ok(match is_metalink_name(url_path(&lower)) {
+                true => Self::MetalinkUrl(trimmed.to_string()),
+                false => Self::Url(trimmed.to_string()),
+            });
         }
         // A bare info hash is 40 hex or 32 base32 characters and nothing else.
         // Checked before the path branch so a hash is never taken for a
@@ -71,7 +85,7 @@ impl Kind {
             return Ok(Self::InfoHash(hash));
         }
         let path = env.resolve(Path::new(trimmed));
-        if lower.ends_with(".meta4") || lower.ends_with(".metalink") {
+        if is_metalink_name(&lower) {
             return Ok(Self::Metalink(path));
         }
         Ok(Self::File(path))
@@ -85,6 +99,7 @@ impl Kind {
             Self::Magnet(_) => "magnet",
             Self::InfoHash(_) => "info_hash",
             Self::Metalink(_) => "metalink",
+            Self::MetalinkUrl(_) => "metalink_url",
             Self::Stdin => "stdin",
         }
     }
@@ -107,9 +122,41 @@ impl Kind {
     pub const fn needs_network(&self) -> bool {
         matches!(
             self,
-            Self::Url(_) | Self::Magnet(_) | Self::InfoHash(_) | Self::Metalink(_)
+            Self::Url(_)
+                | Self::Magnet(_)
+                | Self::InfoHash(_)
+                | Self::Metalink(_)
+                | Self::MetalinkUrl(_)
         )
     }
+
+    /// Whether even the document's own claims need the network.
+    ///
+    /// A local Metalink is readable with nothing running, which is what
+    /// `--dry-run` reports. One named by URL is not: the document itself is the
+    /// thing that has to be fetched. See `TODO/cli-surface.md`, T-154.
+    pub const fn document_needs_network(&self) -> bool {
+        matches!(self, Self::MetalinkUrl(_))
+    }
+}
+
+/// The path part of an already-lower-cased URL.
+///
+/// Everything from after the authority to the first `?` or `#`. A URL with no
+/// path gives the empty string, which no extension matches.
+fn url_path(lower: &str) -> &str {
+    let after_scheme = lower.split_once("://").map_or(lower, |(_, rest)| rest);
+    let path = match after_scheme.find('/') {
+        Some(slash) => &after_scheme[slash..],
+        None => "",
+    };
+    let end = path.find(['?', '#']).unwrap_or(path.len());
+    &path[..end]
+}
+
+/// Whether an already-lower-cased name is a Metalink by extension.
+fn is_metalink_name(lower: &str) -> bool {
+    lower.ends_with(".meta4") || lower.ends_with(".metalink")
 }
 
 /// Load full metadata for a source that carries it.
@@ -132,6 +179,10 @@ pub fn load_local(kind: &Kind, env: &mut Env) -> Result<Metainfo> {
             path.display()
         ))
         .with("source_kind", "metalink")),
+        Kind::MetalinkUrl(url) => Err(Error::source_resolution(format!(
+            "{url}: a metalink has to be fetched and resolved to its torrent first"
+        ))
+        .with("source_kind", "metalink_url")),
         Kind::Url(url) => {
             let _ = env;
             Err(Error::source_resolution(format!(
@@ -198,6 +249,39 @@ pub struct ResolvedMetalink {
     /// The exact bytes fetched. Handed to the session unchanged.
     pub torrent_bytes: Vec<u8>,
     pub meta: Metainfo,
+}
+
+/// Largest Metalink document accepted over HTTP, in bytes.
+///
+/// A `MirrorBrain` document with a hundred mirrors is a few kilobytes. The
+/// ceiling exists because the URL comes from the caller and the body comes from
+/// whoever answers it, which is the same reason `MAX_LIST_BYTES` exists, and it
+/// is the same number for the same reason.
+const MAX_METALINK_BYTES: usize = 1024 * 1024;
+
+/// Fetch a Metalink over HTTP and parse it.
+///
+/// The remote half of [`Kind::MetalinkUrl`]. Everything after this is what a
+/// local `.meta4` already does: [`resolve_metalink`] takes the parsed document
+/// and neither knows nor cares where it came from.
+///
+/// **Nothing is resolved relative to the document's URL.** A `MirrorBrain`
+/// document is generated per request and its `<origin dynamic="true">` names
+/// the URL it came from, so every `<url>` and `<metaurl>` in it is absolute.
+/// A document with relative mirror URLs would need a base to resolve against,
+/// and `bit-cli` refuses those on both paths rather than resolving one kind
+/// and not the other. See `TODO/cli-surface.md`, T-154.
+pub async fn fetch_metalink(url: &str, user_agent: &str) -> Result<Metalink> {
+    let bytes = fetch_bytes(url, user_agent).await?;
+    if bytes.len() > MAX_METALINK_BYTES {
+        return Err(Error::source_resolution(format!(
+            "{url}: the metalink is {} bytes, and the ceiling is {MAX_METALINK_BYTES}",
+            bytes.len()
+        ))
+        .with("url", url.to_string())
+        .with("bytes", bytes.len()));
+    }
+    Metalink::parse(&bytes).map_err(|e| Error::source_resolution(format!("{url}: {e}")))
 }
 
 /// Read a Metalink and fetch the torrent it names.
@@ -422,6 +506,76 @@ mod tests {
         }
     }
 
+    /// Every real Metalink is served over HTTP, so a URL is how a caller
+    /// normally meets one. Until T-154 the `http://` prefix was checked before
+    /// the extension, so this was a `Kind::Url`, was handed to the session as a
+    /// `.torrent`, and failed on the bencode parse with a message about the
+    /// torrent rather than about the metalink.
+    #[test]
+    fn a_metalink_named_by_url_is_a_metalink() {
+        for url in [
+            "https://e.com/r.meta4",
+            "http://e.com/r.metalink",
+            "HTTPS://E.COM/R.META4",
+            "https://e.com/pub/25.8/r.msi.meta4",
+        ] {
+            assert_eq!(
+                Kind::classify(url, &env()).unwrap(),
+                Kind::MetalinkUrl(url.to_string()),
+                "{url} should be a metalink URL"
+            );
+        }
+    }
+
+    /// The extension is read from the URL's **path**. A query naming a file and
+    /// a fragment are not statements about what the URL serves, and a
+    /// `MirrorBrain` instance generating a document per request is exactly the
+    /// place a query string turns up. T-154.
+    #[test]
+    fn only_the_url_path_decides_whether_it_is_a_metalink() {
+        for url in [
+            // The extension is in the query, and the path is a torrent.
+            "https://e.com/x.torrent?file=r.meta4",
+            // In the fragment.
+            "https://e.com/x.torrent#r.metalink",
+            // No path at all.
+            "https://e.com",
+        ] {
+            assert!(
+                matches!(Kind::classify(url, &env()).unwrap(), Kind::Url(_)),
+                "{url} should be a plain URL"
+            );
+        }
+        // And the other way: the path ends in `.meta4` and the query is noise.
+        assert!(matches!(
+            Kind::classify("https://e.com/r.meta4?mirrorlist", &env()).unwrap(),
+            Kind::MetalinkUrl(_)
+        ));
+    }
+
+    /// A local Metalink is readable with nothing running; one named by URL is
+    /// not, and `--dry-run` reports the difference rather than fetching. T-154.
+    #[test]
+    fn only_a_metalink_url_needs_the_network_to_read_the_document() {
+        assert!(
+            !Kind::classify("r.meta4", &env())
+                .unwrap()
+                .document_needs_network()
+        );
+        assert!(
+            Kind::classify("https://e.com/r.meta4", &env())
+                .unwrap()
+                .document_needs_network()
+        );
+        // A plain torrent URL needs the network for the torrent, and there is
+        // no separate document to read, so this is false rather than true.
+        assert!(
+            !Kind::classify("https://e.com/x.torrent", &env())
+                .unwrap()
+                .document_needs_network()
+        );
+    }
+
     #[test]
     fn an_empty_source_is_refused() {
         assert!(Kind::classify("", &env()).is_err());
@@ -471,6 +625,7 @@ mod tests {
             Kind::Url(String::new()).name(),
             Kind::InfoHash(InfoHash([0; 20])).name(),
             Kind::Metalink(PathBuf::new()).name(),
+            Kind::MetalinkUrl(String::new()).name(),
             Kind::Stdin.name(),
         ];
         for name in names {
@@ -479,5 +634,13 @@ mod tests {
                 "{name}"
             );
         }
+        // Distinct, because `kind` is what a caller branches on and two kinds
+        // sharing a name is the same defect as none having one. The list above
+        // is missing `Magnet` only because it holds a parsed magnet.
+        let mut sorted = names.to_vec();
+        sorted.sort_unstable();
+        let before = sorted.len();
+        sorted.dedup();
+        assert_eq!(sorted.len(), before, "two kinds share a name: {names:?}");
     }
 }

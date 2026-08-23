@@ -549,6 +549,20 @@ That fetches the `.torrent` the document's `<metaurl>` names, registers every
 `<url>` as a web seed source, downloads, and checks the payload against the
 document's own checksum.
 
+**A URL works the same way**, and it is how a Metalink is normally met:
+`MirrorBrain` generates one per request rather than publishing a file.
+
+```bash
+bit-cli download https://download.example.org/pub/release.msi.meta4
+```
+
+The extension is read from the URL's path, so `?mirrorlist` and a fragment
+change nothing, and a URL whose path is a `.torrent` is still a torrent. The
+report is the same document either way. `--dry-run` is the one difference: a
+saved `.meta4` is readable with nothing running and a URL is not, so a dry run
+over a URL reports `document_needs_network: true` and does not fetch it, for the
+same reason it does not fetch `--web-seed-list-url`.
+
 **The two documents are checked against each other, and the report says which
 one is wrong.** A Metalink and a `.torrent` describe the same payload
 independently. The declared lengths are compared before a byte moves. The

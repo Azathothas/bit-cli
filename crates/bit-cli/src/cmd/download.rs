@@ -394,18 +394,31 @@ pub fn run(
         .unwrap_or_else(bit_cli_core::webseed::fetch::default_user_agent);
     let mut resolved: std::collections::HashMap<usize, ResolvedMetalink> =
         std::collections::HashMap::new();
-    let metalinks: Vec<(usize, std::path::PathBuf)> = kinds
+    // A Metalink is either a path or a URL, and only where the document comes
+    // from differs: `resolve_metalink` takes a parsed document either way. See
+    // `TODO/cli-surface.md`, T-154.
+    enum Document {
+        Local(std::path::PathBuf),
+        Remote(String),
+    }
+    let metalinks: Vec<(usize, Document)> = kinds
         .iter()
         .enumerate()
         .filter_map(|(index, kind)| match kind {
-            Kind::Metalink(path) => Some((index, path.clone())),
+            Kind::Metalink(path) => Some((index, Document::Local(path.clone()))),
+            Kind::MetalinkUrl(url) => Some((index, Document::Remote(url.clone()))),
             _ => None,
         })
         .collect();
     if !metalinks.is_empty() {
         runtime.block_on(async {
-            for (index, path) in metalinks {
-                let document = Metalink::read(&path)?;
+            for (index, from) in metalinks {
+                let document = match &from {
+                    Document::Local(path) => Metalink::read(path)?,
+                    Document::Remote(url) => {
+                        crate::source::fetch_metalink(url, &user_agent).await?
+                    }
+                };
                 let one = crate::source::resolve_metalink(&document, &user_agent).await?;
                 renderer.event(
                     env,
@@ -434,7 +447,7 @@ pub fn run(
         let one = resolved.remove(&index);
         let meta = match (&kinds[index], &one) {
             (Kind::File(path), _) => Some(Metainfo::read(path)?),
-            (Kind::Metalink(_), Some(one)) => Some(one.meta.clone()),
+            (Kind::Metalink(_) | Kind::MetalinkUrl(_), Some(one)) => Some(one.meta.clone()),
             _ => None,
         };
         if let Some(meta) = &meta {
@@ -1311,7 +1324,7 @@ async fn one_inner(
 
     if options.hash_check_only {
         let snapshot = engine.snapshot(&handle);
-        return Ok(finish(
+        let mut report = finish(
             plan,
             options,
             &snapshot,
@@ -1321,7 +1334,21 @@ async fn one_inner(
             Vec::new(),
             resumed,
             renames(engine, &handle),
-        ));
+        );
+        // The same call the normal exit makes. This return used to come before
+        // the block that built it, so a Metalink run with `--hash-check-only`
+        // reported nothing about the document at all: not the mirror count, not
+        // the torrent it resolved, and not the size comparison, which is
+        // computed before this point and was then thrown away.
+        //
+        // A payload that is complete on disk gets its checksum checked here
+        // too, which is the strongest thing this flag can report: the hash
+        // check proved the bytes against the torrent, and this proves the same
+        // bytes against the Metalink. `check_metalink` decides that from
+        // `report.finished` and needs no branch of its own.
+        // See `TODO/cli-surface.md`, T-155.
+        apply_metalink(&mut report, plan, engine, &handle, options, tx).await;
+        return Ok(report);
     }
 
     // `--piece-selector sequential` holds the session's priority window at the
@@ -1466,40 +1493,7 @@ async fn one_inner(
     // Set here rather than passed into `finish`, which already takes nine
     // arguments and does not otherwise know the ledger exists.
     report.attribution = (!sources.is_empty()).then(|| ledger.stats());
-    if let Some(metalink) = &plan.metalink {
-        let (metalink_report, code) = check_metalink(metalink, engine, &handle, options, &report);
-        if let Some(checksum) = &metalink_report.checksum {
-            // Serialised from the report's own struct rather than rebuilt
-            // here, so a field the report omits is omitted from the event too.
-            // Rebuilding it with `json!` put `"not_checked": null` in every
-            // successful run, which documents a field as always-null and tells
-            // a reader nothing.
-            let mut payload = serde_json::to_value(checksum).unwrap_or_default();
-            if let Some(fields) = payload.as_object_mut() {
-                fields.insert("info_hash".to_string(), json!(report.info_hash));
-            }
-            let _ = tx.send(Msg::Event("metalink_checked", payload)).await;
-            if checksum.matched == Some(false) {
-                let _ = tx
-                    .send(Msg::Warn(format!(
-                        "the metalink's {} checksum does not match the payload: it says {}, the bytes hash to {}. The payload passed the torrent's own piece hashes, so the metalink is the document that disagrees.",
-                        checksum.algorithm,
-                        checksum.expected,
-                        checksum.actual.as_deref().unwrap_or("nothing"),
-                    )))
-                    .await;
-            }
-        }
-        report.metalink = Some(metalink_report);
-        // A checksum that disagrees is the failure this feature exists to
-        // find, so it decides the torrent's code unless something worse
-        // already had.
-        if let Some(code) = code
-            && report.code == ExitCode::Success
-        {
-            report.code = code;
-        }
-    }
+    apply_metalink(&mut report, plan, engine, &handle, options, tx).await;
     // A finished torrent can lend its files to the ones after it. An
     // unfinished one cannot: its files are on disk but not all of their bytes
     // are.
@@ -1851,6 +1845,61 @@ async fn watch(
 /// not about the bytes. Every guard that stops the check writes a
 /// `not_checked` reason, because a checksum that was not computed is not a
 /// checksum that passed. See `TODO/cli-surface.md`, T-113.
+/// Fold the Metalink's own findings into a torrent's report, and say so on the
+/// event stream.
+///
+/// Called at both of `one_inner`'s exits. It was inline at the normal one, and
+/// `--hash-check-only` returns before it, which is [T-155]. Everything it needs
+/// is on the report it is handed: `check_metalink` reads `finished` to decide
+/// whether there is a complete payload to hash, so a run that checked what was
+/// on disk and a run that fetched it take the same path through this.
+///
+/// [T-155]: `TODO/cli-surface.md`
+async fn apply_metalink(
+    report: &mut TorrentReport,
+    plan: &Plan,
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    options: &Options,
+    tx: &mpsc::Sender<Msg>,
+) {
+    let Some(metalink) = &plan.metalink else {
+        return;
+    };
+    let (metalink_report, code) = check_metalink(metalink, engine, handle, options, report);
+    if let Some(checksum) = &metalink_report.checksum {
+        // Serialised from the report's own struct rather than rebuilt
+        // here, so a field the report omits is omitted from the event too.
+        // Rebuilding it with `json!` put `"not_checked": null` in every
+        // successful run, which documents a field as always-null and tells
+        // a reader nothing.
+        let mut payload = serde_json::to_value(checksum).unwrap_or_default();
+        if let Some(fields) = payload.as_object_mut() {
+            fields.insert("info_hash".to_string(), json!(report.info_hash));
+        }
+        let _ = tx.send(Msg::Event("metalink_checked", payload)).await;
+        if checksum.matched == Some(false) {
+            let _ = tx
+                .send(Msg::Warn(format!(
+                    "the metalink's {} checksum does not match the payload: it says {}, the bytes hash to {}. The payload passed the torrent's own piece hashes, so the metalink is the document that disagrees.",
+                    checksum.algorithm,
+                    checksum.expected,
+                    checksum.actual.as_deref().unwrap_or("nothing"),
+                )))
+                .await;
+        }
+    }
+    report.metalink = Some(metalink_report);
+    // A checksum that disagrees is the failure this feature exists to
+    // find, so it decides the torrent's code unless something worse
+    // already had.
+    if let Some(code) = code
+        && report.code == ExitCode::Success
+    {
+        report.code = code;
+    }
+}
+
 fn check_metalink(
     metalink: &MetalinkPlan,
     engine: &Engine,
@@ -2396,6 +2445,13 @@ fn dry_run(
         // What needs the network is the `.torrent`, and `needs_network` on
         // this row is what says so. This is the cheapest way to check that a
         // `.meta4` says what its author meant.
+        //
+        // A Metalink named by **URL** is the case where that stops being free:
+        // the document itself is the thing to fetch. It is not fetched here,
+        // for the same reason `--web-seed-list-url` is not on this path, and
+        // `document_needs_network` on the row is what says the block is absent
+        // because nothing was contacted rather than because the document had
+        // nothing in it. See `TODO/cli-surface.md`, T-154.
         let metalink = match &kind {
             Kind::Metalink(path) => {
                 let document = Metalink::read(path)?;
@@ -2441,6 +2497,7 @@ fn dry_run(
             "source": source,
             "kind": kind.name(),
             "needs_network": kind.needs_network(),
+            "document_needs_network": kind.document_needs_network(),
             "name": meta.as_ref().map(|m| m.layout().name),
             "info_hash": meta.as_ref().map(|m| m.info_hash().hex()),
             "total_bytes": meta.as_ref().map(|m| m.layout().total_length),
@@ -2709,6 +2766,201 @@ mod tests {
         assert!(wants_in_order(PieceSelector::InOrder));
         assert!(!wants_in_order(PieceSelector::Default));
         assert_eq!(PieceSelector::default(), PieceSelector::Default);
+    }
+
+    /// A Metalink named by URL downloads, and reports what the saved copy does.
+    ///
+    /// `Kind::classify` checked the `http://` prefix before the `.meta4`
+    /// extension, so this was a `Kind::Url`, was handed to the session as a
+    /// `.torrent`, and failed on the bencode parse with a message about the
+    /// torrent rather than about the metalink. Every real Metalink is served
+    /// over HTTP. See `TODO/cli-surface.md`, T-154.
+    ///
+    /// The same document is run twice, once by path and once by URL, and the
+    /// two `metalink` blocks are compared. That is what the entry's "behaves
+    /// exactly as the same document saved to disk does" means, and it is
+    /// stronger than asserting fields one at a time: a field added later is
+    /// compared without this test being edited.
+    #[test]
+    fn a_metalink_named_by_url_downloads_the_same_as_one_on_disk() {
+        let fixture = TorrentFixture::single_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let payload = &fixture.files[0].1;
+        let sha1: String = <sha1::Sha1 as sha1::Digest>::digest(payload)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        // Written where the server can serve it, so the same bytes are
+        // reachable both ways.
+        let meta4 = dir.join("release.meta4");
+        std::fs::write(
+            &meta4,
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="payload.bin">
+    <size>{size}</size>
+    <hash type="sha-1">{sha1}</hash>
+    <url priority="1">{base}payload/payload.bin</url>
+    <metaurl mediatype="torrent">{base}payload.bin.torrent</metaurl>
+  </file>
+</metalink>
+"#,
+                size = payload.len(),
+                base = server.base,
+            ),
+        )
+        .expect("write the metalink");
+
+        let run = |source: &str, out: &str| {
+            run_json(
+                &[
+                    "download",
+                    source,
+                    "--dir",
+                    out,
+                    "--web-seed-only",
+                    "--allow-overwrite",
+                    "--port",
+                    "0",
+                    "--stop-after",
+                    "30s",
+                ],
+                dir.clone(),
+            )
+        };
+        let from_disk_out = dir.join("out-disk");
+        let from_disk = run(
+            meta4.to_str().expect("utf-8 path"),
+            from_disk_out.to_str().expect("utf-8 path"),
+        );
+        let from_url_out = dir.join("out-url");
+        let url = format!("{}release.meta4", server.base);
+        let from_url = run(&url, from_url_out.to_str().expect("utf-8 path"));
+
+        assert_eq!(from_url["torrents"][0]["finished"], true, "{from_url}");
+        assert_eq!(from_url["torrents"][0]["source"], url, "{from_url}");
+        assert_eq!(
+            from_url["torrents"][0]["from_web_seeds"]["bytes"],
+            payload.len(),
+            "{from_url}"
+        );
+
+        // `checksum.path` is the one field that must differ: each run wrote
+        // into its own directory. Blanked for the comparison and asserted on
+        // its own, so a payload that landed somewhere else fails rather than
+        // passes.
+        let mut a = from_disk["torrents"][0]["metalink"].clone();
+        let mut b = from_url["torrents"][0]["metalink"].clone();
+        assert!(b.is_object(), "no metalink block for the URL: {from_url}");
+        let checked = b["checksum"]["path"].as_str().unwrap_or("").to_string();
+        for block in [&mut a, &mut b] {
+            block["checksum"]["path"] = serde_json::Value::Null;
+        }
+        assert_eq!(a, b, "the URL's metalink block differs from the file's");
+        assert!(
+            std::path::Path::new(&checked).starts_with(&from_url_out),
+            "the checksum was computed over {checked}, expected a file under {}",
+            from_url_out.display()
+        );
+    }
+
+    /// `--hash-check-only` over a Metalink reports the document, not silence.
+    ///
+    /// `one_inner` returned for that flag above the block that built the
+    /// `metalink` report, so the run said nothing about the document at all:
+    /// not the mirror count, not the torrent it resolved, and not the size
+    /// comparison, which is computed before that return and was then thrown
+    /// away. See `TODO/cli-surface.md`, T-155.
+    ///
+    /// The payload is complete on disk before the checked run starts, which is
+    /// the case worth holding: the hash check proves the bytes against the
+    /// torrent and the checksum then proves the same bytes against the
+    /// Metalink, which is the strongest thing this flag can report.
+    ///
+    /// `scripts/check-metalink.ps1` case `hash_check_only` is the acceptance.
+    /// This is the same case in `cargo test`, because CI does not run that
+    /// script and a return moved back above the call would otherwise be caught
+    /// only by somebody running it locally.
+    #[test]
+    fn hash_check_only_over_a_metalink_still_reports_the_document() {
+        let fixture = TorrentFixture::single_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let payload = &fixture.files[0].1;
+        let sha1: String = <sha1::Sha1 as sha1::Digest>::digest(payload)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let meta4 = dir.join("release.meta4");
+        std::fs::write(
+            &meta4,
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="payload.bin">
+    <size>{size}</size>
+    <hash type="sha-1">{sha1}</hash>
+    <url priority="1">{base}payload/payload.bin</url>
+    <metaurl mediatype="torrent">{base}payload.bin.torrent</metaurl>
+  </file>
+</metalink>
+"#,
+                size = payload.len(),
+                base = server.base,
+            ),
+        )
+        .expect("write the metalink");
+        let meta4 = meta4.to_str().expect("utf-8 path").to_string();
+        let out = dir.join("out");
+        let out_arg = out.to_str().expect("utf-8 path").to_string();
+
+        // Fetch it once, so the payload on disk is complete and verified.
+        let filled = run_json(
+            &[
+                "download",
+                &meta4,
+                "--dir",
+                &out_arg,
+                "--web-seed-only",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(filled["torrents"][0]["finished"], true, "{filled}");
+
+        // Then check what is there, and read what the document says about it.
+        let checked = run_json(
+            &["download", &meta4, "--dir", &out_arg, "--hash-check-only"],
+            dir.clone(),
+        );
+        let metalink = &checked["torrents"][0]["metalink"];
+        assert!(
+            metalink.is_object(),
+            "no metalink block, which is the whole of T-155: {checked}"
+        );
+        assert_eq!(metalink["agreement"]["size_agrees"], true, "{metalink}");
+        assert_eq!(
+            metalink["agreement"]["metalink_size"],
+            payload.len(),
+            "{metalink}"
+        );
+        assert_eq!(metalink["mirrors_listed"], 1, "{metalink}");
+        // A payload that is complete on disk gets the strongest answer
+        // available: the digest computed and compared, rather than a reason it
+        // was not.
+        assert_eq!(metalink["checksum"]["matched"], true, "{metalink}");
+        assert_eq!(metalink["checksum"]["expected"], sha1, "{metalink}");
+        assert_eq!(
+            metalink["checksum"]["bytes_hashed"],
+            payload.len(),
+            "{metalink}"
+        );
     }
 
     /// A dry run and a real run are two documents, so they carry two kinds.

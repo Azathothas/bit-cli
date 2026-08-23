@@ -1081,10 +1081,10 @@ Source:      `bit-cli` design, found closing [T-113](#t-113-metalink-is-not-impl
 Category:    cli
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T07:18Z
 
-Problem:     `Kind::classify` checks the `http://` and `https://` prefixes
-             before it checks the `.meta4` and `.metalink` extensions, so
+Problem:     `Kind::classify` checked the `http://` and `https://` prefixes
+             before it checked the `.meta4` and `.metalink` extensions, so
              `bit-cli download https://example.org/release.meta4` is a
              `Kind::Url`, is handed to the session as a `.torrent`, and fails
              on the bencode parse with a message about the torrent rather than
@@ -1107,15 +1107,72 @@ Acceptance:  `bit-cli download <URL ending .meta4>` behaves exactly as the same
              `scripts/check-metalink-real.ps1` against the URL rather than the
              saved copy and getting the same report.
 
+**Done 2026-08-23T07:18Z.** `Kind::MetalinkUrl(String)` is the fourth branch,
+`source::fetch_metalink` is the only new code on the resolve path, and
+`resolve_metalink` is unchanged: it takes a parsed document and does not know
+where it came from, which is what the Approach predicted.
+
+**The extension is read from the URL's path and not from the whole string**, and
+that is a decision the entry did not name. `?file=r.meta4` is a query naming a
+file and `#r.metalink` is a fragment, and neither says what the URL serves; a
+`MirrorBrain` instance generating a document per request is exactly the place a
+query string turns up. `only_the_url_path_decides_whether_it_is_a_metalink`
+holds both directions, including `https://e.com/r.meta4?mirrorlist`.
+
+**The redirect case needed no decision after all.** The Approach said one was
+owed. Nothing in either path resolves a mirror URL relative to anything, so a
+document fetched over HTTP is treated exactly as one read from disk: absolute
+URLs are used and relative ones are refused, on both paths. A document with
+relative mirror URLs would need a base, and refusing it on one path and
+resolving it on the other is the divergence worth avoiding.
+
+**`--dry-run` is the one place the two kinds differ, and it is a decision.** A
+saved `.meta4` is readable with nothing running, so a dry run reports every
+claim in it. A URL is not: the document itself is the thing to fetch. It is not
+fetched, for the reason already written into that same function about
+`--web-seed-list-url`, and `torrents[].document_needs_network` on the row is
+what says the block is absent because nothing was contacted rather than because
+the document was empty.
+
+**The acceptance, run against the live mirror**, is
+`bench/metalink-real-20260823T071745617Z.json`, case `real_by_url` beside
+`real_as_served`. Same exit code and the same message, character for character,
+from a document the instance generated per request:
+
+```
+real_as_served  exit 4  the metalink lists no torrent for LibreOffice_...msi,
+                        so there is nothing to download here. It lists 58 HTTP
+                        mirror(s); ...
+real_by_url     exit 4  (identical)
+```
+
+**That case cannot prove the download half**, because no reachable MirrorBrain
+instance emits `<metaurl mediatype="torrent">`, which is what `real_as_served`
+has recorded since [T-113](#t-113-metalink-is-not-implemented). The download
+half is proven on loopback: case `url_source` in `scripts/check-metalink.ps1`,
+`bench/metalink-20260823T071256391Z.json`, which serves the `v4_ok` document
+over HTTP and compares the resulting `metalink` block **field by field** with
+the run over the saved copy. They are identical except `checksum.path`, which
+must differ because each case writes into its own output directory and which is
+asserted separately rather than dropped.
+
+`a_metalink_named_by_url_downloads_the_same_as_one_on_disk` is the same
+comparison in `cargo test`, so CI carries it: CI runs neither script.
+
+```
+$ cargo test -p bit-cli --lib a_metalink_named_by_url
+test result: ok. 1 passed; 0 failed; 0 ignored; 394 filtered out
+```
+
 ### T-155 --hash-check-only drops the metalink report
 
 Source:      `bit-cli` design, found closing [T-113](#t-113-metalink-is-not-implemented)
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T07:06Z
 
-Problem:     `one_inner` returns early for `--hash-check-only`, before the
+Problem:     `one_inner` returned early for `--hash-check-only`, before the
              block that builds `TorrentReport::metalink`. So a Metalink run
              with that flag reports nothing about the document at all: not the
              mirror count, not the torrent it resolved, not the size
@@ -1135,6 +1192,46 @@ Acceptance:  `bit-cli download release.meta4 --hash-check-only --json` over a
              complete payload reports the `metalink` block with
              `agreement.size_agrees` set, and either a checked digest or a
              `not_checked` reason.
+
+**Done 2026-08-23T07:06Z, and the interesting case is the one that happened.**
+The Acceptance allows either a checked digest or a `not_checked` reason, and
+over a complete payload it is the digest: `matched: true`, 2,097,152 bytes
+hashed, against the file at the path the report names. That is the strongest
+thing this flag can report, because the hash check has already proved those
+bytes against the torrent and the checksum then proves the same bytes against
+the Metalink. `check_metalink` decides it from `report.finished` and needed no
+branch of its own, which is what the Approach predicted.
+
+The block that built the report was inline at `one_inner`'s normal exit. It is
+`apply_metalink` now, called at both exits, so the two cannot drift apart the
+way they did.
+
+**`bench/metalink-20260823T070301761Z.json`** is the run, case
+`hash_check_only`, eleventh in `scripts/check-metalink.ps1`:
+
+```json
+{"agreement":{"file_index":0,"matched_by":"only_file","metalink_size":2097152,
+ "size_agrees":true,"torrent_size":2097152},
+ "checksum":{"algorithm":"sha256","matched":true,"bytes_hashed":2097152},
+ "mirrors_listed":1,"mirrors_registered":1,"version":"4"}
+```
+
+**The same case is in `cargo test` as well, and that is deliberate.** CI does
+not run `scripts/check-metalink.ps1`, so an acceptance that lived only there
+would catch a return moved back above the call only when somebody ran it by
+hand. `hash_check_only_over_a_metalink_still_reports_the_document` downloads the
+payload, then checks it, and asserts the block.
+
+**It was checked against the defect rather than assumed to cover it.** With the
+`apply_metalink` call removed from that exit the test fails on
+`no metalink block`, and the document it prints is a `download` report with no
+`metalink` key at all. A test written for a fixed defect and never run against
+the defect is a test that may be asserting something else.
+
+```
+$ cargo test -p bit-cli --lib hash_check_only_over_a_metalink
+test result: ok. 1 passed; 0 failed; 0 ignored; 390 filtered out
+```
 
 ### T-156 A dry run writes a different shape under the same document kind
 
