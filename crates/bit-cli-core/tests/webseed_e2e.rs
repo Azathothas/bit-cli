@@ -1731,6 +1731,79 @@ async fn bench_webseed_series_totals_agree_with_the_summary() {
     }
 }
 
+/// A sweep pays its warmup **before** the curve rather than out of its first
+/// steps.
+///
+/// The recorder excludes warmup samples from a step's byte count, and
+/// `end_step` divides by the step's own wall time, so a step that fell inside
+/// the warmup reported its real seconds against no bytes. Measured on a 64 MiB
+/// loopback payload before the fix: `--duration 6s --concurrency-sweep
+/// 1,2,4,8,16` gave 1.2 seconds a step and the first two came out at 0 B/s,
+/// and `--concurrency-sweep 16,1` reported `best concurrency 1` because
+/// whichever step went first was the one that was crippled.
+///
+/// **`bench_options` sets `warmup: Duration::ZERO`**, which is why
+/// `bench_webseed_reports_a_concurrency_curve_with_its_own_latency` asserts
+/// exactly this and has always passed: every other test of the sweep turns off
+/// the thing that breaks it. This one turns it on.
+///
+/// The two steps are the same concurrency on purpose. It is the control: with
+/// the warmup paid out of the first step the two disagreed by a factor of 340,
+/// and there is nothing about the run that should tell them apart.
+/// See `TODO/bench.md`, T-229.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sweep_pays_its_warmup_before_the_curve_rather_than_out_of_it() {
+    let (_src, _tmp, layout, info_hash, set) = bench_fixture(ServeMode::Ranges).await;
+    let mut options = bench_options(600);
+    // Two steps of 300ms against a 500ms warmup. The numbers are chosen so the
+    // first step falls **entirely** inside the warmup window: both boundaries
+    // are measured from the same `Instant`, so that is arithmetic rather than
+    // a race, and it is the shape a default 3 second warmup has against the 8
+    // second sweeps this defect was found in.
+    options.warmup = Duration::from_millis(500);
+    options.concurrency_sweep = vec![4, 4];
+    let outcome = bit_cli_core::bench::webseed::run(&set, &layout, &info_hash, &options, |_| {})
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.concurrency_curve.len(), 2);
+    for (index, step) in outcome.concurrency_curve.iter().enumerate() {
+        assert!(
+            step.requests > 0,
+            "step {index} at concurrency {} issued no request, so the warmup was charged to it",
+            step.concurrency
+        );
+        assert!(step.bytes.0 > 0, "step {index} moved no bytes");
+    }
+
+    // The steps account for the measured run, less the requests that were
+    // already in flight when the warmup closed. Those complete with no step
+    // open, because the warmup drive is not one, so they are in `measured`
+    // and in no step. The bound is exact rather than a tolerance: at most
+    // `concurrency` requests, of at most one chunk each, can be in flight at
+    // that instant. It is 4 by 16 KiB here and it is what this run leaves
+    // behind, which is the whole of the accounting cost of paying the warmup
+    // separately. Against a step reported at 0 B/s it is a good trade, and it
+    // is written down rather than rounded away.
+    let total: u64 = outcome.concurrency_curve.iter().map(|s| s.bytes.0).sum();
+    let unattributed = outcome.summary.bytes.0.saturating_sub(total);
+    assert!(
+        total <= outcome.summary.bytes.0,
+        "the steps claim more than the run measured"
+    );
+    assert!(
+        unattributed <= 4 * 16 * 1024,
+        "{unattributed} bytes fell outside every step, which is more than the          four in-flight requests the warmup handover can leave"
+    );
+
+    // The warmup was still recorded rather than deleted, which is the rule the
+    // recorder's own module comment gives.
+    assert!(
+        outcome.series.iter().any(|sample| sample.warmup),
+        "a run with a warmup window records the samples inside it"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bench_webseed_reports_a_concurrency_curve_with_its_own_latency() {
     let (_src, _tmp, layout, info_hash, set) = bench_fixture(ServeMode::Ranges).await;

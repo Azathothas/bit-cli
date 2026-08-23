@@ -1466,3 +1466,84 @@ runner cannot find a fourth way. What makes this closable is that the cause is
 named and the fix is an ordering a reader can check without running anything:
 there is no window between the last counter read and the break for the
 completion path, because the flag that ends it is read first.
+
+### T-229 A concurrency sweep charged its warmup to its own first steps
+
+Source:      measured while taking [T-033](performance.md), 2026-08-23
+Category:    bench
+Priority:    P1
+Effort:      S
+Status:      **done** 2026-08-23T18:27Z
+
+Problem:     `bit-cli bench webseed --concurrency-sweep` divides `--duration`
+             across the steps and starts the first one immediately. The
+             recorder's warmup, three seconds by default, runs on the same
+             clock: it excludes warmup samples from a step's byte count, and
+             `end_step` divides by the step's **own wall time**. So a step that
+             fell inside the warmup reported its real seconds against no bytes
+             and came out at 0 B/s.
+Relevance:   The curve is what the command exists to produce, and its first
+             point or two were fabricated. `best_concurrency` is derived from
+             that curve, so the verdict could be inverted outright:
+             `--concurrency-sweep 16,1` reported **best concurrency 1**,
+             because whichever step went first was the one that was crippled.
+
+             It is [T-152](#t-152-a-disk-bench-shorter-than-one-sample-interval-reported-no-series-at-all)'s
+             family, a bench reporting a number for a window it did not
+             measure, and it is worse than that one because the number is not
+             obviously absent. A zero at the left of a concurrency curve reads
+             as "one connection gets nothing", which is a plausible result.
+Approach:    The code already says what it means to do. The comment above the
+             loop reads "the warmup is paid once, before the first step,
+             rather than once per step", and nothing paid it: the recorder's
+             window is a wall clock and the loop simply ran over it.
+
+             Drive the source at the first step's concurrency until
+             `Recorder::in_warmup` is false, **before** the first
+             `begin_step`. A sweep then costs the warmup on top of
+             `--duration` rather than out of it. A single fixed concurrency is
+             left alone: it has no curve and its summary already reads the
+             measured window, so warming it separately would add three seconds
+             to every run for nothing.
+Acceptance:  Two steps of the same concurrency in one sweep report the same
+             rate, and no step of a sweep issues zero requests when the run
+             served any.
+
+**Measured, before and after, on a 64 MiB loopback payload with 20 second
+sweeps.** The control is the last row and it is the whole argument: the same
+concurrency twice, with nothing about the run to tell the two apart.
+
+| sweep | before | after |
+| --- | --- | --- |
+| `1,2,4,8,16` at 6s | 0, 0, 1.34, 3.28, 3.38 | 903 MiB/s, 1.51, 2.58, 3.26, 3.26 |
+| `4,8` | 5.32 MiB/s, 3.16 GiB/s | 2.75 GiB/s, 3.19 GiB/s |
+| `16,1` | 22.49 MiB/s, 930 MiB/s, **best 1** | 3.42 GiB/s, 935 MiB/s, **best 16** |
+| `1,1` | **2.66 MiB/s, 908.73 MiB/s** | **897.15 MiB/s, 896.85 MiB/s** |
+
+```bash
+pwsh -NoProfile -File scripts/bench-webseed.ps1
+```
+
+**Why no test caught it, and this is the part worth keeping.**
+`bench_webseed_reports_a_concurrency_curve_with_its_own_latency` in
+`crates/bit-cli-core/tests/webseed_e2e.rs` already asserts
+`step.requests > 0` for every step, and it has always passed. Its options come
+from `bench_options`, which sets **`warmup: Duration::ZERO`**. Every test of
+the sweep turned off the one thing that breaks it.
+
+`a_sweep_pays_its_warmup_before_the_curve_rather_than_out_of_it` turns it on:
+two steps of 300 ms against a 500 ms warmup, so the first step falls entirely
+inside the warmup window. Both boundaries are measured from the same
+`Instant`, so that is arithmetic rather than a race. Run against the defect it
+fails and names the step.
+
+```bash
+cargo test -p bit-cli-core --test webseed_e2e -- a_sweep_pays_its_warmup
+```
+
+**What the fix costs, written down rather than rounded away.** The requests
+already in flight when the warmup closes complete with no step open, so they
+are in the measured window and in no step. The bound is exact rather than a
+tolerance: at most `concurrency` requests of at most one chunk each, which is
+64 KiB in that test and is what it asserts. Against a step reported at 0 B/s
+it is a good trade.

@@ -406,6 +406,58 @@ The common cause is that all three were written from a specification of what
 `bit-cli` should do rather than from the binary, and the fix each time was one
 command.
 
+## The curve is measured, 2026-08-23, and it is not flat
+
+The entry stays open. Its Acceptance has two halves and the measurement is the
+first: **"`bench/split-<timestamp>.json` shows throughput at `-x 1`, `-x 4`,
+and `-x 16` against one mirror, with the curve recorded here. If the curve is
+flat, the flags do not ship."**
+
+**Taking it needed the instrument fixed first**, which is
+[T-229](bench.md): `bench webseed --concurrency-sweep` charged the run's
+warmup to its own first steps, so the first point of every curve it had ever
+printed was near zero and `--concurrency-sweep 16,1` reported *best
+concurrency 1*. The first attempt at this measurement produced `1: 0 B/s`,
+`2: 0 B/s`, and it was believing that number for ten seconds that found the
+defect.
+
+**The curve, once the instrument was honest.** 64 MiB payload, 1 MiB pieces,
+one loopback source, 20 seconds a step, committed at
+`bench/split-20260823T182709577Z.json`:
+
+| `--web-seed-concurrency` | rate | requests | p50 | p99 |
+| --- | --- | --- | --- | --- |
+| 1 | 940.53 MiB/s | 944 | 3ms | 18ms |
+| 2 | 1.61 GiB/s | 1,655 | 4ms | 17ms |
+| 4 | 2.85 GiB/s | 2,924 | 5ms | 10ms |
+| 8 | **3.44 GiB/s** | 3,534 | 8ms | 14ms |
+| 16 | 3.38 GiB/s | 3,480 | 18ms | 29ms |
+
+It is the shape a sweep is supposed to find: 3.7 times from one connection to
+eight, a knee at eight, and past it throughput stops while p99 doubles. **So
+the curve is not flat and the flags are not disqualified by their own
+Acceptance.**
+
+**What is left is the surface, and it is a decision rather than a measurement.**
+`-x`/`--max-connection-per-server` is an alias of `--web-seed-concurrency` and
+the number above is what justifies it. `-k`/`--min-split-size` is a floor on
+`--web-seed-chunk-size`. `-s`/`--split` is the segment count per source, and it
+is the one with no existing flag behind it: aria2 splits **one file** across N
+ranges, which is what `--web-seed-concurrency` already does per source, so `-s`
+and `-x` would mean nearly the same thing here and a migrating script passing
+both would expect them not to.
+
+Decide those three together, with the man page written before the code, which
+is what [T-198](cli-surface.md) is for. The measurement half of the Acceptance
+is done and committed; nothing else about this entry is blocked.
+
+**One caveat on the numbers and it does not change the verdict.** This is a
+loopback file server on the machine under test, so the payload is in the page
+cache and the rates are the local HTTP stack rather than a mirror. What the
+curve says is that concurrency moves *this* path by 3.7 times, which is the
+question the Acceptance asks; a real mirror's knee will be at a different
+place for a different reason.
+
 ### T-034 Endgame mode is not observable
 
 Source:      corpus, performance category

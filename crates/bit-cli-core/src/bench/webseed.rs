@@ -204,6 +204,35 @@ pub async fn run(
     ));
     let mut curve = Vec::new();
 
+    // Pay the warmup before the first step rather than out of it.
+    //
+    // The recorder excludes warmup samples from `step`, but `end_step`
+    // divides by the step's own wall time, so a step that fell inside the
+    // warmup reported its real seconds against no bytes. With the default 3
+    // second warmup, `--duration 6s --concurrency-sweep 1,2,4,8,16` gives
+    // 1.2 seconds a step and the first two came out at 0 B/s; the same sweep
+    // written `16,1` reported `best concurrency 1`, because whichever step
+    // went first was the one that was crippled. `--concurrency-sweep 1,1` is
+    // the proof: the same concurrency twice, 2.66 MiB/s then 908.73.
+    //
+    // Only for a sweep. A single fixed concurrency has no curve and its
+    // summary already reads the measured window, so warming it separately
+    // would add three seconds to every run for nothing.
+    // See `TODO/bench.md`, T-229.
+    if steps.len() > 1 && recorder.in_warmup() {
+        while recorder.in_warmup() {
+            drive(
+                &recorder,
+                &sources,
+                steps[0],
+                recorder.remaining_warmup(),
+                options,
+                &mut on_sample,
+            )
+            .await;
+        }
+    }
+
     for &concurrency in &steps {
         recorder.begin_step(concurrency);
         drive(

@@ -331,6 +331,15 @@ impl Recorder {
         self.started.elapsed() < self.warmup
     }
 
+    /// How much of the warmup window is left, or zero once it has closed.
+    ///
+    /// A caller that has to keep a load going until the run is warm asks this
+    /// rather than sleeping for the whole warmup, because it may already be
+    /// part way through one. See `TODO/bench.md`, T-229.
+    pub fn remaining_warmup(&self) -> Duration {
+        self.warmup.saturating_sub(self.started.elapsed())
+    }
+
     /// The interval between samples.
     pub fn interval(&self) -> Duration {
         self.interval

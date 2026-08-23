@@ -222,6 +222,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-221](windows.md) | P1 | ci | **done** | A seeder fixture treated a bound port as a session ready to answer |
 | [T-222](cli-surface.md) | P1 | cli | **done** | A config file reaches `config show` and nothing else |
 | [T-223](bench.md) | P1 | bench | **done** | The leech bench reads its transfer counters before deciding to stop |
+| [T-229](bench.md) | P1 | bench | **done** | A concurrency sweep charged its warmup to its own first steps |
 | [T-224](memory.md) | P2 | memory | open | The six hour soak's RSS slope is one step and a sawtooth, not a leak |
 | [T-227](memory.md) | P2 | memory | open | The window cache budget is per source, so the total is whatever the source count makes it |
 | [T-225](create-seed.md) | P1 | ci | **done** | The interop script hashes files the client it just killed still holds |
@@ -254,8 +255,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-177 items: 167 to work through, and 10 deferred to Phase C.
-24 open, 1 partial, 0 blocked, 142 done.
+178 items: 168 to work through, and 10 deferred to Phase C.
+24 open, 1 partial, 0 blocked, 143 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -513,11 +514,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 1 | 0 | 0 | 62 | 63 |
+| P1 | 1 | 0 | 0 | 63 | 64 |
 | P2 | 11 | 1 | 0 | 53 | 65 |
 | P3 | 12 | 0 | 0 | 15 | 27 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **24** | **1** | **0** | **142** | **177** |
+| **All** | **24** | **1** | **0** | **143** | **178** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
