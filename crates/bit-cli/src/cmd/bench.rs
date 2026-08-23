@@ -2786,9 +2786,17 @@ mod tests {
 
         let pipeline = &doc["summary"]["pipeline"];
         assert!(pipeline["blocks"].as_u64().unwrap() > 0);
-        // Not equal: near the end the session re-asks for a block it already
-        // has outstanding, and the second answer is dropped rather than sent
-        // twice. See TODO/webseed.md, T-008.
+        // `>=` rather than `==`, and the reason is not the one this comment
+        // used to give. It said the session re-asks for a block it already has
+        // outstanding near the end of a transfer, and that no longer happens
+        // on any shape measured: 3 pieces, 64, 1,024, five runs each, the two
+        // counters equal every time. See `TODO/webseed.md`, T-008.
+        //
+        // The bridge still spawns a second fetch for a duplicate `request`
+        // without checking whether one is already in flight, so a duplicate
+        // remains possible and would show here as `requests` above `blocks`.
+        // Tightening this to equality would turn that into a flake rather than
+        // into a report. The difference between the two **is** the monitor.
         assert!(
             pipeline["requests"].as_u64().unwrap() >= pipeline["blocks"].as_u64().unwrap(),
             "more blocks than requests: {pipeline}"

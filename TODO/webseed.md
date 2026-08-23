@@ -574,7 +574,7 @@ Source:      the [T-090](bench.md) `bench leech` measurement
 Category:    webseed
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T18:45Z, premise no longer reproduces
 
 Problem:     The bridge keeps a set of the blocks the session is waiting on.
              A `request` for a block already in that set inserts nothing new,
@@ -622,6 +622,62 @@ the discard window is not needed.
 the same file: compare `Content-Length` **only** when `Content-Encoding` is
 `identity` or absent. See [T-004](#t-004-bep-17-style-is-not-auto-detected-only-declared)
 on why a transcoding proxy makes any other comparison wrong.
+
+**Done 2026-08-23T18:45Z on the Acceptance, and the premise no longer
+reproduces on the fixture it was filed from.**
+
+The Acceptance is `summary.pipeline.requests` equal to
+`summary.pipeline.blocks` on a `bench leech` of a torrent with more than a
+thousand pieces, with the run still completing. It is met, and so is every
+smaller shape:
+
+| torrent | pieces | runs | requests | blocks |
+| --- | --- | --- | --- | --- |
+| 64 MiB, 64 KiB pieces | 1,024 | 2 | 4,096 | 4,096 |
+| 1 MiB, 16 KiB pieces | 64 | 3 | 64 | 64 |
+| 1 MiB, one piece | 1 | 3 | 64 | 64 |
+| **3,000 bytes, 1 KiB pieces** | **3** | **5** | **3** | **3** |
+
+The last row is the entry's own fixture. It was filed on that torrent
+answering "3 blocks for 5 requests"; five runs of it now give three and three.
+Every run completed and every payload verified.
+
+**The mechanism is still in the code and it is not what was measured.**
+`crates/bit-cli-core/src/webseed/bridge.rs:942` inserts the block key into
+`pending` and ignores what `HashSet::insert` returns, then spawns
+`serve_block` unconditionally on the next line. A duplicate `request` would
+still start a second fetch. What changed is that no duplicate arrives.
+
+**So the guard is not added, on the rule that produced this entry's own
+Acceptance.** A change with no number behind it does not ship, and there is no
+run in which the guard saves a fetch. It would also not change what goes on
+the wire: today the first fetch to finish removes the key and sends the block
+and the second finds the key gone and drops what it fetched, so the session
+already receives exactly one `piece` for a duplicate `request`. The guard
+would save an HTTP round trip and nothing else, in a case nothing produces.
+
+**And it is monitored rather than merely absent.** `requests` minus `blocks`
+is the duplicate count, and both are already in every `bench leech` report.
+Nothing has to be added for the next run to notice.
+
+### What this closed in the tree, and it is the part worth keeping
+
+`a_leech_measures_the_transfer_the_hashing_and_the_disk` asserts
+`requests >= blocks` rather than equality, and the comment above it stated
+this entry's premise as fact: "near the end the session re-asks for a block it
+already has outstanding". That is a claim about a run nothing produces, sitting
+in a test and weakening its assertion.
+
+The comment says what is true now: the counters are equal on every shape
+measured, the unguarded spawn remains, and the assertion stays at `>=` because
+tightening it would turn a possible duplicate into a flake rather than into a
+report. That is the opposite of the usual rule about an exemption coming off
+when an entry closes, and the reason is specific: what closed here is a
+measurement, not the mechanism.
+
+```bash
+cargo test -p bit-cli --lib a_leech_measures_the_transfer
+```
 
 ### T-009 A source cannot be attached over more than one connection
 

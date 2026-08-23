@@ -81,7 +81,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-005](webseed.md) | P2 | webseed | **done** | A source restricted mid-run cannot be re-scoped |
 | [T-006](webseed.md) | P1 | webseed | **done** | Prove the failure matrix against a real mirror |
 | [T-007](webseed.md) | P2 | webseed | done | A stalling source takes 24 seconds to give up |
-| [T-008](webseed.md) | P3 | webseed | open | A duplicate block request is fetched twice |
+| [T-008](webseed.md) | P3 | webseed | **done** | A duplicate block request is fetched twice *(premise no longer reproduces: the counters are equal)* |
 | [T-179](webseed.md) | P2 | webseed | **done** | A bad piece cannot be attributed to the source that filled it |
 | [T-009](webseed.md) | P1 | webseed | **done** | A source cannot be attached over more than one connection |
 | [T-141](webseed.md) | P1 | webseed | **done** | --web-seed-connect-timeout does not bound a connect that never answers |
@@ -256,7 +256,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 178 items: 168 to work through, and 10 deferred to Phase C.
-24 open, 1 partial, 0 blocked, 143 done.
+23 open, 1 partial, 0 blocked, 144 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -516,9 +516,9 @@ sessions earlier.
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 63 | 64 |
 | P2 | 11 | 1 | 0 | 53 | 65 |
-| P3 | 12 | 0 | 0 | 15 | 27 |
+| P3 | 11 | 0 | 0 | 16 | 27 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **24** | **1** | **0** | **143** | **178** |
+| **All** | **23** | **1** | **0** | **144** | **178** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
