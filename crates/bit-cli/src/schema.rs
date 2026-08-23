@@ -64,6 +64,10 @@ pub const DOCUMENT_KINDS: &[(&str, &str)] = &[
         "A finished download: what arrived, from where, and what it cost.",
     ),
     (
+        "download_dry_run",
+        "What `download --dry-run` resolved: the sources, what each one is, what it would cost, and whether the network is needed. It has its own `kind` because it shares almost no fields with a real run, and a consumer selecting by `kind` would otherwise get two shapes under one name. `dry_run: true` is also on the document. See `TODO/cli-surface.md`, T-156.",
+    ),
+    (
         "seed",
         "A finished seeding run: who connected and what they took.",
     ),

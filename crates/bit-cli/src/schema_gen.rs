@@ -362,10 +362,58 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
             _ => observe_events(&mut events, "bit-cli download <METALINK> --jsonl", &out),
         }
     }
-    // `--dry-run` is deliberately not sampled. Its document carries
-    // `kind: "download"` and a different shape, so folding it in would make
-    // the `download` table a union of two documents without saying which
-    // fields belong to which. See `TODO/cli-surface.md`, T-156.
+    // `--dry-run` is sampled now, under its own `kind`. It carried
+    // `kind: "download"` and a shape sharing almost nothing with a real run
+    // until T-156, so folding it in would have made the `download` table a
+    // union of two documents without saying which fields belong to which.
+    //
+    // Two runs, merged, because neither reaches every field on its own: the
+    // torrent one is the only one that resolves a file layout, so it is the
+    // only one with `torrents[].coverage` and a real `info_hash`, and the
+    // Metalink one is the only source kind that fills `torrents[].metalink`.
+    //
+    // The torrent goes first, and the order is load-bearing. `Sample::merge`
+    // is `or_insert`, so the first observation of a path names its type and
+    // later ones only add paths. Taking the Metalink first documented
+    // `info_hash`, `name` and `total_bytes` as `null`, which is what a
+    // Metalink dry run leaves them as and is not what the field is.
+    // See `TODO/cli-surface.md`, T-156.
+    let (_, out) = capture(
+        &[
+            "--json",
+            "download",
+            &torrent,
+            "--dir",
+            out_dir.to_str().unwrap(),
+            "--web-seed",
+            &source,
+            "--web-seed-mode",
+            "prefix",
+            "--dry-run",
+        ],
+        dir.clone(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli download <TORRENT> --web-seed <URL> --dry-run --json",
+        &out,
+    );
+    let (_, out) = capture(
+        &[
+            "--json",
+            "download",
+            &meta4_arg,
+            "--dir",
+            metalink_out.to_str().unwrap(),
+            "--dry-run",
+        ],
+        metalink_dir.clone(),
+    );
+    observe_document(
+        &mut documents,
+        "bit-cli download <METALINK> --dry-run --json",
+        &out,
+    );
 
     // The three `webseed` verbs that need a server: one request per source,
     // a concurrency sweep, and one piece pulled and checked.

@@ -52,7 +52,13 @@ pub struct Cli {
     /// Sources to download when no subcommand is given.
     ///
     /// `bit-cli <SOURCE>` is the same as `bit-cli download <SOURCE>`.
-    #[arg(value_name = "SOURCE")]
+    ///
+    /// `help_heading = None` because this field is declared after the `Global`
+    /// flatten, which sets "Global options", and a positional inherits the
+    /// running heading like any other argument. Without it `bit-cli --help`
+    /// has no "Arguments" section at all and documents `[SOURCE]...` at the
+    /// bottom of the global flags. `TODO/cli-surface.md`, T-159.
+    #[arg(value_name = "SOURCE", help_heading = None)]
     pub sources: Vec<String>,
 }
 
@@ -339,7 +345,12 @@ pub enum Command {
 pub struct SourceArgs {
     /// A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a
     /// metalink, or `-` for stdin.
-    #[arg(value_name = "SOURCE")]
+    ///
+    /// `help_heading = None` keeps it in clap's own "Arguments" section
+    /// wherever it is flattened. Without it, a command that sets a heading
+    /// before flattening this would file its own positional under that
+    /// heading. `TODO/cli-surface.md`, T-159.
+    #[arg(value_name = "SOURCE", help_heading = None)]
     pub source: String,
 }
 
@@ -1614,9 +1625,10 @@ pub enum ReportFormat {
 /// endpoint. It moves no payload and has no time series, so it takes only the
 /// report flags and a deadline rather than the shared benchmark set.
 #[derive(Debug, Args)]
+#[command(next_help_heading = "Probe options")]
 pub struct BenchProbeArgs {
     /// `HOST:PORT` for a peer, or an `http(s)://` URL for a mirror.
-    #[arg(value_name = "TARGET")]
+    #[arg(value_name = "TARGET", help_heading = None)]
     pub target: String,
 
     /// The torrent to ask a peer about, as a `.torrent`, a magnet, or an info
@@ -1645,10 +1657,15 @@ pub struct BenchProbeArgs {
 /// the target does not have, which measures its accept path. See
 /// `TODO/bench.md`, T-092, for why those are two loads and not one.
 #[derive(Debug, Args)]
+#[command(next_help_heading = "Swarm options")]
 pub struct BenchSwarmArgs {
     /// `HOST:PORT` of the peer to load. The only address this ever connects
     /// to: it announces to no tracker, uses no DHT, and reads no peer list.
-    #[arg(value_name = "TARGET")]
+    ///
+    /// `help_heading = None` keeps the positional in clap's own "Arguments"
+    /// section rather than under this struct's heading, which is where every
+    /// other command's positional is.
+    #[arg(value_name = "TARGET", help_heading = None)]
     pub target: String,
 
     /// A torrent the target already serves, as a `.torrent` path. Repeatable.
@@ -1658,9 +1675,6 @@ pub struct BenchSwarmArgs {
     /// connections it cannot serve rather than how fast it serves.
     #[arg(long = "for", value_name = "TORRENT")]
     pub for_torrents: Vec<PathBuf>,
-
-    #[command(flatten)]
-    pub shared: BenchShared,
 
     /// Synthetic peer count.
     #[arg(long, value_name = "N", default_value_t = 8)]
@@ -1692,6 +1706,15 @@ pub struct BenchSwarmArgs {
     /// Keep the scratch directory instead of removing it.
     #[arg(long)]
     pub keep: bool,
+
+    // Flattened last, deliberately. `next_help_heading` is a running setting on
+    // the `clap` command rather than a property of the struct that set it, so
+    // every argument declared after a flatten inherits whatever heading that
+    // flatten left behind. `BenchShared` ends by flattening `ReportArgs`, so
+    // anything after it here would be filed under "Report options".
+    // `TODO/cli-surface.md`, T-159.
+    #[command(flatten)]
+    pub shared: BenchShared,
 }
 
 /// `bit-cli bench leech`.
@@ -1701,22 +1724,8 @@ pub struct BenchSwarmArgs {
 /// the point of the measurement is what a download costs, and one that never
 /// writes is measuring something else.
 #[derive(Debug, Args)]
+#[command(next_help_heading = "Leech options")]
 pub struct BenchLeechArgs {
-    #[command(flatten)]
-    pub source: SourceArgs,
-
-    #[command(flatten)]
-    pub web_seeds: WebSeedArgs,
-
-    #[command(flatten)]
-    pub trackers: TrackerArgs,
-
-    #[command(flatten)]
-    pub limits: LimitArgs,
-
-    #[command(flatten)]
-    pub shared: BenchShared,
-
     /// Listen port, or a range as START-END. `0` asks the OS for a free one.
     #[arg(long, value_name = "PORT")]
     pub port: Vec<String>,
@@ -1749,17 +1758,14 @@ pub struct BenchLeechArgs {
     /// Keep running until `--duration` elapses even after the payload is in.
     #[arg(long, overrides_with = "stop_on_complete")]
     pub run_full_duration: bool,
-}
 
-/// `bit-cli bench seed`.
-///
-/// The same envelope as `bench leech` with the counters facing the other way:
-/// what leaves rather than what arrives, per peer rather than per source. See
-/// `TODO/bench.md`, T-090.
-#[derive(Debug, Args)]
-pub struct BenchSeedArgs {
+    // Flattened last, so that every argument above keeps this struct's heading.
+    // T-159 has why.
     #[command(flatten)]
     pub source: SourceArgs,
+
+    #[command(flatten)]
+    pub web_seeds: WebSeedArgs,
 
     #[command(flatten)]
     pub trackers: TrackerArgs,
@@ -1769,7 +1775,16 @@ pub struct BenchSeedArgs {
 
     #[command(flatten)]
     pub shared: BenchShared,
+}
 
+/// `bit-cli bench seed`.
+///
+/// The same envelope as `bench leech` with the counters facing the other way:
+/// what leaves rather than what arrives, per peer rather than per source. See
+/// `TODO/bench.md`, T-090.
+#[derive(Debug, Args)]
+#[command(next_help_heading = "Seed options")]
+pub struct BenchSeedArgs {
     /// Where the payload already lives, when that is not `--dir`.
     #[arg(long, value_name = "DIR")]
     pub data: Option<PathBuf>,
@@ -1801,6 +1816,19 @@ pub struct BenchSeedArgs {
     /// on, the report carries how long it took and how fast it went.
     #[arg(long)]
     pub include_hash_check: bool,
+
+    // Flattened last. T-159.
+    #[command(flatten)]
+    pub source: SourceArgs,
+
+    #[command(flatten)]
+    pub trackers: TrackerArgs,
+
+    #[command(flatten)]
+    pub limits: LimitArgs,
+
+    #[command(flatten)]
+    pub shared: BenchShared,
 }
 
 /// `bit-cli bench webseed`.
@@ -1823,10 +1851,8 @@ pub struct BenchWebseedArgs {
 /// honour, because a fixed number of bytes has no warmup window and no target
 /// rate. See `TODO/disk-io.md`, T-017.
 #[derive(Debug, Args)]
+#[command(next_help_heading = "Disk options")]
 pub struct BenchDiskArgs {
-    #[command(flatten)]
-    pub report: ReportArgs,
-
     /// Where the payload is written. Defaults to a directory this run makes
     /// under the system temporary directory and removes afterwards.
     #[arg(long, value_name = "DIR")]
@@ -1880,6 +1906,10 @@ pub struct BenchDiskArgs {
     /// Skip the read-back that checks every block landed where it was sent.
     #[arg(long)]
     pub no_verify: bool,
+
+    // Flattened last. T-159.
+    #[command(flatten)]
+    pub report: ReportArgs,
 }
 
 /// How `bench disk` spreads the payload over files.
@@ -2177,6 +2207,96 @@ mod tests {
         }
     }
 
+    /// A help heading exists so a reader can find a flag by what it does, and
+    /// one that files `--peers` beside `--fail-under` is worse than none.
+    ///
+    /// `next_help_heading` is a running setting on the `clap` command rather
+    /// than a property of the struct that set it, so every argument declared
+    /// after a `#[command(flatten)]` inherits whatever heading that flatten
+    /// left behind. `BenchShared` ends by flattening `ReportArgs`, so four of
+    /// the six `bench` subcommands filed their own flags under "Report
+    /// options". `TODO/cli-surface.md`, T-159.
+    ///
+    /// This asserts the property rather than the fix, so flattening last is
+    /// not the only shape that passes and the next subcommand cannot
+    /// reintroduce the defect by declaring one flag in the wrong place.
+    #[test]
+    fn only_report_flags_are_filed_under_report_options() {
+        const REPORT_FLAGS: [&str; 4] = ["report", "format", "baseline", "fail_under"];
+        let command = Cli::command();
+        let bench = command
+            .get_subcommands()
+            .find(|sub| sub.get_name() == "bench")
+            .expect("bench is a subcommand");
+        let mut checked = 0;
+        for sub in bench.get_subcommands() {
+            for arg in sub.get_arguments() {
+                if arg.get_help_heading() != Some("Report options") {
+                    continue;
+                }
+                let id = arg.get_id().as_str();
+                assert!(
+                    REPORT_FLAGS.contains(&id),
+                    "`bench {}`: `--{}` is filed under \"Report options\" and is not a report \
+                     option. Declare it before the flatten that sets that heading, or give it \
+                     its own. TODO/cli-surface.md, T-159.",
+                    sub.get_name(),
+                    id.replace('_', "-")
+                );
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 6, "every bench subcommand is walked");
+    }
+
+    /// The other half of the same rule: the report flags are still *there*.
+    /// A heading that files nothing under it would pass the case above.
+    #[test]
+    fn every_bench_subcommand_files_its_report_flags_under_report_options() {
+        let command = Cli::command();
+        let bench = command
+            .get_subcommands()
+            .find(|sub| sub.get_name() == "bench")
+            .expect("bench is a subcommand");
+        for sub in bench.get_subcommands() {
+            let filed: Vec<_> = sub
+                .get_arguments()
+                .filter(|arg| arg.get_help_heading() == Some("Report options"))
+                .map(|arg| arg.get_id().to_string())
+                .collect();
+            assert_eq!(
+                filed.len(),
+                4,
+                "`bench {}` files {filed:?} under \"Report options\"",
+                sub.get_name()
+            );
+        }
+    }
+
+    /// A positional belongs in `clap`'s own "Arguments" section on every
+    /// command, and a struct-level heading would otherwise pull it into that
+    /// heading's section and render it after the flags. T-159.
+    #[test]
+    fn no_positional_is_pulled_into_a_help_heading() {
+        fn walk(cmd: &clap::Command, path: &str) {
+            for arg in cmd.get_arguments() {
+                if arg.is_positional() {
+                    assert_eq!(
+                        arg.get_help_heading(),
+                        None,
+                        "`{path}{}`: a positional carries the heading `{:?}`",
+                        arg.get_id(),
+                        arg.get_help_heading()
+                    );
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                walk(sub, &format!("{path}{} ", sub.get_name()));
+            }
+        }
+        walk(&Cli::command(), "");
+    }
+
     #[test]
     fn no_short_flag_is_defined_twice() {
         use std::collections::HashMap;
@@ -2412,10 +2532,144 @@ mod tests {
         // checks drifts within a week. This is the check: a short flag with no
         // row fails here rather than being discovered by a user whose script
         // did the wrong thing.
-        let table = include_str!("../../../docs/flags.md");
-        let command = Cli::command();
+        //
+        // It fails in both directions. A flag with no row is a table that has
+        // gone stale behind the binary; a row naming a flag that no longer
+        // exists is one that has gone stale in front of it, and until
+        // 2026-08-23 only the first was checked. See `TODO/cli-surface.md`,
+        // T-118.
+        let path = flags_path();
+        let committed = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+            .replace("\r\n", "\n");
+        let defined = short_flags();
+        assert!(
+            !defined.is_empty(),
+            "no short flags found, which cannot be right"
+        );
 
-        let mut shorts: Vec<(char, String)> = Vec::new();
+        if std::env::var_os("BIT_CLI_UPDATE_FLAGS").is_some() {
+            std::fs::write(&path, merge_flags_table(&committed, &defined))
+                .expect("write docs/flags.md");
+            return;
+        }
+
+        let documented = documented_flags(&committed);
+        let missing: Vec<String> = defined
+            .iter()
+            .filter(|pair| !documented.contains(*pair))
+            .map(|(short, long)| format!("| `-{short}` | `--{long}` |  |  |  |"))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "docs/flags.md has no row for {} short flag(s); add them, or regenerate with \
+             BIT_CLI_UPDATE_FLAGS=1 cargo test -p bit-cli --lib short_flag:\n{}",
+            missing.len(),
+            missing.join("\n")
+        );
+
+        let stale: Vec<String> = documented
+            .iter()
+            .filter(|pair| !defined.contains(*pair))
+            .map(|(short, long)| format!("`-{short}`/`--{long}`"))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "docs/flags.md has {} row(s) for short flags the binary does not define: {}. \
+             Move them to \"Reserved and not assigned\", or regenerate with \
+             BIT_CLI_UPDATE_FLAGS=1 cargo test -p bit-cli --lib short_flag",
+            stale.len(),
+            stale.join(", ")
+        );
+    }
+
+    /// The regenerating half, tested on its own rather than against the real
+    /// file, because the real file is a no-op for it by construction: the
+    /// assertion above fails the build whenever it would not be.
+    ///
+    /// Three properties, and the first is the one T-158 is about: a row that
+    /// is already there is kept **verbatim**, hand-written cells and all. A
+    /// generator that rewrites those columns from the command tree cannot,
+    /// because the command tree does not know what `aria2` calls a letter.
+    #[test]
+    fn regenerating_the_flags_table_adds_and_removes_rows_without_touching_prose() {
+        let table = "\
+# Short flags
+
+## Assigned
+
+| Flag | Long form | Scope | `aria2` | Note |
+| --- | --- | --- | --- | --- |
+| `-c` | `--continue` | download | `-c` continue | Same concept. |
+| `-z` | `--gone` | download | unclaimed | This flag no longer exists. |
+
+## Reserved and not assigned
+
+| `-k` | min split size | Reserved. |
+";
+        let defined = vec![
+            ('c', "continue".to_string()),
+            ('d', "dir".to_string()),
+            ('h', "help".to_string()),
+        ];
+        let merged = merge_flags_table(table, &defined);
+
+        // Kept, with every hand-written cell.
+        assert!(
+            merged.contains("| `-c` | `--continue` | download | `-c` continue | Same concept. |"),
+            "{merged}"
+        );
+        // Added, with the three hand-written cells empty for a person.
+        assert!(merged.contains("| `-d` | `--dir` |  |  |  |"), "{merged}");
+        assert!(merged.contains("| `-h` | `--help` |  |  |  |"), "{merged}");
+        // Removed, because the binary no longer defines it.
+        assert!(!merged.contains("`--gone`"), "{merged}");
+        // The other section is untouched: its rows name letters that are
+        // deliberately not defined, and reading them as assigned rows would
+        // delete every one of them.
+        assert!(
+            merged.contains("| `-k` | min split size | Reserved. |"),
+            "{merged}"
+        );
+        // The prose and the headings survive, and so does the header row.
+        assert!(merged.contains("# Short flags"), "{merged}");
+        assert!(merged.contains("## Reserved and not assigned"), "{merged}");
+        assert!(
+            merged.contains("| Flag | Long form | Scope | `aria2` | Note |"),
+            "{merged}"
+        );
+        assert!(
+            merged.ends_with('\n'),
+            "the file keeps its trailing newline"
+        );
+
+        // Idempotent: regenerating a file that is already right changes
+        // nothing, which is what makes the no-op on the committed file mean
+        // something.
+        assert_eq!(merge_flags_table(&merged, &defined), merged);
+    }
+
+    /// Where `docs/flags.md` is, from the crate directory a test runs in.
+    fn flags_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/flags.md")
+    }
+
+    /// Every `(short, long)` the command tree defines, deduplicated and in the
+    /// order the table is sorted in.
+    ///
+    /// A global flag is on the root and on every subcommand, and `-o` is
+    /// `--output` on three of them, so the raw walk yields the same pair many
+    /// times over.
+    ///
+    /// `-h`/`--help` is added by hand. `clap` creates it while **building** a
+    /// command and `Cli::command()` hands back one that is not built, so it is
+    /// not in `get_arguments()` and the walk cannot see it. It is a real flag
+    /// and the table documents it, so leaving it out would make that row look
+    /// stale. `--version` needs no such entry: `disable_version_flag` is set,
+    /// and `-v` is verbosity here.
+    fn short_flags() -> Vec<(char, String)> {
+        let command = Cli::command();
+        let mut shorts: Vec<(char, String)> = vec![('h', "help".to_string())];
         let mut collect = |cmd: &clap::Command| {
             for arg in cmd.get_arguments() {
                 if let Some(short) = arg.get_short() {
@@ -2433,17 +2687,107 @@ mod tests {
                 collect(nested);
             }
         }
+        shorts.sort_by_key(flag_order);
+        shorts.dedup();
+        shorts
+    }
 
-        assert!(
-            !shorts.is_empty(),
-            "no short flags found, which cannot be right"
-        );
-        for (short, long) in shorts {
-            let row = format!("| `-{short}` | `--{long}` |");
-            assert!(
-                table.contains(&row),
-                "docs/flags.md has no row for `-{short}`/`--{long}`; add one:\n{row}"
-            );
+    /// The sort key the "Assigned" table is in: by letter, uppercase before
+    /// lowercase of the same letter, then by long name.
+    fn flag_order((short, long): &(char, String)) -> (char, bool, String) {
+        (
+            short.to_ascii_lowercase(),
+            short.is_ascii_lowercase(),
+            long.clone(),
+        )
+    }
+
+    /// Every `(short, long)` the "Assigned" table has a row for.
+    ///
+    /// Only that section. "Reserved and not assigned" names letters `bit-cli`
+    /// deliberately does not define, and reading it here would make every one
+    /// of them look like a stale row.
+    fn documented_flags(table: &str) -> Vec<(char, String)> {
+        assigned_rows(table)
+            .iter()
+            .filter_map(|row| flag_of_row(row))
+            .collect()
+    }
+
+    /// The lines of the "Assigned" table's body, in file order.
+    fn assigned_rows(table: &str) -> Vec<&str> {
+        table
+            .split("\n## ")
+            .find(|section| section.starts_with("Assigned\n"))
+            .map(|section| {
+                section
+                    .lines()
+                    .filter(|line| line.starts_with("| `-"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The `(short, long)` a row names, or `None` when it is not that shape.
+    fn flag_of_row(row: &str) -> Option<(char, String)> {
+        let mut cells = row.split('|').map(str::trim);
+        cells.next()?;
+        let short = cells.next()?.trim_matches('`').strip_prefix('-')?;
+        let long = cells.next()?.trim_matches('`').strip_prefix("--")?;
+        let mut chars = short.chars();
+        let letter = chars.next()?;
+        match chars.next() {
+            None => Some((letter, long.to_string())),
+            Some(_) => None,
         }
+    }
+
+    /// Rewrite the "Assigned" table to hold exactly the defined flags.
+    ///
+    /// A merge rather than a render. Three of the five columns, `Scope`,
+    /// `aria2` and `Note`, are hand written and nothing in the command tree
+    /// knows them, so an existing row is kept **verbatim** and only a row for
+    /// a flag with none is added, with those three cells empty for a person to
+    /// fill. A row whose flag the binary no longer defines is dropped.
+    ///
+    /// `TODO/cli-surface.md` T-158 is why it is written this way: regenerating
+    /// `docs/schema.md` by rendering over it deleted rows the sample did not
+    /// happen to produce. A generator that can only add and remove whole rows
+    /// cannot do that.
+    fn merge_flags_table(table: &str, defined: &[(char, String)]) -> String {
+        let existing = assigned_rows(table);
+        let mut rows: Vec<String> = Vec::new();
+        for pair in defined {
+            let kept = existing
+                .iter()
+                .find(|row| flag_of_row(row).as_ref() == Some(pair));
+            rows.push(match kept {
+                Some(row) => (*row).to_string(),
+                None => format!("| `-{}` | `--{}` |  |  |  |", pair.0, pair.1),
+            });
+        }
+
+        let mut out = String::with_capacity(table.len());
+        let mut written = false;
+        let mut in_assigned = false;
+        for line in table.split('\n') {
+            if line.starts_with("## ") {
+                in_assigned = line == "## Assigned";
+            }
+            if in_assigned && line.starts_with("| `-") {
+                if !written {
+                    out.push_str(&rows.join("\n"));
+                    out.push('\n');
+                    written = true;
+                }
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        // `split` on the trailing newline gives a final empty piece, and the
+        // loop above turned it into one newline of its own.
+        out.pop();
+        out
     }
 }

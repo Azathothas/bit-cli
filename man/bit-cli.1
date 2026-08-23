@@ -16,6 +16,13 @@ There is no short form: `\-v` is verbosity and `\-V` is `\-\-check\-integrity`, 
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+[\fISOURCE\fR]
+Sources to download when no subcommand is given.
+
+`bit\-cli <SOURCE>` is the same as `bit\-cli download <SOURCE>`.
+
+`help_heading = None` because this field is declared after the `Global` flatten, which sets "Global options", and a positional inherits the running heading like any other argument. Without it `bit\-cli \-\-help` has no "Arguments" section at all and documents `[SOURCE]...` at the bottom of the global flags. `TODO/cli\-surface.md`, T\-159.
 .SH "GLOBAL OPTIONS"
 .TP
 \fB\-\-json\fR
@@ -139,11 +146,6 @@ Overall operation deadline
 .TP
 \fB\-\-stop\-after\fR \fI<DUR>\fR
 Stop after this long regardless of state
-.TP
-[\fISOURCE\fR]
-Sources to download when no subcommand is given.
-
-`bit\-cli <SOURCE>` is the same as `bit\-cli download <SOURCE>`.
 .SH SUBCOMMANDS
 .TP
 bit\-cli\-download(1)
@@ -603,10 +605,12 @@ Parse a torrent, magnet, or metalink and print its metadata
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fISOURCE\fR>
-A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin
+A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
+
+`help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-files 1  "bit-cli-files " 
@@ -630,7 +634,9 @@ Two torrents that hold the same file are two downloads of the same bytes unless 
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fISOURCE\fR>
-A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin
+A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
+
+`help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-peers 1  "bit-cli-peers " 
@@ -658,7 +664,9 @@ Listen port, or a range as START\-END. `0` asks the OS for a free one
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fISOURCE\fR>
-A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin
+A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
+
+`help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
 .SH TRACKERS
 .TP
 \fB\-\-tracker\fR \fI<URL>\fR
@@ -808,7 +816,9 @@ Announce or scrape, report the result, then exit
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fISOURCE\fR>
-A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin
+A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
+
+`help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
 .SH TRACKERS
 .TP
 \fB\-\-tracker\fR \fI<URL>\fR
@@ -925,7 +935,9 @@ Skip these files, as `\-\-select\-file`\*(Aqs complement
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fISOURCE\fR>
-A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin
+A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
+
+`help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-create 1  "bit-cli-create " 
@@ -1108,10 +1120,12 @@ Convert a torrent to a magnet URI, or resolve a magnet to metadata
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fISOURCE\fR>
-A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin
+A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
+
+`help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-seed 1  "bit-cli-seed " 
@@ -1127,7 +1141,9 @@ Seed existing data in the foreground
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fISOURCE\fR>
-A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin
+A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
+
+`help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
 .SH TRACKERS
 .TP
 \fB\-\-tracker\fR \fI<URL>\fR

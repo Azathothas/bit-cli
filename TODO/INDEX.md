@@ -184,7 +184,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-115](cli-surface.md) | P2 | cli | partial | Hooks do not fire for every documented trigger |
 | [T-116](cli-surface.md) | P3 | cli | open | -O/--index-out cannot rename a file |
 | [T-117](cli-surface.md) | P1 | cli | **done** | --schema-version has no schema behind it |
-| [T-118](cli-surface.md) | P3 | cli | open | The short-flag table is not checked in CI *(title disproved: it is, by four tests)* |
+| [T-118](cli-surface.md) | P3 | cli | **done** | The short-flag table is not checked in CI *(title disproved: it is, by four tests)* |
 | [T-144](cli-surface.md) | P1 | ci | **done** | The MSRV job fails: the tree needs a newer rustc than it claims |
 | [T-145](cli-surface.md) | P2 | ci | **done** | The macOS test job fails to link |
 | [T-146](cli-surface.md) | P1 | ci | **done** | CI built a Windows binary against the dynamic C runtime |
@@ -193,9 +193,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-153](cli-surface.md) | P3 | ci | open | Link speeds are not read on macOS |
 | [T-154](cli-surface.md) | P2 | cli | open | A Metalink named by URL is not recognised |
 | [T-155](cli-surface.md) | P3 | cli | open | --hash-check-only drops the metalink report |
-| [T-156](cli-surface.md) | P3 | cli | open | A dry run writes a different shape under the same document kind |
+| [T-156](cli-surface.md) | P3 | cli | **done** | A dry run writes a different shape under the same document kind |
 | [T-158](cli-surface.md) | P2 | cli | **done** | Regenerating the schema deletes fields the sample did not produce |
-| [T-159](cli-surface.md) | P3 | cli | open | Subcommand flags are filed under "Report options" in the help |
+| [T-159](cli-surface.md) | P3 | cli | **done** | Subcommand flags are filed under "Report options" in the help |
 | [T-160](cli-surface.md) | P1 | ci | **done** | A peers test raced its own seeder |
 | [T-161](cli-surface.md) | P3 | ci | open | A CI action still targets Node.js 20, which is deprecated *(four call sites, not two)* |
 | [T-151](cli-surface.md) | P1 | ci | **done** | Only one of the three release targets was checked for static linking |
@@ -239,7 +239,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 161 items: 151 to work through, and 10 deferred to Phase C.
-44 open, 2 partial, 0 blocked, 105 done.
+41 open, 2 partial, 0 blocked, 108 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -499,9 +499,9 @@ sessions earlier.
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 54 | 55 |
 | P2 | 22 | 2 | 0 | 36 | 60 |
-| P3 | 21 | 0 | 0 | 3 | 24 |
+| P3 | 18 | 0 | 0 | 6 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **44** | **2** | **0** | **105** | **161** |
+| **All** | **41** | **2** | **0** | **108** | **161** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

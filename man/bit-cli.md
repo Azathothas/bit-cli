@@ -604,6 +604,13 @@ Effects: `non_idempotent`.
 
 | option | type | accepts | default | what it does |
 | --- | --- | --- | --- | --- |
+| `--port <PORT>` | array |  |  | Listen port, or a range as START-END. `0` asks the OS for a free one |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--file-allocation <METHOD>` | string | `none`, `prealloc`, `sparse`, `falloc` | `sparse` | How disk space is allocated for the payload |
+| `--allow-overwrite` | boolean |  | `true` | Overwrite whatever is already in the output directory |
+| `--keep-existing` | boolean |  | `false` | Keep what is already in the output directory and resume onto it |
+| `--stop-on-complete` | boolean |  | `true` | Stop once the torrent completes, rather than running out `--duration`. On by default |
+| `--run-full-duration` | boolean |  | `false` | Keep running until `--duration` elapses even after the payload is in |
 | `source <SOURCE>` | string |  |  | A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin |
 | `--web-seed <URL>` | array |  |  | Source for the whole torrent, under the current composition mode |
 | `--web-seed-exact <URL>` | array |  |  | Shorthand for a source with composition=exact |
@@ -680,13 +687,6 @@ Effects: `non_idempotent`.
 | `--format <FMT>` | string | `json`, `ndjson`, `csv`, `text` | `json` | Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not |
 | `--baseline <PATH>` | string |  |  | Compare against a previous report and print the delta |
 | `--fail-under <RATE>` | string |  |  | Exit 14 if sustained throughput falls below this |
-| `--port <PORT>` | array |  |  | Listen port, or a range as START-END. `0` asks the OS for a free one |
-| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
-| `--file-allocation <METHOD>` | string | `none`, `prealloc`, `sparse`, `falloc` | `sparse` | How disk space is allocated for the payload |
-| `--allow-overwrite` | boolean |  | `true` | Overwrite whatever is already in the output directory |
-| `--keep-existing` | boolean |  | `false` | Keep what is already in the output directory and resume onto it |
-| `--stop-on-complete` | boolean |  | `true` | Stop once the torrent completes, rather than running out `--duration`. On by default |
-| `--run-full-duration` | boolean |  | `false` | Keep running until `--duration` elapses even after the payload is in |
 
 ### `bit-cli bench seed`
 
@@ -696,6 +696,12 @@ Effects: `non_idempotent`.
 
 | option | type | accepts | default | what it does |
 | --- | --- | --- | --- | --- |
+| `--data <DIR>` | string |  |  | Where the payload already lives, when that is not `--dir` |
+| `--port <PORT>` | array |  |  | Listen port, or a range as START-END. `0` asks the OS for a free one |
+| `--no-dht` | boolean |  | `false` | Disable the DHT |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery |
+| `--exit-when-idle <DUR>` | string |  |  | Stop once no peer has been connected for this long |
+| `--include-hash-check` | boolean |  | `false` | Measure the payload's hash check on add as well |
 | `source <SOURCE>` | string |  |  | A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin |
 | `--tracker <URL>` | array |  |  | Add a tracker at runtime. The .torrent is never rewritten |
 | `--tracker-file <PATH>` | array |  |  | One tracker per line. A blank line separates BEP 12 tiers |
@@ -739,12 +745,6 @@ Effects: `non_idempotent`.
 | `--format <FMT>` | string | `json`, `ndjson`, `csv`, `text` | `json` | Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not |
 | `--baseline <PATH>` | string |  |  | Compare against a previous report and print the delta |
 | `--fail-under <RATE>` | string |  |  | Exit 14 if sustained throughput falls below this |
-| `--data <DIR>` | string |  |  | Where the payload already lives, when that is not `--dir` |
-| `--port <PORT>` | array |  |  | Listen port, or a range as START-END. `0` asks the OS for a free one |
-| `--no-dht` | boolean |  | `false` | Disable the DHT |
-| `--no-lsd` | boolean |  | `false` | Disable local service discovery |
-| `--exit-when-idle <DUR>` | string |  |  | Stop once no peer has been connected for this long |
-| `--include-hash-check` | boolean |  | `false` | Measure the payload's hash check on add as well |
 
 ### `bit-cli bench webseed`
 
@@ -810,10 +810,6 @@ Effects: `non_idempotent`.
 
 | option | type | accepts | default | what it does |
 | --- | --- | --- | --- | --- |
-| `--report <PATH>` | string |  |  | Write the full report here, or `-` for stdout. Default: stdout |
-| `--format <FMT>` | string | `json`, `ndjson`, `csv`, `text` | `json` | Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not |
-| `--baseline <PATH>` | string |  |  | Compare against a previous report and print the delta |
-| `--fail-under <RATE>` | string |  |  | Exit 14 if sustained throughput falls below this |
 | `--dir <DIR>` | string |  |  | Where the payload is written. Defaults to a directory this run makes under the system temporary directory and removes afterwards |
 | `--payload-size <SIZE>` | string |  | `1GiB` | Total bytes written per step |
 | `--block-size <SIZE>` | string |  | `16KiB` | Bytes per positioned write. The peer protocol's block is 16 KiB |
@@ -826,6 +822,10 @@ Effects: `non_idempotent`.
 | `--metrics-interval <DUR>` | string |  | `1s` | Time series resolution |
 | `--duration <DUR>` | string |  | `300s` | Stop a step once this much wall time has passed |
 | `--no-verify` | boolean |  | `false` | Skip the read-back that checks every block landed where it was sent |
+| `--report <PATH>` | string |  |  | Write the full report here, or `-` for stdout. Default: stdout |
+| `--format <FMT>` | string | `json`, `ndjson`, `csv`, `text` | `json` | Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not |
+| `--baseline <PATH>` | string |  |  | Compare against a previous report and print the delta |
+| `--fail-under <RATE>` | string |  |  | Exit 14 if sustained throughput falls below this |
 
 ### `bit-cli bench swarm`
 
@@ -837,6 +837,13 @@ Effects: `non_idempotent`.
 | --- | --- | --- | --- | --- |
 | `target <TARGET>` | string |  |  | `HOST:PORT` of the peer to load. The only address this ever connects to: it announces to no tracker, uses no DHT, and reads no peer list |
 | `--for <TORRENT>` | array |  |  | A torrent the target already serves, as a `.torrent` path. Repeatable |
+| `--peers <N>` | string |  | `8` | Synthetic peer count |
+| `--torrents <N>` | string |  | `1` | How many torrents to generate. Ignored when `--for` is given |
+| `--payload-size <SIZE>` | string |  | `256MiB` | The length a generated torrent declares. No payload is written for it: the target does not have the torrent, so nothing will ever be fetched or checked against it |
+| `--piece-size <SIZE>` | string |  | `1MiB` | The piece length a generated torrent declares |
+| `--dir <DIR>` | string |  |  | Where verified pieces and generated torrents are written. A directory this run makes and removes when not given |
+| `--connect-timeout <DUR>` | string |  | `10s` | How long one connect attempt gets before the peer gives up on it |
+| `--keep` | boolean |  | `false` | Keep the scratch directory instead of removing it |
 | `--duration <DUR>` | string |  | `30s` | How long to run |
 | `--warmup <DUR>` | string |  | `3s` | Discard measurements from this initial window |
 | `--metrics-interval <DUR>` | string |  | `1s` | Time series resolution |
@@ -850,13 +857,6 @@ Effects: `non_idempotent`.
 | `--format <FMT>` | string | `json`, `ndjson`, `csv`, `text` | `json` | Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not |
 | `--baseline <PATH>` | string |  |  | Compare against a previous report and print the delta |
 | `--fail-under <RATE>` | string |  |  | Exit 14 if sustained throughput falls below this |
-| `--peers <N>` | string |  | `8` | Synthetic peer count |
-| `--torrents <N>` | string |  | `1` | How many torrents to generate. Ignored when `--for` is given |
-| `--payload-size <SIZE>` | string |  | `256MiB` | The length a generated torrent declares. No payload is written for it: the target does not have the torrent, so nothing will ever be fetched or checked against it |
-| `--piece-size <SIZE>` | string |  | `1MiB` | The piece length a generated torrent declares |
-| `--dir <DIR>` | string |  |  | Where verified pieces and generated torrents are written. A directory this run makes and removes when not given |
-| `--connect-timeout <DUR>` | string |  | `10s` | How long one connect attempt gets before the peer gives up on it |
-| `--keep` | boolean |  | `false` | Keep the scratch directory instead of removing it |
 
 ### `bit-cli bench probe`
 

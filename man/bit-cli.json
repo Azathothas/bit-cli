@@ -2647,6 +2647,55 @@
     {
       "args": [
         {
+          "description": "Listen port, or a range as START-END. `0` asks the OS for a free one",
+          "name": "--port",
+          "type": "array",
+          "value_name": "PORT"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "sparse",
+          "description": "How disk space is allocated for the payload",
+          "enum": [
+            "none",
+            "prealloc",
+            "sparse",
+            "falloc"
+          ],
+          "name": "--file-allocation",
+          "type": "string",
+          "value_name": "METHOD"
+        },
+        {
+          "default": "true",
+          "description": "Overwrite whatever is already in the output directory",
+          "name": "--allow-overwrite",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Keep what is already in the output directory and resume onto it",
+          "name": "--keep-existing",
+          "type": "boolean"
+        },
+        {
+          "default": "true",
+          "description": "Stop once the torrent completes, rather than running out `--duration`. On by default",
+          "name": "--stop-on-complete",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Keep running until `--duration` elapses even after the payload is in",
+          "name": "--run-full-duration",
+          "type": "boolean"
+        },
+        {
           "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
           "name": "source",
           "positional": true,
@@ -3147,55 +3196,6 @@
           "name": "--fail-under",
           "type": "string",
           "value_name": "RATE"
-        },
-        {
-          "description": "Listen port, or a range as START-END. `0` asks the OS for a free one",
-          "name": "--port",
-          "type": "array",
-          "value_name": "PORT"
-        },
-        {
-          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
-          "name": "--peer",
-          "type": "array",
-          "value_name": "ADDR"
-        },
-        {
-          "default": "sparse",
-          "description": "How disk space is allocated for the payload",
-          "enum": [
-            "none",
-            "prealloc",
-            "sparse",
-            "falloc"
-          ],
-          "name": "--file-allocation",
-          "type": "string",
-          "value_name": "METHOD"
-        },
-        {
-          "default": "true",
-          "description": "Overwrite whatever is already in the output directory",
-          "name": "--allow-overwrite",
-          "type": "boolean"
-        },
-        {
-          "default": "false",
-          "description": "Keep what is already in the output directory and resume onto it",
-          "name": "--keep-existing",
-          "type": "boolean"
-        },
-        {
-          "default": "true",
-          "description": "Stop once the torrent completes, rather than running out `--duration`. On by default",
-          "name": "--stop-on-complete",
-          "type": "boolean"
-        },
-        {
-          "default": "false",
-          "description": "Keep running until `--duration` elapses even after the payload is in",
-          "name": "--run-full-duration",
-          "type": "boolean"
         }
       ],
       "description": "Download from a target and measure",
@@ -3204,6 +3204,43 @@
     },
     {
       "args": [
+        {
+          "description": "Where the payload already lives, when that is not `--dir`",
+          "name": "--data",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "DIR"
+        },
+        {
+          "description": "Listen port, or a range as START-END. `0` asks the OS for a free one",
+          "name": "--port",
+          "type": "array",
+          "value_name": "PORT"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "description": "Stop once no peer has been connected for this long",
+          "name": "--exit-when-idle",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Measure the payload's hash check on add as well",
+          "name": "--include-hash-check",
+          "type": "boolean"
+        },
         {
           "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
           "name": "source",
@@ -3486,43 +3523,6 @@
           "name": "--fail-under",
           "type": "string",
           "value_name": "RATE"
-        },
-        {
-          "description": "Where the payload already lives, when that is not `--dir`",
-          "name": "--data",
-          "type": "string",
-          "value_hint": "path",
-          "value_name": "DIR"
-        },
-        {
-          "description": "Listen port, or a range as START-END. `0` asks the OS for a free one",
-          "name": "--port",
-          "type": "array",
-          "value_name": "PORT"
-        },
-        {
-          "default": "false",
-          "description": "Disable the DHT",
-          "name": "--no-dht",
-          "type": "boolean"
-        },
-        {
-          "default": "false",
-          "description": "Disable local service discovery",
-          "name": "--no-lsd",
-          "type": "boolean"
-        },
-        {
-          "description": "Stop once no peer has been connected for this long",
-          "name": "--exit-when-idle",
-          "type": "string",
-          "value_name": "DUR"
-        },
-        {
-          "default": "false",
-          "description": "Measure the payload's hash check on add as well",
-          "name": "--include-hash-check",
-          "type": "boolean"
         }
       ],
       "description": "Seed and measure what the swarm pulls",
@@ -3857,38 +3857,6 @@
     {
       "args": [
         {
-          "description": "Write the full report here, or `-` for stdout. Default: stdout",
-          "name": "--report",
-          "type": "string",
-          "value_name": "PATH"
-        },
-        {
-          "default": "json",
-          "description": "Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not",
-          "enum": [
-            "json",
-            "ndjson",
-            "csv",
-            "text"
-          ],
-          "name": "--format",
-          "type": "string",
-          "value_name": "FMT"
-        },
-        {
-          "description": "Compare against a previous report and print the delta",
-          "name": "--baseline",
-          "type": "string",
-          "value_hint": "path",
-          "value_name": "PATH"
-        },
-        {
-          "description": "Exit 14 if sustained throughput falls below this",
-          "name": "--fail-under",
-          "type": "string",
-          "value_name": "RATE"
-        },
-        {
           "description": "Where the payload is written. Defaults to a directory this run makes under the system temporary directory and removes afterwards",
           "name": "--dir",
           "type": "string",
@@ -3980,6 +3948,38 @@
           "description": "Skip the read-back that checks every block landed where it was sent",
           "name": "--no-verify",
           "type": "boolean"
+        },
+        {
+          "description": "Write the full report here, or `-` for stdout. Default: stdout",
+          "name": "--report",
+          "type": "string",
+          "value_name": "PATH"
+        },
+        {
+          "default": "json",
+          "description": "Report format: json, ndjson, csv, or text. `csv` carries the time series only, because a report is nested and a table is not",
+          "enum": [
+            "json",
+            "ndjson",
+            "csv",
+            "text"
+          ],
+          "name": "--format",
+          "type": "string",
+          "value_name": "FMT"
+        },
+        {
+          "description": "Compare against a previous report and print the delta",
+          "name": "--baseline",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Exit 14 if sustained throughput falls below this",
+          "name": "--fail-under",
+          "type": "string",
+          "value_name": "RATE"
         }
       ],
       "description": "Measure the payload file under several writers, with no session",
@@ -4002,6 +4002,54 @@
           "type": "array",
           "value_hint": "path",
           "value_name": "TORRENT"
+        },
+        {
+          "default": "8",
+          "description": "Synthetic peer count",
+          "name": "--peers",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "1",
+          "description": "How many torrents to generate. Ignored when `--for` is given",
+          "name": "--torrents",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "256MiB",
+          "description": "The length a generated torrent declares. No payload is written for it: the target does not have the torrent, so nothing will ever be fetched or checked against it",
+          "name": "--payload-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "default": "1MiB",
+          "description": "The piece length a generated torrent declares",
+          "name": "--piece-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "Where verified pieces and generated torrents are written. A directory this run makes and removes when not given",
+          "name": "--dir",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "DIR"
+        },
+        {
+          "default": "10s",
+          "description": "How long one connect attempt gets before the peer gives up on it",
+          "name": "--connect-timeout",
+          "type": "string",
+          "value_name": "DUR"
+        },
+        {
+          "default": "false",
+          "description": "Keep the scratch directory instead of removing it",
+          "name": "--keep",
+          "type": "boolean"
         },
         {
           "default": "30s",
@@ -4093,54 +4141,6 @@
           "name": "--fail-under",
           "type": "string",
           "value_name": "RATE"
-        },
-        {
-          "default": "8",
-          "description": "Synthetic peer count",
-          "name": "--peers",
-          "type": "string",
-          "value_name": "N"
-        },
-        {
-          "default": "1",
-          "description": "How many torrents to generate. Ignored when `--for` is given",
-          "name": "--torrents",
-          "type": "string",
-          "value_name": "N"
-        },
-        {
-          "default": "256MiB",
-          "description": "The length a generated torrent declares. No payload is written for it: the target does not have the torrent, so nothing will ever be fetched or checked against it",
-          "name": "--payload-size",
-          "type": "string",
-          "value_name": "SIZE"
-        },
-        {
-          "default": "1MiB",
-          "description": "The piece length a generated torrent declares",
-          "name": "--piece-size",
-          "type": "string",
-          "value_name": "SIZE"
-        },
-        {
-          "description": "Where verified pieces and generated torrents are written. A directory this run makes and removes when not given",
-          "name": "--dir",
-          "type": "string",
-          "value_hint": "path",
-          "value_name": "DIR"
-        },
-        {
-          "default": "10s",
-          "description": "How long one connect attempt gets before the peer gives up on it",
-          "name": "--connect-timeout",
-          "type": "string",
-          "value_name": "DUR"
-        },
-        {
-          "default": "false",
-          "description": "Keep the scratch directory instead of removing it",
-          "name": "--keep",
-          "type": "boolean"
         }
       ],
       "description": "Synthetic peer load against a target",

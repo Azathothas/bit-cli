@@ -66,10 +66,10 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 ## State
 
 - **Last session:** 2026-08-23T06:14:39Z, unattended, and running.
-- **Tests:** 1,166 passing, 0 failing, re-measured at the start rather than
-  carried forward. Plus **149** in the vendored trees, which the workspace gates
-  do not run.
-- **Gates:** clean, 112.8s, on rustc 1.98.0.
+- **Tests:** 1,171 passing, 0 failing. 1,166 at the start, re-measured rather
+  than carried forward. Plus **149** in the vendored trees, which the workspace
+  gates do not run.
+- **Gates:** clean, on rustc 1.98.0.
 
 ```bash
 pwsh -NoProfile -File scripts/gates.ps1
@@ -82,8 +82,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 - **CI:** green at run **32620536345** against commit `a289977`, all
   **seventeen** jobs. `f055328` is on top of it and is documentation only, so it
   carries `[skip ci]` and started no run.
-- **Entries:** 161 items. 44 open, 2 partial, 0 blocked, 105 done, 10 deferred
-  to Phase C. 105 of 151 workable done, 46 left.
+- **Entries:** 161 items. 41 open, 2 partial, 0 blocked, 108 done, 10 deferred
+  to Phase C. 108 of 151 workable done, 43 left.
 - **Tree:** 92 Rust files, 52,557 lines of code, 12,567 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
@@ -122,13 +122,59 @@ carries all five slopes and says `"complete": false`. That is exactly what
 a killed run still leaves them. The numbers the previous session quoted were
 right; the sentence about where they came from was not.
 
-### The entries
+### The `cli` group, taken in the work order's item 3
 
-Nothing is closed yet this session.
+**[T-159](cli-surface.md), P3, done.** Four `bench` subcommands filed their own
+flags under **Report options**. `next_help_heading` is a running setting on the
+`clap` command rather than a property of the struct that set it, so an argument
+declared after a `#[command(flatten)]` inherits whatever that flatten left
+behind, and `BenchShared` ends by flattening `ReportArgs`.
+
+**The entry undercounted it.** The fifth place it happens is the front door:
+`bit-cli --help` had **no "Arguments" section at all**, because `Cli::sources`
+is declared after the `Global` flatten. `[SOURCE]...` was documented 100 lines
+below the usage line that names it. That was found by the test rather than by
+reading, on its first run.
+
+**[T-156](cli-surface.md), P3, done.** `download --dry-run --json` writes
+`kind: "download_dry_run"`. `docs/schema.md` carries its field table now, from
+two runs the generator drives.
+
+**The order of those two runs is load-bearing and the first attempt got it
+wrong.** `Sample::merge` is `or_insert`, so the **first** observation of a path
+names its type. With the Metalink run first, the table said `info_hash`, `name`
+and `total_bytes` were `null`, which is what a Metalink dry run leaves them as
+and is not what the field is.
+
+**[T-118](cli-surface.md), P3, done**, and its one unmet clause is met as a
+**merge** rather than a render. `BIT_CLI_UPDATE_FLAGS=1` keeps an existing row
+verbatim, adds an empty one for a new flag, and drops one for a flag that is
+gone. Three of the five columns are things `clap` cannot know, so rendering the
+table would delete every hand-written cell, which is [T-158](cli-surface.md)
+arriving in a second file.
+
+**A second direction of drift had been open the whole time**: the old test
+walked the flags and asked the table about each, so a row for a flag that no
+longer exists passed. And `-h` was never checked in either direction, because
+`clap` creates `--help` while **building** a command and `Cli::command()` hands
+back one that is not built.
+
+### A defect in the tooling, found on the way
+
+`scripts/check-man.ps1 -Fix` generated the manuals by running
+`target/release/bit-cli.exe` and did not build one first. A stale binary
+regenerated all three files from the surface as it was at the last release
+build, wrote them, and printed "regenerated"; `git diff man/` was then empty
+while `cargo test --test man_is_current` went on failing, because that test
+renders from the crate being compiled. **`gates.ps1` printed `man ok` and
+`test FAILED` in the same run**, which reads as the test being wrong.
+
+`-Fix` builds first now. Without `-Fix` it does not, because that would put a
+release build in front of every `gates.ps1` run; it compares the binary's
+timestamp against the newest `.rs` under `crates/` and defers to the test.
 
 ## In progress
 
-- **The standing-instruction documentation**, above, is written and unpushed.
 - **[T-212](memory.md)** is filed and open, with an acceptance that names the
   fixture it needs.
 - **[T-102](bep-coverage.md)**, **[T-164](peers.md)** are open or partial.

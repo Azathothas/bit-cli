@@ -531,7 +531,7 @@ Source:      the operator's brief; premise disproved 2026-08-21, see the correct
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T07:05Z
 
 Problem:     A3.2 requires `docs/flags.md` with the full short-flag table and a
              CI check, so a new subcommand cannot quietly reuse a letter that
@@ -553,10 +553,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2410` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2181` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2217` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2002` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2530` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2301` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2337` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2032` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -569,11 +569,11 @@ max-upload-rate, `q` quiet, `c` continue, `V` check-integrity, `O` index-out,
 `l` log-file. It requires any flag carrying one of those letters to name the
 matching id or not exist.
 
-**One clause of the Acceptance is genuinely unmet, and it is the reason this
-stays open rather than closing.** The Acceptance says a test "regenerates it
-and fails on drift". The test *asserts* and does not regenerate: it fails with
-the exact row to add, which a reader then pastes in. That is a deliberate
-difference and probably the better one, see [T-158](#t-158-regenerating-the-schema-deletes-fields-the-sample-did-not-produce),
+**One clause of the Acceptance was genuinely unmet, and it is why this stayed
+open.** The Acceptance says a test "regenerates it and fails on drift". The test
+*asserted* and did not regenerate: it failed with the exact row to add, which a
+reader then pasted in. That is a deliberate difference and probably the better
+one, see [T-158](#t-158-regenerating-the-schema-deletes-fields-the-sample-did-not-produce),
 where the regenerating half of the schema check deletes rows the sample did not
 produce, but the entry asked for regeneration and did not get it, so the
 honest state is open with the gap narrowed to one clause. Dropped from P2 to
@@ -583,6 +583,52 @@ P3: nothing is unprotected.
 not its name. Corrected in the same pass. A doc citing a symbol that does not
 exist is the same defect class as an entry describing a state the tree is not
 in, which is what this correction is.
+
+**Done 2026-08-23T07:05Z**, and the regeneration is a **merge** rather than a
+render, which is the only shape T-158 leaves available.
+
+```bash
+BIT_CLI_UPDATE_FLAGS=1 cargo test -p bit-cli --lib short_flag
+```
+
+Three of the table's five columns, `Scope`, `aria2` and `Note`, are things the
+command tree cannot know: nothing in `clap` knows what `aria2` calls a letter or
+why `-v` diverges. So `merge_flags_table` keeps an existing row **verbatim**,
+adds a row for a flag that has none with those three cells empty for a person,
+and drops a row whose flag the binary no longer defines. Rendering the table
+instead would delete every hand-written cell in it, which is T-158 arriving in a
+second file.
+
+**A second direction of drift was open the whole time and nobody had noticed.**
+The old test walked the flags and asked the table about each, so a row for a
+flag that no longer exists passed. That is the drift `-O`/`--index-out` would
+leave behind if [T-116](#t-116--o--index-out-cannot-rename-a-file) were ever
+answered by removing the flag rather than implementing it. Both directions fail
+now.
+
+**`-h` is not in the tree the test walks**, which the stale-row check found the
+first time it ran. `clap` creates `--help` while **building** a command, and
+`Cli::command()` returns one that is not built, so `get_arguments()` does not
+carry it. The table's row for `-h` had therefore never been checked in either
+direction. `short_flags` adds the pair by hand, with why.
+
+Two tests, not one. The assertion runs against the committed file and the merge
+is tested on a fixture of its own, because on the committed file the merge is a
+no-op by construction: the assertion fails the build whenever it would not be.
+`regenerating_the_flags_table_adds_and_removes_rows_without_touching_prose`
+checks that a kept row keeps every hand-written cell, that a new one arrives
+empty, that a dead one goes, that "Reserved and not assigned" is untouched, and
+that a second run changes nothing.
+
+```
+$ cargo test -p bit-cli --lib short_flag
+test result: ok. 4 passed; 0 failed; 0 ignored; 386 filtered out
+
+$ BIT_CLI_UPDATE_FLAGS=1 cargo test -p bit-cli --lib every_short_flag_is_documented
+test result: ok. 1 passed; 0 failed; 0 ignored; 389 filtered out
+$ git diff --stat docs/flags.md
+(nothing)
+```
 
 ### T-144 The MSRV job fails: the tree needs a newer rustc than it claims
 
@@ -1096,7 +1142,7 @@ Source:      `bit-cli` design, found closing [T-113](#t-113-metalink-is-not-impl
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T06:44Z
 
 Problem:     `download --dry-run --json` writes `kind: "download"` and a
              document that shares almost no fields with a real run's:
@@ -1120,6 +1166,48 @@ Acceptance:  `bit-cli download <SOURCE> --dry-run --json | jq -r .kind` prints
              `download_dry_run`, `DOCUMENT_KINDS` names it, and
              `docs/schema.md` carries its field table from a run the generator
              drives.
+
+**Done, all three clauses.** `dry_run` in `cmd/download.rs` emits
+`download_dry_run`, `DOCUMENT_KINDS` in `schema.rs` names it with why it is its
+own kind, and `schema_gen.rs` drives two runs it folds into one table.
+`dry_run: true` stays on the document, so a reader holding one does not have to
+know the kind changed.
+
+**Two runs rather than one, because neither reaches every field.** A Metalink
+dry run is the only source kind that fills `torrents[].metalink`; a torrent one
+is the only one that resolves a file layout, so it is the only one with
+`torrents[].coverage` and a real `info_hash`.
+
+**The order of the two is load-bearing, and the first attempt got it wrong.**
+`Sample::merge` is `or_insert`, so the **first** observation of a path names its
+type and later ones can only add paths. With the Metalink run first, the
+committed table said `torrents[].info_hash`, `name` and `total_bytes` were
+`null`, which is what a Metalink dry run leaves them as and is not what the
+field is. Taking the torrent run first gives `string`, `string` and `integer`,
+and the Metalink run still contributes every `metalink.*` row. This is the same
+shape of defect as [T-158](#t-158-regenerating-the-schema-deletes-fields-the-sample-did-not-produce):
+what the generator writes depends on what the sample happened to contain.
+
+`a_dry_run_writes_its_own_document_kind` asserts both halves. A real run is
+still `download` and carries no `dry_run` field, which is what stops the case
+passing if the kind is simply renamed everywhere.
+
+```
+$ cargo test -p bit-cli --lib a_dry_run_writes_its_own
+test result: ok. 1 passed; 0 failed; 0 ignored; 388 filtered out
+```
+
+**A defect in the tooling turned up on the way, and it is fixed here.**
+`scripts/check-man.ps1 -Fix` generates the manuals by running
+`target/release/bit-cli.exe`, and it did not build one first. A stale binary
+regenerated all three files from the command surface as it was at the last
+release build, wrote them, and printed "regenerated"; `git diff man/` was then
+empty while `cargo test --test man_is_current` went on failing, because that
+test renders from the crate being compiled. `gates.ps1` reported `man ok` and
+`test FAILED` in the same run, which reads as the test being wrong. `-Fix`
+builds first now, and without `-Fix` the script compares the binary's timestamp
+against the newest `.rs` under `crates/` and defers to the test rather than
+answering about a surface that no longer exists.
 
 ### T-158 Regenerating the schema deletes fields the sample did not produce
 
@@ -1175,7 +1263,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1068` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1116` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -1286,7 +1374,7 @@ Source:      `bit-cli bench <SUB> --help`, found in the doc pass of 2026-08-21
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T06:52Z
 
 Problem:     `--peers`, `--torrents`, `--dir`, and `--connect-timeout` appear
              under the heading **Report options** in `bench swarm --help`.
@@ -1320,6 +1408,58 @@ done
 
 `webseed` and `probe` are correct, and they are correct by accident: neither
 declares a flag after its flatten.
+
+**Done, and the entry undercounted the defect.** It named four `bench`
+subcommands. The fifth place it happens is the front door: `bit-cli --help` had
+**no "Arguments" section at all**, because `Cli::sources` is declared after the
+`Global` flatten and a positional inherits the running heading like any other
+argument. `[SOURCE]...` was documented at the bottom of "Global options", 100
+lines below the usage line that names it. Nothing in the entry predicted that,
+and it was found by the test rather than by reading:
+`no_positional_is_pulled_into_a_help_heading` walks the whole command tree and
+failed on `sources` the first time it ran.
+
+Each of the four subcommand structs now sets its own heading, `Swarm options`,
+`Leech options`, `Seed options` and `Disk options`, **and flattens the shared
+groups last**. The heading alone is not enough: `next_help_heading` is applied
+once at the top of `augment_args`, so a field after a flatten still inherits
+whatever that flatten left behind. `bench probe` gets `Probe options` too, so
+its two flags are correct by construction rather than by accident.
+
+`help_heading = None` on the three positionals is the other half.
+`#[command(next_help_heading)]` covers a struct's positionals as well, so
+without it `<TARGET>` moved out of "Arguments" and rendered *after*
+`--connect-timeout`, which is a worse place than the one it started in.
+
+Three tests, and the split matters. `only_report_flags_are_filed_under_report_options`
+asserts the property rather than the fix, so flattening last is not the only
+shape that passes. `every_bench_subcommand_files_its_report_flags_under_report_options`
+is its inverse, because a heading that files *nothing* under it would pass the
+first one. `no_positional_is_pulled_into_a_help_heading` walks every command,
+not just `bench`.
+
+```
+$ cargo test -p bit-cli --lib report_options
+test result: ok. 2 passed; 0 failed; 0 ignored; 386 filtered out
+
+$ cargo test -p bit-cli --lib no_positional
+test result: ok. 1 passed; 0 failed; 0 ignored; 387 filtered out
+```
+
+The acceptance, run:
+
+```
+webseed  --report --format --baseline --fail-under
+leech    --report --format --baseline --fail-under
+seed     --report --format --baseline --fail-under
+disk     --report --format --baseline --fail-under
+probe    --report --format --baseline --fail-under
+swarm    --report --format --baseline --fail-under
+```
+
+`man/` is unchanged by this, checked with `scripts/check-man.ps1 -Fix` and an
+empty `git diff man/`. The generated manuals group flags by command rather than
+by help heading, so the heading is a terminal-only surface.
 
 ### T-160 A peers test raced its own seeder
 
@@ -1564,7 +1704,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2410` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2530` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -2202,9 +2342,9 @@ Effort:      S
 Status:      **done**, 2026-08-22T11:21Z
 
 Problem:     `scripts/check-todo.ps1` resolved a citation written long, as
-             `crates/bit-cli/src/cli.rs:2181`, and checked only that the file
+             `crates/bit-cli/src/cli.rs:2301`, and checked only that the file
              had that many lines. Most of `TODO/` does not write them long. A
-             citation written as `cli.rs:2181` matched nothing in the pattern,
+             citation written as `cli.rs:2301` matched nothing in the pattern,
              so it was never resolved, never range checked, and never read.
 Relevance:   `RULES.md` section 2 step 4 says the mechanical half of the two
              reviews answers "a cited path that does not resolve". For the

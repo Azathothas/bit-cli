@@ -8,6 +8,23 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### `download --dry-run` writes its own document kind
+
+`kind: "download_dry_run"` rather than `kind: "download"`. A dry run and a real
+run shared a kind and almost no fields: a consumer selecting by `kind`, which is
+the documented way to select, got two shapes under one name, and `docs/schema.md`
+could not sample the dry run at all without making the `download` table a union
+of both. `dry_run: true` is still on the document. Its field table is in
+`docs/schema.md` now. See `TODO/cli-surface.md`, T-156.
+
+### `bench` subcommand flags are filed under their own help headings
+
+`--peers`, `--torrents`, `--dir` and `--connect-timeout` appeared under **Report
+options** in `bench swarm --help`, and `bench leech`, `bench seed` and `bench
+disk` did the same with their own flags. Each subcommand has its own heading now.
+`bit-cli --help` also had no **Arguments** section at all: `[SOURCE]...` was
+documented at the bottom of the global flags. See `TODO/cli-surface.md`, T-159.
+
 ### The command surface is generated and committed
 
 `man/bit-cli.1`, `man/bit-cli.md` and `man/bit-cli.json` hold every command,

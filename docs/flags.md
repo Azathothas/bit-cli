@@ -12,10 +12,29 @@ Two rules:
 
 `crates/bit-cli/src/cli.rs` carries a test,
 `every_short_flag_is_documented_in_the_flags_table`, that reads this file's
-table and fails when the two disagree. Adding a short flag without adding a row
-here fails the build. Two more tests sit beside it: `no_short_flag_is_defined_twice`
-rejects a letter used twice in one command, and `short_flags_never_contradict_aria2`
-rejects an `aria2` letter reassigned to a different concept.
+table and fails when the two disagree, **in both directions**: a short flag with
+no row, and a row for a short flag the binary no longer defines. Two more tests
+sit beside it: `no_short_flag_is_defined_twice` rejects a letter used twice in
+one command, and `short_flags_never_contradict_aria2` rejects an `aria2` letter
+reassigned to a different concept.
+
+The "Assigned" table below is regenerated rather than edited by hand when a flag
+is added or removed:
+
+```bash
+BIT_CLI_UPDATE_FLAGS=1 cargo test -p bit-cli --lib short_flag
+```
+
+That **merges**, it does not render. Three of the five columns, `Scope`,
+`aria2` and `Note`, are things the command tree does not know, so an existing
+row is kept exactly as written and a new flag gets a row with those three cells
+empty for a person to fill in. A row whose flag no longer exists is dropped, and
+if the letter should stay reserved, move it to the section below by hand. See
+`TODO/cli-surface.md`, T-118 and T-158.
+
+`-h` is not in the command tree the test walks: `clap` creates `--help` while
+building a command and the test walks an unbuilt one. It is added by hand there
+so this file's row for it is checked like any other.
 
 ## The -v and -V question
 

@@ -2473,7 +2473,12 @@ fn dry_run(
         "torrents": planned,
     });
     let _ = global;
-    renderer.emit(env, "download", &report, || {
+    // `download_dry_run` rather than `download`. The two documents share almost
+    // no fields, and a consumer selecting by `kind`, which is the documented way
+    // to select, was getting two shapes under one name. `dry_run: true` stays,
+    // so a reader holding the document does not have to know the kind changed.
+    // See `TODO/cli-surface.md`, T-156.
+    renderer.emit(env, "download_dry_run", &report, || {
         let mut out = vec![
             field("dry run", "nothing will be written"),
             field("directory", directory.display()),
@@ -2688,7 +2693,7 @@ fn lines(report: &DownloadReport) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::cli::SelectionArgs;
-    use crate::test_support::{TorrentFixture, run_json_code};
+    use crate::test_support::{TorrentFixture, run_json, run_json_code};
 
     /// Every selector value maps to one of two behaviours, and which is which
     /// is stated once.
@@ -2704,6 +2709,49 @@ mod tests {
         assert!(wants_in_order(PieceSelector::InOrder));
         assert!(!wants_in_order(PieceSelector::Default));
         assert_eq!(PieceSelector::default(), PieceSelector::Default);
+    }
+
+    /// A dry run and a real run are two documents, so they carry two kinds.
+    ///
+    /// They share `dry_run` and `directory` and nothing else that matters: a
+    /// real run has `stopped`, `finished`, `sources[]` and `total`, and this
+    /// has `torrents[].kind`, `needs_network`, `coverage` and `total_bytes`. A
+    /// consumer selecting by `kind`, which is the documented way to select,
+    /// was getting both under `download`. See `TODO/cli-surface.md`, T-156.
+    #[test]
+    fn a_dry_run_writes_its_own_document_kind() {
+        let fixture = TorrentFixture::multi_file();
+        let report = run_json(
+            &["download", fixture.path_str(), "--dry-run"],
+            fixture.dir(),
+        );
+        assert_eq!(report["kind"], "download_dry_run");
+        // Kept, so a reader holding the document does not have to know the
+        // kind changed to know what it is.
+        assert_eq!(report["dry_run"], true);
+        assert_eq!(report["torrents"][0]["kind"], "torrent_file");
+        assert_eq!(report["torrents"][0]["needs_network"], false);
+
+        // The other half: a real run is still `download`. Without this the
+        // case above passes if the kind is renamed everywhere.
+        let out = fixture.dir().join("out");
+        let real = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().unwrap(),
+                "--no-tracker",
+                "--port",
+                "0",
+                "--stop-after",
+                "1s",
+            ],
+            fixture.dir(),
+            ExitCode::Timeout,
+        );
+        assert_eq!(real["kind"], "download");
+        assert_eq!(real["dry_run"], serde_json::Value::Null);
     }
 
     /// A torrent whose paths cannot be written as given still reports where

@@ -29,7 +29,10 @@ param(
     [switch]$Fix,
     [ValidateSet("debug", "release")]
     [string]$Profile = "release",
-    [string]$ManDir = "man"
+    [string]$ManDir = "man",
+    # Skip the rebuild and use whatever binary is already there. For a caller
+    # that has just built one, and for nothing else.
+    [switch]$NoBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,10 +43,48 @@ function Exit-With([int]$code, [string]$message) {
     exit $code
 }
 
+# This reads a binary rather than the sources, so a stale one makes it answer
+# about a command surface that no longer exists.
+#
+# `-Fix` therefore builds first. Without that, a stale
+# `target/release/bit-cli.exe` regenerates all three manuals from the surface as
+# it was at the last release build, writes them, and prints "regenerated".
+# `git diff man/` is then empty and `cargo test --test man_is_current` fails
+# anyway, because that test renders from the crate being compiled. The two
+# disagree and only one of them is reading the current code. That cost about ten
+# minutes on 2026-08-23 and the loop it produces looks like the test being wrong.
+#
+# Without `-Fix` it does not build, because that would put a release build in
+# front of every `gates.ps1` run. It reports the staleness instead and defers to
+# the test, which is the gate that binds and which gates.ps1 also runs.
+if (-not $NoBuild -and $Fix) {
+    $buildArgs = @("build", "--bins")
+    if ($Profile -eq "release") { $buildArgs += "--release" }
+    Write-Host "check-man: cargo $($buildArgs -join ' ')"
+    $build = Start-Process -FilePath "cargo" -PassThru -NoNewWindow -WorkingDirectory $repo `
+        -ArgumentList $buildArgs
+    $build.WaitForExit()
+    if ($build.ExitCode -ne 0) {
+        Exit-With 2 "cargo $($buildArgs -join ' ') exited $($build.ExitCode)"
+    }
+}
+
 $exe = Join-Path $repo "target/$Profile/bit-cli.exe"
 if (-not (Test-Path $exe)) { $exe = Join-Path $repo "target/$Profile/bit-cli" }
 if (-not (Test-Path $exe)) {
     Exit-With 2 "no bit-cli binary at target/$Profile. Run: cargo build --profile $Profile --bins"
+}
+
+if (-not $Fix) {
+    $exeWritten = (Get-Item -LiteralPath $exe).LastWriteTimeUtc
+    $newestSource = Get-ChildItem -Path (Join-Path $repo "crates") -Filter *.rs -Recurse -File |
+        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($newestSource -and $newestSource.LastWriteTimeUtc -gt $exeWritten) {
+        Write-Host ("check-man: skipped, the binary at target/$Profile is older than " +
+            "$($newestSource.Name). `cargo test -p bit-cli --test man_is_current` is the gate " +
+            "that binds; regenerate with -Fix, which builds first.")
+        exit 0
+    }
 }
 
 $label = $ManDir

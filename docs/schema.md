@@ -382,6 +382,46 @@ From `bit-cli download <TORRENT> --web-seed <URL> --json`.
 | `total.bytes` | integer |
 | `total.human` | string |
 
+### `download_dry_run`
+
+What `download --dry-run` resolved: the sources, what each one is, what it would cost, and whether the network is needed. It has its own `kind` because it shares almost no fields with a real run, and a consumer selecting by `kind` would otherwise get two shapes under one name. `dry_run: true` is also on the document. See `TODO/cli-surface.md`, T-156.
+
+From `bit-cli download <TORRENT> --web-seed <URL> --dry-run --json`.
+
+| field | type |
+| --- | --- |
+| `bit_cli_version` | string |
+| `directory` | string |
+| `dry_run` | bool |
+| `generated_at` | string |
+| `kind` | string |
+| `schema_version` | string |
+| `torrents[].coverage` | null |
+| `torrents[].coverage.complete` | bool |
+| `torrents[].coverage.covered_bytes` | integer |
+| `torrents[].coverage.uncovered_bytes` | integer |
+| `torrents[].coverage.uncovered_pieces[]` | array |
+| `torrents[].info_hash` | string |
+| `torrents[].kind` | string |
+| `torrents[].metalink` | null |
+| `torrents[].metalink.checksum.algorithm` | string |
+| `torrents[].metalink.checksum.expected` | string |
+| `torrents[].metalink.file` | string |
+| `torrents[].metalink.mirrors_listed` | integer |
+| `torrents[].metalink.mirrors_unsupported[]` | array |
+| `torrents[].metalink.size` | integer |
+| `torrents[].metalink.torrents[]` | string |
+| `torrents[].metalink.version` | string |
+| `torrents[].name` | string |
+| `torrents[].needs_network` | bool |
+| `torrents[].source` | string |
+| `torrents[].total_bytes` | integer |
+| `torrents[].trackers[]` | string |
+| `torrents[].web_seeds[].mode` | string |
+| `torrents[].web_seeds[].origin` | string |
+| `torrents[].web_seeds[].scope` | string |
+| `torrents[].web_seeds[].url` | string |
+
 ### `seed`
 
 A finished seeding run: who connected and what they took.
