@@ -39,6 +39,9 @@ librqbit-peer-protocol.workspace = true
 md-5.workspace = true
 percent-encoding.workspace = true
 quick-xml.workspace = true
+# The MSE key exchange needs a private exponent and the handshake needs
+# padding. See src/mse/.
+rand.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true

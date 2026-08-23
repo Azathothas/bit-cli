@@ -618,6 +618,7 @@ mod tests {
             state: "live".into(),
             client: Some("rqbit".into()),
             connection: Some("tcp".into()),
+            encryption: Some("rc4".into()),
             direction: "incoming",
             downloaded_bytes: 0,
             uploaded_bytes: uploaded,

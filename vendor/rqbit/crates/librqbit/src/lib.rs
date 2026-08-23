@@ -80,6 +80,9 @@ pub mod spawn_utils;
 
 pub mod storage;
 mod stream_connect;
+// Added by this fork: the seam a dependent crate wraps a peer connection at.
+// See patches/UPSTREAM.md and TODO/peers.md T-163.
+pub mod stream_transform;
 mod torrent_state;
 #[cfg(feature = "tracing-subscriber-utils")]
 pub mod tracing_subscriber_config_utils;
@@ -106,6 +109,12 @@ pub use session::{
     SUPPORTED_SCHEMES, Session, SessionOptions, SessionPersistenceConfig,
 };
 pub use stream_connect::ConnectionOptions;
+pub use stream_transform::{OutgoingTransform, StreamTransform, TransformFuture};
+// A transform hands back a read half, and the read half this crate wants is a
+// vectored one, so the trait has to be nameable. The module stays private:
+// `AsyncReadVectoredExt` beside it has an `async fn` in a trait and would warn
+// under this repository's `-D warnings` the moment it became public API.
+pub use vectored_traits::AsyncReadVectored;
 pub use torrent_state::{
     ManagedTorrent, ManagedTorrentShared, ManagedTorrentState, TorrentMetadata, TorrentStats,
     TorrentStatsState,

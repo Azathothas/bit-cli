@@ -68,6 +68,7 @@ use parking_lot::RwLock;
 use peer_binary_protocol::Handshake;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
+use tokio::time::timeout;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{Instrument, debug, debug_span, error, info, trace, warn};
 use tracker_comms::{ReqwestClientFactory, TrackerComms, UdpTrackerClient};
@@ -499,6 +500,11 @@ pub struct SessionOptions {
     /// Override the client name and version used in User-Agent headers and
     /// peer extended handshakes. Defaults to "rqbit X.Y.Z".
     pub client_name_and_version: Option<String>,
+
+    /// Added by this fork. Wraps every peer connection before the BitTorrent
+    /// handshake crosses it, in both directions, which is where message stream
+    /// encryption goes. See `stream_transform` and `patches/UPSTREAM.md`.
+    pub stream_transform: Option<Arc<dyn crate::stream_transform::StreamTransform>>,
 }
 
 impl Default for SessionOptions {
@@ -528,6 +534,7 @@ impl Default for SessionOptions {
             disable_local_service_discovery: false,
             ipv4_only: false,
             client_name_and_version: None,
+            stream_transform: None,
         }
     }
 }
@@ -790,6 +797,7 @@ impl Session {
                     utp_socket: listen_result.as_ref().and_then(|l| l.utp_socket.clone()),
                     bind_device: bind_device.clone(),
                     ipv4_only: opts.ipv4_only,
+                    stream_transform: opts.stream_transform.clone(),
                 })
                 .await
                 .context("error creating stream connector")?,
@@ -965,7 +973,7 @@ impl Session {
         self: Arc<Self>,
         addr: SocketAddr,
         kind: ConnectionKind,
-        mut reader: BoxAsyncReadVectored,
+        reader: BoxAsyncReadVectored,
         writer: BoxAsyncWrite,
     ) -> anyhow::Result<(Arc<TorrentStateLive>, CheckedIncomingConnection)> {
         let rwtimeout = self
@@ -988,6 +996,31 @@ impl Session {
                 .fetch_add(1, Ordering::Relaxed);
             bail!("Incoming ip {incoming_ip} is not in allowlist");
         }
+
+        // Added by this fork. A transform sits between the socket and the
+        // protocol, and it has to run before the handshake is read because on
+        // an encrypted connection the handshake is not there yet. It is handed
+        // every info hash this session holds: which torrent the connection is
+        // for is inside what it is about to decrypt. See TODO/peers.md T-163.
+        let (mut reader, writer) = match self.connector.stream_transform() {
+            Some(transform) => {
+                let hashes: Vec<Id20> = self
+                    .db
+                    .read()
+                    .torrents
+                    .values()
+                    .map(|t| t.info_hash())
+                    .collect();
+                // The same timeout the handshake read gets. Without it a peer
+                // that opens a connection and then says nothing holds a slot
+                // in the accept loop's queue for as long as it likes.
+                match timeout(rwtimeout, transform.incoming(addr, hashes, reader, writer)).await {
+                    Ok(r) => r.context("error transforming incoming connection")?,
+                    Err(_) => bail!("timeout transforming incoming connection"),
+                }
+            }
+            None => (reader, writer),
+        };
 
         let mut read_buf = ReadBuf::new();
         let h = read_buf

@@ -455,6 +455,7 @@ From `bit-cli peers <TORRENT> --peer <ADDR> --json`.
 | `peers[].connect_ms` | integer |
 | `peers[].direction` | string |
 | `peers[].downloaded_bytes` | integer |
+| `peers[].encryption` | string |
 | `peers[].errors` | integer |
 | `peers[].mean_piece_ms` | integer |
 | `peers[].state` | string |

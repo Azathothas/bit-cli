@@ -289,6 +289,7 @@ mod tests {
             state: "live".into(),
             client: client.map(ToString::to_string),
             connection: Some("tcp".into()),
+            encryption: Some("rc4".into()),
             direction: "outgoing",
             downloaded_bytes: down,
             uploaded_bytes: 0,

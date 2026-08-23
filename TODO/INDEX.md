@@ -108,7 +108,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-025](peers.md) | P3 | peers | done | PeerStatsFilterState is not exported, so the filter is built by JSON |
 | [T-142](peers.md) | P1 | peers | **done** | bit-cli peers never joined the swarm it was sampling |
 | [T-138](peers.md) | P2 | peers | **done** | A peer that comes back waits out a backoff that grows by six |
-| [T-163](peers.md) | P2 | peers | open | MSE/PE peer encryption is not implemented |
+| [T-163](peers.md) | P2 | peers | **done** | MSE/PE peer encryption is not implemented |
 | [T-164](peers.md) | P2 | peers | partial | A peer that sends garbage keeps its connection slot |
 | [T-165](peers.md) | P2 | peers | open | The peer's reqq is ignored, so the queue depth is a fixed 128 |
 | [T-166](peers.md) | P1 | peers | **done** | BEP 10 extension ids are not proven to map in both directions |
@@ -238,7 +238,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 160 items: 150 to work through, and 10 deferred to Phase C.
-46 open, 4 partial, 0 blocked, 100 done.
+45 open, 4 partial, 0 blocked, 101 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -497,10 +497,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 2 | 0 | 0 | 53 | 55 |
-| P2 | 23 | 4 | 0 | 32 | 59 |
+| P2 | 22 | 4 | 0 | 33 | 59 |
 | P3 | 21 | 0 | 0 | 3 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **46** | **4** | **0** | **100** | **160** |
+| **All** | **45** | **4** | **0** | **101** | **160** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
@@ -679,12 +679,13 @@ The distinction the coverage table could not make until now.
 
 **They cost reach today.**
 
-12. **[T-163](peers.md)**, MSE/PE. The largest single loss of reachable swarm
-    in the list: a peer configured to *require* encryption will not exchange
-    traffic with a plaintext-only client at all. Blocked on the same librqbit
-    seam as [T-002](webseed.md) and [T-102](bep-coverage.md), and
-    `nanotorrent`'s patches 0003 and 0005 are the shape of the upstream change.
-    High value, not startable.
+12. **[T-163](peers.md)**, MSE/PE, and it is **done** as of 2026-08-23. It was
+    the largest single loss of reachable swarm in the list: a peer configured
+    to *require* encryption will not exchange traffic with a plaintext-only
+    client at all. It was blocked on the same librqbit seam as
+    [T-002](webseed.md) and [T-102](bep-coverage.md), which the vendored tree
+    removed: one `StreamTransform` trait, and the encryption itself in this
+    repository's own code.
 13. **[T-103](bep-coverage.md)**, the `.utf-8` key variants. uTorrent writes
     `name` and `name.utf-8` with different encodings, and preferring the
     `.utf-8` spelling is a read-side rule, not the Shift-JIS work the entry
@@ -718,8 +719,9 @@ problem. Three are blocked on `librqbit` seams and one on a design decision:
   Sending one would be a log line per retracted piece and no change to what the
   session requests. Two upstream changes would unblock it, both named in the
   entry, and the smaller is twenty lines.
-- **[T-163](peers.md)** MSE, **[T-102](bep-coverage.md)** BEP 55: the
-  `PeerConnectionHandler` seam, named in both.
+- **[T-163](peers.md)** MSE, **done**, and **[T-102](bep-coverage.md)** BEP 55:
+  the `PeerConnectionHandler` seam, named in both. MSE needed a seam around the
+  connection rather than into the handler, which is why it went first.
 - **[T-016](disk-io.md)** fastresume, which was blocked on `librqbit` offering
   no way to keep a bitfield without a session store, and is **done**.
 

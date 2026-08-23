@@ -5,7 +5,7 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/crates/rqbit/src/main.rs b/crates/rqbit/src/main.rs
-index a171274..bff192f 100644
+index a171274..3b15968 100644
 --- a/crates/rqbit/src/main.rs
 +++ b/crates/rqbit/src/main.rs
 @@ -645,6 +645,9 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
@@ -18,3 +18,13 @@ index a171274..bff192f 100644
          peer_id: None,
          listen,
          connect: Some(ConnectionOptions {
+@@ -691,6 +694,9 @@ async fn async_main(mut opts: Opts, cancel: CancellationToken) -> anyhow::Result
+         runtime_worker_threads: Some(opts.max_blocking_threads as usize),
+         ipv4_only: opts.ipv4_only,
+         client_name_and_version: None,
++        // Added by this fork: the peer connection seam. `rqbit` itself has no
++        // use for one. See patches/UPSTREAM.md.
++        stream_transform: None,
+     };
+ 
+     #[allow(clippy::needless_update)]

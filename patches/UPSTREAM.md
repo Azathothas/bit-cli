@@ -104,8 +104,8 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0007-crates-librqbit-src-peer_info_reader-mod.rs.patch
-             patches/rqbit/0011-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0014-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0013-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0017-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0017-package-lock.json.patch
+             patches/rqbit/0020-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -316,8 +316,8 @@ open since before this repository existed, and the change is one match arm.
 Unblocks:    T-040, TODO/memory.md, the record's other P0
 Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-             patches/rqbit/0011-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0012-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0013-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T15:30Z
 ```
@@ -390,7 +390,7 @@ Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
              patches/rqbit/0009-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0016-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0019-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T17:26Z
 ```
@@ -551,7 +551,7 @@ Unblocks:    T-132, TODO/multi-source.md
 Files:       vendor/rqbit/crates/librqbit/src/limits.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0005-crates-librqbit-src-limits.rs.patch
-             patches/rqbit/0011-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0013-crates-librqbit-src-torrent_state-live-mod.rs.patch
 Upstream:    not offered yet
 Added:       2026-08-22T17:55Z
 ```
@@ -739,8 +739,8 @@ Files:       vendor/rqbit/crates/librqbit/src/lib.rs
              vendor/rqbit/crates/rqbit/src/main.rs, which builds the struct
              patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
              patches/rqbit/0009-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0010-crates-librqbit-src-torrent_state-initializing.rs.patch
-             patches/rqbit/0015-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0012-crates-librqbit-src-torrent_state-initializing.rs.patch
+             patches/rqbit/0018-crates-rqbit-src-main.rs.patch
 Upstream:    not offered yet, and the first two thirds of it should be
 Added:       2026-08-22T19:28Z
 ```
@@ -906,3 +906,110 @@ sending one worth doing.
 **Offer it upstream.** It is a BEP with an implementation in two other clients,
 the receive side is twenty lines, and a client that honours a retraction
 without sending one is a posture another project has taken deliberately.
+
+---
+
+## librqbit: a peer connection cannot be wrapped before the handshake
+
+```
+Unblocks:    T-163, TODO/peers.md, MSE/PE peer encryption
+Files:       vendor/rqbit/crates/librqbit/src/stream_transform.rs (new)
+             vendor/rqbit/crates/librqbit/src/lib.rs
+             vendor/rqbit/crates/librqbit/src/type_aliases.rs
+             vendor/rqbit/crates/librqbit/src/stream_connect.rs
+             vendor/rqbit/crates/librqbit/src/peer_connection.rs
+             vendor/rqbit/crates/librqbit/src/session.rs
+             vendor/rqbit/crates/rqbit/src/main.rs
+             patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
+             patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0009-crates-librqbit-src-session.rs.patch
+             patches/rqbit/0010-crates-librqbit-src-stream_connect.rs.patch
+             patches/rqbit/0011-crates-librqbit-src-stream_transform.rs.patch
+             patches/rqbit/0015-crates-librqbit-src-type_aliases.rs.patch
+             patches/rqbit/0018-crates-rqbit-src-main.rs.patch
+Upstream:    not offered, and it is a seam rather than a fix
+Added:       2026-08-23T02:52Z
+```
+
+A new trait, `StreamTransform`, and one `SessionOptions` field holding it. It
+is called once per peer connection in each direction, on the two halves, before
+any protocol byte crosses them: after `StreamConnector::connect` in
+`manage_peer_outgoing`, and before `ReadBuf::read_handshake` in
+`Session::check_incoming_connection`. It hands back the halves to use from
+there on.
+
+Two parts of the shape are not obvious and both are forced by MSE.
+
+**The accepting side is handed every info hash the session holds.** MSE keys
+its handshake on the info hash, and the info hash is inside what the transform
+is about to decrypt, so it cannot be told which torrent the connection is for.
+It resolves it against the candidates instead and reports which one it found.
+`check_incoming_connection` already reads the session database a few lines
+later for exactly the same purpose.
+
+**The dialling side may ask for the connection to be made again.**
+`OutgoingTransform::RetryPlaintext` is that answer, and `manage_peer_outgoing`
+redials once with the transform skipped. A transform that offered encryption to
+a peer which does not speak it has spent that connection finding out: the peer
+saw 96 bytes of Diffie-Hellman key where it wanted the plaintext protocol
+header and dropped the socket. Without the redial, "prefer encryption" would
+mean "lose every plaintext peer until librqbit's own backoff dials it again",
+and that backoff is [T-138](../TODO/peers.md)'s, which grows by six.
+
+The transform call is bounded by the same read timeout the handshake gets, on
+both paths. Without that on the accepting side, a peer that opens a connection
+and then says nothing holds a slot in the accept loop's queue for as long as it
+likes, which is the shape [T-020](../TODO/peers.md) already cost a session.
+
+Two smaller changes come with it. `type_aliases::BoxAsyncReadVectored` and
+`BoxAsyncWrite` are `pub` rather than `pub(crate)`, because the trait hands both
+halves to another crate and takes them back. `AsyncReadVectored` is re-exported
+from the crate root for the same reason; the module around it stays private
+because `AsyncReadVectoredExt` beside it has an `async fn` in a public trait and
+would warn under this repository's `-D warnings` the moment it became public
+API. `rqbit`'s own `main.rs` builds `SessionOptions` field by field rather than
+with `..Default::default()`, so it names the new field as `None`.
+
+**Why it has to be here.** Because there is nowhere else to stand. The connect
+and accept paths are private, `PeerConnection` is `pub(crate)`, and the two
+halves are `pub(crate)` type aliases over private traits. `TODO/peers.md`
+T-163 recorded this as the blocker before the trees were vendored, and
+`TODO/webseed.md` T-002 and `TODO/bep-coverage.md` T-102 record the same wall
+from two other directions.
+
+**Why the encryption itself is not here.** The implementation lives in
+`crates/bit-cli-core/src/mse/`, this repository's own code, for three reasons.
+`cargo test --workspace` runs it and does not run the vendored crates' tests;
+the vendored diff stays a seam, which is what the next reconciliation has to
+read; and the policy, the flag and the reporting are `bit-cli`'s rather than
+`librqbit`'s.
+
+**What was decided against, and why.** `patches/TASKS.md` section 3 asked
+whether to take upstream's shape from
+[rqbit#633](https://github.com/ikatson/rqbit/pull/633), which adds
+`crates/librqbit/src/mse/` inside the library, or our own. Ours, and the reason
+is the paragraph above: their shape puts the whole implementation in the tree
+this repository has to reconcile, and reconciling somebody else's crypto on
+every release is a cost paid forever for a feature that already works. If that
+pull request lands, this seam is seven small hunks to weigh against it rather
+than a competing implementation, and the decision can be taken then with the
+code in hand.
+
+**How it was measured.** `scripts/check-encryption.ps1`, seven phases, three
+seeders differing only in `--encryption`, and two of the seven are controls
+that must fetch nothing.
+
+```bash
+pwsh -NoProfile -File scripts/check-encryption.ps1
+```
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+```
+
+**Offer it upstream, but not as this.** The seam is worth having and the
+argument for it is the same one that produced #633: encryption cannot be
+written outside the crate. A maintainer with an MSE pull request open is
+unlikely to want a hook for somebody else's, so what would be offered is the
+seam on its own, with this repository's implementation as the evidence that one
+transform is enough.

@@ -50,9 +50,10 @@ than on anything here, which is what vendoring it was for.
 
 ## State
 
-- **Last session:** 2026-08-22T16:41:28Z to 23:05Z, unattended, 6h 24m. It worked
-  [`patches/TASKS.md`](../patches/TASKS.md) in order. Section 3, MSE, was
-  excluded by the operator as too large for one session.
+- **Last session:** 2026-08-23T01:53:05Z, unattended, running. It is working
+  [`patches/TASKS.md`](../patches/TASKS.md) in order from section 3, MSE, which
+  the session before it was told to leave alone. The session before ran
+  2026-08-22T16:41:28Z to 23:05Z, unattended, 6h 24m.
 - **Tests:** 1,131 passing, 0 failing. 1,126 at the start. Plus **142** in the
   vendored trees, which the workspace gates do not run, up from 139.
 - **Gates:** clean, and they have a `record` gate now.
@@ -70,14 +71,29 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
   The seventeenth job is `Record`, added this session, which runs
   `scripts/check-todo.ps1` where `-SkipGates` cannot reach it. Two runs went
   red mid-session and neither was this tree's fault: see [T-211](bench.md).
-- **Entries:** 160 items. 46 open, 4 partial, 0 blocked, 100 done, 10 deferred
-  to Phase C. 100 of 150 workable done, 50 left.
+- **Entries:** 160 items. 45 open, 4 partial, 0 blocked, 101 done, 10 deferred
+  to Phase C. 101 of 150 workable done, 49 left.
 - **Tree:** 87 Rust files, 50,718 lines of code, 11,912 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
-- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **18 patches**
+- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **21 patches**
   across twelve sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
   `scripts/vendor-status.ps1` exits 0.
 - **Version:** `bit-cli` 0.2.0, unchanged.
+
+## What this session is doing
+
+Written before the work, by [RULES.md](RULES.md) section 1 step 4. The order is
+[`patches/TASKS.md`](../patches/TASKS.md)'s, resumed at its section 3.
+
+1. **[T-163](peers.md), MSE**, `patches/TASKS.md` section 3. The decision it
+   asks for is taken below.
+2. **[T-211](bench.md)**, the two bench tests that fail on the CI runner and
+   pass here.
+3. **[T-167](bep-coverage.md)**'s send half, `lt_donthave`.
+4. **[T-100](bep-coverage.md)** BEP 6 fast extension and
+   **[T-102](bep-coverage.md)** BEP 55 holepunch.
+5. **Section 4's four unread nzbd patches**, `0012`, `0014`, `0016`, `0005`.
+6. The dependabot pull requests, which all fail CI, and then CI green again.
 
 ## What the last session did
 

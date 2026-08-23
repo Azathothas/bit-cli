@@ -926,7 +926,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    peers
 Priority:    P2
 Effort:      L
-Status:      open
+Status:      **done**, 2026-08-23T03:05Z
 
 Problem:     `bit-cli` speaks plaintext BitTorrent only. There is no MSE/PE
              (message stream encryption, protocol encryption) in the tree, and
@@ -985,6 +985,96 @@ Acceptance:  A `bit-cli download` against a peer configured to require
              encryption off completes too, from one listening port with no
              mode flag. `--encryption off|prefer|require` reports which mode
              each peer settled on in `--json`. Both runs recorded here.
+
+**Closed 2026-08-23. The blocker was real and the fork removed it.** The
+Blocker line said the seams do not exist in `librqbit` 9.0.0 and that what
+would unblock it is "two upstream visibility changes of the shape nanotorrent's
+0003 and 0005 make, or a vendored `librqbit`, which decision 7.3 does not
+take". The trees were vendored on 2026-08-22, so the second option is now the
+one available, and it is one trait rather than two.
+
+**The seam is in the vendored tree and the encryption is not.**
+`librqbit::StreamTransform` is called once per peer connection in each
+direction, before any protocol byte crosses it, and hands back the two halves
+to use from then on. `patches/UPSTREAM.md` carries it under "a peer connection
+cannot be wrapped before the handshake". Everything else is this repository's
+own code in `crates/bit-cli-core/src/mse/`, which is where
+`cargo test --workspace` can reach it: the vendored crates' tests are not in
+that run and the workspace's are.
+
+**What was written, and what it was checked against.** No cryptography
+dependency was added and none of the corpus was copied.
+
+| file | what | checked against |
+| --- | --- | --- |
+| `mse/dh768.rs` | the 768 bit exchange, twelve `u64` limbs, Montgomery reduction | `pow(2, x, P)` from an arbitrary precision implementation, three exponents |
+| `mse/rc4.rs` | RC4 with the 1,024 byte MSE discard | RFC 6229, three keys, offsets 0, 16 and 240 |
+| `mse/handshake.rs` | both directions of the five message handshake | both ends over one in-memory duplex, twenty runs for the padding search |
+| `mse/stream.rs` | the encrypting halves and the pushback | round trips at four write sizes, and one duplex narrower than a write |
+| `mse/mod.rs` | the policy, and what each peer settled on | the bound on the outcome map |
+
+**One 768 bit exponentiation costs 51.4 microseconds** and a handshake needs
+two, so MSE adds about a tenth of a millisecond to a peer connection. The
+first draft used binary long division for the reduction, which is 1,536
+iterations per multiply against Montgomery's one pass; the measurement is the
+ignored `exponentiation_cost` test in `dh768.rs`.
+
+```bash
+cargo test -p bit-cli-core --release --lib mse::dh768 -- --ignored --nocapture
+```
+
+**The acceptance ran, all seven phases.**
+`bench/encryption-20260823T030511908Z.json`, from
+`scripts/check-encryption.ps1`. Three seeders differing only in
+`--encryption`, one payload, and two phases that are controls rather than
+cases.
+
+| phase | seeder | leecher | bytes | settled on |
+| --- | --- | --- | --- | --- |
+| `prefer_seeder_default` | prefer | no flag | **8,388,608** | `rc4` |
+| `prefer_seeder_off` | prefer | `off` | **8,388,608** | `plaintext` |
+| `prefer_seeder_require` | prefer | `require` | **8,388,608** | `rc4` |
+| `require_seeder_default` | require | no flag | **8,388,608** | `rc4` |
+| `require_seeder_off` | require | `off` | **0** | control |
+| `off_seeder_default` | off | no flag | **8,388,608** | `plaintext` |
+| `off_seeder_require` | off | `require` | **0** | control |
+
+The first three are the same seeder process on the same port, which is the
+"one listening port with no mode flag" half of the acceptance: an accepting end
+tells MSE from plaintext by reading the first twenty bytes, and it did it three
+times without restarting. The two controls are what say the rest measured
+something: a `require` that quietly accepted plaintext would pass every other
+row.
+
+**`--encryption` defaults to `prefer`, which changes what a default run does.**
+It dials with MSE and dials again in plaintext when the peer does not answer,
+which is what mainline clients do. The redial is the reason `prefer` is
+usable at all: without it, a plaintext peer would be lost until `librqbit`'s
+own backoff dialled it again, and that backoff is [T-138](peers.md)'s.
+
+**A premise that was wrong, and the measurement that showed it.** The first
+implementation let a responder with `--encryption off` complete the
+Diffie-Hellman exchange and refuse afterwards, on the reasoning that the policy
+check belongs where the outcome is known. That is backwards. The dialling end
+had by then been told its handshake worked, so it never fell back, and
+`off_seeder_default` did not complete at all: it looped, dialling with MSE
+against a seeder that answered and then hung up, until the run's deadline. The
+refusal is at the first twenty bytes now, before the exchange, and
+`encryption_off_refuses_before_the_key_exchange` in `handshake.rs` holds the
+ordering.
+
+**What is deliberately not offered.** `crypto_provide` names RC4 and nothing
+else. MSE's other method is plaintext-after-handshake, and offering it would
+buy no peer that RC4 does not already reach while adding a third state to
+report and to test. A peer that offers plaintext only is refused with a message
+saying so.
+
+**What this is not.** RC4 with a 768 bit exchange is not confidentiality
+against a serious attacker, and nothing here claims it. What it buys is that a
+middlebox cannot classify the stream by reading the protocol header off the
+front of it, and that a peer which refuses plaintext will talk to us. That was
+always the entry's argument: the Relevance line calls it an interoperability
+cost before it is a privacy feature.
 
 ### T-164 A peer that sends garbage keeps its connection slot
 

@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**13 entries: 9 done, 2 partial, 0 blocked, 2 open.** Every one of them was
+**13 entries: 10 done, 2 partial, 0 blocked, 1 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
 record, and nothing in the record is blocked.**
 
@@ -30,16 +30,16 @@ record, and nothing in the record is blocked.**
 | [T-132](../TODO/multi-source.md) | P1 | **done** | a download limit that skips one peer |
 | [T-016](../TODO/disk-io.md) | P2 | **done** | a resume cache without session persistence |
 | [T-100](../TODO/bep-coverage.md) | P2 | partial | the send half of an extension message |
-| [T-163](../TODO/peers.md) | P2 | open | MSE, a wire-level handshake |
+| [T-163](../TODO/peers.md) | P2 | **done** | MSE, a wire-level handshake |
 | [T-167](../TODO/bep-coverage.md) | P2 | partial | **has** an inverse of `on_have` now |
 | [T-195](../TODO/peers.md) | P2 | **done** | the read side of T-194, at 262,104 pieces |
 | [T-210](../TODO/peers.md) | P1 | **done** | an incoming peer filed under our own peer id |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 | [T-025](../TODO/peers.md) | P3 | **done** | one `pub use`, and the filter had no name |
 
-Four are not done, and one of those is not waiting on `librqbit` either:
+Three are not done, and one of those is not waiting on `librqbit` either:
 [T-167](../TODO/bep-coverage.md)'s receive side is built and the send half is
-this repository's own bridge. The remaining three are sections 3 and 5.
+this repository's own bridge. The remaining two are in section 5.
 
 **All three P0 items are closed.** [T-040](../TODO/memory.md) was the last, and
 it closed on a measurement rather than a change: six hours of `soak.ps1` on the
@@ -180,32 +180,52 @@ it outlasts most of one, and it survives a `gates.ps1` run now because
 [rqbit#525](https://github.com/ikatson/rqbit/issues/525), open, and reported as
 exactly this.
 
-## 3. MSE, and upstream has a pull request open
+## 3. DONE. MSE, and this tree did not take upstream's shape
 
 [rqbit#633](https://github.com/ikatson/rqbit/pull/633), "feat(mse): Message
-Stream Encryption (MSE) support", is open upstream and unblocks
-[T-163](../TODO/peers.md).
+Stream Encryption (MSE) support", is open upstream and was the reason this
+section asked a question before it asked for code.
+[T-163](../TODO/peers.md) is **done** as of 2026-08-23.
 
-Two independent implementations exist to read before writing a third:
+**The decision this section asked for, taken.** Our own shape, through a seam,
+and the argument is where the tests run and what a reconciliation has to read.
+Upstream's pull request puts `crates/librqbit/src/mse/` inside the library:
+taking it means carrying somebody else's crypto through every future merge, and
+`cargo test --workspace` does not run the vendored crates' tests, so none of it
+would be in the gates. What went into the vendored tree instead is one trait,
+`StreamTransform`, called once per connection in each direction before the
+BitTorrent handshake crosses it. The implementation is
+`crates/bit-cli-core/src/mse/`, this repository's own code, where the gates
+reach it.
 
-- **The upstream pull request**, which is the one that will eventually decide
-  what `librqbit`'s API looks like. Taking it early means taking the merge cost
-  if it changes before it lands.
-- **`FluxDown`**, which is already in the corpus and needs no fetching:
-  `reference/FluxDown/native/engine/vendor/librqbit/src/mse/` holds `dh768.rs`,
-  `rc4.rs`, `stream.rs` and `mod.rs`, against a vendored `librqbit` 8.1.1. It
-  landed well before upstream had a pull request at all, which is the
-  demonstration that this is reachable from a vendored fork.
+If #633 lands, this seam is seven small hunks to weigh against it rather than a
+competing implementation, and `README.md`'s three questions can be answered
+then with the code in hand.
 
-`reference/FluxDown` is MIT. `TODO/RULES.md` section 7 says to read cited code
-and never to copy corpus files into this repository; an MIT licence permits the
-copy with attribution, so if any of it is taken rather than read, it is
-attributed in `UPSTREAM.md` and in `THIRD_PARTY.md` both.
+**Nothing was copied.** `reference/FluxDown`'s `mse/` and
+`reference/mtorrent/mtorrent-core/src/pe/` were both read, and the protocol is
+what they agree on: the 768 bit MODP group from RFC 2409 with generator 2, a
+160 bit private exponent, RC4 with the first 1,024 keystream bytes discarded,
+and `keyA`/`keyB` derived from the shared secret and the info hash. The code
+here is written against that description and checked against sources neither
+project wrote: `pow(2, x, P)` from an arbitrary precision implementation for the
+exchange, and RFC 6229 for the cipher. So `THIRD_PARTY.md` is owed nothing and
+neither is `UPSTREAM.md` beyond the seam.
 
-**Decide before starting** whether this tree takes upstream's shape or its own.
-Taking upstream's costs a merge every time the pull request moves and costs
-nothing when it lands. Taking our own is available immediately and has to be
-carried forever. The entry does not have to decide it; this session did not.
+**What the seam has to do that a wrapper would not.** Two things, and both are
+in `patches/UPSTREAM.md` under "a peer connection cannot be wrapped before the
+handshake". The accepting end is handed **every info hash the session holds**,
+because MSE keys its handshake on one and it is inside what has not been
+decrypted yet. And the dialling end may answer `RetryPlaintext`, because a
+transform that offered encryption to a peer which does not speak it has spent
+that connection finding out.
+
+**Measured.** `scripts/check-encryption.ps1`, seven phases, three seeders
+differing only in `--encryption`, two of them controls that must fetch nothing.
+`bench/encryption-20260823T030511908Z.json`. The first three phases are one
+seeder process on one port, which is the "no second port and no mode flag" half
+of the entry's acceptance. One 768 bit exponentiation costs **51.4
+microseconds** and a handshake needs two.
 
 ## 4. The nzbd series: nine patches, and the licence permits using them
 

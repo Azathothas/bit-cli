@@ -8,6 +8,7 @@ use tracing::debug;
 
 use crate::{
     Error, PeerConnectionOptions, Result,
+    stream_transform::StreamTransform,
     type_aliases::{BoxAsyncReadVectored, BoxAsyncWrite},
     vectored_traits::AsyncReadVectoredIntoCompat,
 };
@@ -65,6 +66,9 @@ pub(crate) struct StreamConnectorArgs {
     pub utp_socket: Option<Arc<UtpSocketUdp>>,
     pub bind_device: Option<BindDevice>,
     pub ipv4_only: bool,
+    /// Added by this fork. Wraps every connection before the BitTorrent
+    /// handshake, in both directions. See `stream_transform`.
+    pub stream_transform: Option<Arc<dyn StreamTransform>>,
 }
 
 impl SocksProxyConfig {
@@ -133,6 +137,7 @@ pub(crate) struct StreamConnector {
     utp_socket: Option<Arc<librqbit_utp::UtpSocketUdp>>,
     stats: ConnectStatsAtomic,
     ipv4_only: bool,
+    stream_transform: Option<Arc<dyn StreamTransform>>,
 }
 
 impl StreamConnector {
@@ -158,6 +163,7 @@ impl StreamConnector {
             bind_device: config.bind_device,
             stats: Default::default(),
             ipv4_only: config.ipv4_only,
+            stream_transform: config.stream_transform,
         })
     }
 
@@ -205,6 +211,11 @@ impl StreamConnector {
 
     pub fn stats(&self) -> &ConnectStatsAtomic {
         &self.stats
+    }
+
+    /// The session's stream transform, if it has one. Added by this fork.
+    pub fn stream_transform(&self) -> Option<&Arc<dyn StreamTransform>> {
+        self.stream_transform.as_ref()
     }
 
     pub async fn connect(

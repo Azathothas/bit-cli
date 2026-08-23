@@ -756,6 +756,21 @@ pub struct LimitArgs {
     #[arg(long, value_name = "N")]
     pub max_peers_total: Option<usize>,
 
+    /// Message stream encryption, for peer connections in both directions.
+    ///
+    /// `prefer` dials with MSE and dials again in plaintext when the peer does
+    /// not speak it, and accepts either. `require` refuses a plaintext peer in
+    /// both directions, which is what reaches a peer configured to require
+    /// encryption, at the cost of every peer that cannot do it. `off` neither
+    /// offers nor accepts it.
+    ///
+    /// One listening port serves both: an accepting end tells the two apart by
+    /// reading the first twenty bytes, so there is no second port and nothing
+    /// on the wire says which mode this run is in. `--json` reports what each
+    /// peer settled on as `encryption`. See `TODO/peers.md`, T-163.
+    #[arg(long, value_name = "MODE", default_value = "prefer")]
+    pub encryption: EncryptionMode,
+
     /// Refuse this peer for the whole run. Repeatable.
     ///
     /// An address, an inclusive `START-END` range, or a CIDR block, in either
@@ -874,6 +889,33 @@ pub struct SelectionArgs {
     /// thing under two names, and both make a download readable front to back.
     #[arg(long, value_name = "STRATEGY", default_value = "default")]
     pub piece_selector: PieceSelector,
+}
+
+/// What a run does about peer encryption.
+///
+/// Mirrors [`bit_cli_core::mse::Encryption`] rather than deriving `ValueEnum`
+/// on it, which is the same split every other enum flag here uses: the core
+/// crate does not depend on `clap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum EncryptionMode {
+    /// Never encrypt, and refuse a peer that opens with MSE.
+    Off,
+    /// Try MSE, fall back to plaintext, accept both.
+    #[default]
+    Prefer,
+    /// MSE or nothing, in both directions.
+    Require,
+}
+
+impl From<EncryptionMode> for bit_cli_core::mse::Encryption {
+    fn from(mode: EncryptionMode) -> Self {
+        match mode {
+            EncryptionMode::Off => Self::Off,
+            EncryptionMode::Prefer => Self::Prefer,
+            EncryptionMode::Require => Self::Require,
+        }
+    }
 }
 
 /// How space is reserved for the payload.

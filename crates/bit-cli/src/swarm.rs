@@ -303,6 +303,7 @@ impl SessionSetup<'_> {
             allocation: self.allocation,
             max_open_files: self.limits.max_open_files,
             blocked_peers: blocked_ranges(&self.limits.block_peer)?,
+            encryption: self.limits.encryption.into(),
             // Off unless a command turns it on. `bit-cli seed --fastresume`
             // is the only one that does, and it sets this after this call
             // because the default location is derived from where the payload
@@ -2370,6 +2371,7 @@ udp://cli.example:80
             state: "live".into(),
             client: None,
             connection: None,
+            encryption: None,
             direction: "incoming",
             downloaded_bytes: 0,
             uploaded_bytes: 0,

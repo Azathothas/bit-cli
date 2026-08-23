@@ -17,6 +17,7 @@ pub mod fast_set;
 pub mod layout;
 pub mod listener;
 pub mod metalink;
+pub mod mse;
 pub mod paths;
 pub mod piece_order;
 pub mod resume;

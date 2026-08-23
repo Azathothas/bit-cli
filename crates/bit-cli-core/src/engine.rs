@@ -125,6 +125,15 @@ pub struct EngineOptions {
     /// it could only get from a session persistence store before the vendored
     /// tree took one here. See [`crate::resume`] and `TODO/disk-io.md` T-016.
     pub resume_cache: Option<PathBuf>,
+    /// What this session does about peer encryption.
+    ///
+    /// `prefer` is the default and it is what mainline clients default to:
+    /// dial with MSE, dial again in plaintext when the peer does not speak it,
+    /// and accept both. `require` refuses a plaintext peer in either
+    /// direction, which is what reaches a peer that requires encryption at the
+    /// cost of every peer that cannot. See [`crate::mse`] and `TODO/peers.md`,
+    /// T-163.
+    pub encryption: crate::mse::Encryption,
     /// Peer addresses this run refuses, as inclusive ranges.
     ///
     /// The session checks these before it reads an incoming handshake and
@@ -155,6 +164,7 @@ impl Default for EngineOptions {
             client_name: Some(format!("bit-cli {}", crate::VERSION)),
             allocation: crate::alloc::Allocation::default(),
             max_open_files: crate::storage::DEFAULT_MAX_OPEN_FILES,
+            encryption: crate::mse::Encryption::default(),
             blocked_peers: Vec::new(),
         }
     }
@@ -293,6 +303,11 @@ pub struct PeerSnapshot {
     /// `tcp`, `utp`, or `socks`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<String>,
+    /// `rc4` when the connection settled on message stream encryption,
+    /// `plaintext` when it did not, absent for a peer this session has not
+    /// completed a connection with. See `TODO/peers.md`, T-163.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<String>,
     /// `incoming` when the peer dialled us, `outgoing` when we dialled it.
     pub direction: &'static str,
     /// Bytes this peer sent us.
@@ -344,6 +359,12 @@ pub struct Engine {
     storage_notes: Mutex<Vec<Arc<Mutex<Vec<String>>>>>,
     /// What storage did, across every torrent in this session.
     storage_metrics: Arc<crate::storage::StorageMetrics>,
+    /// The encryption policy, and what each peer settled on.
+    ///
+    /// Held here as well as inside the session because `librqbit` takes the
+    /// transform as a trait object and gives no way to read it back, and the
+    /// negotiated mode per peer is what `--json` reports.
+    encryption: Arc<crate::mse::MseTransform>,
 }
 
 impl Engine {
@@ -380,6 +401,12 @@ impl Engine {
         // rules out. See `TODO/peers.md`, T-164.
         let _blocklist = write_blocklist(&options.blocked_peers)?;
 
+        // Message stream encryption. The session calls this on both sides of
+        // every peer connection before a protocol byte crosses it, and it is
+        // also what `peers()` joins against to say which mode each peer
+        // settled on. See `TODO/peers.md`, T-163.
+        let encryption = Arc::new(crate::mse::MseTransform::new(options.encryption));
+
         let opts = SessionOptions {
             blocklist_url: _blocklist.as_ref().map(|(_, url)| url.clone()),
             dht: options.enable_dht.then(DhtSessionConfig::default),
@@ -410,6 +437,7 @@ impl Engine {
             peer_limit: options.max_peers,
             ipv4_only: options.ipv4_only,
             client_name_and_version: options.client_name.clone(),
+            stream_transform: Some(encryption.clone() as Arc<dyn librqbit::StreamTransform>),
             ..Default::default()
         };
 
@@ -458,6 +486,7 @@ impl Engine {
             max_open_files: options.max_open_files,
             storage_notes: Mutex::new(Vec::new()),
             storage_metrics: Arc::new(crate::storage::StorageMetrics::default()),
+            encryption,
         })
     }
 
@@ -748,6 +777,9 @@ impl Engine {
             return Vec::new();
         };
         let snapshot = live.per_peer_stats_snapshot(all_peers_filter());
+        // One lock rather than one per row: the map is shared with every
+        // connection task that is negotiating right now.
+        let negotiated = self.encryption.negotiated_all();
         let mut rows: Vec<PeerSnapshot> = snapshot
             .peers
             .into_iter()
@@ -757,12 +789,14 @@ impl Engine {
                     counters.total_piece_download_ms
                         / u64::from(counters.downloaded_and_checked_pieces)
                 });
+                let encryption = negotiated.get(&addr).map(|m| (*m).to_string());
                 PeerSnapshot {
                     web_seed: is_own_loopback_port(&addr, bridge_ports),
                     addr,
                     state: peer.state.to_string(),
                     client: peer.client_name,
                     connection: peer.conn_kind.map(|k| format!("{k:?}").to_lowercase()),
+                    encryption,
                     direction: match counters.incoming_connections > 0 {
                         true => "incoming",
                         false => "outgoing",

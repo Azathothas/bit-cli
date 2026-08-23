@@ -5,10 +5,17 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/crates/librqbit/src/peer_connection.rs b/crates/librqbit/src/peer_connection.rs
-index c06259a..3d3ed7d 100644
+index c06259a..5ea010f 100644
 --- a/crates/librqbit/src/peer_connection.rs
 +++ b/crates/librqbit/src/peer_connection.rs
-@@ -36,8 +36,28 @@ use crate::{
+@@ -30,14 +30,35 @@ use crate::{
+     read_buf::ReadBuf,
+     spawn_utils::BlockingSpawner,
+     stream_connect::StreamConnector,
++    stream_transform::OutgoingTransform,
+     type_aliases::{BoxAsyncReadVectored, BoxAsyncWrite},
+ };
+ 
  pub trait PeerConnectionHandler {
      fn on_connected(&self, _connection_time: Duration) {}
      fn should_send_bitfield(&self) -> bool;
@@ -38,7 +45,7 @@ index c06259a..3d3ed7d 100644
      fn on_extended_handshake(
          &self,
          extended_handshake: &ExtendedHandshake<ByteBuf>,
-@@ -170,8 +190,8 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+@@ -170,8 +191,8 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
          );
  
          let mut write_buf = Box::new([0u8; MAX_MSG_LEN]);
@@ -49,7 +56,7 @@ index c06259a..3d3ed7d 100644
          with_timeout(
              "writing handshake",
              rwtimeout,
-@@ -182,15 +202,27 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+@@ -182,15 +203,27 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
          )
          .await?;
  
@@ -80,7 +87,46 @@ index c06259a..3d3ed7d 100644
              write_buf,
              read: incoming.reader,
              write: incoming.writer,
-@@ -240,6 +272,7 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+@@ -224,6 +257,38 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+         )
+         .await?;
+ 
++        // Added by this fork. The session's transform, if it has one, gets the
++        // connection before the handshake is written. A transform that
++        // negotiated something this peer does not speak has spent the
++        // connection finding out, so it may ask for one more, made without it.
++        // See stream_transform and TODO/peers.md T-163.
++        if let Some(transform) = self.connector.stream_transform() {
++            let transformed = with_timeout(
++                "transforming outgoing connection",
++                rwtimeout,
++                transform
++                    .outgoing(self.addr, self.info_hash, read, write)
++                    .map_err(Error::Anyhow),
++            )
++            .await?;
++            match transformed {
++                OutgoingTransform::Stream(r, w) => {
++                    read = r;
++                    write = w;
++                }
++                OutgoingTransform::RetryPlaintext => {
++                    let (_, r, w) = with_timeout(
++                        "connecting",
++                        connect_timeout,
++                        self.connector.connect(self.addr),
++                    )
++                    .await?;
++                    read = r;
++                    write = w;
++                }
++            }
++        }
++
+         async move {
+             self.handler.on_connected(now.elapsed());
+ 
+@@ -240,6 +305,7 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
              .await?;
  
              let mut read_buf = ReadBuf::new();
@@ -88,7 +134,7 @@ index c06259a..3d3ed7d 100644
              let h = read_buf.read_handshake(&mut read, rwtimeout).await?;
              let handshake_supports_extended = h.supports_extended();
              trace!(
-@@ -319,14 +352,20 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+@@ -319,14 +385,20 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
                  .unwrap_or_else(|| Duration::from_secs(120));
  
              if self.handler.should_send_bitfield() {

@@ -361,6 +361,18 @@
           "value_name": "N"
         },
         {
+          "default": "prefer",
+          "description": "Message stream encryption, for peer connections in both directions",
+          "enum": [
+            "off",
+            "prefer",
+            "require"
+          ],
+          "name": "--encryption",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
           "description": "Refuse this peer for the whole run. Repeatable",
           "name": "--block-peer",
           "type": "array",
@@ -757,6 +769,18 @@
           "name": "--max-peers-total",
           "type": "string",
           "value_name": "N"
+        },
+        {
+          "default": "prefer",
+          "description": "Message stream encryption, for peer connections in both directions",
+          "enum": [
+            "off",
+            "prefer",
+            "require"
+          ],
+          "name": "--encryption",
+          "type": "string",
+          "value_name": "MODE"
         },
         {
           "description": "Refuse this peer for the whole run. Repeatable",
@@ -2429,6 +2453,18 @@
           "value_name": "N"
         },
         {
+          "default": "prefer",
+          "description": "Message stream encryption, for peer connections in both directions",
+          "enum": [
+            "off",
+            "prefer",
+            "require"
+          ],
+          "name": "--encryption",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
           "description": "Refuse this peer for the whole run. Repeatable",
           "name": "--block-peer",
           "type": "array",
@@ -2936,6 +2972,18 @@
           "value_name": "N"
         },
         {
+          "default": "prefer",
+          "description": "Message stream encryption, for peer connections in both directions",
+          "enum": [
+            "off",
+            "prefer",
+            "require"
+          ],
+          "name": "--encryption",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
           "description": "Refuse this peer for the whole run. Repeatable",
           "name": "--block-peer",
           "type": "array",
@@ -3261,6 +3309,18 @@
           "name": "--max-peers-total",
           "type": "string",
           "value_name": "N"
+        },
+        {
+          "default": "prefer",
+          "description": "Message stream encryption, for peer connections in both directions",
+          "enum": [
+            "off",
+            "prefer",
+            "require"
+          ],
+          "name": "--encryption",
+          "type": "string",
+          "value_name": "MODE"
         },
         {
           "description": "Refuse this peer for the whole run. Repeatable",

@@ -5,11 +5,14 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/crates/librqbit/src/session.rs b/crates/librqbit/src/session.rs
-index 75071b9..eb0ac33 100644
+index 75071b9..2e02691 100644
 --- a/crates/librqbit/src/session.rs
 +++ b/crates/librqbit/src/session.rs
-@@ -70,7 +70,7 @@ use serde::{Deserialize, Serialize};
+@@ -68,9 +68,10 @@ use parking_lot::RwLock;
+ use peer_binary_protocol::Handshake;
+ use serde::{Deserialize, Serialize};
  use tokio::sync::Notify;
++use tokio::time::timeout;
  use tokio_util::sync::{CancellationToken, DropGuard};
  use tracing::{Instrument, debug, debug_span, error, info, trace, warn};
 -use tracker_comms::{TrackerComms, UdpTrackerClient};
@@ -17,7 +20,7 @@ index 75071b9..eb0ac33 100644
  
  pub const SUPPORTED_SCHEMES: [&str; 3] = ["http:", "https:", "magnet:"];
  
-@@ -118,6 +118,11 @@ pub struct Session {
+@@ -118,6 +119,11 @@ pub struct Session {
      dht: Option<Dht>,
      pub(crate) connector: Arc<StreamConnector>,
      reqwest_client: reqwest::Client,
@@ -29,7 +32,7 @@ index 75071b9..eb0ac33 100644
      udp_tracker_client: UdpTrackerClient,
      disable_trackers: bool,
  
-@@ -430,6 +435,21 @@ pub struct SessionOptions {
+@@ -430,6 +436,21 @@ pub struct SessionOptions {
      /// Enable fastresume, to restore state quickly after restart.
      pub fastresume: bool,
  
@@ -51,7 +54,19 @@ index 75071b9..eb0ac33 100644
      /// Turn on to dump session contents into a file periodically, so that on next start
      /// all remembered torrents will continue where they left off.
      pub persistence: Option<SessionPersistenceConfig>,
-@@ -488,6 +508,7 @@ impl Default for SessionOptions {
+@@ -479,6 +500,11 @@ pub struct SessionOptions {
+     /// Override the client name and version used in User-Agent headers and
+     /// peer extended handshakes. Defaults to "rqbit X.Y.Z".
+     pub client_name_and_version: Option<String>,
++
++    /// Added by this fork. Wraps every peer connection before the BitTorrent
++    /// handshake crosses it, in both directions, which is where message stream
++    /// encryption goes. See `stream_transform` and `patches/UPSTREAM.md`.
++    pub stream_transform: Option<Arc<dyn crate::stream_transform::StreamTransform>>,
+ }
+ 
+ impl Default for SessionOptions {
+@@ -488,6 +514,7 @@ impl Default for SessionOptions {
              bind_device_name: None,
              disable_trackers: false,
              fastresume: false,
@@ -59,7 +74,15 @@ index 75071b9..eb0ac33 100644
              persistence: None,
              peer_id: None,
              listen: None,
-@@ -645,12 +666,22 @@ impl Session {
+@@ -507,6 +534,7 @@ impl Default for SessionOptions {
+             disable_local_service_discovery: false,
+             ipv4_only: false,
+             client_name_and_version: None,
++            stream_transform: None,
+         }
+     }
+ }
+@@ -645,12 +673,22 @@ impl Session {
                  Option<Arc<dyn SessionPersistenceStore>>,
                  Arc<dyn BitVFactory>,
              )> {
@@ -83,7 +106,7 @@ index 75071b9..eb0ac33 100644
                          }
                      };
                  }
-@@ -676,7 +707,7 @@ impl Session {
+@@ -676,7 +714,7 @@ impl Session {
                          let p = Arc::new(PostgresSessionStorage::new(connection_string).await?);
                          make_result!(p)
                      }
@@ -92,7 +115,7 @@ index 75071b9..eb0ac33 100644
                  }
              }
  
-@@ -724,6 +755,34 @@ impl Session {
+@@ -724,6 +762,34 @@ impl Session {
                      .context("error building HTTP(S) client")?
              };
  
@@ -127,7 +150,15 @@ index 75071b9..eb0ac33 100644
              let stream_connector = Arc::new(
                  StreamConnector::new(StreamConnectorArgs {
                      enable_tcp: opts.connect.as_ref().map(|c| c.enable_tcp).unwrap_or(true),
-@@ -793,6 +852,7 @@ impl Session {
+@@ -731,6 +797,7 @@ impl Session {
+                     utp_socket: listen_result.as_ref().and_then(|l| l.utp_socket.clone()),
+                     bind_device: bind_device.clone(),
+                     ipv4_only: opts.ipv4_only,
++                    stream_transform: opts.stream_transform.clone(),
+                 })
+                 .await
+                 .context("error creating stream connector")?,
+@@ -793,6 +860,7 @@ impl Session {
                  listen_addr: listen_result.as_ref().map(|l| l.addr),
                  default_storage_factory: opts.default_storage_factory,
                  reqwest_client,
@@ -135,7 +166,48 @@ index 75071b9..eb0ac33 100644
                  connector: stream_connector,
                  root_span: opts.root_span,
                  stats: Arc::new(SessionStats::new()),
-@@ -1002,10 +1062,25 @@ impl Session {
+@@ -905,7 +973,7 @@ impl Session {
+         self: Arc<Self>,
+         addr: SocketAddr,
+         kind: ConnectionKind,
+-        mut reader: BoxAsyncReadVectored,
++        reader: BoxAsyncReadVectored,
+         writer: BoxAsyncWrite,
+     ) -> anyhow::Result<(Arc<TorrentStateLive>, CheckedIncomingConnection)> {
+         let rwtimeout = self
+@@ -929,6 +997,31 @@ impl Session {
+             bail!("Incoming ip {incoming_ip} is not in allowlist");
+         }
+ 
++        // Added by this fork. A transform sits between the socket and the
++        // protocol, and it has to run before the handshake is read because on
++        // an encrypted connection the handshake is not there yet. It is handed
++        // every info hash this session holds: which torrent the connection is
++        // for is inside what it is about to decrypt. See TODO/peers.md T-163.
++        let (mut reader, writer) = match self.connector.stream_transform() {
++            Some(transform) => {
++                let hashes: Vec<Id20> = self
++                    .db
++                    .read()
++                    .torrents
++                    .values()
++                    .map(|t| t.info_hash())
++                    .collect();
++                // The same timeout the handshake read gets. Without it a peer
++                // that opens a connection and then says nothing holds a slot
++                // in the accept loop's queue for as long as it likes.
++                match timeout(rwtimeout, transform.incoming(addr, hashes, reader, writer)).await {
++                    Ok(r) => r.context("error transforming incoming connection")?,
++                    Err(_) => bail!("timeout transforming incoming connection"),
++                }
++            }
++            None => (reader, writer),
++        };
++
+         let mut read_buf = ReadBuf::new();
+         let h = read_buf
+             .read_handshake(&mut reader, rwtimeout)
+@@ -1002,10 +1095,25 @@ impl Session {
                          }
                      }
                  },
@@ -165,7 +237,7 @@ index 75071b9..eb0ac33 100644
                      }
                  },
              }
-@@ -1576,6 +1651,7 @@ impl Session {
+@@ -1576,6 +1684,7 @@ impl Session {
              force_tracker_interval,
              self.announce_port().unwrap_or(4240),
              self.reqwest_client.clone(),

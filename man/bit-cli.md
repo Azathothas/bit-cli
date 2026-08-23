@@ -134,6 +134,7 @@ Effects: `idempotent`.
 | `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
+| `--encryption <MODE>` | string | `off`, `prefer`, `require` | `prefer` | Message stream encryption, for peer connections in both directions |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |
 | `--max-open-files <N>` | string |  | `128` | Payload files kept open at once |
 | `--max-handles <N>` | string |  |  | Stop when the process holds more than this many handles. Off by default |
@@ -218,6 +219,7 @@ Effects: `read_only`.
 | `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
+| `--encryption <MODE>` | string | `off`, `prefer`, `require` | `prefer` | Message stream encryption, for peer connections in both directions |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |
 | `--max-open-files <N>` | string |  | `128` | Payload files kept open at once |
 | `--max-handles <N>` | string |  |  | Stop when the process holds more than this many handles. Off by default |
@@ -559,6 +561,7 @@ Effects: `read_only`.
 | `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
+| `--encryption <MODE>` | string | `off`, `prefer`, `require` | `prefer` | Message stream encryption, for peer connections in both directions |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |
 | `--max-open-files <N>` | string |  | `128` | Payload files kept open at once |
 | `--max-handles <N>` | string |  |  | Stop when the process holds more than this many handles. Off by default |
@@ -651,6 +654,7 @@ Effects: `non_idempotent`.
 | `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
+| `--encryption <MODE>` | string | `off`, `prefer`, `require` | `prefer` | Message stream encryption, for peer connections in both directions |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |
 | `--max-open-files <N>` | string |  | `128` | Payload files kept open at once |
 | `--max-handles <N>` | string |  |  | Stop when the process holds more than this many handles. Off by default |
@@ -709,6 +713,7 @@ Effects: `non_idempotent`.
 | `--max-peer-rate <RATE>` | string |  |  | Download rate cap for swarm peers, not for attached HTTP sources |
 | `--max-peers <N>` | string |  |  | Peer connections per torrent |
 | `--max-peers-total <N>` | string |  |  | Peer connections across the run |
+| `--encryption <MODE>` | string | `off`, `prefer`, `require` | `prefer` | Message stream encryption, for peer connections in both directions |
 | `--block-peer <ADDR>` | array |  |  | Refuse this peer for the whole run. Repeatable |
 | `--max-open-files <N>` | string |  | `128` | Payload files kept open at once |
 | `--max-handles <N>` | string |  |  | Stop when the process holds more than this many handles. Off by default |

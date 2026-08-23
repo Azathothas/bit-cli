@@ -1199,6 +1199,11 @@ pub fn leech(
             ));
         }
 
+        // Before the sources are attached, because attaching them is what
+        // lets a byte arrive, and a piece verified before the first counter
+        // read would be counted in no interval. See `LeechOptions`.
+        let storage_baseline = engine.storage_counts();
+
         let (sources, _set) = swarm::attach_sources(
             &engine,
             &handle,
@@ -1223,6 +1228,7 @@ pub fn leech(
                 warmup,
                 interval,
                 stop_on_complete: !args.run_full_duration,
+                storage_baseline,
             },
             renderer,
             env,
@@ -1725,6 +1731,16 @@ struct LeechOptions {
     warmup: Duration,
     interval: Duration,
     stop_on_complete: bool,
+    /// The storage counters as they stood before anything could be fetched.
+    ///
+    /// Taken by the caller rather than here, and the difference is the whole
+    /// point: by the time this function runs, the sources are attached and
+    /// serving, and a piece verified between attaching them and the first
+    /// counter read would be in no interval at all. That is what made
+    /// `a_leech_measures_the_transfer_the_hashing_and_the_disk` report two
+    /// hashed pieces where three were hashed, on a runner slow enough for one
+    /// to land in the gap. See `TODO/bench.md`, T-211.
+    storage_baseline: bit_cli_core::storage::StorageCounts,
 }
 
 /// What a `bench leech` run produced.
@@ -1773,7 +1789,9 @@ async fn drive_leech(
     // Peers are numbered after the declared sources, so a source keeps the
     // index the caller gave it whether or not any peer ever connects.
     let mut next_index = sources.iter().map(|s| s.index + 1).max().unwrap_or(0);
-    let mut storage = engine.storage_counts();
+    // The caller's, taken before the sources were attached. See
+    // `LeechOptions::storage_baseline`.
+    let mut storage = options.storage_baseline;
     let mut notes = Vec::new();
     let mut completed = false;
 
@@ -2829,10 +2847,24 @@ mod tests {
         );
 
         let total = fixture.files[0].1.len() as u64;
-        assert_eq!(doc["summary"]["bytes"]["bytes"].as_u64().unwrap(), total);
+        // The payload is the invariant. `summary.bytes` is not: it counts what
+        // arrived from the source, and with three connections the session can
+        // ask twice for a block that is already outstanding and be answered
+        // twice. That is a legitimate outcome of several connections rather
+        // than a defect, and asserting equality here was asserting that it
+        // never happens, which is a scheduling outcome this test does not
+        // control. It failed exactly that way on a CI runner at 4,024 bytes
+        // against 3,000, which is one extra block. See `TODO/bench.md` T-211
+        // and `TODO/webseed.md` T-008.
         assert_eq!(
             std::fs::read(out.join("payload.bin")).unwrap(),
-            fixture.files[0].1
+            fixture.files[0].1,
+            "the payload on disk is the payload in the torrent"
+        );
+        let counted = doc["summary"]["bytes"]["bytes"].as_u64().unwrap();
+        assert!(
+            counted >= total,
+            "the run counted {counted} bytes for a {total} byte payload"
         );
 
         let sources = doc["sources"].as_array().unwrap();
@@ -2841,7 +2873,23 @@ mod tests {
             1,
             "three connections are one source: {sources:?}"
         );
-        assert_eq!(sources[0]["bytes"]["bytes"].as_u64().unwrap(), total);
+        // What this test is for: one row accounts for everything the run
+        // counted, however many connections carried it. An equality against
+        // the payload length would pass with the row wrong and the summary
+        // wrong by the same amount; this one cannot.
+        assert_eq!(
+            sources[0]["bytes"]["bytes"].as_u64().unwrap(),
+            counted,
+            "the one source row has to account for the whole run: {sources:?}"
+        );
+        // Three connections were asked for and the row says how many the
+        // source used, so a run that quietly fell back to one is caught here
+        // rather than passing as "one row".
+        assert_eq!(
+            sources[0]["connections"].as_u64().unwrap(),
+            3,
+            "the source row has to report the connections it was given: {sources:?}"
+        );
     }
 
     /// `bench disk` writes the payload, reads every block back, and reports

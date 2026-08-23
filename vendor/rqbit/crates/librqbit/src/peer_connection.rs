@@ -30,6 +30,7 @@ use crate::{
     read_buf::ReadBuf,
     spawn_utils::BlockingSpawner,
     stream_connect::StreamConnector,
+    stream_transform::OutgoingTransform,
     type_aliases::{BoxAsyncReadVectored, BoxAsyncWrite},
 };
 
@@ -255,6 +256,38 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
             self.connector.connect(self.addr),
         )
         .await?;
+
+        // Added by this fork. The session's transform, if it has one, gets the
+        // connection before the handshake is written. A transform that
+        // negotiated something this peer does not speak has spent the
+        // connection finding out, so it may ask for one more, made without it.
+        // See stream_transform and TODO/peers.md T-163.
+        if let Some(transform) = self.connector.stream_transform() {
+            let transformed = with_timeout(
+                "transforming outgoing connection",
+                rwtimeout,
+                transform
+                    .outgoing(self.addr, self.info_hash, read, write)
+                    .map_err(Error::Anyhow),
+            )
+            .await?;
+            match transformed {
+                OutgoingTransform::Stream(r, w) => {
+                    read = r;
+                    write = w;
+                }
+                OutgoingTransform::RetryPlaintext => {
+                    let (_, r, w) = with_timeout(
+                        "connecting",
+                        connect_timeout,
+                        self.connector.connect(self.addr),
+                    )
+                    .await?;
+                    read = r;
+                    write = w;
+                }
+            }
+        }
 
         async move {
             self.handler.on_connected(now.elapsed());
