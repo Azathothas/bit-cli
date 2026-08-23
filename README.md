@@ -570,6 +570,24 @@ somewhere else.
 **What none of it tells you is whether the `.torrent` describes the file you
 wanted.** That is what the Metalink below is for.
 
+## Telling something else what happened
+
+`--on-complete` and `--on-error` run a command of yours **once per torrent**, and
+`--on-piece-verified` runs one per verified piece. Every fact arrives as a
+`BIT_CLI_*` environment variable and nothing is interpolated into a command line,
+so a file named `; rm -rf /` is a file name.
+
+```bash
+bit-cli download a.torrent b.torrent -j 2 --on-complete 'echo "$BIT_CLI_NAME landed in $BIT_CLI_DIR"'
+```
+
+That runs twice, with `BIT_CLI_INFO_HASH` differing. A run where one torrent
+finished and the other did not runs `--on-complete` for the first and
+`--on-error` for the second.
+
+[`docs/hooks.md`](docs/hooks.md) lists every variable, says what
+`--on-piece-verified` costs and how it is bounded, and what an exit code does.
+
 ## Metalink
 
 A Metalink carries a `.torrent`, a list of HTTP mirrors for the same bytes, and
