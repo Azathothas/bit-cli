@@ -991,7 +991,8 @@ Blocker line said the seams do not exist in `librqbit` 9.0.0 and that what
 would unblock it is "two upstream visibility changes of the shape nanotorrent's
 0003 and 0005 make, or a vendored `librqbit`, which decision 7.3 does not
 take". The trees were vendored on 2026-08-22, so the second option is now the
-one available, and it is one trait rather than two.
+one available, and what it took is one trait with two methods rather than the
+two separate seams the Blocker line expected.
 
 **The seam is in the vendored tree and the encryption is not.**
 `librqbit::StreamTransform` is called once per peer connection in each
@@ -1002,8 +1003,11 @@ own code in `crates/bit-cli-core/src/mse/`, which is where
 `cargo test --workspace` can reach it: the vendored crates' tests are not in
 that run and the workspace's are.
 
-**What was written, and what it was checked against.** No cryptography
-dependency was added and none of the corpus was copied.
+**What was written, and what it was checked against.** Nothing cryptographic
+came from a dependency and none of the corpus was copied. One dependency was
+added, `rand`, and it is a random source rather than an implementation: the
+private exponent and the two padding fields. It was already in the lock file
+through `librqbit`.
 
 | file | what | checked against |
 | --- | --- | --- |
@@ -1018,10 +1022,12 @@ two, so MSE adds about a tenth of a millisecond to a peer connection. The
 measurement is the ignored `exponentiation_cost` test in `dh768.rs`, which is
 there so a reader has a command rather than a remembered number.
 
-The reduction is Montgomery's. Both implementations this was read against use
-binary long division instead, which walks the 1,536 bits of the product once
-per multiply where Montgomery walks the twelve limbs once. No comparison
-between the two is claimed here, because only one of them was built.
+The reduction is Montgomery's. The one hand-rolled implementation this was read
+against, `FluxDown`'s, uses binary long division instead, which walks the 1,536
+bits of the product once per multiply where Montgomery walks the twelve limbs
+once; `mtorrent` delegates the arithmetic to a big integer crate and does not
+have the question. No comparison between the two is claimed here, because only
+one of them was built.
 
 ```bash
 cargo test -p bit-cli-core --release --lib mse::dh768 -- --ignored --nocapture
