@@ -642,6 +642,20 @@ pub fn run(
             plan.donations = donations;
         }
     }
+    // What the window caches will cost, said before the run rather than
+    // discovered in a resident set. Raised here rather than in the worker
+    // because a run with `-j 4` would otherwise say it four times, and once is
+    // the useful number of times. Named by source where there is more than one
+    // torrent, because the chunk size is per source. See `TODO/memory.md`,
+    // T-041.
+    for plan in &plans {
+        if let Some(message) = cache_budget_warning(&plan.specs) {
+            match plans.len() {
+                1 => renderer.warn(env, message),
+                _ => renderer.warn(env, format!("{}: {message}", plan.source)),
+            }
+        }
+    }
     let donor_files: SharedDonors = Arc::new(std::sync::Mutex::new(
         std::collections::HashMap::with_capacity(plans.len()),
     ));
@@ -2752,18 +2766,76 @@ fn apply_max_total(
         .collect()
 }
 
+/// What a mirror's window cache is allowed before eviction starts.
+///
+/// Per source, not per run, which is the whole of what makes the total a
+/// number worth reporting. See `TODO/memory.md`, T-041.
+pub(crate) const CACHE_BUDGET_PER_SOURCE: u64 = 16 * bit_cli_core::units::MIB;
+
+/// Total window cache above which a run says so before it starts.
+///
+/// Sixteen mirrors at the default chunk size is 256 MiB, which is the largest
+/// total the ordinary case reaches. Anything above it comes from a chunk size
+/// the caller chose, and the caller is the one who can undo it.
+/// See `TODO/memory.md`, T-041.
+pub(crate) const CACHE_TOTAL_WARN: u64 = 256 * bit_cli_core::units::MIB;
+
 /// How many windows each source caches.
 ///
 /// Memory is `windows * chunk_size` per source, so the window count comes down
 /// as the chunk size goes up. Four windows of the default 4 MiB is 16 MiB per
 /// source, which is the budget a mirror gets before eviction starts.
+///
+/// **The floor of two is what puts a run over that budget**, and it is
+/// deliberate: a cache of one window cannot hold the window a read is being
+/// served from and the next one at the same time, so the source re-fetches
+/// every window it just evicted. So a 64 MiB chunk size costs 128 MiB per
+/// source rather than 16, by design, and [`cache_budget`] is what says so
+/// before the run rather than after it.
 pub(crate) fn cache_windows(specs: &[SourceSpec]) -> usize {
     let largest = specs
         .iter()
         .map(|s| s.limits.chunk_size)
         .max()
         .unwrap_or(bit_cli_core::units::MIB);
-    ((16 * bit_cli_core::units::MIB) / largest.max(1)).clamp(2, 16) as usize
+    (CACHE_BUDGET_PER_SOURCE / largest.max(1)).clamp(2, 16) as usize
+}
+
+/// What the window caches will cost this run, per source and in total.
+///
+/// One window count is used for every source, computed from the largest chunk
+/// size any of them asked for, so a source with a smaller chunk gets the same
+/// number of smaller windows. Both numbers are reported by
+/// `bit-cli webseed list --json` and are what the warning below is raised on.
+/// See `TODO/memory.md`, T-041.
+pub(crate) fn cache_budget(specs: &[SourceSpec]) -> (usize, Vec<u64>, u64) {
+    let windows = cache_windows(specs);
+    let per_source: Vec<u64> = specs
+        .iter()
+        .map(|s| s.limits.chunk_size.saturating_mul(windows as u64))
+        .collect();
+    let total = per_source.iter().copied().fold(0u64, u64::saturating_add);
+    (windows, per_source, total)
+}
+
+/// The line a run prints when the window caches will cost more than
+/// [`CACHE_TOTAL_WARN`], or `None` when they will not.
+///
+/// It names the flag that produced the number, because the only way a caller
+/// gets here is by choosing a chunk size or by attaching a lot of mirrors, and
+/// both are theirs to change. See `TODO/memory.md`, T-041.
+pub(crate) fn cache_budget_warning(specs: &[SourceSpec]) -> Option<String> {
+    let (windows, _, total) = cache_budget(specs);
+    if total <= CACHE_TOTAL_WARN || specs.is_empty() {
+        return None;
+    }
+    let largest = specs.iter().map(|s| s.limits.chunk_size).max().unwrap_or(0);
+    Some(format!(
+        "the window caches will hold up to {} across {} source(s): {windows} window(s) of {} each. Lower --web-seed-chunk-size or attach fewer sources.",
+        bit_cli_core::units::format_size(total),
+        specs.len(),
+        bit_cli_core::units::format_size(largest),
+    ))
 }
 
 /// Resolve `--select-file` and `--exclude-file` into explicit indices.
@@ -5124,28 +5196,94 @@ mod tests {
         assert_eq!(late[0].limits.concurrency, 2);
     }
 
+    /// The window count against the chunk size, and what it costs.
+    ///
+    /// This test was called `the_window_cache_stays_inside_its_memory_budget`
+    /// and its middle case asserted the run where it does not: two windows of
+    /// 64 MiB is 128 MiB against a per-source budget of 16. The floor of two
+    /// is right and the name was wrong, so the name went and the cost the
+    /// floor produces is asserted beside the count. See `TODO/memory.md`,
+    /// T-041.
     #[test]
-    fn the_window_cache_stays_inside_its_memory_budget() {
-        let mut spec = SourceSpec::new(
-            "https://m.example.com/",
-            bit_cli_core::webseed::Origin::CommandLine,
-        );
-        spec.limits.chunk_size = 4 * bit_cli_core::units::MIB;
-        assert_eq!(cache_windows(std::slice::from_ref(&spec)), 4);
+    fn the_window_count_falls_as_the_chunk_size_rises_until_the_floor() {
+        let spec_at = |chunk: u64| {
+            let mut spec = SourceSpec::new(
+                "https://m.example.com/",
+                bit_cli_core::webseed::Origin::CommandLine,
+            );
+            spec.limits.chunk_size = chunk;
+            spec
+        };
 
-        spec.limits.chunk_size = 64 * bit_cli_core::units::MIB;
+        let default = spec_at(4 * bit_cli_core::units::MIB);
+        assert_eq!(cache_windows(std::slice::from_ref(&default)), 4);
         assert_eq!(
-            cache_windows(std::slice::from_ref(&spec)),
+            cache_budget(std::slice::from_ref(&default)).2,
+            CACHE_BUDGET_PER_SOURCE,
+            "the ordinary chunk size spends exactly the budget"
+        );
+
+        let huge = spec_at(64 * bit_cli_core::units::MIB);
+        assert_eq!(
+            cache_windows(std::slice::from_ref(&huge)),
             2,
             "never below two windows"
         );
-
-        spec.limits.chunk_size = 64 * bit_cli_core::units::KIB;
         assert_eq!(
-            cache_windows(std::slice::from_ref(&spec)),
+            cache_budget(std::slice::from_ref(&huge)).2,
+            8 * CACHE_BUDGET_PER_SOURCE,
+            "and the floor is what puts one source eight times over it"
+        );
+
+        let tiny = spec_at(64 * bit_cli_core::units::KIB);
+        assert_eq!(
+            cache_windows(std::slice::from_ref(&tiny)),
             16,
             "and never above sixteen"
         );
+        assert!(
+            cache_budget(std::slice::from_ref(&tiny)).2 < CACHE_BUDGET_PER_SOURCE,
+            "a small chunk size runs under the budget rather than over it"
+        );
+    }
+
+    /// The total is what a caller cannot work out from one source, and it is
+    /// where the warning comes from. T-041.
+    #[test]
+    fn the_total_budget_is_the_sum_and_the_warning_names_the_flag() {
+        let specs = |count: usize, chunk: u64| -> Vec<SourceSpec> {
+            (0..count)
+                .map(|index| {
+                    let mut spec = SourceSpec::new(
+                        format!("https://m{index}.example.com/"),
+                        bit_cli_core::webseed::Origin::CommandLine,
+                    );
+                    spec.limits.chunk_size = chunk;
+                    spec
+                })
+                .collect()
+        };
+
+        // Sixteen mirrors at the default chunk size is the largest total the
+        // ordinary case reaches, and it is the ceiling, so it does not warn.
+        let ordinary = specs(16, 4 * bit_cli_core::units::MIB);
+        assert_eq!(cache_budget(&ordinary).2, CACHE_TOTAL_WARN);
+        assert!(cache_budget_warning(&ordinary).is_none());
+
+        // The entry was filed on ten sources at 64 MiB and put the figure at
+        // 640 MiB, which assumes one window each. The floor is two, so it is
+        // 1.25 GiB, and that correction is why this asserts the number rather
+        // than only that something warned.
+        let chosen = specs(10, 64 * bit_cli_core::units::MIB);
+        assert_eq!(cache_budget(&chosen).0, 2);
+        assert_eq!(cache_budget(&chosen).2, 20 * 64 * bit_cli_core::units::MIB);
+        let said = cache_budget_warning(&chosen).expect("a warning");
+        assert!(said.contains("1.25 GiB"), "{said}");
+        assert!(said.contains("--web-seed-chunk-size"), "{said}");
+        assert!(said.contains("10 source(s)"), "{said}");
+
+        // And nothing warns about nothing.
+        assert!(cache_budget_warning(&[]).is_none());
     }
 
     /// A run that stalls with `--redial-after` set throws its peer state away

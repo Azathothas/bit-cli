@@ -125,7 +125,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-037](performance.md) | P1 | performance | **done** | A run stalls for minutes, roughly once in fifty |
 | [T-040](memory.md) | P0 | memory | done | Memory and descriptors grow without bound over a long run |
 | [T-157](memory.md) | P2 | memory | **done** | A killed soak destroys the summary it was rewriting |
-| [T-041](memory.md) | P2 | memory | open | Per-source window cache is bounded but not measured |
+| [T-041](memory.md) | P2 | memory | **done** | Per-source window cache is bounded but not measured |
 | [T-042](memory.md) | P1 | memory | **done** | Peak RSS is not captured in any report |
 | [T-050](dht.md) | P2 | dht | **done** | The DHT cache costs disk I/O even when nothing is running |
 | [T-051](dht.md) | P2 | dht | **done** | A magnet with no DHT and no trackers fails without saying so |
@@ -223,8 +223,10 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-222](cli-surface.md) | P1 | cli | **done** | A config file reaches `config show` and nothing else |
 | [T-223](bench.md) | P1 | bench | **done** | The leech bench reads its transfer counters before deciding to stop |
 | [T-224](memory.md) | P2 | memory | open | The six hour soak's RSS slope is one step and a sawtooth, not a leak |
+| [T-227](memory.md) | P2 | memory | open | The window cache budget is per source, so the total is whatever the source count makes it |
 | [T-225](create-seed.md) | P1 | ci | **done** | The interop script hashes files the client it just killed still holds |
 | [T-226](cli-surface.md) | P1 | cli | **done** | `download --out` is parsed and never read |
+| [T-228](cli-surface.md) | P3 | ci | open | Two gate runs at once fail on a locked file rather than on being two |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -252,8 +254,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-175 items: 165 to work through, and 10 deferred to Phase C.
-24 open, 1 partial, 0 blocked, 140 done.
+177 items: 167 to work through, and 10 deferred to Phase C.
+25 open, 1 partial, 0 blocked, 141 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -512,10 +514,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 62 | 63 |
-| P2 | 12 | 1 | 0 | 51 | 64 |
-| P3 | 11 | 0 | 0 | 15 | 26 |
+| P2 | 12 | 1 | 0 | 52 | 65 |
+| P3 | 12 | 0 | 0 | 15 | 27 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **24** | **1** | **0** | **140** | **175** |
+| **All** | **25** | **1** | **0** | **141** | **177** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

@@ -48,6 +48,11 @@ pub struct SourceReport {
     pub retry_status: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fatal_status: Vec<String>,
+    /// Bytes this source's window cache may hold before it starts evicting,
+    /// which is `cache_windows * chunk_size`. Reported because it is memory a
+    /// run costs by construction and nothing said so before it started. See
+    /// `TODO/memory.md`, T-041.
+    pub cache_budget: Size,
     pub urls: Vec<UrlReport>,
 }
 
@@ -74,11 +79,23 @@ pub struct ListReport {
     pub uncovered: Size,
     pub uncovered_pieces: Vec<u32>,
     pub complete: bool,
+    /// Windows each source caches. One number for the run: it is computed from
+    /// the largest chunk size any source asked for. See `TODO/memory.md`,
+    /// T-041.
+    pub cache_windows: usize,
+    /// Every source's `cache_budget` added up, which is what the run will hold
+    /// in window caches with every mirror busy.
+    pub cache_budget_total: Size,
 }
 
 impl ListReport {
     /// Build from resolved bindings.
     pub fn new(meta: &Metainfo, layout: &Layout, set: &BindingSet) -> Self {
+        // The same function the run itself calls, so what this prints is what
+        // a download of the same torrent with the same flags will hold rather
+        // than a second estimate of it. See `TODO/memory.md`, T-041.
+        let specs: Vec<_> = set.bindings.iter().map(|b| b.spec.clone()).collect();
+        let (cache_windows, _, cache_budget_total) = crate::cmd::download::cache_budget(&specs);
         let sources = set
             .bindings
             .iter()
@@ -102,6 +119,13 @@ impl ListReport {
                     partial_pieces: binding.scope.pieces.len().saturating_sub(whole),
                     retry_status: (&binding.spec.limits.retry_status).into(),
                     fatal_status: (&binding.spec.limits.fatal_status).into(),
+                    cache_budget: Size(
+                        binding
+                            .spec
+                            .limits
+                            .chunk_size
+                            .saturating_mul(cache_windows as u64),
+                    ),
                     urls: binding
                         .file_urls
                         .iter()
@@ -128,6 +152,8 @@ impl ListReport {
             uncovered: Size(set.uncovered.len()),
             uncovered_pieces: set.uncovered_pieces.clone(),
             complete: set.is_complete(),
+            cache_windows,
+            cache_budget_total: Size(cache_budget_total),
         }
     }
 
@@ -154,6 +180,15 @@ impl ListReport {
                 summarize_indices(&self.uncovered_pieces),
             ));
         }
+        out.push(field(
+            "window cache",
+            format!(
+                "{} across {} source(s), {} window(s) each",
+                format_size(self.cache_budget_total.0),
+                self.source_count,
+                self.cache_windows
+            ),
+        ));
         for source in &self.sources {
             out.push(String::new());
             out.push(format!("[{}] {}", source.index, source.url));
@@ -176,6 +211,7 @@ impl ListReport {
                 ),
             ));
             out.push(field("  origin", source.origin));
+            out.push(field("  window cache", format_size(source.cache_budget.0)));
             // Printed only where a policy was set, because "retry statuses:
             // none" on every source of every listing says nothing.
             if !source.retry_status.is_empty() {
@@ -234,6 +270,7 @@ fn resolve(
 pub fn list(args: &WebseedListArgs, renderer: &mut Renderer, env: &mut Env) -> Result<ExitCode> {
     let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, env)?;
     let report = ListReport::new(&meta, &layout, &set);
+    warn_about_cache(&set, renderer, env);
 
     // `--web-seed-require` turns an incomplete mirror set into a failure. A
     // script that declared its mirrors wants to know they are wrong here, not
@@ -243,6 +280,19 @@ pub fn list(args: &WebseedListArgs, renderer: &mut Renderer, env: &mut Env) -> R
     }
     renderer.emit(env, "webseed_list", &report, || report.lines())?;
     Ok(ExitCode::Success)
+}
+
+/// Say so when the window caches will cost more than the run's ceiling.
+///
+/// Raised here as well as on `download` because `webseed list` is the command
+/// a caller runs to find out what a set of mirrors will do **before** running
+/// it, and the memory it will hold is part of that. See `TODO/memory.md`,
+/// T-041.
+pub(crate) fn warn_about_cache(set: &BindingSet, renderer: &mut Renderer, env: &mut Env) {
+    let specs: Vec<_> = set.bindings.iter().map(|b| b.spec.clone()).collect();
+    if let Some(message) = crate::cmd::download::cache_budget_warning(&specs) {
+        renderer.warn(env, message);
+    }
 }
 
 /// A tokio runtime for the commands that do I/O.
@@ -945,6 +995,91 @@ pub fn run(
 mod tests {
     use crate::test_support::{TorrentFixture, run_err, run_json, run_json_code, run_ok};
     use bit_cli_core::ExitCode;
+
+    /// `webseed list --json` says what the window caches will hold, per source
+    /// and in total, before anything is fetched. It is memory a run costs by
+    /// construction and nothing said so. See `TODO/memory.md`, T-041.
+    #[test]
+    fn the_listing_carries_the_window_cache_budget() {
+        let fixture = TorrentFixture::single_file();
+        let doc = run_json(
+            &[
+                "webseed",
+                "list",
+                fixture.path_str(),
+                // The fixture carries its own `url-list`, and this is about
+                // the two named here.
+                "--no-torrent-web-seed",
+                "--web-seed",
+                "https://a.example.com/",
+                "--web-seed",
+                "https://b.example.com/",
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(doc["source_count"], 2);
+        // The default chunk size is 4 MiB and four windows is the budget, so
+        // each source is 16 MiB and the run is 32.
+        let windows = doc["cache_windows"].as_u64().expect("a window count");
+        let per_source = doc["sources"][0]["cache_budget"]["bytes"]
+            .as_u64()
+            .expect("a per-source budget");
+        let total = doc["cache_budget_total"]["bytes"]
+            .as_u64()
+            .expect("a total");
+        assert!(windows >= 2, "{doc}");
+        assert_eq!(total, per_source * 2, "the total is the sum: {doc}");
+        assert_eq!(
+            doc["sources"][1]["cache_budget"]["bytes"].as_u64(),
+            Some(per_source),
+            "two sources at one chunk size have one budget"
+        );
+
+        let text = run_ok(
+            &[
+                "webseed",
+                "list",
+                fixture.path_str(),
+                "--no-torrent-web-seed",
+                "--web-seed",
+                "https://a.example.com/",
+            ],
+            fixture.dir(),
+        );
+        assert!(text.contains("window cache"), "{text}");
+    }
+
+    /// And a chunk size the caller chose says so on stderr, which is the half
+    /// a script that is not reading `--json` still sees. T-041.
+    #[test]
+    fn a_chunk_size_that_costs_a_gigabyte_warns() {
+        let fixture = TorrentFixture::single_file();
+        let mut args = vec![
+            "webseed".to_string(),
+            "list".to_string(),
+            fixture.path_str().to_string(),
+            "--no-torrent-web-seed".to_string(),
+            "--web-seed-chunk-size".to_string(),
+            "64MiB".to_string(),
+        ];
+        for index in 0..10 {
+            args.push("--web-seed".to_string());
+            args.push(format!("https://m{index}.example.com/"));
+        }
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (mut env, captured) = crate::env::Env::test(&borrowed, fixture.dir());
+        crate::run(&mut env);
+        let said = captured.err();
+        assert!(said.contains("window caches"), "{said}");
+        assert!(said.contains("1.25 GiB"), "{said}");
+        // Warnings never reach stdout, which is the rule the whole surface
+        // keeps: stdout carries data only.
+        assert!(
+            !captured.out().contains("window caches"),
+            "{}",
+            captured.out()
+        );
+    }
 
     /// `TODO/bep-coverage.md`, T-103, and the half that costs bytes rather
     /// than legibility. `webseed list` exists to print the exact URL each file

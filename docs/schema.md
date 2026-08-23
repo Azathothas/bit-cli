@@ -587,6 +587,9 @@ From `bit-cli webseed list <TORRENT> --web-seed <URL> --json`.
 | field | type |
 | --- | --- |
 | `bit_cli_version` | string |
+| `cache_budget_total.bytes` | integer |
+| `cache_budget_total.human` | string |
+| `cache_windows` | integer |
 | `complete` | bool |
 | `covered.bytes` | integer |
 | `covered.human` | string |
@@ -597,6 +600,8 @@ From `bit-cli webseed list <TORRENT> --web-seed <URL> --json`.
 | `piece_count` | integer |
 | `schema_version` | string |
 | `source_count` | integer |
+| `sources[].cache_budget.bytes` | integer |
+| `sources[].cache_budget.human` | string |
 | `sources[].files[]` | integer |
 | `sources[].in_scope.bytes` | integer |
 | `sources[].in_scope.human` | string |

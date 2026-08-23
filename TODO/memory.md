@@ -581,7 +581,7 @@ Source:      `bit-cli` design
 Category:    memory
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T18:00Z
 
 Problem:     Each HTTP source caches whole windows in memory. The bound is
              `cache_windows * chunk_size`, and `cmd::download::cache_windows`
@@ -597,6 +597,85 @@ Acceptance:  `bit-cli webseed list <TORRENT> --json` carries
              `"cache_budget_bytes"` per source and a total, and a run with ten
              sources at a 64 MiB chunk size warns when the total exceeds
              256 MiB.
+
+**Done 2026-08-23T18:00Z. The premise held and the number in the Relevance
+line is half the real one.**
+
+`cache_windows` divides a 16 MiB per-source budget by the largest chunk size
+any source asked for and **clamps the result to `[2, 16]`**. The Relevance line
+reads "`--web-seed-chunk-size 64MiB` with ten sources is 640 MiB of cache by
+construction", which is ten sources times one window of 64 MiB. The floor is
+two, so it is **1.25 GiB**, and the acceptance asserts that figure rather than
+only that something warned.
+
+**The floor is right and it is the whole reason the budget is exceeded.** A
+cache of one window cannot hold the window a read is being served from and the
+next one at the same time, so a source with one window re-fetches every window
+it just evicted. So a large chunk size costs eight times the budget by design,
+and what was missing is anything that said so before the run.
+
+### A test named for the budget asserted the case that breaks it
+
+`the_window_cache_stays_inside_its_memory_budget` had three cases and the
+middle one was `cache_windows == 2` for a 64 MiB chunk, commented "never below
+two windows". That is 128 MiB against a per-source budget of 16, so the test's
+name was a claim about the run it was pinning the opposite of. The floor stays;
+the name went, and the **cost** the floor produces is now asserted beside the
+count in `the_window_count_falls_as_the_chunk_size_rises_until_the_floor`.
+
+### What ships
+
+`cache_budget` returns the window count, the bytes per source, and the total,
+and `CACHE_BUDGET_PER_SOURCE` and `CACHE_TOTAL_WARN` are named constants rather
+than two literals in one expression.
+
+`bit-cli webseed list --json` carries `sources[].cache_budget` per source and
+`cache_budget_total` with `cache_windows` for the run, and the text form prints
+both. It is computed by the same function the run calls, from the same specs,
+so the listing is what a download of that torrent with those flags will hold
+rather than a second estimate of it.
+
+**The warning is on `download` as well as on `webseed list`**, which the
+Acceptance did not ask for and the entry's own Relevance did: the memory is
+held by the run, and `webseed list` is only where a caller looks first. On
+`download` it is raised once per run rather than once per worker, and named by
+source where the run has more than one torrent.
+
+### Measured
+
+| sources | chunk | windows | total | warns |
+| --- | --- | --- | --- | --- |
+| 1 | 4 MiB | 4 | 16 MiB | no |
+| 16 | 4 MiB | 4 | 256 MiB | no, and it is exactly the ceiling |
+| 1 | 64 MiB | 2 | 128 MiB | no |
+| 10 | 64 MiB | 2 | **1.25 GiB** | yes |
+| 1 | 64 KiB | 16 | 1 MiB | no |
+
+The ceiling is 256 MiB because sixteen mirrors at the default chunk size is
+the largest total the ordinary case reaches. Anything above it comes from a
+chunk size the caller chose, and the message names that flag.
+
+Four cases, two on the arithmetic and two driving the command, and the last of
+them asserts the warning is on **stderr and not stdout**, which is the rule the
+whole surface keeps.
+
+```bash
+cargo test -p bit-cli --lib the_window_count_falls the_total_budget_is the_listing_carries a_chunk_size_that_costs
+```
+
+### What this entry did not do, and it is filed rather than left
+
+The Approach's second half, "cap the total across sources rather than per
+source", is **not** taken here, and the reason is the rule about evidence
+rather than a preference. Capping the total means dividing 16 MiB across the
+sources, which for two mirrors halves each one's cache from four windows to
+two. That is a throughput change and this entry has no measurement of it: the
+window cache is what absorbs a re-read, so fewer windows may cost fetches. A
+cap chosen without measuring what it costs is the shape [RULES.md](RULES.md)
+section 5 refuses.
+
+It is [T-227](#t-227-the-window-cache-budget-is-per-source-so-the-total-is-whatever-the-source-count-makes-it),
+filed, with the measurement it needs named.
 
 ### T-042 Peak RSS is not captured in any report
 
@@ -987,3 +1066,52 @@ The reproduction was still running when this was written, at 161 samples of
 its 360 minutes, so it may yet step later at a point neither run has reached.
 That would be a different finding from the one filed, and the column now
 reports it without anybody fitting a line by hand.
+
+### T-227 The window cache budget is per source, so the total is whatever the source count makes it
+
+Source:      measured while closing T-041, 2026-08-23
+Category:    memory
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `cmd::download::cache_windows` divides `CACHE_BUDGET_PER_SOURCE`,
+             16 MiB, by the largest chunk size any source asked for, and every
+             source gets that many windows. Nothing divides by the number of
+             sources, so the run's total is the per-source budget multiplied by
+             the mirror count: sixteen mirrors at the default chunk size hold
+             256 MiB, and ten at `--web-seed-chunk-size 64MiB` hold 1.25 GiB.
+Relevance:   [T-041](#t-041-per-source-window-cache-is-bounded-but-not-measured)
+             closed on making that number visible and warning above 256 MiB,
+             which is what its Acceptance asked for. Its Approach also proposed
+             capping the total, and that half is here because it is a
+             throughput change and T-041 had no measurement of one.
+
+             The warning is honest but it is advice rather than a bound. A
+             caller who wants sixteen mirrors and a large chunk size has no way
+             to say "hold both, inside 256 MiB", and the tool has no way to
+             give it to them.
+Approach:    Divide the budget by the source count, with a floor of two windows
+             per source, which is where the arithmetic stops helping: two
+             windows is what stops a source re-fetching the window it just
+             evicted, and below it the cache does more harm than none.
+
+             So the cap is only reachable while
+             `sources * 2 * chunk_size <= budget`, and past that the honest
+             answer is the warning T-041 already ships plus a flag that lets a
+             caller lower the ceiling themselves. Decide the two together: a
+             `--web-seed-cache-budget` that defaults to today's behaviour is a
+             smaller change than it looks and makes the bound the caller's.
+
+             **Measure before building**, because this is a throughput change
+             and the entry is filed without that measurement. Two mirrors at
+             the default chunk size go from four windows each to two under a
+             shared budget, and the window cache is what absorbs a re-read.
+             `bit-cli bench webseed` against `loopback-fileserver` with two and
+             with eight sources, at four windows and at two, is the curve. If
+             the curve is flat the cap ships; if it is not, the flag ships and
+             the default does not move.
+Acceptance:  `bench/cache-windows-<timestamp>.json` shows throughput against
+             window count at two source counts, and either the total is capped
+             with the curve recorded here, or the cap is refused on that curve
+             and a flag gives the caller the bound instead.

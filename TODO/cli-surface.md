@@ -3817,3 +3817,46 @@ path.
 ```bash
 cargo test -p bit-cli --lib out_writes_a_multi_file out_names_the_file a_relative_out_resolves out_with_more_than_one
 ```
+
+### T-228 Two gate runs at once fail on a locked file rather than on being two
+
+Source:      hit while closing T-041, 2026-08-23
+Category:    ci
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `scripts/gates.ps1:287` tees `cargo test` into
+             `$env:TEMP\bit-cli-gates-tests.txt`, one fixed path for every run
+             on the machine. A second `gates.ps1` started while the first is
+             still in its `test` gate dies on it:
+
+             ```
+             out-file: The process cannot access the file
+             'C:\Users\...\Temp\bit-cli-gates-tests.txt' because it is being
+             used by another process.
+             ```
+Relevance:   It is [T-225](create-seed.md)'s shape in a different script: the
+             run failed for a reason nobody would guess from what it printed.
+             Nothing in that message says "another gates run is going", so the
+             next session debugs `Out-File`, and the fixed path is not
+             something a reader of the failure can see.
+
+             It cost this session about two minutes, which is why it is P3
+             rather than higher. What makes it worth recording is that a
+             session **does** start a second run: this one had one in the
+             background and ran another in the foreground, which is the
+             ordinary way an agent works, and the collision is silent until
+             the `test` gate.
+Approach:    Put the process id in the name, which is one line, and delete the
+             file at the end of the run rather than leaving it. That is enough
+             on its own. A lock file that reported "another gates run is in the
+             `test` gate, started at <instant>" would be better and is more
+             than a P3 is worth: with per-run paths the two runs simply both
+             work, which is the outcome anybody wanted.
+
+             The same fixed-path question applies to any other
+             `$env:TEMP\bit-cli-*` in `scripts/`; check them in the same pass
+             rather than fixing one.
+Acceptance:  Two `gates.ps1` runs started within a second of each other both
+             reach a verdict, and neither leaves a file in `$env:TEMP` behind.
