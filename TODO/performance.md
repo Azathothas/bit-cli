@@ -415,11 +415,13 @@ flat, the flags do not ship."**
 
 **Taking it needed the instrument fixed first**, which is
 [T-229](bench.md): `bench webseed --concurrency-sweep` charged the run's
-warmup to its own first steps, so the first point of every curve it had ever
-printed was near zero and `--concurrency-sweep 16,1` reported *best
-concurrency 1*. The first attempt at this measurement produced `1: 0 B/s`,
-`2: 0 B/s`, and it was believing that number for ten seconds that found the
-defect.
+warmup to its own first steps. How wrong the first point was depended on how
+much of it fell inside the warmup: at the defaults, 30 seconds over five steps
+is six seconds a step against a three second warmup, so the first point read
+about half. The sweeps taken here used shorter steps and it read zero, and
+`--concurrency-sweep 16,1` reported *best concurrency 1*. The first attempt at
+this measurement produced `1: 0 B/s`, `2: 0 B/s`, and it was believing that
+number for ten seconds that found the defect.
 
 **The curve, once the instrument was honest.** 64 MiB payload, 1 MiB pieces,
 one loopback source, 20 seconds a step, committed at

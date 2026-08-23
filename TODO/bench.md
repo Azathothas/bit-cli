@@ -1483,10 +1483,17 @@ Problem:     `bit-cli bench webseed --concurrency-sweep` divides `--duration`
              fell inside the warmup reported its real seconds against no bytes
              and came out at 0 B/s.
 Relevance:   The curve is what the command exists to produce, and its first
-             point or two were fabricated. `best_concurrency` is derived from
-             that curve, so the verdict could be inverted outright:
-             `--concurrency-sweep 16,1` reported **best concurrency 1**,
-             because whichever step went first was the one that was crippled.
+             point was understated by however much of the step fell inside the
+             warmup. At the defaults, `--duration 30s` over five steps is six
+             seconds a step against a three second warmup, so the first point
+             read about half; the sweeps below used shorter steps and it read
+             zero. Ten steps at the defaults is three seconds each and swallows
+             the first whole.
+
+             `best_concurrency` is derived from that curve, so the verdict
+             could be inverted outright: `--concurrency-sweep 16,1` reported
+             **best concurrency 1**, because whichever step went first was the
+             one that was crippled.
 
              It is [T-152](#t-152-a-disk-bench-shorter-than-one-sample-interval-reported-no-series-at-all)'s
              family, a bench reporting a number for a window it did not
@@ -1505,9 +1512,17 @@ Approach:    The code already says what it means to do. The comment above the
              left alone: it has no curve and its summary already reads the
              measured window, so warming it separately would add three seconds
              to every run for nothing.
-Acceptance:  Two steps of the same concurrency in one sweep report the same
-             rate, and no step of a sweep issues zero requests when the run
-             served any.
+Acceptance:  No step of a sweep issues zero requests when the run served
+             any, asserted with a warmup long enough to swallow the first step
+             whole. That is the half a test can hold exactly.
+
+             Two steps of the same concurrency reporting the **same rate** is
+             the sharper statement and it is measured rather than asserted:
+             897.15 against 896.85 MiB/s below, where it was 2.66 against
+             908.73. A test of it would need a tolerance on a throughput
+             number, which is the assertion
+             [RULES.md](RULES.md) section 5 refuses, so it is a row in this
+             entry and the run that produced it is repeatable in one command.
 
 **Measured, before and after, on a 64 MiB loopback payload with 20 second
 sweeps.** The control is the last row and it is the whole argument: the same
@@ -1520,9 +1535,20 @@ concurrency twice, with nothing about the run to tell the two apart.
 | `16,1` | 22.49 MiB/s, 930 MiB/s, **best 1** | 3.42 GiB/s, 935 MiB/s, **best 16** |
 | `1,1` | **2.66 MiB/s, 908.73 MiB/s** | **897.15 MiB/s, 896.85 MiB/s** |
 
+The rows come from `bench webseed` driven directly, against
+`loopback-fileserver` on a payload `bit-cli create` made. There is no script
+for it, because a sweep against one loopback source is three commands:
+
 ```bash
-pwsh -NoProfile -File scripts/bench-webseed.ps1
+cargo run --release --example loopback-fileserver -- --root .tmp/split/srv --port 0
 ```
+
+```bash
+cargo run --release -- bench webseed .tmp/split/payload.torrent --web-seed <BASE> --no-torrent-web-seed --concurrency-sweep 1,1 --duration 20s
+```
+
+`--concurrency-sweep 1,1` is the one to run: the two rows have to agree, and
+before this they did not.
 
 **Why no test caught it, and this is the part worth keeping.**
 `bench_webseed_reports_a_concurrency_curve_with_its_own_latency` in
