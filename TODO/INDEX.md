@@ -165,7 +165,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-148](bench.md) | P2 | bench | **done** | The peer probe test asserted an exit code inside its own retry loop |
 | [T-149](bench.md) | P1 | bench | **done** | The last window of a leech bench was never counted |
 | [T-152](bench.md) | P1 | bench | **done** | A disk bench shorter than one sample interval reported no series at all |
-| [T-100](bep-coverage.md) | P2 | bep | partial | BEP 6 fast extension is not implemented |
+| [T-100](bep-coverage.md) | P2 | bep | **done** | BEP 6 fast extension is not implemented |
 | [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested *(title disproved: it is not reachable)* |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
 | [T-103](bep-coverage.md) | P2 | bep | open | Filenames that are not valid UTF-8 are refused |
@@ -238,7 +238,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 160 items: 150 to work through, and 10 deferred to Phase C.
-44 open, 3 partial, 0 blocked, 103 done.
+44 open, 2 partial, 0 blocked, 104 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -497,10 +497,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 54 | 55 |
-| P2 | 22 | 3 | 0 | 34 | 59 |
+| P2 | 22 | 2 | 0 | 35 | 59 |
 | P3 | 21 | 0 | 0 | 3 | 24 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **44** | **3** | **0** | **103** | **160** |
+| **All** | **44** | **2** | **0** | **104** | **160** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

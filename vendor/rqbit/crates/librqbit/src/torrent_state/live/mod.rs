@@ -89,7 +89,7 @@ use crate::{
     file_ops::FileOps,
     limits::Limits,
     peer_connection::{
-        PeerConnection, PeerConnectionHandler, PeerConnectionOptions, WriterRequest,
+        HaveShortcut, PeerConnection, PeerConnectionHandler, PeerConnectionOptions, WriterRequest,
     },
     piece_tracker::{AcquireRequest, AcquireResult, PieceTracker},
     session::CheckedIncomingConnection,
@@ -483,6 +483,7 @@ impl TorrentStateLive {
             tx,
             counters,
             first_message_received: AtomicBool::new(false),
+            fast_negotiated: AtomicBool::new(false),
             cancel_token: self.cancellation_token.child_token(),
             client_name_and_version: self.shared.client_name_and_version().to_owned(),
             peer_id: Default::default(),
@@ -558,6 +559,7 @@ impl TorrentStateLive {
             tx,
             counters,
             first_message_received: AtomicBool::new(false),
+            fast_negotiated: AtomicBool::new(false),
             cancel_token: state.cancellation_token.child_token(),
             client_name_and_version: state.shared.client_name_and_version().to_owned(),
             peer_id: Default::default(),
@@ -1055,6 +1057,12 @@ struct PeerHandler {
 
     first_message_received: AtomicBool,
 
+    // BEP 6. Set from the peer's handshake before the first message goes out,
+    // and read where the answer to an unserviceable request is decided: with
+    // the extension that answer is `reject request`, without it the connection
+    // ends. See TODO/bep-coverage.md T-100.
+    fast_negotiated: AtomicBool,
+
     cancel_token: CancellationToken,
 
     client_name_and_version: String,
@@ -1104,6 +1112,25 @@ impl PeerConnectionHandler for &'_ PeerHandler {
             // that told us it had lost a piece was not believed and went on
             // being asked for it. See TODO/bep-coverage.md T-167.
             Message::Extended(ExtendedMessage::LtDontHave(piece)) => self.on_donthave(piece),
+            // BEP 6, the fast extension. All five used to reach the catch-all
+            // below and, worse, `have all` left the peer's bitfield empty, so
+            // a peer that sent two bytes instead of a full bitfield was never
+            // asked for anything. See TODO/bep-coverage.md T-100.
+            Message::HaveAll => self.on_have_all(),
+            Message::HaveNone => self.on_have_none(),
+            Message::RejectRequest(request) => self.on_reject_request(request),
+            // Received, understood, and not acted on. A suggestion is advice
+            // about which piece to ask for and the picker here has its own
+            // order; an allowed-fast piece is one this peer would serve while
+            // choking, and nothing here chokes. Both are recorded rather than
+            // dropped so a peer that sends them is not treated as broken, and
+            // the posture is deliberate: `seedchamp` takes the same one.
+            Message::SuggestPiece(piece) => {
+                trace!(piece, "peer suggested a piece; the picker has its own order")
+            }
+            Message::AllowedFast(piece) => {
+                trace!(piece, "peer offered an allowed-fast piece")
+            }
             Message::NotInterested => {
                 trace!("received \"not interested\", but we don't process it yet")
             }
@@ -1265,6 +1292,35 @@ impl PeerConnectionHandler for &'_ PeerHandler {
         }
 
         self.state.get_approx_have_bytes() > 0
+    }
+
+    fn on_fast_negotiated(&self, negotiated: bool) {
+        self.fast_negotiated.store(negotiated, Ordering::Relaxed);
+    }
+
+    /// BEP 6: two bytes instead of a bitfield, when the bitfield says one
+    /// thing about every piece.
+    ///
+    /// Answered from the have-bitfield rather than from a byte count, because
+    /// "we have every piece" and "we have every selected piece" are different
+    /// statements and only the first one may be sent as `have all`. A torrent
+    /// with files deselected is complete and does not have every piece.
+    fn have_shortcut(&self) -> Option<HaveShortcut> {
+        if self.state.torrent().options.disable_upload() {
+            return Some(HaveShortcut::None);
+        }
+        let g = self.state.lock_read("have_shortcut");
+        let chunks = g.get_chunks().ok()?;
+        let have = chunks.get_have_pieces().as_slice();
+        let total = self.state.lengths.total_pieces() as usize;
+        let bits = have.get(..total)?;
+        if bits.all() {
+            return Some(HaveShortcut::All);
+        }
+        if bits.not_any() {
+            return Some(HaveShortcut::None);
+        }
+        None
     }
 
     fn should_transmit_have(&self, id: ValidPieceIndex) -> bool {
@@ -1558,6 +1614,18 @@ impl PeerHandler {
             .get_chunks()?
             .is_chunk_ready_to_upload(&chunk_info)
         {
+            // BEP 6. A peer that negotiated the fast extension is told no and
+            // stays connected; one that did not still costs the connection,
+            // because there is no way to say no to it. Asking for a piece we
+            // do not have is a normal thing to do against a partial seed, and
+            // dropping the peer for it is the stall the extension removes.
+            if self.fast_negotiated.load(Ordering::Relaxed) {
+                trace!(?chunk_info, "rejecting a request for a chunk we cannot serve");
+                let _ = self
+                    .tx
+                    .send(WriterRequest::Message(Message::RejectRequest(request)));
+                return Ok(());
+            }
             anyhow::bail!(
                 "got request for a chunk that is not ready to upload. chunk {:?}",
                 chunk_info
@@ -1661,6 +1729,73 @@ impl PeerHandler {
         };
         if released {
             trace!(?piece, "donthave released an in-flight piece back to the queue");
+            self.state.new_pieces_notify.notify_waiters();
+        }
+    }
+
+    /// BEP 6 `have all`: the peer has every piece, in two bytes.
+    ///
+    /// The same effect as a bitfield of all ones, and it goes through the same
+    /// door, so everything downstream of `update_bitfield` is unchanged.
+    fn on_have_all(&self) {
+        let mut bf = BF::from_boxed_slice(
+            vec![0u8; self.state.lengths.piece_bitfield_bytes()].into_boxed_slice(),
+        );
+        // Only up to the piece count. The spare bits past the last piece must
+        // stay zero, exactly as a bitfield on the wire must, or a peer would
+        // appear to hold pieces that do not exist.
+        if let Some(s) = bf.get_mut(..self.state.lengths.total_pieces() as usize) {
+            s.fill(true);
+        }
+        debug!("peer has full torrent");
+        self.state.peers.update_bitfield(self.addr, bf);
+        self.on_bitfield_notify.notify_waiters();
+    }
+
+    /// BEP 6 `have none`: the peer has nothing yet.
+    ///
+    /// Not the same as sending no bitfield at all, which is what this client
+    /// assumes when the first message is something else. It is the same
+    /// content and a different fact: the peer said so.
+    fn on_have_none(&self) {
+        let bf = BF::from_boxed_slice(
+            vec![0u8; self.state.lengths.piece_bitfield_bytes()].into_boxed_slice(),
+        );
+        self.state.peers.update_bitfield(self.addr, bf);
+        self.on_bitfield_notify.notify_waiters();
+    }
+
+    /// BEP 6 `reject request`: the peer will not answer one of ours.
+    ///
+    /// Without this the request sits in the in-flight set until something
+    /// times it out, which is the stall the extension exists to remove. The
+    /// whole piece goes back on the queue rather than the one chunk: a peer
+    /// that will not serve one chunk of a piece is not about to serve the
+    /// rest, and leaving the piece assigned to it would stall it just as long.
+    fn on_reject_request(&self, request: Request) {
+        let Some(piece) = self.state.lengths.validate_piece_index(request.index) else {
+            trace!(?request, "reject request for a piece index that is not valid");
+            return;
+        };
+        let dropped = self
+            .state
+            .peers
+            .with_live_mut(self.addr, "on_reject_request", |live| {
+                live.drop_inflight_requests_for_piece(piece)
+            })
+            .unwrap_or(0);
+        let released = {
+            let mut g = self.state.lock_write("on_reject_request");
+            match g.get_pieces_mut() {
+                Ok(pieces) => pieces.release_piece_owned_by(piece, self.addr),
+                Err(_) => false,
+            }
+        };
+        if released || dropped > 0 {
+            trace!(
+                ?piece,
+                dropped, released, "peer rejected a request, releasing the piece"
+            );
             self.state.new_pieces_notify.notify_waiters();
         }
     }

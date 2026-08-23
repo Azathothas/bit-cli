@@ -5,10 +5,10 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/crates/librqbit/src/peer_connection.rs b/crates/librqbit/src/peer_connection.rs
-index c06259a..5ea010f 100644
+index c06259a..98ec550 100644
 --- a/crates/librqbit/src/peer_connection.rs
 +++ b/crates/librqbit/src/peer_connection.rs
-@@ -30,14 +30,35 @@ use crate::{
+@@ -30,14 +30,60 @@ use crate::{
      read_buf::ReadBuf,
      spawn_utils::BlockingSpawner,
      stream_connect::StreamConnector,
@@ -16,10 +16,35 @@ index c06259a..5ea010f 100644
      type_aliases::{BoxAsyncReadVectored, BoxAsyncWrite},
  };
  
++/// BEP 6's two byte stand-ins for a bitfield.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum HaveShortcut {
++    /// Every piece.
++    All,
++    /// No piece.
++    None,
++}
++
  pub trait PeerConnectionHandler {
      fn on_connected(&self, _connection_time: Duration) {}
      fn should_send_bitfield(&self) -> bool;
 -    fn serialize_bitfield_message_to_buf(&self, buf: &mut [u8]) -> anyhow::Result<usize>;
++
++    /// BEP 6: whether this end's bitfield is all ones or all zeroes.
++    ///
++    /// Only consulted when the fast extension was negotiated, and it is what
++    /// replaces a bitfield of a million bits with two bytes. `None` means send
++    /// the bitfield. The default answers `None`, which is what every
++    /// implementor did before this method existed.
++    fn have_shortcut(&self) -> Option<HaveShortcut> {
++        None
++    }
++
++    /// Whether the fast extension was negotiated on this connection.
++    ///
++    /// Set from the peer's handshake before the first message goes out. An
++    /// implementor that does not care leaves the default, which does nothing.
++    fn on_fast_negotiated(&self, _negotiated: bool) {}
 +    /// Serialize our bitfield into `buf`, resizing it as needed, and return
 +    /// its length. `buf` is owned by the caller and is not the shared
 +    /// fixed-size message buffer: a bitfield is one bit per piece, so only the
@@ -45,7 +70,17 @@ index c06259a..5ea010f 100644
      fn on_extended_handshake(
          &self,
          extended_handshake: &ExtendedHandshake<ByteBuf>,
-@@ -170,8 +191,8 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+@@ -112,6 +158,9 @@ pub(crate) async fn with_timeout<T>(
+ 
+ struct ManagePeerArgs {
+     handshake_supports_extended: bool,
++    /// BEP 6: both ends set the reserved bit. `Handshake::new` sets ours on
++    /// every connection, so this is the peer's answer.
++    fast_negotiated: bool,
+     read_buf: ReadBuf,
+     write_buf: Box<[u8; MAX_MSG_LEN]>,
+     read: BoxAsyncReadVectored,
+@@ -170,8 +219,8 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
          );
  
          let mut write_buf = Box::new([0u8; MAX_MSG_LEN]);
@@ -56,7 +91,7 @@ index c06259a..5ea010f 100644
          with_timeout(
              "writing handshake",
              rwtimeout,
-@@ -182,15 +203,27 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+@@ -182,15 +231,30 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
          )
          .await?;
  
@@ -68,6 +103,8 @@ index c06259a..5ea010f 100644
 +        // outgoing path a few lines below reads the peer's, which is what says
 +        // this was a slip rather than a design. See TODO/peers.md T-210.
 +        let handshake_supports_extended = incoming.handshake.supports_extended();
++        let fast_negotiated = incoming.handshake.supports_fast();
++        self.handler.on_fast_negotiated(fast_negotiated);
  
          self.handler
 -            .on_handshake(handshake, incoming.kind)
@@ -83,11 +120,12 @@ index c06259a..5ea010f 100644
          self.manage_peer(ManagePeerArgs {
              handshake_supports_extended,
 -            read_buf: incoming.read_buf,
++            fast_negotiated,
 +            read_buf,
              write_buf,
              read: incoming.reader,
              write: incoming.writer,
-@@ -224,6 +257,38 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+@@ -224,6 +288,38 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
          )
          .await?;
  
@@ -126,34 +164,104 @@ index c06259a..5ea010f 100644
          async move {
              self.handler.on_connected(now.elapsed());
  
-@@ -240,6 +305,7 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+@@ -240,8 +336,11 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
              .await?;
  
              let mut read_buf = ReadBuf::new();
 +            read_buf.set_max_len(self.handler.max_incoming_message_len());
              let h = read_buf.read_handshake(&mut read, rwtimeout).await?;
              let handshake_supports_extended = h.supports_extended();
++            let fast_negotiated = h.supports_fast();
++            self.handler.on_fast_negotiated(fast_negotiated);
              trace!(
-@@ -319,14 +385,20 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+                 peer_id=?h.peer_id,
+                 decoded_id=?try_decode_peer_id(h.peer_id),
+@@ -259,6 +358,7 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+ 
+             self.manage_peer(ManagePeerArgs {
+                 handshake_supports_extended,
++                fast_negotiated,
+                 read_buf,
+                 write_buf,
+                 read,
+@@ -275,6 +375,7 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+     async fn manage_peer(&self, args: ManagePeerArgs) -> Result<()> {
+         let ManagePeerArgs {
+             handshake_supports_extended,
++            fast_negotiated,
+             mut read_buf,
+             mut write_buf,
+             mut read,
+@@ -318,18 +419,60 @@ impl<H: PeerConnectionHandler> PeerConnection<H> {
+                 .keep_alive_interval
                  .unwrap_or_else(|| Duration::from_secs(120));
  
-             if self.handler.should_send_bitfield() {
-+                // Not write_buf: that one is MAX_MSG_LEN, which bounds every
-+                // message whose size the protocol bounds. A bitfield is one
-+                // bit per piece and is bounded by the torrent instead, so it
-+                // gets a buffer sized for this torrent. It is written once per
-+                // connection and dropped here.
-+                let mut bitfield_buf = Vec::new();
-                 let len = self
-                     .handler
+-            if self.handler.should_send_bitfield() {
+-                let len = self
+-                    .handler
 -                    .serialize_bitfield_message_to_buf(&mut *write_buf)
-+                    .serialize_bitfield_message_to_buf(&mut bitfield_buf)
-                     .map_err(Error::Anyhow)?;
-                 with_timeout(
-                     "writing bitfield",
-                     rwtimeout,
+-                    .map_err(Error::Anyhow)?;
+-                with_timeout(
+-                    "writing bitfield",
+-                    rwtimeout,
 -                    write.write_all(&write_buf[..len]).map_err(Error::Write),
-+                    write.write_all(&bitfield_buf[..len]).map_err(Error::Write),
-                 )
-                 .await?;
-                 trace!("sent bitfield");
+-                )
+-                .await?;
+-                trace!("sent bitfield");
++            // BEP 6 changes what the first message may be, and makes sending
++            // one mandatory: a peer that negotiated the fast extension expects
++            // a bitfield, a have-all or a have-none before anything else, and
++            // sending nothing is a protocol violation rather than an
++            // omission. Without the extension this stays exactly as it was,
++            // including sending nothing when there is nothing to announce.
++            let shortcut = fast_negotiated
++                .then(|| self.handler.have_shortcut())
++                .flatten();
++            match shortcut {
++                Some(shortcut) => {
++                    let msg = match shortcut {
++                        HaveShortcut::All => Message::HaveAll,
++                        HaveShortcut::None => Message::HaveNone,
++                    };
++                    let len = msg.serialize(&mut *write_buf, &Default::default)?;
++                    with_timeout(
++                        "writing the bitfield shortcut",
++                        rwtimeout,
++                        write.write_all(&write_buf[..len]).map_err(Error::Write),
++                    )
++                    .await?;
++                    trace!(?shortcut, "sent the bitfield shortcut");
++                }
++                None if self.handler.should_send_bitfield() => {
++                    // Not write_buf: that one is MAX_MSG_LEN, which bounds every
++                    // message whose size the protocol bounds. A bitfield is one
++                    // bit per piece and is bounded by the torrent instead, so it
++                    // gets a buffer sized for this torrent. It is written once per
++                    // connection and dropped here.
++                    let mut bitfield_buf = Vec::new();
++                    let len = self
++                        .handler
++                        .serialize_bitfield_message_to_buf(&mut bitfield_buf)
++                        .map_err(Error::Anyhow)?;
++                    with_timeout(
++                        "writing bitfield",
++                        rwtimeout,
++                        write.write_all(&bitfield_buf[..len]).map_err(Error::Write),
++                    )
++                    .await?;
++                    trace!("sent bitfield");
++                }
++                None if fast_negotiated => {
++                    let len = Message::HaveNone.serialize(&mut *write_buf, &Default::default)?;
++                    with_timeout(
++                        "writing have none",
++                        rwtimeout,
++                        write.write_all(&write_buf[..len]).map_err(Error::Write),
++                    )
++                    .await?;
++                    trace!("sent have none in place of no bitfield at all");
++                }
++                None => {}
+             }
+ 
+             let len = Message::Unchoke.serialize(&mut *write_buf, &Default::default)?;

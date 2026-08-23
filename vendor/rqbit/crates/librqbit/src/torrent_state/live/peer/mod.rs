@@ -351,6 +351,33 @@ impl LivePeerState {
         }
     }
 
+    /// Forget every in-flight request for one piece without sending a
+    /// `Cancel` for each.
+    ///
+    /// Added by this fork, for BEP 6. `cancel_inflight_requests_for_piece`
+    /// tells the peer to stop; this is for when the peer is the one that told
+    /// us, with `reject request`, and a `Cancel` back would be noise. The
+    /// tolerance is still bumped, because a chunk already on the wire when the
+    /// rejection was sent is not an unexpected chunk. See
+    /// TODO/bep-coverage.md T-100.
+    pub fn drop_inflight_requests_for_piece(&mut self, piece: ValidPieceIndex) -> usize {
+        let before = self.inflight_requests.len();
+        let tolerance = &mut self.late_cancelled_request_tolerance;
+        self.inflight_requests.retain(|req| {
+            if req.piece_index == piece {
+                *tolerance += 1;
+                false
+            } else {
+                true
+            }
+        });
+        let dropped = before - self.inflight_requests.len();
+        if dropped > 0 {
+            self.request_slots_changed.notify_waiters();
+        }
+        dropped
+    }
+
     pub fn inflight_requests(&self) -> impl Iterator<Item = &InflightRequest> {
         self.inflight_requests.iter()
     }

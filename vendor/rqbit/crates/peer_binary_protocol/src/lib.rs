@@ -49,7 +49,21 @@ const MSGID_BITFIELD: MsgId = 5;
 const MSGID_REQUEST: MsgId = 6;
 const MSGID_PIECE: MsgId = 7;
 const MSGID_CANCEL: MsgId = 8;
+// BEP 6, the fast extension. Five ids in a block, and this crate declared none
+// of them: a peer that spoke BEP 6 was answered with `UnsupportedMessageId`
+// and dropped. See TODO/bep-coverage.md T-100.
+const MSGID_SUGGEST_PIECE: MsgId = 13;
+const MSGID_HAVE_ALL: MsgId = 14;
+const MSGID_HAVE_NONE: MsgId = 15;
+const MSGID_REJECT_REQUEST: MsgId = 16;
+const MSGID_ALLOWED_FAST: MsgId = 17;
 const MSGID_EXTENDED: MsgId = 20;
+
+/// BEP 6's reserved bit: the last reserved byte, `0x04`.
+///
+/// BEP 10's is byte 5 and `0x10`, which is `1 << 20` in the `u64` this crate
+/// keeps the reserved bytes in. This one is `1 << 2`.
+const RESERVED_FAST: u64 = 1 << 2;
 
 pub const EXTENDED_UT_METADATA_KEY: &[u8] = b"ut_metadata";
 pub const MY_EXTENDED_UT_METADATA: u8 = 3;
@@ -81,6 +95,11 @@ impl MsgIdDebug {
             MSGID_REQUEST => "request",
             MSGID_PIECE => "piece",
             MSGID_CANCEL => "cancel",
+            MSGID_SUGGEST_PIECE => "suggest_piece",
+            MSGID_HAVE_ALL => "have_all",
+            MSGID_HAVE_NONE => "have_none",
+            MSGID_REJECT_REQUEST => "reject_request",
+            MSGID_ALLOWED_FAST => "allowed_fast",
             MSGID_EXTENDED => "extended",
             _ => return None,
         };
@@ -241,6 +260,17 @@ pub enum Message<'a> {
     Interested,
     NotInterested,
     Piece(Piece<ByteBuf<'a>>),
+    /// BEP 6. The sender has every piece, in two bytes rather than a bitfield.
+    HaveAll,
+    /// BEP 6. The sender has no piece.
+    HaveNone,
+    /// BEP 6. A piece the sender would rather you asked it for.
+    SuggestPiece(u32),
+    /// BEP 6. A request the sender will not answer, named so the asker can
+    /// stop waiting rather than time out.
+    RejectRequest(Request),
+    /// BEP 6. A piece the sender will serve even while choking.
+    AllowedFast(u32),
     Extended(ExtendedMessage<ByteBuf<'a>>),
 }
 
@@ -349,6 +379,34 @@ impl Message<'_> {
                 out[5..9].copy_from_slice(&v.to_be_bytes());
                 Ok(9)
             }
+            Message::HaveAll | Message::HaveNone => {
+                check_len!(PREAMBLE_LEN);
+                let msg_id = match self {
+                    Message::HaveAll => MSGID_HAVE_ALL,
+                    Message::HaveNone => MSGID_HAVE_NONE,
+                    _ => unsafe { unreachable_unchecked() },
+                };
+                write_preamble!(0, msg_id);
+                Ok(PREAMBLE_LEN)
+            }
+            Message::SuggestPiece(v) | Message::AllowedFast(v) => {
+                check_len!(PREAMBLE_LEN + INTEGER_LEN);
+                let msg_id = match self {
+                    Message::SuggestPiece(..) => MSGID_SUGGEST_PIECE,
+                    Message::AllowedFast(..) => MSGID_ALLOWED_FAST,
+                    _ => unsafe { unreachable_unchecked() },
+                };
+                write_preamble!(INTEGER_LEN as u32, msg_id);
+                out[5..9].copy_from_slice(&v.to_be_bytes());
+                Ok(PREAMBLE_LEN + INTEGER_LEN)
+            }
+            Message::RejectRequest(request) => {
+                const TOTAL_LEN: usize = PREAMBLE_LEN + INTEGER_LEN * 3;
+                check_len!(TOTAL_LEN);
+                write_preamble!((INTEGER_LEN * 3) as u32, MSGID_REJECT_REQUEST);
+                request.serialize_unchecked_len(&mut out[PREAMBLE_LEN..]);
+                Ok(TOTAL_LEN)
+            }
             Message::Extended(e) => {
                 check_len!(PREAMBLE_LEN + 2);
                 let msg_len = e.serialize(&mut out[PREAMBLE_LEN..], peer_extended_messages)?;
@@ -437,7 +495,7 @@ impl Message<'_> {
                     .ok_or(MessageDeserializeError::NeedContiguous)?;
                 Ok((Message::Bitfield(ByteBuf::from(data)), total_len))
             }
-            MSGID_REQUEST | MSGID_CANCEL => {
+            MSGID_REQUEST | MSGID_CANCEL | MSGID_REJECT_REQUEST => {
                 check_msg_len!(12);
                 const I32: usize = 4;
                 const I32_3: usize = I32 * 3;
@@ -447,12 +505,29 @@ impl Message<'_> {
                     begin: BE::read_u32(&req[I32..I32 * 2]),
                     length: BE::read_u32(&req[I32 * 2..I32 * 3]),
                 };
-                let req = if msg_id == MSGID_REQUEST {
-                    Message::Request(request)
-                } else {
-                    Message::Cancel(request)
+                let req = match msg_id {
+                    MSGID_REQUEST => Message::Request(request),
+                    MSGID_CANCEL => Message::Cancel(request),
+                    _ => Message::RejectRequest(request),
                 };
                 Ok((req, total_len))
+            }
+            MSGID_HAVE_ALL => {
+                check_msg_len!(0);
+                Ok((Message::HaveAll, total_len))
+            }
+            MSGID_HAVE_NONE => {
+                check_msg_len!(0);
+                Ok((Message::HaveNone, total_len))
+            }
+            MSGID_SUGGEST_PIECE | MSGID_ALLOWED_FAST => {
+                check_msg_len!(4);
+                let piece = buf.read_u32_be().unwrap();
+                let msg = match msg_id {
+                    MSGID_SUGGEST_PIECE => Message::SuggestPiece(piece),
+                    _ => Message::AllowedFast(piece),
+                };
+                Ok((msg, total_len))
             }
             MSGID_PIECE => {
                 const MIN_PAYLOAD: usize = 1;
@@ -504,6 +579,12 @@ impl Handshake {
         let mut reserved: u64 = 0;
         // supports extended messaging
         reserved |= 1 << 20;
+        // BEP 6. Advertised because this client understands all five messages
+        // now: a peer that sends `have all` in place of a bitfield used to
+        // leave us with an empty bitfield and nothing to ask it for, and a
+        // `reject request` used to end the connection. See
+        // TODO/bep-coverage.md T-100.
+        reserved |= RESERVED_FAST;
 
         Handshake {
             reserved,
@@ -534,6 +615,11 @@ impl Handshake {
 
     pub fn supports_extended(&self) -> bool {
         self.reserved.to_be_bytes()[5] & 0x10 > 0
+    }
+
+    /// BEP 6, the fast extension: the last reserved byte, `0x04`.
+    pub fn supports_fast(&self) -> bool {
+        self.reserved.to_be_bytes()[7] & 0x04 > 0
     }
 
     #[must_use]
@@ -826,7 +912,6 @@ mod tests {
     // length is a property of the torrent. It is the one message that does not
     // fit in MAX_MSG_LEN, and a buffer of that size refuses to hold it just
     // past 131,960 pieces.
-    #[test]
     /// BEP 54 `lt_donthave` round trips, and its payload is not bencode.
     ///
     /// Four big-endian bytes and nothing else. Every other extension message
@@ -856,6 +941,109 @@ mod tests {
         }
     }
 
+    /// BEP 6, all five, on the wire and back. The ids are the BEP's and the
+    /// lengths are what a peer will send, so a mistake in either shows here
+    /// rather than as a dropped connection against a real client.
+    #[test]
+    fn test_bep6_messages_round_trip() {
+        let cases: &[(Message<'_>, MsgId, usize)] = &[
+            (Message::HaveAll, MSGID_HAVE_ALL, 5),
+            (Message::HaveNone, MSGID_HAVE_NONE, 5),
+            (Message::SuggestPiece(1313), MSGID_SUGGEST_PIECE, 9),
+            (Message::AllowedFast(1059), MSGID_ALLOWED_FAST, 9),
+            (
+                Message::RejectRequest(Request {
+                    index: 7,
+                    begin: 16384,
+                    length: 16384,
+                }),
+                MSGID_REJECT_REQUEST,
+                17,
+            ),
+        ];
+        for (msg, msg_id, total) in cases {
+            let mut buf = vec![0u8; 64];
+            let len = msg.serialize(&mut buf, &Default::default).unwrap();
+            assert_eq!(len, *total, "{msg:?}");
+            assert_eq!(buf[4], *msg_id, "{msg:?}");
+            assert_eq!(
+                &buf[..4],
+                &((*total as u32) - 4).to_be_bytes(),
+                "length prefix for {msg:?}"
+            );
+            let (de, dlen) = Message::deserialize(&buf[..len], &[]).unwrap();
+            assert_eq!(dlen, len, "{msg:?}");
+            match (msg, &de) {
+                (Message::HaveAll, Message::HaveAll) => {}
+                (Message::HaveNone, Message::HaveNone) => {}
+                (Message::SuggestPiece(a), Message::SuggestPiece(b)) => assert_eq!(a, b),
+                (Message::AllowedFast(a), Message::AllowedFast(b)) => assert_eq!(a, b),
+                (Message::RejectRequest(a), Message::RejectRequest(b)) => {
+                    assert_eq!(a.index, b.index);
+                    assert_eq!(a.begin, b.begin);
+                    assert_eq!(a.length, b.length);
+                }
+                (sent, got) => panic!("sent {sent:?}, got {got:?}"),
+            }
+        }
+    }
+
+    /// `reject request` shares its body with `request` and `cancel` and must
+    /// not be confused with either. Three ids, three variants.
+    #[test]
+    fn test_reject_request_is_not_a_request() {
+        let request = Request {
+            index: 3,
+            begin: 0,
+            length: 16384,
+        };
+        for (msg, id) in [
+            (Message::Request(request), MSGID_REQUEST),
+            (Message::Cancel(request), MSGID_CANCEL),
+            (Message::RejectRequest(request), MSGID_REJECT_REQUEST),
+        ] {
+            let mut buf = vec![0u8; 32];
+            let len = msg.serialize(&mut buf, &Default::default).unwrap();
+            assert_eq!(buf[4], id);
+            let (de, _) = Message::deserialize(&buf[..len], &[]).unwrap();
+            let same = match (&msg, &de) {
+                (Message::Request(..), Message::Request(..)) => true,
+                (Message::Cancel(..), Message::Cancel(..)) => true,
+                (Message::RejectRequest(..), Message::RejectRequest(..)) => true,
+                _ => false,
+            };
+            assert!(same, "{msg:?} came back as {de:?}");
+        }
+    }
+
+    /// The reserved bit is the last byte and `0x04`, which is a different byte
+    /// from BEP 10's. Getting the two confused advertises one and negotiates
+    /// the other.
+    #[test]
+    fn test_handshake_advertises_both_reserved_bits() {
+        let h = Handshake::new(Id20::new([1u8; 20]), Id20::new([2u8; 20]));
+        assert!(h.supports_extended(), "BEP 10");
+        assert!(h.supports_fast(), "BEP 6");
+        assert_eq!(h.reserved.to_be_bytes()[5], 0x10, "BEP 10 is byte 5");
+        assert_eq!(h.reserved.to_be_bytes()[7], 0x04, "BEP 6 is byte 7");
+
+        let mut buf = [0u8; 68];
+        let len = h.serialize_unchecked_len(&mut buf);
+        let (back, blen) = Handshake::deserialize(&buf[..len]).unwrap();
+        assert_eq!(blen, len);
+        assert!(back.supports_extended());
+        assert!(back.supports_fast());
+
+        // A peer that sets neither is understood as setting neither.
+        let plain = Handshake {
+            reserved: 0,
+            info_hash: Id20::new([1u8; 20]),
+            peer_id: Id20::new([2u8; 20]),
+        };
+        assert!(!plain.supports_extended());
+        assert!(!plain.supports_fast());
+    }
+
     /// A peer that never advertised it cannot be sent one.
     #[test]
     fn test_lt_donthave_needs_the_peer_to_have_asked_for_it() {
@@ -869,6 +1057,10 @@ mod tests {
         ));
     }
 
+    /// Not attributed until 2026-08-23. The `#[test]` this needed had landed
+    /// on the test above it, which then carried two, so this one was compiled
+    /// and never run. It is T-194's own regression test.
+    #[test]
     fn test_bitfield_larger_than_max_msg_len() {
         const PIECES: usize = 131_961;
         let bitfield = vec![0xffu8; PIECES.div_ceil(8)];

@@ -80,6 +80,14 @@ const RECONNECT_MAX: Duration = Duration::from_secs(30);
 /// How many loopback ports a bridge remembers having connected from.
 const MAX_REMEMBERED_PORTS: usize = 64;
 
+/// A `request`, `cancel` or `reject request` body: three big-endian `u32`s.
+///
+/// [`serialize`] sizes its buffer as the overhead plus whatever
+/// variable-length body the message carries, and a rejection's body is longer
+/// than the piece preamble that overhead is built for. Passing zero produced
+/// `NoSpaceInBuffer` and ended the connection the rejection existed to keep.
+const REQUEST_BODY_LEN: usize = 12;
+
 /// BitTorrent message id for the BEP 10 extension protocol.
 const MSGID_EXTENDED: u8 = 20;
 
@@ -179,6 +187,9 @@ pub struct BridgeStatus {
     pieces_dropped: AtomicU64,
     /// Of those, the ones retracted with BEP 54 rather than by reconnecting.
     pieces_retracted: AtomicU64,
+    /// Requests answered with BEP 6 `reject request` rather than by ending the
+    /// connection.
+    rejections: AtomicU64,
 }
 
 /// One file a source turned out not to hold.
@@ -211,6 +222,7 @@ impl Default for BridgeStatus {
             gone_files: Mutex::new(Vec::new()),
             pieces_dropped: AtomicU64::new(0),
             pieces_retracted: AtomicU64::new(0),
+            rejections: AtomicU64::new(0),
         }
     }
 }
@@ -343,6 +355,19 @@ impl BridgeStatus {
     /// Pieces retracted with BEP 54 `lt_donthave` on a live connection.
     pub fn pieces_retracted(&self) -> u64 {
         self.pieces_retracted.load(Ordering::Relaxed)
+    }
+
+    /// Record a request refused with BEP 6 rather than by hanging up.
+    fn record_rejection(&self) {
+        self.rejections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Requests answered with BEP 6 `reject request`.
+    ///
+    /// Every one of these was a connection the source would have lost before
+    /// the fast extension, because the only way to refuse was to stop talking.
+    pub fn rejections(&self) -> u64 {
+        self.rejections.load(Ordering::Relaxed)
     }
 
     /// Files this source turned out not to hold, in the order they were found.
@@ -746,8 +771,8 @@ async fn serve(
     let (mut read, mut write) = stream.split();
     let mut frames = Framer::default();
 
-    handshake(params, &mut read, &mut write, &mut frames).await?;
-    send_greeting(params, &mut write).await?;
+    let fast = handshake(params, &mut read, &mut write, &mut frames).await?;
+    send_greeting(params, fast, &mut write).await?;
     status.set_error(None);
     status.set_state(BridgeState::Active);
 
@@ -835,10 +860,42 @@ async fn serve(
                     // A request for a piece this source never announced is a
                     // session bug, and answering it would fetch bytes outside
                     // the scope. Refuse loudly rather than silently.
+                    // BEP 6. A request this source cannot answer is refused
+                    // with `reject request` rather than by ending the
+                    // connection, which is the whole point of the message: a
+                    // partial seed being asked for a piece it does not hold is
+                    // a normal thing rather than a protocol error. Two cases
+                    // reach it: a piece retracted with `lt_donthave` while the
+                    // request was already on the wire, and a piece this source
+                    // never announced.
+                    //
+                    // Without the extension a retracted piece is dropped
+                    // silently, because there is no way to say no and refusing
+                    // costs the connection.
                     if retracted.contains(&request.index) {
+                        if fast {
+                            out_tx
+                                .send(serialize(
+                                    &Message::RejectRequest(request),
+                                    REQUEST_BODY_LEN,
+                                )?)
+                                .await
+                                .map_err(|e| BridgeError::Link(format!("reject request: {e}")))?;
+                        }
                         continue;
                     }
                     if !served.contains(&request.index) {
+                        if fast {
+                            out_tx
+                                .send(serialize(
+                                    &Message::RejectRequest(request),
+                                    REQUEST_BODY_LEN,
+                                )?)
+                                .await
+                                .map_err(|e| BridgeError::Link(format!("reject request: {e}")))?;
+                            status.record_rejection();
+                            continue;
+                        }
                         return Err(BridgeError::Link(format!(
                             "session asked for piece {}, which this source did not announce",
                             request.index
@@ -948,12 +1005,15 @@ async fn serve(
 }
 
 /// Exchange handshakes and confirm the session routed us to the right torrent.
+///
+/// Returns whether the session set BEP 6's reserved bit. `Handshake::new` sets
+/// ours, so this is the negotiation: both ends or neither.
 async fn handshake(
     params: &BridgeParams,
     read: &mut (impl tokio::io::AsyncRead + Unpin),
     write: &mut (impl tokio::io::AsyncWrite + Unpin),
     frames: &mut Framer,
-) -> Result<(), BridgeError> {
+) -> Result<bool, BridgeError> {
     let mut peer_id = generate_peer_id(PEER_ID_PREFIX);
     while peer_id == params.session_peer_id {
         peer_id = generate_peer_id(PEER_ID_PREFIX);
@@ -978,7 +1038,7 @@ async fn handshake(
                     ));
                 }
                 frames.consume(size);
-                return Ok(());
+                return Ok(theirs.supports_fast());
             }
             Err(_) => {
                 let n = frames
@@ -1000,11 +1060,21 @@ async fn handshake(
 /// partial seed rather than a peer that is still downloading.
 async fn send_greeting(
     params: &BridgeParams,
+    fast: bool,
     write: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), BridgeError> {
     let bits = bitfield(params);
     let mut out = extended_handshake(params);
-    for message in [Message::Bitfield(ByteBuf(&bits)), Message::Unchoke] {
+    // BEP 6. A source whose scope is the whole torrent says so in two bytes
+    // rather than one bit per piece, which on a million piece torrent is
+    // 128 KiB saved on every connection. Only when the session negotiated it:
+    // a `have all` to a peer that does not know the message is a dropped
+    // connection. See TODO/bep-coverage.md, T-100.
+    let announce = match fast && params.is_complete() {
+        true => Message::HaveAll,
+        false => Message::Bitfield(ByteBuf(&bits)),
+    };
+    for message in [announce, Message::Unchoke] {
         out.extend_from_slice(&serialize(&message, bits.len())?);
     }
     write

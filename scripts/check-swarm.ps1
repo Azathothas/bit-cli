@@ -293,6 +293,7 @@ $cases += [pscustomobject][ordered]@{
     bytes_on_disk   = $acceptBytes
     failures        = $run.report.swarm.failures
     fast_negotiated = $run.report.swarm.fast_extension.peers_negotiated
+    have_all        = $run.report.swarm.fast_extension.have_all
 }
 
 # The default directory is removed. Same command, no --dir, and the temp
@@ -375,12 +376,18 @@ foreach ($n in $LeechPeers) {
         blocks_sent = $swarm.serving.blocks_sent
         bytes_sent = $swarm.serving.bytes_sent.bytes
         # Every synthetic peer offers the BEP 6 bit, so this is the target's
-        # answer rather than the peer's offer. `librqbit` 9.0.0 has no BEP 6,
-        # so zero is the expected reading and a non-zero one means the session
-        # gained it. Recorded rather than judged: what this script measures is
-        # the load generator, and the entry that owns the number is
+        # answer rather than the peer's offer. It was zero on every run until
+        # 2026-08-23, which was `librqbit` saying it had no BEP 6 at all;
+        # the vendored tree has it now and this is what says so from the wire.
+        # Recorded rather than judged: what this script measures is the load
+        # generator, and the entry that owns the number is
         # TODO/bep-coverage.md T-100.
         fast_negotiated = $swarm.fast_extension.peers_negotiated
+        # And what the target sent in place of a bitfield. A complete seeder
+        # that negotiated the extension says `have all` in two bytes, so this
+        # is the half of the negotiation the target acted on rather than the
+        # half it merely agreed to.
+        have_all        = $swarm.fast_extension.have_all
     }
 }
 
@@ -762,7 +769,7 @@ $reportPath = Join-Path $ReportDir "swarm-$stamp.json"
         "In leech mode every peer is an independent leecher, so the payload arrives once per peer, and it is held on disk once between them.",
         "Every case but no_target and dead_target starts its own seeder. The connect load used to leave the target unable to complete a handshake for any info hash, so a case sharing a seeder with the one before it measured the previous case. That was T-020, now fixed, and listener_poisoned is where it is held rather than tripped over.",
         "listener_poisoned is judged since 2026-08-22. It carried judged: false while T-020 was open; the accept loop is fixed in the vendored tree and the case now fails the build if the target stops serving after the load.",
-        "fast_negotiated is the target's answer to a BEP 6 offer every synthetic peer makes. Recorded rather than judged: librqbit 9.0.0 has no BEP 6, so zero is expected, and the entry that owns the number is TODO/bep-coverage.md T-100.",
+        "fast_negotiated is the target's answer to a BEP 6 offer every synthetic peer makes, and have_all is what it then sent in place of a bitfield. Recorded rather than judged. Both were zero on every run until 2026-08-23, which was librqbit having no BEP 6 at all; the entry that owns the numbers is TODO/bep-coverage.md T-100.",
         "A synthetic peer announces every piece it verified and kept and answers requests for those pieces. peers_asked is zero against a seeder and that is the only result that load can produce: a synthetic peer holds only what the target served it, so it can never offer the target a piece the target is missing. What the serving side changes is what the target sees, and pieces_announced is the number that says it happened.",
         "sources_ignored reads the operating system's socket table rather than the report, because the report is the tool's own claim about itself. It is judged only on Windows, where Get-NetTCPConnection is; on any other platform it records judged: false."
     )

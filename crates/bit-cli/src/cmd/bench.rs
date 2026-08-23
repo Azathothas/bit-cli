@@ -3248,14 +3248,30 @@ mod tests {
             format!("bit-cli {}", env!("CARGO_PKG_VERSION")),
             "{probe}"
         );
-        assert_eq!(peer["pieces_advertised"], 2, "{probe}");
+        // BEP 6. Both ends set the fast extension bit now, so a complete
+        // seeder announces what it holds as `have all` rather than as a
+        // bitfield, and there is no count to read: two bytes carry a stronger
+        // statement than a number of set bits. What the probe has to report is
+        // which of the three forms arrived. See `TODO/bep-coverage.md`, T-100.
+        assert!(
+            peer["extensions"]
+                .as_array()
+                .expect("extensions")
+                .iter()
+                .any(|name| name == "fast"),
+            "{probe}"
+        );
         assert!(
             peer["messages"]
                 .as_array()
                 .expect("messages")
                 .iter()
-                .any(|kind| kind == "bitfield"),
+                .any(|kind| kind == "have-all"),
             "{probe}"
+        );
+        assert!(
+            peer["pieces_advertised"].is_null(),
+            "have all carries no count: {probe}"
         );
     }
 

@@ -85,6 +85,10 @@ pub struct PeerFacts {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub messages: Vec<String>,
     /// Pieces its bitfield claims, when it sent one.
+    ///
+    /// Absent when the peer said `have all` instead, which BEP 6 lets it do
+    /// and which carries no count. `messages` names which of the three it
+    /// used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pieces_advertised: Option<u32>,
 }
@@ -354,6 +358,20 @@ fn observe(frame: &[u8], facts: &mut PeerFacts) {
         Message::Request(_) => note(facts, "request"),
         Message::Cancel(_) => note(facts, "cancel"),
         Message::Piece(_) => note(facts, "piece"),
+        // BEP 6. `have all` and `have none` stand in for a bitfield, so a
+        // target that negotiated the fast extension announces what it holds in
+        // two bytes and there are no bits to count. `have all` therefore
+        // leaves `pieces_advertised` absent and says so in `messages`, which
+        // is a stronger statement than a count anyway: every piece, whatever
+        // the torrent turns out to be. See `TODO/bep-coverage.md`, T-100.
+        Message::HaveAll => note(facts, "have-all"),
+        Message::HaveNone => {
+            note(facts, "have-none");
+            facts.pieces_advertised = Some(0);
+        }
+        Message::SuggestPiece(_) => note(facts, "suggest-piece"),
+        Message::RejectRequest(_) => note(facts, "reject-request"),
+        Message::AllowedFast(_) => note(facts, "allowed-fast"),
         Message::Extended(_) => {
             note(facts, "extended");
             // The extended handshake is extension id 0, and its payload is the

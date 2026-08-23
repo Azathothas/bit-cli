@@ -78,7 +78,7 @@ Source:      https://github.com/ikatson/rqbit/issues/584 (open)
 Category:    bep
 Priority:    P2
 Effort:      L
-Status:      partial
+Status:      **done**, 2026-08-23T04:01Z
 
 Problem:     No `have all`, `have none`, `suggest piece`, `reject request`, or
              `allowed fast`.
@@ -245,6 +245,87 @@ construction, so it needs a target reachable on a class C address or aria2's
 own set derived by hand from the address it sees. That is a session's work, not
 a blocker.
 
+## Part three is built, 2026-08-23, and the entry is done
+
+The blocker above was "librqbit gaining the five message variants and the
+reserved bit". The trees are vendored, so it was done here.
+`patches/UPSTREAM.md` carries it under "BEP 6, the fast extension, is not
+implemented at all".
+
+**The five ids and the bit.** 13 `suggest piece`, 14 `have all`, 15 `have
+none`, 16 `reject request`, 17 `allowed fast`, each with a `Message` variant.
+The reserved bit is the **last** reserved byte and `0x04`, which is a different
+byte from BEP 10's `0x10` at byte 5, and `Handshake::new` sets both.
+`reject request` shares its three `u32` body with `request` and `cancel` and is
+a third variant rather than a flag on one of them, because confusing them turns
+a refusal into a demand.
+
+**What the session does with them.** `have all` fills the peer's bitfield up to
+the piece count and no further, so the spare bits past the last piece stay zero
+exactly as a wire bitfield's must. `have none` sets an empty one, which is not
+the same fact as sending no bitfield at all. `reject request` releases the
+**whole piece** rather than the one chunk: a peer that will not serve one chunk
+of a piece is not about to serve the rest, and leaving the piece assigned to it
+stalls it just as long. `suggest piece` and `allowed fast` are understood,
+traced and not acted on, which is the posture `seedchamp` takes deliberately
+and which this entry already cited approvingly.
+
+**One thing the send side forced.** BEP 6 makes the first message mandatory: a
+peer that negotiated it expects a bitfield, a have-all or a have-none before
+anything else, and sending nothing is a protocol violation rather than an
+omission. `should_send_bitfield` returns false when this end has nothing, and
+that used to mean silence. It means `have none` now.
+
+**The Acceptance, all three clauses.**
+`crates/bit-cli-core/tests/bridge_protocol.rs`, against a session written by
+hand that shares no constant with the bridge, which is the same harness
+[T-166](peers.md) built and for the same reason.
+
+| clause | test |
+| --- | --- |
+| negotiates BEP 6 with a session that supports it | the handshake assertion in `Session::start_with`, on the byte the bit lives in |
+| sends `have all` for a complete source | `a_complete_source_announces_have_all_only_when_bep_6_is_negotiated` |
+| rejects an out-of-scope request without dropping the connection | `an_out_of_scope_request_is_rejected_rather_than_ending_the_connection` |
+
+The first of those two tests asserts **both** directions on the same fixture,
+because the interesting failure is announcing `have all` to a peer that does
+not know the message: that is a dropped connection rather than a smaller
+greeting, and a test that only checked the negotiated case would not see it.
+The second asks for a piece one past the end of the torrent, so the refusal is
+deterministic and nothing has to lose a file first.
+
+**Measured from the wire, which is where part two said the number would come
+from.** `bench/swarm-20260823T040125619Z.json`, the same script and the same
+workload as the run part two recorded:
+
+| case | `fast_negotiated` before | after | `have_all` | `received` |
+| --- | --- | --- | --- | --- |
+| `leech_1` | 0 | **1** | **1** | 8,388,608 |
+| `leech_4` | 0 | **4** | **4** | 33,554,432 |
+| `leech_16` | 0 | **16** | **16** | 134,217,728 |
+
+Every synthetic peer offered the bit, `bit-cli seed` set it back on every one,
+and answered every one with `have all` rather than a bitfield. The bytes
+received are identical to the run before the change, so the extension changed
+what is said and not what is transferred. `check-swarm.ps1` reports `have_all`
+beside `fast_negotiated` now, because "agreed to it" and "used it" are two
+facts and only the second says the send side works.
+
+**A test that had been dead for a session, found on the way.**
+`test_bitfield_larger_than_max_msg_len` in `peer_binary_protocol`, which is
+[T-194](peers.md)'s own regression test, carried no `#[test]` attribute: the
+one it needed had landed on the test above it, which then had two. It was
+compiled and never run. It is attributed now and it passes. Nothing in the
+workspace gates catches this, because `cargo clippy --workspace` does not
+compile the vendored crates' test targets, so the duplicate-attribute warning
+only appears when the vendored tests are run.
+
+**What is still not done, and it is not this entry's.** Measuring a live
+`aria2c` seeder to see which allowed-fast mask it uses. Nothing changed about
+that: it needs a target on a class C address, because the two rules agree on
+loopback. `Mask::is_ambiguous` still says so rather than claiming a pass, and
+nothing here sends an `allowed fast` set, so the divergence costs nothing yet.
+
 ### T-101 uTP is available but untested
 
 Source:      corpus, `librqbit-utp`
@@ -392,6 +473,32 @@ of peers unrelayable and 50 per cent behind a bad NAT, relaying takes pairwise
 connectability from 75 per cent to 92.5 per cent. That is the number this
 entry's "raises the reachable swarm size" should be measured against if it is
 ever built.
+
+**The seam is gone as of 2026-08-23, and this entry is still open. The reason
+it is open has changed.** What blocked it was
+`PeerConnectionHandler::on_extended_handshake` and
+`update_my_extended_handshake` being implemented inside `librqbit` by the
+torrent state. The trees are vendored, so that is now a place this repository
+can write, and [T-167](#t-167-bep-54-lt_donthave-is-not-implemented) and
+[T-100](#t-100-bep-6-fast-extension-is-not-implemented) both went through it.
+Nothing about BEP 55 is unreachable any more.
+
+What stands in the way instead is this entry's own Acceptance, which says
+"Deferred. Revisit if peer reachability shows up as a measured limit in `bench
+swarm`", and nothing has measured one. Two things would have to exist before
+building it means anything here:
+
+1. **A measurement that says reachability is a limit.** `bench swarm` dials
+   loopback, where every peer is reachable by construction, so the number this
+   entry exists to move cannot be taken with the fixtures this repository has.
+2. **A fixture that produces an unreachable peer**, or the acceptance is
+   unfalsifiable: an implementation that never opens a hole and one that always
+   does look identical against peers that never needed one.
+
+So it stays open at P3 with the condition named rather than the blocker, which
+is a different and weaker reason to leave something undone. Do not reach for a
+NAT crate for it: the paragraphs above still hold and the swarm is still the
+rendezvous.
 
 ### T-103 Filenames that are not valid UTF-8 are refused
 

@@ -105,7 +105,7 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
              patches/rqbit/0007-crates-librqbit-src-peer_info_reader-mod.rs.patch
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0018-crates-peer_binary_protocol-src-lib.rs.patch
+             patches/rqbit/0019-crates-peer_binary_protocol-src-lib.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T13:52Z
 ```
@@ -189,7 +189,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0021-package-lock.json.patch
+             patches/rqbit/0022-package-lock.json.patch
 Upstream:    never. This is a consequence of our exclusion list, not their bug
 Added:       2026-08-22T13:47Z
 ```
@@ -317,7 +317,7 @@ Unblocks:    T-040, TODO/memory.md, the record's other P0
 Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-             patches/rqbit/0015-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T15:30Z
 ```
@@ -390,7 +390,7 @@ Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0020-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0021-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    not offered yet, and it should be
 Added:       2026-08-22T17:26Z
 ```
@@ -740,7 +740,7 @@ Files:       vendor/rqbit/crates/librqbit/src/lib.rs
              patches/rqbit/0004-crates-librqbit-src-lib.rs.patch
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
              patches/rqbit/0013-crates-librqbit-src-torrent_state-initializing.rs.patch
-             patches/rqbit/0019-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0020-crates-rqbit-src-main.rs.patch
 Upstream:    not offered yet, and the first two thirds of it should be
 Added:       2026-08-22T19:28Z
 ```
@@ -942,8 +942,8 @@ Files:       vendor/rqbit/crates/librqbit/src/stream_transform.rs (new)
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
              patches/rqbit/0011-crates-librqbit-src-stream_connect.rs.patch
              patches/rqbit/0012-crates-librqbit-src-stream_transform.rs.patch
-             patches/rqbit/0016-crates-librqbit-src-type_aliases.rs.patch
-             patches/rqbit/0019-crates-rqbit-src-main.rs.patch
+             patches/rqbit/0017-crates-librqbit-src-type_aliases.rs.patch
+             patches/rqbit/0020-crates-rqbit-src-main.rs.patch
 Upstream:    not offered, and it is a seam rather than a fix
 Added:       2026-08-23T02:52Z
 ```
@@ -1030,3 +1030,100 @@ written outside the crate. A maintainer with an MSE pull request open is
 unlikely to want a hook for somebody else's, so what would be offered is the
 seam on its own, with this repository's implementation as the evidence that one
 transform is enough.
+
+---
+
+## librqbit: BEP 6, the fast extension, is not implemented at all
+
+```
+Unblocks:    T-100, TODO/bep-coverage.md, part three, which was the whole of
+             what kept it open
+Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
+             vendor/rqbit/crates/librqbit/src/peer_connection.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
+             vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/mod.rs
+             patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
+             patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
+             patches/rqbit/0016-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
+             patches/rqbit/0019-crates-peer_binary_protocol-src-lib.rs.patch
+Upstream:    not offered yet, and it should be. It is
+             rqbit#584 (https://github.com/ikatson/rqbit/issues/584), open.
+Added:       2026-08-23T03:55Z
+```
+
+Five message ids and one reserved bit, none of which this crate had. A peer
+that spoke BEP 6 got `UnsupportedMessageId` and was dropped, and the two that
+cost the most were `have all`, which a seeder sends in place of a bitfield, and
+`reject request`, which is how a peer says no without hanging up.
+
+**The wire.** `MSGID_SUGGEST_PIECE` 13, `MSGID_HAVE_ALL` 14,
+`MSGID_HAVE_NONE` 15, `MSGID_REJECT_REQUEST` 16, `MSGID_ALLOWED_FAST` 17, each
+with a `Message` variant, serialize and deserialize.
+`Handshake::supports_fast` reads the reserved bit, which is the **last**
+reserved byte and `0x04`, a different byte from BEP 10's; `Handshake::new` sets
+it. `reject request` shares its three `u32` body with `request` and `cancel`
+and is a third variant rather than a flag on either, because confusing them
+turns a refusal into a demand.
+
+**The receive side.** `have all` fills the peer's bitfield up to the piece
+count and no further, so the spare bits past the last piece stay zero exactly
+as a wire bitfield's must; `have none` sets an empty one, which is not the same
+as sending no bitfield at all and is recorded as the peer having said so.
+`reject request` releases the whole piece rather than the one chunk: a peer
+that will not serve one chunk of a piece is not about to serve the rest, and
+leaving the piece assigned to it stalls it just as long.
+`PeerState::drop_inflight_requests_for_piece` is the half that forgets the
+chunks without sending a `Cancel` back for each, which would be noise addressed
+to the peer that just refused.
+
+`suggest piece` and `allowed fast` are understood, traced and not acted on.
+That is a posture rather than an omission: a suggestion is advice about which
+piece to ask for and this picker has its own order, and an allowed-fast piece
+is one the peer would serve while choking, and nothing here chokes. `seedchamp`
+takes the same one deliberately.
+
+**The send side, and one thing it forced.** BEP 6 makes the first message
+mandatory: a peer that negotiated it expects a bitfield, a have-all or a
+have-none before anything else, and sending nothing is a protocol violation
+rather than an omission. `should_send_bitfield` returns false when this end has
+nothing, and that used to mean silence; with the extension it means `have
+none`. `PeerConnectionHandler::have_shortcut` answers from the have-bitfield
+rather than from a byte count, because "we have every piece" and "we have every
+selected piece" are different statements and only the first may be sent as
+`have all`.
+
+A request this end cannot serve is answered with `reject request` when the
+extension was negotiated, where it used to end the connection. Asking a partial
+seed for a piece it does not hold is a normal thing to do.
+
+**Why it has to be here.** The message ids are a private `const` block in
+`peer_binary_protocol` and the `Message` enum is closed, so a dependent crate
+cannot construct one; the reserved bit is set inside `Handshake::new`; and the
+receive side is a private method on a private type. T-100 recorded this as
+"part three, blocked, upstream" and named these exact two files.
+
+**A dead test found on the way, and it had been dead for a session.**
+`test_bitfield_larger_than_max_msg_len`, which is [T-194](../TODO/peers.md)'s
+own regression test, carried no `#[test]` attribute: the one it needed had
+landed on the test above it, which then had two. It was compiled and never run.
+It is attributed now and it passes. Nothing catches this from the workspace,
+because `cargo clippy --workspace` does not compile the vendored crates' test
+targets, so the duplicate-attribute warning only appears when the vendored
+tests are run.
+
+**How it was measured.** Three new tests in `peer_binary_protocol`, all five
+messages round-tripping on the wire with their BEP ids and lengths, `reject
+request` proved distinct from `request` and `cancel`, and both reserved bits
+asserted at the byte they live in. Then two in this repository's own
+`bridge_protocol.rs`, against a session written by hand that shares no constant
+with the bridge: a complete source announces `have all` when the extension is
+negotiated and a bitfield when it is not, and an out-of-scope request comes
+back as `reject request` with the connection still serving afterwards.
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+```
+
+```bash
+cargo test -p bit-cli-core --test bridge_protocol
+```

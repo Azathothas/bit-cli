@@ -43,6 +43,10 @@ const MSG_BITFIELD: u8 = 5;
 const MSG_REQUEST: u8 = 6;
 const MSG_PIECE: u8 = 7;
 const MSG_EXTENDED: u8 = 20;
+/// BEP 6, written out for the same reason every other id here is: importing
+/// them would make this test agree with the bridge by sharing a constant.
+const MSG_HAVE_ALL: u8 = 14;
+const MSG_REJECT_REQUEST: u8 = 16;
 
 /// `librqbit` 9.0.0's own receive-side numbering, from
 /// `librqbit-peer-protocol/src/lib.rs`: `MY_EXTENDED_UT_PEX = 1` and
@@ -138,7 +142,16 @@ impl Session {
     /// The source is a local file rather than an HTTP server: this test is
     /// about the peer protocol, and a `file://` source removes a whole stub
     /// server from the things that could fail it.
+    /// The default session, which does not speak BEP 6.
     async fn start() -> Self {
+        Self::start_with(false).await
+    }
+
+    /// `fast` sets BEP 6's reserved bit, which is the last reserved byte and
+    /// `0x04`. BEP 10's is byte 5 and `0x10`: two different bytes, and a test
+    /// that set the wrong one would negotiate nothing and still pass a
+    /// bitfield assertion.
+    async fn start_with(fast: bool) -> Self {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let addr: SocketAddr = listener.local_addr().unwrap();
 
@@ -202,6 +215,12 @@ impl Session {
             "the bridge has to set the BEP 10 bit, or the extended handshake \
              that carries the BEP 21 flag is not allowed to follow"
         );
+        assert_eq!(
+            theirs[27] & 0x04,
+            0x04,
+            "the bridge has to set the BEP 6 bit, or no session can negotiate \
+             the fast extension with it"
+        );
         assert_eq!(&theirs[28..48], &info_hash.0, "info hash");
 
         // Ours back, with the extension bit set, so a session that speaks BEP
@@ -211,6 +230,9 @@ impl Session {
         ours.extend_from_slice(b"BitTorrent protocol");
         let mut reserved = [0u8; 8];
         reserved[5] = 0x10;
+        if fast {
+            reserved[7] = 0x04;
+        }
         ours.extend_from_slice(&reserved);
         ours.extend_from_slice(&info_hash.0);
         ours.extend_from_slice(&[0x11u8; 20]);
@@ -449,5 +471,118 @@ async fn no_extension_id_can_end_the_connection() {
         &piece.payload[8..],
         &session.data[offset..offset + BLOCK as usize],
         "the bridge still serves the right bytes after every extension id"
+    );
+}
+
+/// BEP 6. A source whose scope is the whole torrent announces it in two bytes
+/// rather than one bit per piece, and only against a session that negotiated
+/// the extension.
+///
+/// Both directions are asserted on the same fixture, because the interesting
+/// failure is announcing `have all` to a peer that does not know the message:
+/// that is a dropped connection rather than a smaller greeting, and a test
+/// that only checked the negotiated case would not see it.
+///
+/// See `TODO/bep-coverage.md`, T-100.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_complete_source_announces_have_all_only_when_bep_6_is_negotiated() {
+    // Negotiated: two bytes.
+    let mut session = Session::start_with(true).await;
+    let first = read_frame(&mut session.stream).await;
+    assert_eq!(
+        first.id, MSG_EXTENDED,
+        "the extended handshake is still first"
+    );
+    let announce = read_frame(&mut session.stream).await;
+    assert_eq!(
+        announce.id, MSG_HAVE_ALL,
+        "a complete source has to say have all rather than send a bitfield"
+    );
+    assert!(
+        announce.payload.is_empty(),
+        "have all carries no payload: {:?}",
+        announce.payload
+    );
+
+    // Not negotiated: the bitfield, exactly as before.
+    let mut plain = Session::start().await;
+    let first = read_frame(&mut plain.stream).await;
+    assert_eq!(first.id, MSG_EXTENDED);
+    let announce = read_frame(&mut plain.stream).await;
+    assert_eq!(
+        announce.id, MSG_BITFIELD,
+        "a session that did not negotiate BEP 6 has to get a bitfield"
+    );
+    assert_eq!(
+        announce.payload.len(),
+        (PIECE_COUNT as usize).div_ceil(8),
+        "one bit per piece, rounded up to a byte"
+    );
+}
+
+/// BEP 6. A request this source cannot answer is refused with `reject request`
+/// and the connection stays up.
+///
+/// This is the half of T-100 that the extension exists for. Before it, the
+/// only way to refuse was to stop talking, and a partial seed being asked for
+/// a piece it does not hold is a normal thing rather than a protocol error.
+///
+/// The out-of-scope piece is one past the end of the torrent, so the refusal
+/// is deterministic: nothing has to lose a file first and no scheduling
+/// decision is involved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_out_of_scope_request_is_rejected_rather_than_ending_the_connection() {
+    let mut session = Session::start_with(true).await;
+    for _ in 0..3 {
+        read_frame(&mut session.stream).await;
+    }
+
+    let outside: u32 = PIECE_COUNT + 5;
+    let mut request = Vec::new();
+    request.extend_from_slice(&outside.to_be_bytes());
+    request.extend_from_slice(&0u32.to_be_bytes());
+    request.extend_from_slice(&BLOCK.to_be_bytes());
+    session
+        .stream
+        .write_all(&frame(MSG_REQUEST, &request))
+        .await
+        .unwrap();
+
+    let reject = read_frame(&mut session.stream).await;
+    assert_eq!(
+        reject.id, MSG_REJECT_REQUEST,
+        "the bridge answered id {} instead of rejecting",
+        reject.id
+    );
+    assert_eq!(
+        reject.payload, request,
+        "a rejection names the request it refuses, byte for byte"
+    );
+
+    // The connection is still there, which is the whole point: a real request
+    // after the refusal is answered with the source's own bytes.
+    let index: u32 = 3;
+    let mut good = Vec::new();
+    good.extend_from_slice(&index.to_be_bytes());
+    good.extend_from_slice(&0u32.to_be_bytes());
+    good.extend_from_slice(&BLOCK.to_be_bytes());
+    session
+        .stream
+        .write_all(&frame(MSG_REQUEST, &good))
+        .await
+        .unwrap();
+
+    let piece = loop {
+        let got = read_frame(&mut session.stream).await;
+        if got.id == MSG_PIECE {
+            break got;
+        }
+        assert_ne!(got.id, MSG_CHOKE, "the bridge choked after a rejection");
+    };
+    let offset = (index * PIECE_LENGTH) as usize;
+    assert_eq!(
+        &piece.payload[8..],
+        &session.data[offset..offset + BLOCK as usize],
+        "the bridge still serves after refusing"
     );
 }

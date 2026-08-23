@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**13 entries: 11 done, 1 partial, 0 blocked, 1 open.** Every one of them was
+**13 entries: 12 done, 0 partial, 0 blocked, 1 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
 record, and nothing in the record is blocked.**
 
@@ -29,7 +29,7 @@ record, and nothing in the record is blocked.**
 | [T-022](../TODO/peers.md) | P1 | **done** | an HTTP tracker announce per address family |
 | [T-132](../TODO/multi-source.md) | P1 | **done** | a download limit that skips one peer |
 | [T-016](../TODO/disk-io.md) | P2 | **done** | a resume cache without session persistence |
-| [T-100](../TODO/bep-coverage.md) | P2 | partial | the send half of an extension message |
+| [T-100](../TODO/bep-coverage.md) | P2 | **done** | five message ids and a reserved bit |
 | [T-163](../TODO/peers.md) | P2 | **done** | MSE, a wire-level handshake |
 | [T-167](../TODO/bep-coverage.md) | P2 | **done** | **has** an inverse of `on_have` now |
 | [T-195](../TODO/peers.md) | P2 | **done** | the read side of T-194, at 262,104 pieces |
@@ -37,9 +37,11 @@ record, and nothing in the record is blocked.**
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 | [T-025](../TODO/peers.md) | P3 | **done** | one `pub use`, and the filter had no name |
 
-Two are not done, and both are in section 5:
-[T-100](../TODO/bep-coverage.md) BEP 6 and [T-102](../TODO/bep-coverage.md)
-BEP 55.
+One is not done: [T-102](../TODO/bep-coverage.md), BEP 55, and it is no longer
+waiting on a seam. The seam that blocked it is the one
+[T-100](../TODO/bep-coverage.md) and [T-167](../TODO/bep-coverage.md) both went
+through. What it waits on now is its own acceptance, which asks for a measured
+reachability limit that loopback fixtures cannot produce. The entry says so.
 
 **All three P0 items are closed.** [T-040](../TODO/memory.md) was the last, and
 it closed on a measurement rather than a change: six hours of `soak.ps1` on the
