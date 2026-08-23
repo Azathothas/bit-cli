@@ -441,7 +441,7 @@ impl Engine {
 
         let opts = SessionOptions {
             blocklist_url: _blocklist.as_ref().map(|(_, url)| url.clone()),
-            dht: options.enable_dht.then(DhtSessionConfig::default),
+            dht: options.enable_dht.then(dht_config),
             disable_trackers: !options.enable_trackers,
             disable_local_service_discovery: !options.enable_lsd,
             // No persistence, ever. A stored session is Phase C, and writing
@@ -1309,6 +1309,34 @@ impl BlockedPeers {
     }
 }
 
+/// DHT configuration, with the routing table cache turned off.
+///
+/// `DhtSessionConfig::default()` enables persistence, and persistence is a
+/// JSON routing table under the OS cache directory, rewritten every sixty
+/// seconds. Two things are wrong with that here, and the second is the one
+/// that bites.
+///
+/// It is state a foreground one-shot leaves behind, which decision 7.4 rules
+/// out. The `persistence: None` a few lines above says "no persistence, ever"
+/// about the session, and the DHT was writing anyway.
+///
+/// And the path is not this program's. `dht::persistence` builds it from
+/// `get_configuration_directory("dht")`, which is `com.rqbit.dht`, so this
+/// program was rewriting the routing table of any `rqbit` install on the same
+/// machine. There is one on this machine, and this repository runs it for
+/// interop. Measured: one 90 second run took that file from 95,248 bytes to
+/// 81,752 and moved its timestamp.
+///
+/// What it costs to turn off is bootstrapping from the well-known nodes on
+/// every run, which is what a tool that keeps no state has to do anyway. See
+/// `TODO/dht.md`, T-050.
+fn dht_config() -> DhtSessionConfig {
+    DhtSessionConfig {
+        persistence: None,
+        ..Default::default()
+    }
+}
+
 /// Write the blocked ranges where `librqbit` will read them, as a `file:` URL.
 ///
 /// The format is PeerGuardian's, which is what `IpRanges` parses: one
@@ -1602,6 +1630,25 @@ mod tests {
         ] {
             assert_eq!(classify_by_text(text), expected, "{text}");
         }
+    }
+
+    /// The DHT writes no routing table, anywhere.
+    ///
+    /// The default enables it, so this is one field away from coming back on a
+    /// version bump, and what it wrote was another program's file. See
+    /// `TODO/dht.md`, T-050.
+    #[test]
+    fn the_dht_keeps_no_cache_on_disk() {
+        assert!(
+            dht_config().persistence.is_none(),
+            "the DHT is persisting a routing table again"
+        );
+        // And the default really is the other way, so this test is about a
+        // choice rather than about a tautology.
+        assert!(
+            librqbit::DhtSessionConfig::default().persistence.is_some(),
+            "upstream stopped persisting by default: this test no longer says anything"
+        );
     }
 
     #[test]

@@ -431,6 +431,17 @@ pub fn run(
         .map(|source| Kind::classify(source, env))
         .collect::<Result<_>>()?;
 
+    // A source that carries no metadata, with nothing left that could fetch
+    // it. Refused here rather than waited on: the run would otherwise sit in
+    // `wait_until_initialized` until a deadline it cannot meet, and report a
+    // timeout, which reads like the network being slow. See `TODO/dht.md`,
+    // T-051.
+    if let Some(source) = metadata_that_cannot_arrive(&kinds, args, &setup) {
+        return Err(Error::usage(format!(
+            "{source} carries no metadata and every way of fetching it is off.              A web seed serves payload, not the torrent file: name a .torrent,              or leave one of the DHT, the trackers or local discovery on"
+        )));
+    }
+
     // One runtime for the whole command. It is built here rather than beside
     // the session because a Metalink has to be resolved over HTTP before the
     // plans can be built, and resolving it needs somewhere to run.
@@ -2370,6 +2381,39 @@ fn donated_sources(
     (specs, shared, pending)
 }
 
+/// The first source whose metadata nothing left in this run could fetch.
+///
+/// A magnet and a bare info hash name a torrent without carrying it. The
+/// metadata comes from a peer, over BEP 9, and a peer is found through the
+/// DHT, a tracker or local discovery. Turn all three off and there is no
+/// second way: a web seed answers ranged GETs for payload and knows nothing
+/// about the torrent file, which is exactly why `--web-seed-only` is the flag
+/// that produces this.
+///
+/// `None` when nothing is wrong, which includes every `.torrent` source: a
+/// file, a URL and a Metalink all carry their own metadata, so `--web-seed-only`
+/// with one of those is the arrangement this tool exists for.
+fn metadata_that_cannot_arrive(
+    kinds: &[Kind],
+    args: &DownloadArgs,
+    setup: &swarm::SessionSetup<'_>,
+) -> Option<String> {
+    // A peer named with `--peer` is dialled whether or not anything was
+    // discovered, and BEP 9 is how metadata arrives from a peer, so one is a
+    // way for this to work. `--web-seed-only` turns peers off entirely, which
+    // takes that way with it.
+    let discovery_off = setup.no_dht && setup.no_lsd && setup.trackers.no_tracker;
+    let peers_off = setup.web_seeds.web_seed_only || (discovery_off && args.peers.is_empty());
+    if !peers_off {
+        return None;
+    }
+    kinds
+        .iter()
+        .zip(args.sources.iter())
+        .find(|(kind, _)| matches!(kind, Kind::Magnet(_) | Kind::InfoHash(_)))
+        .map(|(_, source)| source.clone())
+}
+
 /// Tell every tracker this torrent uses that something happened.
 ///
 /// The announce carries the session's own peer id and listening port, so a
@@ -2990,6 +3034,130 @@ fn lines(report: &DownloadReport) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A magnet with every way of fetching metadata turned off is refused.
+    ///
+    /// It used to wait out `--init-timeout` and report a timeout, which reads
+    /// like a slow network rather than an arrangement that cannot work. A web
+    /// seed answers ranged GETs for payload and knows nothing about the
+    /// torrent file. See `TODO/dht.md`, T-051.
+    #[test]
+    fn a_magnet_with_no_way_to_fetch_metadata_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        let (mut env, captured) = Env::test(
+            &[
+                "download",
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                "--web-seed-only",
+                "--web-seed",
+                "http://127.0.0.1:1/payload.bin",
+                "--dir",
+                dir.path().to_str().unwrap(),
+            ],
+            dir.path(),
+        );
+        let code = crate::run(&mut env);
+
+        let said = format!("{}{}", captured.out(), captured.err());
+        assert_eq!(code, ExitCode::Usage, "{said}");
+        assert!(said.contains("carries no metadata"), "{said}");
+        // Refused before anything was added, which is what makes the exit
+        // code a usage error rather than a source failure. The old path got
+        // as far as the session and came back with librqbit's own words, "no
+        // known way to resolve peers (no DHT, no trackers, no initial_peers)",
+        // and exit 6, which invites the retry that cannot work. See
+        // `TODO/dht.md`, T-051.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the run waited rather than refusing: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            !said.contains("initial_peers"),
+            "the message still names a librqbit field: {said}"
+        );
+    }
+
+    /// The same three off, without `--web-seed-only`, is the same problem.
+    #[test]
+    fn a_magnet_with_dht_lsd_and_trackers_all_off_is_refused_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut env, captured) = Env::test(
+            &[
+                "download",
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--dir",
+                dir.path().to_str().unwrap(),
+            ],
+            dir.path(),
+        );
+        let code = crate::run(&mut env);
+        let said = format!("{}{}", captured.out(), captured.err());
+        assert_eq!(code, ExitCode::Usage, "{said}");
+        assert!(
+            said.contains("carries no metadata"),
+            "refused, and not for this reason: {said}"
+        );
+    }
+
+    /// A named peer is a way for metadata to arrive, so the run is not refused.
+    ///
+    /// BEP 9 carries metadata from a peer, and `--peer` is dialled whether or
+    /// not discovery ever answers. A check that refused this would be refusing
+    /// the one arrangement a private swarm has. See `TODO/dht.md`, T-051.
+    #[test]
+    fn a_magnet_with_no_discovery_but_a_named_peer_is_not_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut env, captured) = Env::test(
+            &[
+                "download",
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--peer",
+                "127.0.0.1:1",
+                "--init-timeout",
+                "1s",
+                "--dir",
+                dir.path().to_str().unwrap(),
+            ],
+            dir.path(),
+        );
+        let code = crate::run(&mut env);
+        let said = format!("{}{}", captured.out(), captured.err());
+        assert_ne!(code, ExitCode::Usage, "{said}");
+        assert!(!said.contains("carries no metadata"), "{said}");
+    }
+
+    /// A `.torrent` carries its own metadata, so nothing about it is refused.
+    ///
+    /// This is the arrangement the tool exists for: a torrent file, its
+    /// payload from HTTP, and no swarm at all.
+    #[test]
+    fn a_torrent_file_with_web_seed_only_is_not_refused() {
+        let fixture = crate::test_support::TorrentFixture::single_file();
+        let server = crate::test_support::FileServer::start(fixture.payload_dir());
+        let dir = tempfile::tempdir().unwrap();
+        let (mut env, captured) = Env::test(
+            &[
+                "download",
+                fixture.path_str(),
+                "--web-seed-only",
+                "--web-seed",
+                &format!("{}/{}", server.base, fixture.files[0].0),
+                "--dir",
+                dir.path().to_str().unwrap(),
+            ],
+            dir.path(),
+        );
+        let code = crate::run(&mut env);
+        assert_ne!(code, ExitCode::Usage, "{}", captured.err());
+    }
+
     use super::*;
     use crate::cli::SelectionArgs;
     use crate::test_support::{TorrentFixture, run_json, run_json_code};

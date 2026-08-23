@@ -42,7 +42,7 @@ Source:      https://github.com/ikatson/rqbit/issues/310 (open)
 Category:    dht
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T10:55Z
 
 Problem:     A reporter running the daemon with no active torrents saw it as
              the busiest writer on the machine, from periodically saving the
@@ -58,13 +58,58 @@ Acceptance:  `bit-cli download <MAGNET>` writes nothing outside `--dir` and the
              system temp directory, verified by watching the process with
              Process Monitor for one run and recording the write list here.
 
+**Done, and it was worse than the entry supposed.** The Relevance says a short
+run "may still write one". It did, and the file it wrote is not this program's.
+
+`DhtSessionConfig::default()` sets `persistence: Some(..)`, and
+`dht/src/persistence.rs:98` builds the path from
+`get_configuration_directory("dht")`, which is `com.rqbit.dht`. So the file is
+`%LOCALAPPDATA%/rqbit/dht/cache/dht.json`: the routing table of whatever
+`rqbit` install is on the machine. There is one on this machine, and
+[RULES.md](RULES.md) section 5 records it as installed for interop. **This
+program was overwriting another program's state.**
+
+**Measured rather than reasoned about.** One 90 second run against an info hash
+that resolves to nothing:
+
+```
+before   2026-08-23 00:38:17  95,248 bytes
+after    2026-08-23 15:48:11  81,752 bytes
+```
+
+The timestamp moved and the file shrank, which is a rewrite rather than a
+touch. With `persistence: None` the same run leaves it at
+`2026-08-23 15:48:11  81,752`, byte for byte and second for second.
+
+**The line above it said this could not happen.** `SessionOptions` carries
+`persistence: None` with the comment "No persistence, ever. A stored session is
+Phase C, and writing one from a foreground command would leave state behind".
+That was true of the session and false of the DHT, one field away, in the same
+struct literal. `engine.rs:444` takes `dht_config()` now, and
+`the_dht_keeps_no_cache_on_disk` asserts both halves: that this program does
+not persist, and that the default still does, so the test says something about
+a choice rather than about a tautology.
+
+**What the acceptance asked for and what was done instead.** It asks for a
+Process Monitor write list. Process Monitor is a GUI, it cannot run unattended,
+and its output is not a thing a later session can re-derive. Two file
+timestamps and two sizes answer the same question for the one path that was
+found, are reproducible with `stat`, and are in this entry. **A full write list
+for one run is still not measured**, so a second path outside `--dir` would not
+have been found by this. That residual is real and is smaller than what it
+replaced.
+
+**Upstream's issue 310 is about the daemon writing every 60 seconds while
+idle.** `bit-cli` is a foreground one-shot, so the frequency was never the
+problem here. The path was.
+
 ### T-051 A magnet with no DHT and no trackers fails without saying so
 
 Source:      design gap
 Category:    dht
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T11:05Z
 
 Problem:     `--web-seed-only` turns off DHT, LSD, and trackers. A magnet
              source then has no way to resolve its metadata, so the run waits
@@ -76,6 +121,53 @@ Approach:    Refuse at argument-validation time: a magnet or bare info hash
              web seeds carry payload and not metadata.
 Acceptance:  `bit-cli download <MAGNET> --web-seed-only --web-seed <URL>` exits
              2 immediately, naming the conflict, rather than timing out.
+
+**Done, and the Problem's account of the failure is wrong.** It says the run
+"waits on `wait_until_initialized` until the deadline". It does not. Measured
+by taking the new check out and running the acceptance case, it failed in
+**0.01 seconds**, with exit **6**, `no_usable_sources`, and this:
+
+```
+error   magnet:?xt=urn:btih:0123...: no known way to resolve peers
+        (no DHT, no trackers, no initial_peers)
+```
+
+`librqbit` refuses the add itself. So the entry's premise, that this is a
+timeout nobody explains, was never true, and the work it implies, a deadline to
+short-circuit, was not the work.
+
+**What was actually wrong is the two things a caller reads.** The exit code
+said `no_usable_sources`, which is the code for a source that might be there
+next time, so a script retries an arrangement that cannot work on any attempt.
+And the message names `initial_peers`, a `librqbit` field that appears in no
+`bit-cli` flag, no manual and no document, so the one sentence a reader gets
+points at a thing they cannot set.
+
+It is exit **2** now, before the session is built, and it says what to do:
+
+```
+magnet:?xt=urn:btih:0123...: carries no metadata and every way of fetching it
+is off. A web seed serves payload, not the torrent file: name a .torrent, or
+leave one of the DHT, the trackers or local discovery on
+```
+
+**The Approach was too narrow by one flag and too wide by another.**
+
+It names `--web-seed-only`. `--no-dht --no-lsd --no-tracker` is the same
+arrangement spelled out and has the same answer, so the check is on the
+condition rather than on the flag.
+
+And it would have refused a run that works. `--peer` is dialled whether or not
+discovery ever answers, and BEP 9 carries metadata from a peer, so a magnet
+with every discovery mechanism off and one named peer is exactly how a private
+swarm is reached. `a_magnet_with_no_discovery_but_a_named_peer_is_not_refused`
+is the test that says the check is not that wide, and it was written because
+the first version of the check was.
+
+```
+$ cargo test -p bit-cli --lib a_magnet_with
+test result: ok. 3 passed; 0 failed; 0 ignored; 420 filtered out
+```
 
 ### T-052 DHT is not reported
 

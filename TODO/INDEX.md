@@ -127,8 +127,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-157](memory.md) | P2 | memory | **done** | A killed soak destroys the summary it was rewriting |
 | [T-041](memory.md) | P2 | memory | open | Per-source window cache is bounded but not measured |
 | [T-042](memory.md) | P1 | memory | **done** | Peak RSS is not captured in any report |
-| [T-050](dht.md) | P2 | dht | open | The DHT cache costs disk I/O even when nothing is running |
-| [T-051](dht.md) | P2 | dht | open | A magnet with no DHT and no trackers fails without saying so |
+| [T-050](dht.md) | P2 | dht | **done** | The DHT cache costs disk I/O even when nothing is running |
+| [T-051](dht.md) | P2 | dht | **done** | A magnet with no DHT and no trackers fails without saying so |
 | [T-052](dht.md) | P3 | dht | open | DHT is not reported |
 | [T-169](dht.md) | P3 | dht | open | BEP 33 DHT scrape and BEP 51 infohash indexing are not implemented |
 | [T-170](dht.md) | P3 | dht | open | BEP 44 mutable items are not implemented |
@@ -245,7 +245,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 167 items: 157 to work through, and 10 deferred to Phase C.
-33 open, 1 partial, 0 blocked, 123 done.
+31 open, 1 partial, 0 blocked, 125 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -504,10 +504,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 56 | 57 |
-| P2 | 18 | 1 | 0 | 43 | 62 |
+| P2 | 16 | 1 | 0 | 45 | 62 |
 | P3 | 14 | 0 | 0 | 12 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **33** | **1** | **0** | **123** | **167** |
+| **All** | **31** | **1** | **0** | **125** | **167** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
