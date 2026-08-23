@@ -768,3 +768,57 @@ one afternoon anyway.
 
 The message names the offset and the byte now, where it used to say "NUL byte"
 whatever it found.
+
+### T-221 A seeder fixture treated a bound port as a session ready to answer
+
+Source:      CI run 32637997195, `Test (ubuntu-latest)`, 2026-08-23
+Category:    ci
+Priority:    P1
+Effort:      S
+Status:      **done** 2026-08-23T12:20Z
+
+Problem:     `a_peer_that_leaves_is_reported_with_a_reason_and_a_time` waits for
+             the seeder's listener, then connects **once** and reads the
+             handshake back. A bound port is not a session ready to answer for
+             that info hash: the seeder binds before the torrent is live, so an
+             early connect is accepted and dropped, and `read_exact` sees the
+             close as `failed to fill whole buffer`.
+Relevance:   It turned `Test (ubuntu-latest)` red on a push that moved a gate
+             in `scripts/gates.ps1` and changed no source at all. That is the
+             sixth test of this kind, after [T-148](bench.md),
+             [T-160](cli-surface.md), [T-162](webseed.md),
+             [T-215](webseed.md) and [T-216](#t-216-a-seeder-test-waited-longer-for-a-listener-than-the-run-was-allowed-to-live),
+             and it is the same rule every time:
+             [RULES.md](RULES.md) section 5, a test waits on the condition and
+             never asserts the machine cannot fail some other way.
+
+             **[T-216](#t-216-a-seeder-test-waited-longer-for-a-listener-than-the-run-was-allowed-to-live)
+             is the near miss worth reading.** It fixed this test three hours
+             earlier, ordered the two deadlines, and gave the peer thread three
+             named failure paths. The failure it did not have is the fourth:
+             the connect and the handshake both succeed and the seeder hangs up
+             anyway, because the listener is up and the session is not.
+Approach:    Retry the whole attempt, inside the same patience, and return on
+             the first handshake that completes. The condition the test is
+             about is a completed handshake, not an accepted connection, and
+             waiting on the wrong one is what made a bound port look like
+             success.
+Acceptance:  The peer retries until the deadline it already had, the failure
+             names the last attempt, and one attempt succeeding is what ends
+             the wait.
+
+**Done.** The connect, the send and the read back are one closure now, called
+until it succeeds or the patience runs out, with a 100 ms gap. The message on
+failure carries the last attempt's reason, so the four cases stay
+distinguishable: no listener, a refused connect, a cut-short read, and none of
+them completing in time.
+
+**What is not changed, and why.** The seeder still binds before it is ready to
+answer, and this entry does not make it stop. That is what a listening socket
+means in the accept-then-check design [T-020](peers.md) closed on, and a fixture
+that assumed otherwise is the thing that was wrong.
+
+```
+$ cargo test -p bit-cli --lib a_peer_that_leaves
+test result: ok. 1 passed; 0 failed; 0 ignored; 427 filtered out
+```

@@ -99,8 +99,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
   `success` with `Clippy (tracking beta)` failing, because the tracking job
   does not block. What it found is [T-218](cli-surface.md), fixed two pushes
   later, and the run above is green on all nineteen including that job.
-- **Entries:** 169 items. 27 open, 1 partial, 0 blocked, 131 done, 10 deferred
-  to Phase C. 131 of 159 workable done, 28 left.
+- **Entries:** 170 items. 27 open, 1 partial, 0 blocked, 132 done, 10 deferred
+  to Phase C. 132 of 160 workable done, 28 left.
 - **Tree:** 94 Rust files, 55,302 lines of code, 13,766 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **27 patches**
@@ -110,7 +110,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 
 ## What the last session did
 
-**Fourteen entries closed, three filed, and nine of the fourteen had a premise
+**Fifteen entries closed, four filed, and nine of the fifteen had a premise
 the measurement disproved.** That is the highest proportion any session has
 had, and every one of them was found by running something rather than by
 reading it.
@@ -239,7 +239,7 @@ found so far: ten of the eleven documented `--trace` subsystems raise a target
 nothing writes to. Measured on one run tracing all ten: zero lines of stderr,
 against 257 for `http` on the same run.
 
-### The last push went red, and the gate that missed it is fixed
+### Two red jobs at the end of the session, and both are fixed
 
 **[T-220](cli-surface.md), filed and done.** `gates.ps1` ran the `record` gate
 before `man` and `fmt`, both of which rewrite files under `-Fix`. A local run
@@ -247,6 +247,15 @@ printed `record ok` and `all gates pass`; the push went red on `Record`,
 because `cargo fmt --all` had moved a cited line by ten **in the same run that
 had just approved it**. The gate runs after both now. Same shape as the
 `check-man.ps1 -Fix` defect found earlier the same day.
+
+**[T-221](windows.md), filed and done.** The push carrying that fix turned
+`Test (ubuntu-latest)` red on a seeder fixture, having changed no source at
+all. The peer waited for the listener and connected **once**: a bound port is
+not a session ready to answer for that info hash, so an early connect is
+accepted and dropped. It retries inside the patience it already had now. That
+is the **sixth** test of this kind and the second in one day, and
+[T-216](windows.md) fixed this very test three hours earlier without covering
+this path.
 
 ## In progress
 

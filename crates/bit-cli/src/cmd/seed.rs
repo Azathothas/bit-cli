@@ -1463,31 +1463,58 @@ mod tests {
         const PEER_PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
         let port = crate::test_support::free_port();
         let peer = std::thread::spawn(move || -> Result<(), String> {
+            let deadline = std::time::Instant::now() + PEER_PATIENCE;
             if !crate::test_support::wait_for_listener(port, PEER_PATIENCE) {
                 return Err(format!(
                     "no listener on port {port} within {PEER_PATIENCE:?}: the seeder never bound it"
                 ));
             }
-            let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
-                .map_err(|e| format!("cannot connect to port {port}: {e}"))?;
-            let mut handshake = Vec::with_capacity(68);
-            handshake.push(19u8);
-            handshake.extend_from_slice(b"BitTorrent protocol");
-            handshake.extend_from_slice(&[0u8; 8]);
-            handshake.extend_from_slice(&info_hash);
-            handshake.extend_from_slice(b"-bitCLItest000000001");
-            stream
-                .write_all(&handshake)
-                .map_err(|e| format!("cannot send the handshake: {e}"))?;
-            // Read theirs back, so the connection is established from both
-            // ends before it is dropped. Without this the seeder may never
+
+            // One attempt: connect, send a BEP 3 handshake, read theirs back.
+            // Reading theirs is what makes the connection established from
+            // both ends before it is dropped; without it the seeder may never
             // reach the live state and there is nothing to disconnect from.
-            let mut theirs = [0u8; 68];
-            let read = stream
-                .read_exact(&mut theirs)
-                .map_err(|e| format!("cannot read the seeder's handshake back: {e}"));
-            drop(stream);
-            read
+            let once = |info_hash: &[u8]| -> Result<(), String> {
+                let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
+                    .map_err(|e| format!("cannot connect to port {port}: {e}"))?;
+                let mut handshake = Vec::with_capacity(68);
+                handshake.push(19u8);
+                handshake.extend_from_slice(b"BitTorrent protocol");
+                handshake.extend_from_slice(&[0u8; 8]);
+                handshake.extend_from_slice(info_hash);
+                handshake.extend_from_slice(b"-bitCLItest000000001");
+                stream
+                    .write_all(&handshake)
+                    .map_err(|e| format!("cannot send the handshake: {e}"))?;
+                let mut theirs = [0u8; 68];
+                let read = stream
+                    .read_exact(&mut theirs)
+                    .map_err(|e| format!("cannot read the seeder's handshake back: {e}"));
+                drop(stream);
+                read
+            };
+
+            // Bound, and on the condition rather than on one attempt. A bound
+            // listener is not a session ready to answer for this info hash:
+            // the seeder binds before the torrent is live, so an early connect
+            // is accepted and dropped, and `read_exact` sees the close as
+            // "failed to fill whole buffer". That is what turned
+            // `Test (ubuntu-latest)` red at run 32637997195. Retrying inside
+            // the same patience waits for the thing the test is about, which
+            // is a handshake that completes. See `TODO/windows.md`, T-221.
+            let mut last = String::from("nothing was attempted");
+            while std::time::Instant::now() < deadline {
+                match once(&info_hash) {
+                    Ok(()) => return Ok(()),
+                    Err(why) => {
+                        last = why;
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
+            }
+            Err(format!(
+                "no handshake completed within {PEER_PATIENCE:?}, last attempt: {last}"
+            ))
         });
 
         // The run length rather than a wait on the peer: the peer connects the
