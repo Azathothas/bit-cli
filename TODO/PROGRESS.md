@@ -82,10 +82,9 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green on all **nineteen** jobs at run **32635532834**, against commit
-  `35707ee`. The pushes after it are named under "Start here next session"
-  item 1, which is to read the last of them. Seventeen jobs until this session:
-  [T-150](cli-surface.md) added `Clippy (tracking stable)` and
+- **CI:** green on all **nineteen** jobs at run **32638490147**, against commit
+  `9d5eb41`, which is the last commit of the session. Seventeen jobs until this
+  session: [T-150](cli-surface.md) added `Clippy (tracking stable)` and
   `Clippy (tracking beta)`.
 
   **One job went red and it is fixed.** Run **32637486414** failed `Record` on
@@ -101,7 +100,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
   later, and the run above is green on all nineteen including that job.
 - **Entries:** 170 items. 27 open, 1 partial, 0 blocked, 132 done, 10 deferred
   to Phase C. 132 of 160 workable done, 28 left.
-- **Tree:** 94 Rust files, 55,302 lines of code, 13,766 of comment,
+- **Tree:** 94 Rust files, 55,328 lines of code, 13,775 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **27 patches**
   across nineteen sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
@@ -287,8 +286,11 @@ The counts are derived from the rows rather than from memory:
 pwsh -NoProfile -File scripts/check-todo.ps1
 ```
 
-1. **Read the run this session's last push started**, which is the only thing
-   left unread:
+1. **Re-measure the baseline rather than trusting the one above**, which is
+   what [RULES.md](RULES.md) section 1 step 5 asks for. Every run this session
+   started has been read and the last is green on all nineteen jobs, so there
+   is no red job waiting and nothing to chase. One documentation commit sits on
+   top of `9d5eb41` carrying a skip marker, so it started no run.
 
 ```bash
 gh run list --limit 1
