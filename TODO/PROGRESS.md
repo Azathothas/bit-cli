@@ -75,13 +75,13 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** the last green one is run **32648746353**, all nineteen jobs,
-  against commit `4931e66`. Five runs this session and **two were red, both
-  fixed**: **32645146193** on `Test (windows-latest)`, which is
-  [T-223](bench.md), and **32649574641** on
-  `Create round trip (windows-latest)`, which is [T-225](create-seed.md). One
-  push follows this line carrying that fix, and its run is not named here;
-  read the current one.
+- **CI:** green on all **nineteen** jobs at run **32650336109**, against
+  commit `0ad5792`, which is the last commit of the session. Six runs this
+  session and **two were red, both fixed and both entered**:
+  **32645146193** on `Test (windows-latest)`, which is [T-223](bench.md), and
+  **32649574641** on `Create round trip (windows-latest)`, which is
+  [T-225](create-seed.md). One documentation commit follows this line carrying
+  a CI skip marker, so it starts no run.
 - **Soak, finished:** the six hour run completed at 2026-08-23T15:01:32Z, 681
   samples, 1,360 leech cycles, none failed, every named ceiling held. Its CSV
   and JSON are committed. What its RSS slope actually says is
