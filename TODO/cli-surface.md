@@ -3088,12 +3088,14 @@ Source:      measured on `beta` while closing [T-150](#t-150-clippy-pins-a-float
 Category:    ci
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T11:25Z
 
 Problem:     `rustc 1.99.0-beta.1` deprecates
              `std::sync::atomic::Atomic::<u64>::fetch_update`, renamed to
-             `try_update`. `crates/bit-cli-core/src/webseed/bridge.rs:450`
-             calls it:
+             `try_update`. `request_settled`, in
+             `crates/bit-cli-core/src/webseed/bridge.rs`, calls it. The line
+             number is in the compiler's own output below rather than here,
+             because the fix moves it and this is a record of where it was:
 
              ```
              error: use of deprecated method
@@ -3138,3 +3140,55 @@ Acceptance:  `cargo +beta clippy --workspace --all-targets --all-features --
              -D warnings` is clean, `cargo check` on 1.88 still passes, and a
              test holds the saturating behaviour the closure carried, which
              nothing does today.
+
+**Done, and the title undercounts it: there were two, and the first run of the
+acceptance is what found the second.**
+
+**The Acceptance command was wrong, and being wrong is what found it.**
+`cargo clippy -- -D warnings` passes the flag to the crates being linted and
+not to path dependencies. CI sets `RUSTFLAGS: -D warnings`, which reaches
+everything, and that is the difference between a warning nobody sees and a
+failed job. Run the way CI runs it, `beta` had a **second** finding:
+
+```
+error: use of deprecated constant `std::f64::INFINITY`:
+       replaced by the `INFINITY` associated constant on `f64`
+  --> vendor/librqbit-utp/src/congestion/cubic.rs:56:28
+```
+
+`cubic.rs` opened with `use std::{f64, ...}`, importing the **module**, so
+`f64::INFINITY` resolved to the legacy module constant rather than to the
+associated constant on the primitive. Dropping the import is the whole fix and
+the expression is untouched. That is
+[`patches/UPSTREAM.md`](../patches/UPSTREAM.md)'s nineteenth section.
+
+**The bridge's own fix is the loop rather than the new name.** `try_update`
+does not exist on the pinned 1.98.0 or on the MSRV, and
+[RULES.md](RULES.md) section 6 says the MSRV is measured rather than chosen, so
+taking the rename would mean raising it eleven releases to silence a lint.
+`saturating_decrement` in `webseed/bridge.rs` is the compare-exchange loop
+`fetch_update` compiles to.
+
+**`#[allow(deprecated)]` was the alternative and is worse.** It silences the
+call site for every future rename in the same file, which is precisely the
+early warning [T-150](#t-150-clippy-pins-a-floating-toolchain-so-a-rust-release-can-turn-the-tree-red)
+was built to get.
+
+**The saturation had no test, and that is what the closure was for.** Every
+settle is paired with a receive, so a plain `fetch_sub` is correct in every path
+that exists today and wraps to `u64::MAX` the first time one is not. The number
+is reported as `in_flight`, so the failure would be a figure a reader believes.
+`a_settled_request_never_takes_the_counter_below_zero` holds it now.
+
+**Both toolchains, the way CI runs them.**
+
+```
+$ RUSTFLAGS="-D warnings" cargo +beta clippy --workspace --all-targets --all-features
+    Finished `dev` profile
+
+$ RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --all-features
+    Finished `dev` profile
+```
+
+`rustc 1.99.0-beta.1` and the pinned `1.98.0`. The vendored trees still pass
+their own tests, 149 in `rqbit` and 76 in `librqbit-utp`.

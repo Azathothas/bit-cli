@@ -446,11 +446,7 @@ impl BridgeStatus {
     /// A requested block is no longer outstanding, whether it was served, was
     /// cancelled, or failed.
     fn request_settled(&self, elapsed: Duration) {
-        self.in_flight
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                Some(n.saturating_sub(1))
-            })
-            .ok();
+        saturating_decrement(&self.in_flight);
         self.service_nanos.fetch_add(
             elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
             Ordering::Relaxed,
@@ -462,6 +458,35 @@ impl BridgeStatus {
     /// as still in flight would report a depth that no longer exists.
     fn reset_in_flight(&self) {
         self.in_flight.store(0, Ordering::Relaxed);
+    }
+}
+
+/// Take one off a counter, and stop at zero.
+///
+/// This is `fetch_update` with `saturating_sub`, written as the loop that
+/// method is. `fetch_update` is deprecated from `rustc` 1.99, renamed to
+/// `try_update`, and under CI's `-D warnings` a deprecation is an error rather
+/// than a warning. The new name cannot be taken: it does not exist on the
+/// pinned toolchain and it does not exist on the MSRV, 1.88, which
+/// `TODO/RULES.md` section 6 says is measured rather than chosen. Silencing it
+/// with `#[allow(deprecated)]` would hide the next rename in this file too.
+///
+/// The saturation is the part worth keeping. Every settle is paired with a
+/// receive, so a plain `fetch_sub` would be correct in every path there is;
+/// it would also wrap to `u64::MAX` the first time one is not, and the number
+/// it is counting is reported. See `TODO/cli-surface.md`, T-218.
+fn saturating_decrement(counter: &AtomicU64) {
+    let mut current = counter.load(Ordering::Relaxed);
+    while current > 0 {
+        match counter.compare_exchange_weak(
+            current,
+            current - 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return,
+            Err(seen) => current = seen,
+        }
     }
 }
 
@@ -1413,6 +1438,26 @@ impl Framer {
 
 #[cfg(test)]
 mod tests {
+    /// The counter stops at zero rather than wrapping.
+    ///
+    /// The saturation is the whole reason this is not `fetch_sub`, and nothing
+    /// held it: the closure it replaced was never covered either. A wrapped
+    /// counter is reported as `in_flight`, so the failure is a number a reader
+    /// believes. See `TODO/cli-surface.md`, T-218.
+    #[test]
+    fn a_settled_request_never_takes_the_counter_below_zero() {
+        let counter = AtomicU64::new(2);
+        saturating_decrement(&counter);
+        saturating_decrement(&counter);
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+        saturating_decrement(&counter);
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            0,
+            "the counter wrapped instead of stopping"
+        );
+    }
+
     use super::*;
     use crate::webseed::binding::{BindingSet, Origin, SourceSpec};
     use crate::webseed::scope::Scope;

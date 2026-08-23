@@ -1359,3 +1359,42 @@ T-178, which records what happens with the guard removed.
 ```bash
 cargo test -p bit-cli-core --lib a_write_that_makes_no_progress
 ```
+
+---
+
+## librqbit-utp: a deprecated constant that the next release turns into a failed build
+
+```
+Unblocks:    T-218, TODO/cli-surface.md
+Files:       vendor/librqbit-utp/src/congestion/cubic.rs
+             patches/librqbit-utp/0001-src-congestion-cubic.rs.patch
+Upstream:    ours, and it is a lint in their code that a release may fix their
+             own way. It is also the kind that arrives with a toolchain rather
+             than with a commit, so check it at the next reconciliation.
+Added:       2026-08-23T11:20Z
+```
+
+`cubic.rs` opened with `use std::{f64, time::{Duration, Instant}}`. Importing
+the **module** `std::f64` puts it in scope as a path, so `f64::INFINITY` twelve
+lines down resolves to `std::f64::INFINITY`, the legacy module constant, rather
+than to the associated constant on the primitive. `rustc` 1.99 deprecates the
+module constants, and CI sets `RUSTFLAGS: -D warnings` for the whole workflow,
+so on the day 1.99 is stable that is a failed build rather than a warning.
+
+The change is to stop importing the module. The expression is unchanged, and
+with the module gone it resolves to `<f64>::INFINITY`, which is the same value
+and is not deprecated. The associated constant has been stable since 1.43, well
+under the 1.88 MSRV.
+
+**Why it has to be here.** Because it is their file, and because
+`[patch.crates-io]` makes their warnings ours: cargo caps lints for a registry
+dependency and does not cap them for a path dependency. The first section of
+this file is the same case.
+
+**How it was proved.** Both toolchains, with the flag CI sets, before and
+after. Before, `beta` fails on this line and `stable` is silent. After, both
+are clean.
+
+```bash
+RUSTFLAGS="-D warnings" cargo +beta clippy --workspace --all-targets --all-features
+```
