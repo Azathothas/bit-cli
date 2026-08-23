@@ -173,9 +173,9 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-168](bep-coverage.md) | P3 | bep | open | WebTorrent peers and WSS trackers are not supported |
 | [T-171](metainfo.md) | P2 | metainfo | **done** | httpseeds written as a bencoded string is silently dropped |
 | [T-172](metainfo.md) | P2 | metainfo | **done** | Strictness on read is undecided, and the error does not say |
-| [T-173](metainfo.md) | P3 | metainfo | open | A zero-length path component has no defined meaning |
+| [T-173](metainfo.md) | P3 | metainfo | open | A zero-length path component has no defined meaning *(title disproved: it is dropped; what is missing is the report)* |
 | [T-174](metainfo.md) | P2 | metainfo | **done** | A piece length that is not a multiple of 16 KiB has no fixture |
-| [T-187](metainfo.md) | P3 | metainfo | open | Non-canonical integers are refused everywhere, with no instance behind the rule |
+| [T-187](metainfo.md) | P3 | metainfo | **done** | Non-canonical integers are refused everywhere, with no instance behind the rule |
 | [T-110](cli-surface.md) | P1 | cli | **done** | The --jsonl event stream is incomplete |
 | [T-111](cli-surface.md) | P2 | cli | open | piece_verified and file_completed are derived from polling |
 | [T-112](cli-surface.md) | P1 | cli | **done** | --log-file does not write or rotate anything |
@@ -250,7 +250,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 172 items: 162 to work through, and 10 deferred to Phase C.
-26 open, 1 partial, 0 blocked, 135 done.
+25 open, 1 partial, 0 blocked, 136 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -510,9 +510,9 @@ sessions earlier.
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 60 | 61 |
 | P2 | 13 | 1 | 0 | 49 | 63 |
-| P3 | 12 | 0 | 0 | 14 | 26 |
+| P3 | 11 | 0 | 0 | 15 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **26** | **1** | **0** | **135** | **172** |
+| **All** | **25** | **1** | **0** | **136** | **172** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

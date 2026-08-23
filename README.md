@@ -1721,8 +1721,18 @@ nothing here.
 
 What is still refused: duplicate keys, integers with a leading zero or `-0`,
 non-string keys, lengths that run past the end, and any trailing byte that is
-not whitespace or NUL. Those are ambiguities rather than untidiness, and the
-error names the rule rather than only the symptom.
+not whitespace or NUL. The error names the rule rather than only the symptom.
+
+**The leading zero is refused deliberately, and not for the reason it looks
+like.** It cannot move the info hash either: the same verbatim `info` bytes
+that make an unsorted key safe make `i03e` safe. It is refused because no
+torrent in the corpus carries one, and a parser that relaxes a rule with no
+instance behind it grows tolerance nobody needed and gives a hostile file one
+more shape to take. Key order was different on both counts: a real uTorrent
+torrent carries it, and a `BTreeMap` discards order for free, where an
+integer's byte form would have to be recorded per value to be reportable at
+all. If a torrent in the wild turns up with one, this becomes the same work
+key order was.
 
 ## Protocol support
 

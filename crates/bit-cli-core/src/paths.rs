@@ -90,6 +90,15 @@ pub enum Reason {
     TooLong,
     /// A component is empty, or became empty once the above were applied.
     Empty,
+    /// A zero-length component was dropped from the middle or the ends of the
+    /// path.
+    ///
+    /// `path: ["", "foo"]` in the metainfo is `/foo` once joined, and BEP 3
+    /// gives an empty component no meaning, so it is dropped and the file
+    /// lands at `foo`. The drop is reported because the path on disk is then
+    /// not the path the torrent named, which is the one thing this planner
+    /// exists to make visible. See `TODO/metainfo.md`, T-173.
+    DroppedComponent,
     /// Another file in the same torrent already claimed this path, ignoring
     /// case.
     CaseCollision,
@@ -108,6 +117,7 @@ impl Reason {
             Self::TrailingDotOrSpace => "a path component ends in a dot or a space",
             Self::TooLong => "a path component is longer than 255 bytes",
             Self::Empty => "a path component is empty",
+            Self::DroppedComponent => "a zero-length path component was dropped",
             Self::CaseCollision => "two paths differ only in case",
             Self::DuplicatePath => "two files claim the same path",
         }
@@ -201,8 +211,17 @@ pub fn plan_with(paths: &[String], overrides: &BTreeMap<usize, String>) -> PathP
             }
             None => torrent_path,
         };
-        let components: Vec<String> = original
-            .split('/')
+        // A zero-length component and a `.` carry no name, so both are
+        // dropped. Only the empty one is reported: `.` is a component that
+        // names the directory it is already in, which is a path written the
+        // long way round rather than a path the metainfo could have meant two
+        // ways. See `TODO/metainfo.md`, T-173.
+        let raw: Vec<&str> = original.split('/').collect();
+        if raw.iter().any(|c| c.is_empty()) {
+            push_reason(&mut reasons, Reason::DroppedComponent);
+        }
+        let components: Vec<String> = raw
+            .into_iter()
             .filter(|c| !c.is_empty() && *c != ".")
             .map(|component| sanitize_component(component, &mut reasons))
             .collect();
@@ -524,10 +543,17 @@ mod tests {
         }
         // A leading `/` is not in the table above, because it produces an
         // empty component that is dropped rather than a component that is
-        // changed, so no reason is recorded for it. The path is still made
-        // relative, which is the property that matters.
+        // changed. The path is still made relative, which is the property that
+        // matters, and the drop is reported: until T-173 it was not, so a
+        // caller comparing the torrent's file list against `--json` saw a path
+        // it had not asked for and no reason for it.
         let plan = plan_of_with(&["payload.bin"], &[(0, "/abs/x")]);
         assert_eq!(plan.disk_paths, ["abs/x"]);
+        assert!(
+            plan.renames[0].reasons.contains(&Reason::DroppedComponent),
+            "{:?}",
+            plan.renames[0].reasons
+        );
     }
 
     /// A requested path that collides with another file is disambiguated the

@@ -412,3 +412,89 @@ async fn two_one_file_torrents_with_the_same_file_name_do_not_collide() {
 
     assert_eq!(tree(out.path()), ["first/movie.bin", "second/movie.bin"]);
 }
+
+/// A zero-length path component lands as if it were not there.
+///
+/// `TODO/metainfo.md` T-173. `path: ["", "foo"]` is `/foo` once joined and BEP
+/// 3 gives an empty component no meaning, so the file lands at `foo`. Three
+/// shapes, all of them: leading, doubled in the middle, and trailing.
+///
+/// **The drop is not reported, and the reason is a seam rather than an
+/// oversight.** `SafeStorage` plans from `TorrentMetadata::file_infos`, whose
+/// `relative_filename` is a `PathBuf` the vendored session has already built
+/// (`crates/bit-cli-core/src/storage.rs:426`), and `PathBuf::push` drops an
+/// empty component on the way in. So by the time this repository's planner
+/// sees the path there is nothing left to drop and nothing to report.
+/// `Reason::DroppedComponent` exists and fires on the one path where the raw
+/// components do reach the planner, which is `--index-out`; the entry carries
+/// what closing the rest would need.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_empty_path_component_lands_as_if_it_were_not_there() {
+    let torrent = hostile_torrent("album", &["/lead.bin", "mid//dle.bin", "trail.bin/"], 1024);
+    let run = add(&torrent).await;
+
+    assert_eq!(
+        run.plan.disk_paths,
+        ["lead.bin", "mid/dle.bin", "trail.bin"]
+    );
+    assert_eq!(tree(run.root()).len(), 3);
+    // Pinned rather than asserted as correct: this is the measurement the
+    // entry rests on, and a change that started reporting the drop should
+    // fail here and be read as progress.
+    assert!(
+        run.plan.renames.is_empty(),
+        "the drop is reported now, which closes T-173: {:?}",
+        run.plan.renames
+    );
+}
+
+/// Two entries that collapse onto the same path are refused, whole.
+///
+/// This is the case `TODO/metainfo.md` T-173 was filed about, and the answer
+/// is not this repository's planner: `librqbit_core`'s `validate` joins every
+/// file's components and refuses the torrent when two join to the same name,
+/// which `path: ["", "foo"]` and `path: ["foo"]` do.
+///
+/// The entry argues why that stays rather than being relaxed into a rename the
+/// way a case collision is. The short version is that no torrent in evidence
+/// carries one, and a validation relaxed with no instance behind it is
+/// tolerance nobody asked for. It is here so the behaviour is pinned rather
+/// than incidental, and so that relaxing it later is a decision somebody has
+/// to make against a failing test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_entry_that_collapses_onto_another_is_refused_whole() {
+    let torrent = hostile_torrent("album", &["/foo.bin", "foo.bin"], 1024);
+    let out = tempfile::tempdir().unwrap();
+    let meta = tempfile::tempdir().unwrap();
+    let path = meta.path().join("hostile.torrent");
+    std::fs::write(&path, torrent).unwrap();
+
+    let engine = Engine::start(&EngineOptions {
+        download_directory: out.path().to_path_buf(),
+        listen_ports: 0..=0,
+        listen_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+        enable_dht: false,
+        enable_lsd: false,
+        enable_trackers: false,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let added = engine
+        .add(
+            &path.display().to_string(),
+            &AddOptions {
+                overwrite: true,
+                ..Default::default()
+            },
+        )
+        .await;
+    engine.stop().await;
+
+    let error = added.err().expect("the torrent is refused");
+    assert!(
+        error.message().contains("duplicate filenames"),
+        "{}",
+        error.message()
+    );
+}

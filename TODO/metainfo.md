@@ -411,6 +411,82 @@ Acceptance:  A fixture with `path: ["", "foo"]` beside `path: ["foo"]` lands
              overwrites the other. Sits in `crates/bit-cli-core/tests/hostile_paths.rs`
              with the rest of the planner's adversarial set.
 
+**Measured, and the premise is wrong in both halves.** The entry says nothing
+says what an empty component means and the planner has no test for it. Both
+are answered now, and neither answer is the one the Approach assumed.
+
+**It has a defined meaning and always did.** `crates/bit-cli-core/src/paths.rs`
+drops an empty component and a `.`, and the comment beside the `-O` test says
+so. Three shapes measured, all of them landing as if the component were not
+there:
+
+```
+["", "lead.bin"]        -> lead.bin
+["mid", "", "dle.bin"]  -> mid/dle.bin
+["trail.bin", ""]       -> trail.bin
+```
+
+**The case the entry is actually about is refused, whole, before the planner
+runs.** `path: ["", "foo"]` beside `path: ["foo"]` is
+`BadTorrentDuplicateFilenames` from `librqbit_core`'s `validate` at
+`vendor/rqbit/crates/librqbit_core/src/torrent_metainfo.rs:352`, which joins
+every file's components and refuses the torrent when two join to the same
+name. So the two entries never reach the collision rule the Approach proposed
+using:
+
+```
+["/foo.bin", "foo.bin"] -> REFUSED: duplicate filenames in torrent
+```
+
+**That refusal stays, and the argument is the one
+[T-187](#t-187-non-canonical-integers-are-refused-everywhere-with-no-instance-behind-the-rule)
+just used.** parse-torrent
+[Issue 89](https://github.com/webtorrent/parse-torrent/issues/89) is a parser's
+handling, not a torrent anybody has: nothing in the corpus carries an `info`
+with two entries that collapse onto one name. A validation relaxed with no
+instance behind it is tolerance nobody asked for, and it would be inconsistent
+to keep `i03e` strict on that argument in the same session and relax this one.
+[T-072](windows.md)'s precedent does not carry over either: a case collision is
+a **filesystem** fact, where the torrent is unambiguous and the disk is not,
+and this is a **metainfo** fact, where the torrent itself says two things.
+
+`an_entry_that_collapses_onto_another_is_refused_whole` pins it, so relaxing it
+later is a decision somebody makes against a failing test rather than a change
+nobody notices.
+
+**What is left open is smaller than the entry and is a seam.** The drop is not
+reported. `SafeStorage` plans from `TorrentMetadata::file_infos`, whose
+`relative_filename` is a `PathBuf` the vendored session has already built
+(`crates/bit-cli-core/src/storage.rs:426`), and `PathBuf::push` drops an empty
+component on the way in. By the time this repository's planner sees the path
+there is nothing left to drop, so it cannot report what it never saw.
+
+`Reason::DroppedComponent` is built and is reported on the one path where the
+raw components do reach the planner, `--index-out`:
+`-O 0=/abs/x` lands at `abs/x` and says why. Closing the rest needs one of two
+things, and both are larger than this entry:
+
+- a patch to `librqbit_core` so `FileDetails` carries the raw components beside
+  the built `PathBuf`, or
+- `SafeStorage` planning from this repository's own metainfo parse rather than
+  from the session's file list, which is a bigger change than it sounds
+  because the session's list is also what the piece-to-file mapping is keyed
+  on.
+
+Neither is worth doing for a P3 whose only cost is a missing `reasons` entry on
+a path that is already correct. The entry stays open with the seam named, which
+is what [RULES.md](RULES.md) section 5 asks for.
+
+**Two tests, in `crates/bit-cli-core/tests/hostile_paths.rs`.**
+`an_empty_path_component_lands_as_if_it_were_not_there` asserts the three
+shapes and pins the absent report, so a change that starts reporting it fails
+there and is read as progress.
+`an_entry_that_collapses_onto_another_is_refused_whole` pins the refusal.
+
+```bash
+cargo test -p bit-cli-core --test hostile_paths
+```
+
 ### T-174 A piece length that is not a multiple of 16 KiB has no fixture
 
 Source:      `reference/RESEARCH.md` section C, 2026-08-21
@@ -526,7 +602,7 @@ Source:      found while measuring [T-172](#t-172-strictness-on-read-is-undecide
 Category:    metainfo
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T15:00Z
 
 Problem:     `i03e` and `i-0e` are refused wherever they appear, `info` and
              out, by `NonCanonicalInteger` in
@@ -567,3 +643,39 @@ Acceptance:  Either a fixture from a real torrent that carries one, read and
              reported the way T-172 reads unsorted keys, or a line in
              `README.md` under "Reading a torrent somebody else wrote" saying
              the rule is deliberate and why.
+
+**Done, and the outcome is the one the Approach said it most likely had: the
+rule is deliberate and is written down.** No instance turned up, and nothing
+was re-fetched to look for one: [RULES.md](RULES.md) section 7 says not to
+re-fetch what `RESEARCH.md` already summarises, and what it summarises is an
+adversarial case in `rustorrent`'s audit rather than a torrent anybody has.
+
+**What the examination found is that the reason in the code was wrong.**
+`crates/bit-cli-core/src/torrent/bencode.rs` justified the rule with "would
+make the info hash ambiguous". It would not. `decode_torrent` records the byte
+span of `info` and `Metainfo::from_bytes` hashes **those bytes**
+(`crates/bit-cli-core/src/torrent/metainfo.rs:185`), so a leading zero inside
+`info` moves the hash exactly as much as an unsorted key does, which is not at
+all. That is the same argument [T-172](#t-172-strictness-on-read-is-undecided-and-the-error-does-not-say)
+made, and this entry is what noticed it applies here too.
+
+So the comment now carries the two reasons that do hold, both about evidence
+rather than correctness: no instance, and a cost that key order did not have.
+A `BTreeMap` discards key order for free, so tolerating it needed only a record
+that it happened; an integer's byte form would have to be recorded per value to
+be reportable, and a report saying "some integer somewhere had a leading zero"
+is not worth the field.
+
+**Pinned by a test rather than by prose.**
+`a_non_canonical_integer_inside_info_is_refused_too` refuses `i03e` inside
+`info` and, on the same fixture written canonically, asserts the recorded span
+is the `info` bytes. The second half is what makes the paragraph above checkable
+rather than asserted: it is the mechanism that would have made tolerance safe.
+
+```bash
+cargo test -p bit-cli-core --lib torrent::bencode
+```
+
+`README.md`, under "Reading a torrent somebody else wrote", says the same thing
+for a reader who is not going to open the parser, and says what would change
+the decision: a torrent in the wild that carries one.

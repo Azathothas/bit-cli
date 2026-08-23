@@ -61,7 +61,7 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
   operator's word. The duration is not restated here:
   `scripts/session-report.ps1` derives it from the instant above, and a
   duration written down twice is a number two documents disagree about.
-- **Tests:** 1,263 passing, 0 failing. 1,228 at the start. Plus **149** in the
+- **Tests:** 1,266 passing, 0 failing. 1,228 at the start. Plus **149** in the
   vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
   do not run. The vendored count is unchanged by this session's patch, which
   was the point of running them.
@@ -75,18 +75,19 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green on all **nineteen** jobs at run **32638490147**, against commit
-  `9d5eb41`, which is the last commit of the **previous** session. This
-  session's own run is newer and is named in the next revision of this file;
+- **CI:** green on all **nineteen** jobs at run **32647024856**, against commit
+  `f7668e2`, which closes [T-222](cli-surface.md) and [T-223](bench.md). The
+  run before it, **32645146193**, was red on `Test (windows-latest)` and that
+  is what T-223 is. One push follows this line and its run is not named here;
   read the current one rather than trusting either.
 
 ```bash
 gh run list --limit 1
 ```
 
-- **Entries:** 172 items. 26 open, 1 partial, 0 blocked, 135 done, 10 deferred
-  to Phase C. 135 of 162 workable done, 27 left.
-- **Tree:** 95 Rust files, 56,006 lines of code, 14,009 of comment,
+- **Entries:** 172 items. 25 open, 1 partial, 0 blocked, 136 done, 10 deferred
+  to Phase C. 136 of 162 workable done, 26 left.
+- **Tree:** 96 Rust files, 56,600 lines of code, 14,305 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **28 patches**
   across twenty sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
@@ -95,11 +96,12 @@ gh run list --limit 1
 
 ## What the last session did
 
-**Three entries closed and two filed, and every one of the three was found or
-shaped by running something rather than by reading it.** The operator ruled on
-the open question from the previous session, "build rather than delete", so the
-session opened with [T-219](cli-surface.md), item 2 of the previous work order,
-and the other two came out of it.
+**Four entries closed, two filed, and one corrected, and every one of them was
+found or shaped by running something rather than by reading it.** The operator
+ruled on the open question from the previous session, "build rather than
+delete", so the session opened with [T-219](cli-surface.md), item 2 of the
+previous work order; T-222 and T-223 came out of it, and the effort S list
+followed.
 
 ### [T-219](cli-surface.md), P1, effort M, done
 
@@ -219,12 +221,56 @@ subsystem is off: `tracing` does not evaluate a record's fields unless
 something is listening. The commit was simply the first run since the last
 green one.
 
+### The effort S list, item 2 of the order, and both entries were wrong
+
+**[T-187](metainfo.md), P3, done.** Non-canonical integers stay refused, which
+is the outcome the entry said it most likely had. Nothing was re-fetched to
+look for an instance: [RULES.md](RULES.md) section 7 says not to, and what
+`RESEARCH.md` records is an adversarial case in an audit rather than a torrent
+anybody has.
+
+**What the examination found is that the reason in the code was wrong.**
+`bencode.rs` justified the rule with "would make the info hash ambiguous". It
+would not: `decode_torrent` records the byte span of `info` and `Metainfo`
+hashes those bytes, so a leading zero inside `info` moves the hash exactly as
+much as an unsorted key does, which is not at all. That is
+[T-172](metainfo.md)'s own argument, applied where nobody had applied it. The
+comment carries the two reasons that do hold, both about evidence rather than
+correctness, and a test pins the decision by asserting the refusal **and** the
+recorded span on the same fixture written canonically.
+
+**[T-173](metainfo.md), P3, open, premise disproved and corrected under it.**
+The entry says nothing in `bit-cli` defines a zero-length path component and
+the planner has no test. Both halves are wrong.
+
+The component is dropped, always was, and three shapes were measured landing
+as if it were not there. And the case the entry is actually about, `["", "foo"]`
+beside `["foo"]`, never reaches the planner: `librqbit_core`'s `validate`
+refuses the whole torrent with `duplicate filenames in torrent`.
+
+**That refusal stays, on T-187's own argument**, and it would have been
+inconsistent to do otherwise in the same session: no torrent in evidence
+carries one, and a validation relaxed with no instance behind it is tolerance
+nobody asked for. [T-072](windows.md)'s precedent does not carry over, because
+a case collision is a filesystem fact and this is a metainfo fact.
+
+**What is left is a seam and it is smaller than the entry.** The drop is not
+reported, because `SafeStorage` plans from the session's `file_infos`, whose
+`relative_filename` is a `PathBuf` that already lost the empty component. The
+planner cannot report what it never saw. `Reason::DroppedComponent` is built
+and fires on the one path where the raw components do reach it, `--index-out`.
+The entry names the two ways to close the rest and why neither is worth it for
+a P3 whose only cost is a missing `reasons` entry on a path that is correct.
+
 ## In progress
 
 Nothing is half-written. All three entries are closed in [INDEX.md](INDEX.md)
 with their acceptance runs recorded, and T-219's evidence is committed at
 `bench/trace-subsystems-20260823T140418847Z.json`.
 
+- **[T-173](metainfo.md)** is open with its premise disproved, the correction
+  written under it, and the seam named with a file and a line. What is left is
+  the report of a dropped path component, not the behaviour.
 - **[T-212](memory.md)** is open and unchanged, still waiting on a fixture of
   stalling peers.
 - **[T-102](bep-coverage.md)** is open and **[T-164](peers.md)** is partial,
@@ -256,10 +302,17 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 gh run list --limit 1
 ```
 
-2. **The effort S entries**, eight of them, and this is where the open count
-   comes down: [T-176](create-seed.md), [T-173](metainfo.md),
-   [T-187](metainfo.md), [T-041](memory.md), [T-165](peers.md),
-   [T-033](performance.md), [T-008](webseed.md), [T-103](bep-coverage.md).
+2. **The effort S entries**, six left of the eight, and this is where the open
+   count comes down: [T-176](create-seed.md), [T-041](memory.md),
+   [T-165](peers.md), [T-033](performance.md), [T-008](webseed.md),
+   [T-103](bep-coverage.md). [T-187](metainfo.md) closed and
+   [T-173](metainfo.md) is open with its premise disproved and the seam named,
+   which is a smaller thing than the entry describes.
+
+   **[T-176](create-seed.md) is the one to take first**, and it is the only P2
+   of the six: two of its three lints are the difference between a torrent that
+   opens everywhere and one that opens here, and the third is an error message
+   that says something false.
 
    **Check each against the tree before building.** That rule has now paid
    four sessions running and this session is the sharpest case yet: T-219's

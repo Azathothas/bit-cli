@@ -290,8 +290,22 @@ impl Parser<'_> {
         let digits = &self.input[self.pos..end];
         let text = std::str::from_utf8(digits).map_err(|_| Error::BadInteger(start))?;
         let value: i64 = text.parse().map_err(|_| Error::BadInteger(start))?;
-        // `i03e` and `i-0e` would let one number have several encodings, which
-        // would make the info hash ambiguous.
+        // `i03e` and `i-0e` are refused, and the reason written here until
+        // 2026-08-23 was that they would make the info hash ambiguous. They
+        // cannot: [`decode_torrent`] records the byte span of `info` and
+        // `Metainfo` hashes **those bytes**, so the hash is taken over what
+        // was read rather than over anything re-encoded. A leading zero
+        // inside `info` moves nothing, exactly as an unsorted key moves
+        // nothing, which is what T-172 established.
+        //
+        // The rule stays, for two reasons that are about evidence rather than
+        // correctness, and `TODO/metainfo.md` T-187 is where they are argued.
+        // No torrent in the corpus carries one, and relaxing a rule with no
+        // instance behind it grows tolerance nobody needed and gives a hostile
+        // file one more shape to take. And unlike key order, which a
+        // `BTreeMap` discards for free, an integer's byte form would have to
+        // be recorded per value to be reportable at all, and a report saying
+        // "some integer somewhere had a leading zero" is not worth the field.
         let canonical = value.to_string();
         if canonical != text {
             return Err(Error::NonCanonicalInteger(start));
@@ -591,6 +605,34 @@ mod tests {
                 "{bad} should be refused"
             );
         }
+    }
+
+    /// And inside `info` too, which is the case worth pinning because the
+    /// obvious argument for the rule does not hold there.
+    ///
+    /// An unsorted key inside `info` is tolerated, by T-172, because the
+    /// `info` bytes are hashed from their recorded span and never re-encoded.
+    /// That is equally true of a leading zero, so "it would move the hash" is
+    /// not why this is refused. It is refused because no torrent in the corpus
+    /// carries one and a rule relaxed without an instance is tolerance nobody
+    /// asked for. See `TODO/metainfo.md`, T-187, and the comment on
+    /// `Parser::integer`.
+    #[test]
+    fn a_non_canonical_integer_inside_info_is_refused_too() {
+        // A leading zero on `info.length`, inside the dictionary the hash
+        // is taken over.
+        let torrent = b"d4:infod6:lengthi03eee";
+        assert!(
+            matches!(decode_torrent(torrent), Err(Error::NonCanonicalInteger(_))),
+            "a leading zero inside info is refused"
+        );
+        // The same torrent with the integer written canonically is read, and
+        // the span that would have been hashed is recorded, which is what
+        // makes the paragraph above true rather than asserted.
+        let good = b"d4:infod6:lengthi3eee";
+        let (_, span, _) = decode_torrent(good).expect("the canonical form reads");
+        let span = span.expect("info has a span");
+        assert_eq!(&good[span], b"d6:lengthi3ee");
     }
 
     #[test]
