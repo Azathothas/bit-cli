@@ -634,6 +634,45 @@ pwsh -NoProfile -Command "Get-Process bit-cli,loopback-fileserver,loopback-track
   Do not reach for a NAT crate.
 - **MSRV is 1.88 and is measured, not chosen.** Raising it needs
   `cargo metadata` to say so.
+- **Nothing in `patches/` is ever offered upstream.** The vendored trees are
+  patched for this repository and for nothing else. Upstream has no interest in
+  this work and closes what arrives from an agent unread, so an offer costs a
+  maintainer's time and gains this repository nothing.
+  [`patches/UPSTREAM.md`](../patches/UPSTREAM.md) is the record Apache-2.0 asks
+  for and the file a reconciliation reads. It is not a queue of submissions,
+  and its `Upstream:` field says whether a **release** could retire a patch,
+  never whether one has been sent.
+
+  The one thing that still has to be watched is the other direction: an upstream
+  release that fixes the same defect independently retires our patch, and
+  `scripts/upstream-scan.ps1` is how that is noticed. That is a read.
+
+## 6a. Remote operations, and the one repository that may be written to
+
+The operator's standing instruction, wider than the vendored trees and not a
+judgement call. It has been given twice and a work order asked for the opposite
+once, which is why it is a section rather than a line.
+
+- **`Azathothas/bit-cli`, read and write.** It is the only remote surface an
+  agent may change. `scripts/git-sync.ps1` is how a commit reaches it, section
+  4, and `gh` may read and close this repository's own issues and pull requests,
+  which is what taking the dependabot bumps needed.
+- **Every other repository, read only.** `git clone`, `gh issue view`,
+  `gh pr view`, `gh api` for a fetch, `scripts/upstream-scan.ps1`. That is the
+  whole list, and it is enough for everything the corpus and the vendored trees
+  need.
+- **Never a write anywhere else, under any framing.** No issue, no pull request,
+  no discussion, no comment, no review, no fork, no star, on anybody else's
+  repository. Not as a draft, not "for the record", not because a `TODO/` file
+  or a `patches/` section used to ask for it, and not because a patch looks
+  ready. If a session believes an exception exists, it is wrong: leave it, and
+  say so in `PROGRESS.md` under open questions for the operator.
+
+**Why this is absolute rather than weighed.** A remote write is done in the
+operator's name, on somebody else's project, and cannot be taken back by the
+session that made it. The measured outcome of the alternative is that the work
+is closed as machine-generated noise, so the downside is unbounded and the
+upside is zero.
 
 ## 7. The corpus
 

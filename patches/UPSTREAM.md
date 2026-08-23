@@ -7,6 +7,16 @@ tree by `scripts/vendor-diff.ps1`; this is the part a script cannot write.
 
 How to add one: [`README.md`](README.md).
 
+**Nothing here is ever sent upstream**, and no session opens an issue, a pull
+request or a discussion anywhere. That is settled by
+[`TODO/RULES.md`](../TODO/RULES.md) section 6, and section 6a is the wider rule:
+this repository is the only one an agent may write to. So the `Upstream:` field
+in each section below does **not** track a submission. It answers the one
+question a reconciliation asks: **could a release retire this patch on its own?**
+A defect upstream may fix independently is named with its issue number so the
+next merge checks for it rather than carrying a duplicate; a patch shaped for
+this repository says that no release retires it.
+
 Verify that this file describes the tree:
 
 ```bash
@@ -21,7 +31,8 @@ pwsh -NoProfile -File scripts/vendor-diff.ps1 -Check
 Unblocks:    nothing, and that is why it is first
 Files:       vendor/librqbit-dualstack-sockets/src/bind_device.rs
              patches/librqbit-dualstack-sockets/0001-src-bind_device.rs.patch
-Upstream:    not offered yet, and it should be
+Upstream:    ours. A lint in their code, so a release may silence it their own
+             way; check at the next one.
 Added:       2026-08-22T12:24Z
 ```
 
@@ -51,9 +62,10 @@ not:
 RUSTFLAGS="-D warnings" cargo build --workspace --all-features
 ```
 
-**Offer it upstream.** It is a one-word fix to a real lint in their code, with
-no behaviour attached, which is the easiest kind of change for a maintainer to
-take. Until it is offered, this section says so rather than claiming otherwise.
+**What would retire it.** A release that names the parameter `_name`, or that
+stops taking it at all. It is a one-word fix to a real lint in their code with
+no behaviour attached, so it is cheap for them to make and cheap for us to
+notice: the patch stops applying and this section goes.
 
 ---
 
@@ -66,7 +78,8 @@ Copy this for the next change.
 
 Unblocks:    T-NNN, and the line in TODO/<file>.md that names the seam
 Files:       vendor/<upstream>/<path>, and the patch that carries it
-Upstream:    not offered | offered, <url> | landed in <ref>, delete this
+Upstream:    ours | ours, and <issue> is the same defect | fixed upstream in
+             <ref>, delete this
 Added:       <ISO 8601 UTC>
 
 What it does, in a paragraph a reviewer can check against the diff.
@@ -85,9 +98,11 @@ somebody a session in this repository:
   reviewed against anything, and it is the first thing a reconciliation has to
   weigh when upstream touches the same lines. The one above has none, and says
   so: it exists because of a build flag, not because of a defect in `bit-cli`.
-- **Whether it is offered upstream.** A change shaped for upstream and a change
-  shaped for this repository are different changes. Deciding which one it is
-  afterwards means writing it twice.
+- **Whether a release could retire it.** Nothing here is ever sent upstream,
+  `TODO/RULES.md` section 6, so the only way a patch goes away is upstream
+  fixing the same thing on its own. A section that names the defect and its
+  issue number is what makes the next reconciliation check for that instead of
+  carrying a duplicate.
 - **Why it has to be here.** `TODO/RULES.md` section 5 has a rule about a doc
   describing a state the tree is not in, and a patch justified by a seam that
   has since opened is exactly that.
@@ -106,7 +121,8 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              patches/rqbit/0007-crates-librqbit-src-peer_info_reader-mod.rs.patch
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
              patches/rqbit/0021-crates-peer_binary_protocol-src-lib.rs.patch
-Upstream:    not offered yet, and it should be
+Upstream:    ours. A defect in their code, so a release may fix it
+             independently; check at the next one.
 Added:       2026-08-22T13:52Z
 ```
 
@@ -174,9 +190,10 @@ was a 32,768 byte ring buffer, so the same message failed on receipt past
 [`TODO/peers.md`](../TODO/peers.md) T-195, and it is closed: the section below,
 "a message larger than the read buffer cannot be received", is the change.
 
-**Offer it upstream.** It is a defect in their code with a one line reproduction
-and no behaviour attached beyond the message getting sent. Until it is offered
-this section says so rather than claiming otherwise.
+**What would retire it.** A release that sizes the write buffer from the
+bitfield rather than from `MAX_MSG_LEN`. It is a defect in their code with a one
+line reproduction, so it is findable without us; the reproduction is in
+[`TODO/peers.md`](../TODO/peers.md), T-194.
 
 ---
 
@@ -190,7 +207,8 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
              patches/rqbit/0024-package-lock.json.patch
-Upstream:    never. This is a consequence of our exclusion list, not their bug
+Upstream:    ours by construction. It is a consequence of our exclusion list
+             rather than a defect, so no release retires it
 Added:       2026-08-22T13:47Z
 ```
 
@@ -246,7 +264,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 Unblocks:    T-020, TODO/peers.md, the record's only open P0
 Files:       vendor/rqbit/crates/librqbit/src/session.rs
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
-Upstream:    not offered yet, and it should be
+Upstream:    ours. It is rqbit#311 (https://github.com/ikatson/rqbit/issues/311),
+             open, so a release may carry a fix of their own.
 Added:       2026-08-22T14:37Z
 ```
 
@@ -305,8 +324,10 @@ rather than deleted and now hold the fix. `check-swarm.ps1`'s
 `listener_poisoned` case carried `judged: false` for as long as T-020 was open,
 and is judged now.
 
-**Offer it upstream.** It is [rqbit#311](https://github.com/ikatson/rqbit/issues/311),
-open since before this repository existed, and the change is one match arm.
+**What would retire it.** It is
+[rqbit#311](https://github.com/ikatson/rqbit/issues/311), open since before this
+repository existed, and the change is one match arm. A release that closes that
+issue is the one to check this patch against.
 
 ---
 
@@ -318,7 +339,8 @@ Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peers/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
              patches/rqbit/0018-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
-Upstream:    not offered yet, and it should be
+Upstream:    ours. It is rqbit#525 (https://github.com/ikatson/rqbit/issues/525),
+             open, so a release may carry a fix of their own.
 Added:       2026-08-22T15:30Z
 ```
 
@@ -379,8 +401,10 @@ is that demand stops growing, which is what a process that fails at 3am needs.
 The six hour soak that would show it as a flat line is `TODO/memory.md` T-040's
 own acceptance and has not been run since the change.
 
-**Offer it upstream.** It is [rqbit#525](https://github.com/ikatson/rqbit/issues/525),
-open, and reported as exactly this: RSS climbing in a long-lived server.
+**What would retire it.** It is
+[rqbit#525](https://github.com/ikatson/rqbit/issues/525), open, and reported as
+exactly this: RSS climbing in a long-lived server. A release that closes it is
+the one to check this patch against.
 ---
 
 ## librqbit: an HTTP tracker is told about one of our two addresses
@@ -391,7 +415,8 @@ Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
              patches/rqbit/0023-crates-tracker_comms-src-tracker_comms.rs.patch
-Upstream:    not offered yet, and it should be
+Upstream:    ours. It is rqbit#537 (https://github.com/ikatson/rqbit/issues/537),
+             open, so a release may carry a fix of their own.
 Added:       2026-08-22T17:26Z
 ```
 
@@ -476,10 +501,10 @@ tracker got nothing it could dial.
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-**Offer it upstream.** It is [rqbit#537](https://github.com/ikatson/rqbit/issues/537),
-open, and the UDP path in the same file is the shape to point at: this makes
-the HTTP one match it. Until it is offered this section says so rather than
-claiming otherwise.
+**What would retire it.** It is
+[rqbit#537](https://github.com/ikatson/rqbit/issues/537), open, and the UDP path
+in the same file is already the shape ours makes the HTTP one match. A release
+that closes that issue is the one to check this patch against.
 ---
 
 ## librqbit: an incoming peer is recorded under our own peer id
@@ -488,7 +513,8 @@ claiming otherwise.
 Unblocks:    T-210, TODO/peers.md, and T-132 could not work without it
 Files:       vendor/rqbit/crates/librqbit/src/peer_connection.rs
              patches/rqbit/0006-crates-librqbit-src-peer_connection.rs.patch
-Upstream:    not offered yet, and it should be
+Upstream:    ours. A defect in their code, so a release may fix it
+             independently; check at the next one.
 Added:       2026-08-22T17:55Z
 ```
 
@@ -539,8 +565,9 @@ loopback and is exempt from that cap by its peer id prefix:
 The exemption matched nothing before, because the id it was matching against
 was ours. `bench/rate-scope-20260822T175543220Z.json`.
 
-**Offer it upstream.** Three lines, a defect in their code, and the outgoing
-path beside it is the argument for the change.
+**What would retire it.** Three lines, a defect in their code, and the outgoing
+path beside it is what makes it obvious once anybody looks. A release that
+records an incoming peer under the peer id it sent takes this patch with it.
 
 ---
 
@@ -552,7 +579,8 @@ Files:       vendor/rqbit/crates/librqbit/src/limits.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0005-crates-librqbit-src-limits.rs.patch
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
-Upstream:    not offered yet
+Upstream:    ours, and shaped for this repository rather than for anyone else.
+             No release retires it.
 Added:       2026-08-22T17:55Z
 ```
 
@@ -613,12 +641,11 @@ measured nothing.
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-**Not offered upstream yet, and it is the one patch here that may not belong
-upstream as written.** The other four are defects in upstream's code. This is a
-feature, and a maintainer may want the exemption expressed differently, for
-example as a per-connection `LimitsConfig` rather than as a list of peer id
-prefixes on the session. It is worth offering as a question rather than as a
-patch.
+**Nothing retires this one.** The others in this file are defects in upstream's
+code and a release can fix them. This is a feature, and the shape is ours: a
+list of peer id prefixes exempt on the session. If upstream ever grows a
+per-connection `LimitsConfig`, that is the seam to rebuild this on rather than a
+fix that lands underneath it.
 ---
 
 ## librqbit: a message larger than the read buffer cannot be received
@@ -629,7 +656,8 @@ Files:       vendor/rqbit/crates/librqbit/src/read_buf.rs
              vendor/rqbit/crates/librqbit/src/peer_connection.rs
              vendor/rqbit/crates/librqbit/src/peer_info_reader/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
-Upstream:    not offered yet, and it should be
+Upstream:    ours. A defect in their code, so a release may fix it
+             independently; check at the next one.
 Added:       2026-08-22T18:57Z
 ```
 
@@ -724,9 +752,10 @@ Removing it properly means skipping a message this side has no use for instead
 of buffering it, which changes `read_message` from "return a message" to "may
 drop one". T-195 records that and nothing in this repository needs it.
 
-**Offer it upstream.** It is a defect in their code with a one line
-reproduction, and the trait method's default means no implementor of theirs has
-to change.
+**What would retire it.** A release that sizes the read the same way. It is a
+defect in their code with a one line reproduction, and the trait method's
+default means no implementor of theirs has to change, so it is a cheap fix for
+them to make independently.
 ---
 
 ## librqbit: a resume cache cannot exist without a session store
@@ -741,7 +770,8 @@ Files:       vendor/rqbit/crates/librqbit/src/lib.rs
              patches/rqbit/0010-crates-librqbit-src-session.rs.patch
              patches/rqbit/0013-crates-librqbit-src-torrent_state-initializing.rs.patch
              patches/rqbit/0022-crates-rqbit-src-main.rs.patch
-Upstream:    not offered yet, and the first two thirds of it should be
+Upstream:    ours. Two thirds is a seam and a feature; the third part, the
+             validate_fastresume key, is a defect a release may fix on its own
 Added:       2026-08-22T19:28Z
 ```
 
@@ -801,9 +831,11 @@ was right: `warm` claims the whole payload without hashing it, and `stale`
 refuses the cache, hashes again, and finds the one piece that changed. A run
 that trusted a stale cache would have announced a piece it does not have.
 
-**Offer the first two thirds upstream.** The `bitv_factory` seam and the module
-exports are a feature a maintainer may want shaped differently, and the
-`validate_fastresume` key is a defect worth sending on its own.
+**What would retire which third.** The `bitv_factory` seam and the module
+exports are a feature in our shape, and no release lands them. The
+`validate_fastresume` key is a defect, so a release may fix that third on its
+own and leave the rest of this patch standing. Check the three separately at a
+reconciliation.
 ---
 
 ## librqbit: the enum a public type's only field holds is private
@@ -812,7 +844,8 @@ exports are a feature a maintainer may want shaped differently, and the
 Unblocks:    T-025, TODO/peers.md
 Files:       vendor/rqbit/crates/librqbit/src/http_api_types.rs
              patches/rqbit/0003-crates-librqbit-src-http_api_types.rs.patch
-Upstream:    not offered yet, and it is a one line change
+Upstream:    ours. A one line omission in their code, so a release may add the
+             export on its own
 Added:       2026-08-22T19:38Z
 ```
 
@@ -836,8 +869,8 @@ The change adds `PeerStatsFilterState` to the same `pub use`.
 constructs `PeerStatsFilter { state: PeerStatsFilterState::All }` with no
 `serde_json` in it. `cargo test --workspace` covers the reports that read it.
 
-**Offer it upstream.** One line, no behaviour, and the type it completes is
-already public.
+**What would retire it.** One line, no behaviour, and the type it completes is
+already public, so a release that exports the enum takes this patch with it.
 ---
 
 ## librqbit: BEP 54 lt_donthave is received and ignored
@@ -848,7 +881,8 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              vendor/rqbit/crates/peer_binary_protocol/src/extended/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              vendor/rqbit/crates/librqbit/src/piece_tracker.rs
-Upstream:    not offered yet, and it should be
+Upstream:    ours. A BEP two other clients implement, so a release may add the
+             receive side on its own; check at the next one.
 Added:       2026-08-22T19:49Z, extended 2026-08-23T03:26Z
 ```
 
@@ -923,9 +957,11 @@ does not own the piece cannot release it, which is the case that would let one
 peer's retraction cancel another peer's download, and
 `test_release_piece_owned_by_one_peer` asserts exactly that.
 
-**Offer it upstream.** It is a BEP with an implementation in two other clients,
-the receive side is twenty lines, and a client that honours a retraction
-without sending one is a posture another project has taken deliberately.
+**What would retire it.** A BEP with an implementation in two other clients and
+a receive side of twenty lines is one a release may well add. A client that
+honours a retraction without sending one is a posture another project has taken
+deliberately, so upstream landing the receive half alone would retire this patch
+and leave our send half where it is.
 
 ---
 
@@ -947,7 +983,8 @@ Files:       vendor/rqbit/crates/librqbit/src/stream_transform.rs (new)
              patches/rqbit/0012-crates-librqbit-src-stream_transform.rs.patch
              patches/rqbit/0019-crates-librqbit-src-type_aliases.rs.patch
              patches/rqbit/0022-crates-rqbit-src-main.rs.patch
-Upstream:    not offered, and it is a seam rather than a fix
+Upstream:    ours. A seam rather than a fix, and no release will carry this
+             shape of it
 Added:       2026-08-23T02:52Z
 ```
 
@@ -1027,12 +1064,13 @@ pwsh -NoProfile -File scripts/check-encryption.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-**Offer it upstream, but not as this.** The seam is worth having and the
-argument for it is the same one that produced #633: encryption cannot be
-written outside the crate. A maintainer with an MSE pull request open is
-unlikely to want a hook for somebody else's, so what would be offered is the
-seam on its own, with this repository's implementation as the evidence that one
-transform is enough.
+**Nothing retires this one, and #633 would not.** The argument for the seam is
+the same one that produced #633: encryption cannot be written outside the crate.
+But #633 puts MSE **inside** the library, so a release carrying it gives us
+somebody else's crypto in the merge and still no hook for ours. If that lands,
+the question this section poses is whether to keep the seam and our transform or
+to take theirs, and `patches/TASKS.md` section 3 has the argument for keeping
+ours: the tests run here.
 
 ---
 
@@ -1049,8 +1087,8 @@ Files:       vendor/rqbit/crates/peer_binary_protocol/src/lib.rs
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
              patches/rqbit/0018-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
              patches/rqbit/0021-crates-peer_binary_protocol-src-lib.rs.patch
-Upstream:    not offered yet, and it should be. It is
-             rqbit#584 (https://github.com/ikatson/rqbit/issues/584), open.
+Upstream:    ours. It is rqbit#584 (https://github.com/ikatson/rqbit/issues/584),
+             open, so a release may carry an implementation of their own.
 Added:       2026-08-23T03:55Z
 ```
 
@@ -1143,7 +1181,7 @@ Files:       vendor/rqbit/Cargo.toml
              vendor/rqbit/Cargo.lock
              patches/rqbit/0002-Cargo.toml.patch
              patches/rqbit/0001-Cargo.lock.patch
-Upstream:    not offered, and there is nothing to offer: upstream will bump it
+Upstream:    ours, and the shortest lived patch here: upstream bumps the crate
              on its own schedule and this patch disappears when it does.
 Added:       2026-08-23T04:20Z
 ```
@@ -1176,8 +1214,9 @@ Unblocks:    nothing on its own. It is nzbd's 0005 read and taken in part, and
              TODO/trackers.md is where the tracker entries live.
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              patches/rqbit/0023-crates-tracker_comms-src-tracker_comms.rs.patch
-Upstream:    not offered yet. It should be, and nzbd's own draft is written:
-             see contrib/rqbit/TRACKER_REQUEST_BUDGET_PR.md in that repository.
+Upstream:    ours. nzbd has a draft of the same bound, unsent, at
+             contrib/rqbit/TRACKER_REQUEST_BUDGET_PR.md in that repository, so
+             a release may carry a bound from that direction rather than ours.
 Added:       2026-08-23T04:35Z
 ```
 
@@ -1238,8 +1277,8 @@ Files:       vendor/rqbit/crates/librqbit/src/torrent_state/live/peer/mod.rs
              vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs
              patches/rqbit/0014-crates-librqbit-src-torrent_state-live-mod.rs.patch
              patches/rqbit/0018-crates-librqbit-src-torrent_state-live-peers-mod.rs.patch
-Upstream:    not offered yet, and it should be. It is two counters and one
-             bounded list, and the reason was already in hand.
+Upstream:    ours. Two counters and one bounded list on a private method, so a
+             release may expose the reason its own way; check at the next one.
 Added:       2026-08-23T05:19Z
 ```
 

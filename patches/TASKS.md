@@ -136,9 +136,10 @@ on the target being unable to answer its peers and had to be rebuilt: its
 window went from 6 samples to 1 the moment the loop drained. **An acceptance
 that needs the system under test to be slow is measuring the defect.**
 
-**Still to offer upstream.** It is
-[rqbit#311](https://github.com/ikatson/rqbit/issues/311), open, and the change
-is one match arm.
+**Not sent upstream, and it will not be**, [RULES.md](../TODO/RULES.md) section
+6. It is [rqbit#311](https://github.com/ikatson/rqbit/issues/311), open, and the
+change is one match arm, so a release may close it independently. That is what a
+reconciliation checks for.
 
 ## 2. BOUNDED. T-040, and the nzbd patches were not needed
 
@@ -178,9 +179,10 @@ slope of 0.815 MiB/h describes neither regime. Start a soak early in a session:
 it outlasts most of one, and it survives a `gates.ps1` run now because
 `gates.ps1` leaves a process under `.tmp/` alone.
 
-**Still to offer upstream.** It is
-[rqbit#525](https://github.com/ikatson/rqbit/issues/525), open, and reported as
-exactly this.
+**Not sent upstream, and it will not be**, [RULES.md](../TODO/RULES.md) section
+6. It is [rqbit#525](https://github.com/ikatson/rqbit/issues/525), open, and
+reported as exactly this, so a release may close it independently. That is what
+a reconciliation checks for.
 
 ## 3. DONE. MSE, and this tree did not take upstream's shape
 

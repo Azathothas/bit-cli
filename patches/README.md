@@ -179,14 +179,21 @@ pwsh -NoProfile -File scripts/release.ps1 -Bump patch
   different tree from the one that was tested. Either exclude the path in
   `vendor/upstream.json` or un-ignore it.
 
-## Sending a change upstream
+## Nothing here is sent upstream
 
-Nothing here requires it, and `TODO/RULES.md` section 5 says upstream has no
-interest in this work, so nothing waits on it. But a fix that is upstream's bug
-rather than our preference is worth offering, and the series is already in the
-shape a pull request wants.
+**Settled, and not to be relitigated.** [`TODO/RULES.md`](../TODO/RULES.md)
+section 6 is where the decision lives and section 6a is the wider rule it sits
+under: this repository is the only one an agent may write to, and no issue, pull
+request, discussion or comment is opened anywhere else, under any framing.
 
-Mark it in `UPSTREAM.md` as **offered**, with the pull request URL, so the next
-reconciliation knows the change may arrive from the other direction. A patch
-that upstream accepts should be **deleted** here at the release that carries
-it, not merged with itself.
+These patches are for `bit-cli`. Upstream has no interest in the work and closes
+what arrives from an agent unread, so an offer costs a maintainer's time and
+gains this repository nothing. That the series is in the shape a pull request
+wants is a property of `git format-patch`, not a reason.
+
+`UPSTREAM.md` is therefore a record and not a queue. Its `Upstream:` field
+answers the one question a reconciliation asks: **could a release retire this
+patch on its own?** A defect upstream may fix independently is worth naming with
+its issue number, so the next merge checks for it rather than carrying a patch
+that has become a duplicate. A patch a release does carry is **deleted** here at
+that release, not merged with itself.
