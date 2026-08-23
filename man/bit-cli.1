@@ -912,7 +912,7 @@ Print this message or the help of the given subcommand(s)
 .SH NAME
 bit\-cli\-verify \- Hash\-check existing data against the torrent
 .SH SYNOPSIS
-\fBbit\-cli\-verify\fR [\fB\-\-data\fR] [\fB\-\-per\-piece\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-verify\fR [\fB\-\-data\fR] [\fB\-\-per\-piece\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Hash\-check existing data against the torrent
 .SH OPTIONS
@@ -930,6 +930,11 @@ A piece the selection does not cover is reported as not selected rather than as 
 .TP
 \fB\-\-exclude\-file\fR \fI<INDEX>\fR
 Skip these files, as `\-\-select\-file`\*(Aqs complement
+.TP
+\fB\-O\fR, \fB\-\-index\-out\fR \fI<INDEX=PATH>\fR
+Where a file was written, as INDEX=PATH, for a payload downloaded with `\-O`/`\-\-index\-out`.
+
+`verify` looks where the bytes went rather than where the torrent said they would go, and a file the caller renamed is somewhere only the caller knows. Without this, verifying what `download \-O` wrote reports that file as missing. See `TODO/cli\-surface.md`, T\-116.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

@@ -66,7 +66,7 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 ## State
 
 - **Last session:** 2026-08-23T06:14:39Z, unattended, and running.
-- **Tests:** 1,176 passing, 0 failing. 1,166 at the start, re-measured rather
+- **Tests:** 1,188 passing, 0 failing. 1,166 at the start, re-measured rather
   than carried forward. Plus **149** in the vendored trees, which the workspace
   gates do not run.
 - **Gates:** clean, on rustc 1.98.0.
@@ -82,8 +82,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 - **CI:** green at run **32620536345** against commit `a289977`, all
   **seventeen** jobs. `f055328` is on top of it and is documentation only, so it
   carries `[skip ci]` and started no run.
-- **Entries:** 161 items. 39 open, 2 partial, 0 blocked, 110 done, 10 deferred
-  to Phase C. 110 of 151 workable done, 41 left.
+- **Entries:** 162 items. 39 open, 2 partial, 0 blocked, 111 done, 10 deferred
+  to Phase C. 111 of 152 workable done, 41 left.
 - **Tree:** 92 Rust files, 52,557 lines of code, 12,567 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
@@ -183,6 +183,23 @@ request.
 what the URL serves. And the redirect decision the Approach said was owed turned
 out not to be: nothing on either path resolves a mirror URL relative to
 anything, so a fetched document is treated exactly as a saved one.
+
+**[T-116](cli-surface.md), P3, done, and the Approach over-priced it.** It
+predicted a storage wrapper mapping an index to a path, built alongside T-071.
+It is one argument to the function T-071 already built: `paths::plan_with`
+applies each override **before** anything else, so a requested path is
+sanitised, truncated and disambiguated exactly as a torrent path is. `-O
+0=../../etc/passwd` renames the file inside the output directory. Nothing about
+`-O` could reach outside it without first defeating T-071.
+
+**Half of it would have shipped without the second command.** `verify` looks
+where the bytes went rather than where the torrent said, and it builds that
+from the same plan, which knew nothing about `-O`. So the tree could rename a
+file its own verifier then called missing. `verify` takes `-O` too now.
+
+**[T-213](cli-surface.md) filed** for the residual, measured and named with a
+line: `seed` builds its `AddOptions` at `cmd/seed.rs:260` with no `index_out`,
+so a payload downloaded with `-O` cannot be seeded from where it landed.
 
 ### A defect in the tooling, found on the way
 

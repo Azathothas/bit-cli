@@ -1218,6 +1218,16 @@ pub struct VerifyArgs {
     /// Skip these files, as `--select-file`'s complement.
     #[arg(long, value_name = "INDEX", value_delimiter = ',')]
     pub exclude_file: Vec<String>,
+
+    /// Where a file was written, as INDEX=PATH, for a payload downloaded with
+    /// `-O`/`--index-out`.
+    ///
+    /// `verify` looks where the bytes went rather than where the torrent said
+    /// they would go, and a file the caller renamed is somewhere only the
+    /// caller knows. Without this, verifying what `download -O` wrote reports
+    /// that file as missing. See `TODO/cli-surface.md`, T-116.
+    #[arg(short = 'O', long, value_name = "INDEX=PATH")]
+    pub index_out: Vec<String>,
 }
 
 /// `bit-cli create`.
@@ -2415,16 +2425,10 @@ mod tests {
         /// A name belongs here only while an entry is open that will remove
         /// it. Adding one without an entry is how a review list stops being a
         /// review.
-        const ACCEPTED_WITHOUT_A_READER: &[(&str, &str)] = &[
-            (
-                "index_out",
-                "TODO/cli-surface.md T-116, -O cannot rename a file",
-            ),
-            (
-                "on_piece_verified",
-                "TODO/cli-surface.md T-115, hooks do not fire for every trigger",
-            ),
-        ];
+        const ACCEPTED_WITHOUT_A_READER: &[(&str, &str)] = &[(
+            "on_piece_verified",
+            "TODO/cli-surface.md T-115, hooks do not fire for every trigger",
+        )];
 
         // Read the workspace source rather than `include_str!`ing a fixed
         // list, because a file added later would otherwise silently stop

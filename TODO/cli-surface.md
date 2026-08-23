@@ -399,7 +399,7 @@ Source:      the operator's brief
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T07:40Z
 
 Problem:     `-O/--index-out INDEX=PATH` parses and does nothing.
 Relevance:   It is a reserved `aria2` letter and the natural answer to a
@@ -409,6 +409,64 @@ Approach:    Needs a storage wrapper mapping a torrent file index to a
              for sanitisation. Build them together.
 Acceptance:  `bit-cli download <TORRENT> -O 0=renamed.bin` writes the first
              file as `renamed.bin` and `--json` reports the mapping.
+
+**Done 2026-08-23T07:40Z, and no storage wrapper was needed.** The Approach
+priced this as a wrapper mapping an index to a path, built alongside T-071. It
+is one argument to the function T-071 already built: `paths::plan_with` takes
+the overrides and applies each one **before** anything else happens, so a
+requested path is sanitised, truncated and disambiguated exactly as a torrent
+path is. `plan` is `plan_with` with an empty map.
+
+**That ordering is the whole safety argument, and it is what makes this small.**
+`-O 0=../../etc/passwd` renames the file to `__/__/etc/passwd` inside the output
+directory; `-O 0=CON.txt` gets `CON_.txt`; `-O 1=a.bin` against a torrent whose
+file 0 is already `a.bin` gets `a-1.bin`. Not one of those decisions is new, and
+`a_requested_path_cannot_escape_or_name_a_device` is the case that holds it.
+Nothing about `-O` could have reached outside the output directory without
+first defeating T-071, which is why it is one function rather than two.
+
+**`Reason::Requested` is a new reason and it is first in the enum.** It is the
+only one that is a request rather than a defect in the torrent, and `--json`
+carries `reasons` in enum order, so a reader scanning a rename sees it before
+anything that reads as a complaint. `renamed[].torrent_path` stays the path the
+metainfo gives, because the mapping is only useful with both ends in it.
+
+**An index the torrent does not have is a usage error**, checked before the
+session starts wherever the count is already known. A magnet has no count until
+its metadata resolves, so `-O` now joins `--exclude-file` and an open-ended
+`--select-file` in `plan_selection`'s "await the count" branch: the metadata is
+resolved first, which is a round trip the magnet was going to make anyway, and
+the index is checked against a real file list. Without that, `-O 9=x` against a
+five-file magnet would have renamed nothing and said nothing.
+
+**Half of it would have shipped without the second command, and that half was
+found by asking.** `verify` looks where the bytes went rather than where the
+torrent said, which is [T-076](windows.md), and it builds that answer from
+`paths::plan` — which knows nothing about `-O`. So the tree could rename a file
+its own verifier then reported as missing. `verify` takes `-O` too now, and
+`verify_finds_a_file_renamed_by_index_out_when_it_is_told` holds both
+directions: told, `present: true` and `complete: true`; not told, `present:
+false` and a `hash_mismatch` document.
+
+`seed` is **not** covered, and this is the residual, named rather than implied:
+`bit-cli seed` resolves its payload through the same plan and has no `-O`, so a
+payload downloaded with `-O` cannot be seeded from the directory it landed in.
+It is `crates/bit-cli/src/cmd/seed.rs:260`, where `AddOptions` is built without
+`index_out`. [T-213](#t-213-seed-cannot-serve-a-payload-renamed-by-index-out)
+carries it.
+
+```
+$ cargo test -p bit-cli --lib index_out
+test result: ok. 4 passed; 0 failed; 0 ignored; 395 filtered out
+
+$ cargo test -p bit-cli-core --lib paths::
+test result: ok. 35 passed; 0 failed; 0 ignored; 660 filtered out
+```
+
+The acceptance itself, `index_out_writes_the_file_where_the_caller_asked`:
+`--json` reports `{"index":0,"disk_path":"renamed/first.bin","reasons":["requested"]}`,
+the bytes are at that path and byte-identical to the torrent's first file, and
+nothing is left at the path the torrent named.
 
 ### T-117 --schema-version has no schema behind it
 
@@ -553,10 +611,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2530` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2301` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2337` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2032` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2536` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2311` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2347` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2042` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -1801,7 +1859,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2530` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2536` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -2439,9 +2497,9 @@ Effort:      S
 Status:      **done**, 2026-08-22T11:21Z
 
 Problem:     `scripts/check-todo.ps1` resolved a citation written long, as
-             `crates/bit-cli/src/cli.rs:2301`, and checked only that the file
+             `crates/bit-cli/src/cli.rs:2311`, and checked only that the file
              had that many lines. Most of `TODO/` does not write them long. A
-             citation written as `cli.rs:2301` matched nothing in the pattern,
+             citation written as `cli.rs:2311` matched nothing in the pattern,
              so it was never resolved, never range checked, and never read.
 Relevance:   `RULES.md` section 2 step 4 says the mechanical half of the two
              reviews answers "a cited path that does not resolve". For the
@@ -2767,3 +2825,38 @@ how those trees are watched instead; and **`librqbit*` is ignored**, because
 the workflows, so `git-sync -NoCi` refuses to treat a commit touching it as
 documentation-only. That is derived rather than listed: the script reads
 `.github/workflows/` to work out which scripts CI depends on.
+
+### T-213 seed cannot serve a payload renamed by --index-out
+
+Source:      found closing [T-116](#t-116--o--index-out-cannot-rename-a-file)
+Category:    cli
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `download -O 0=renamed.bin` writes the first file to
+             `renamed.bin`, and `bit-cli seed` against that directory looks for
+             it at the path the torrent names. `seed` builds its `AddOptions`
+             at `crates/bit-cli/src/cmd/seed.rs:260` with no `index_out`, so
+             the storage plan it hands the session is the unmodified one and
+             the renamed file is missing as far as the seeder is concerned.
+Relevance:   Downloading a payload and then seeding it back is the ordinary
+             thing to do with one, and `-O` is the flag that quietly breaks it.
+             P3 rather than higher because it needs the caller to have used
+             `-O` in the first place, and because the failure is loud: the
+             hash check finds the file missing and says so.
+Approach:    The same one `verify` took when T-116 closed: an `-O` flag on
+             `SeedArgs`, parsed with `crate::selection::index_out` against the
+             file count the metainfo already gives, and passed into
+             `AddOptions::index_out`, which the engine already carries. The
+             work is the flag and the test, because the machinery underneath
+             is what T-116 built.
+
+             Worth deciding at the same time: whether `bit-cli files` should
+             report the on-disk path a given `-O` would produce, so a caller
+             can ask where a file will land before fetching it.
+Acceptance:  A payload downloaded with `download -O 0=renamed.bin` is served by
+             `seed <TORRENT> --data <DIR> -O 0=renamed.bin` with the hash check
+             finding every piece, and without `-O` the same command reports the
+             file missing. Both in one test, because the second is what makes
+             the first mean anything.

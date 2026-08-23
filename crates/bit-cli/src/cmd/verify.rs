@@ -165,14 +165,23 @@ struct PayloadReader<'a> {
 }
 
 impl<'a> PayloadReader<'a> {
-    fn new(layout: &'a Layout, root: PathBuf) -> Self {
+    fn new(
+        layout: &'a Layout,
+        root: PathBuf,
+        index_out: &std::collections::BTreeMap<usize, String>,
+    ) -> Self {
         let open = (0..layout.files.len()).map(|_| None).collect();
-        let plan = bit_cli_core::paths::plan(
+        // The same plan the download made, including whatever it was told with
+        // `-O`. A file the caller renamed is somewhere only the caller knows,
+        // so verifying it means being told the same thing the download was.
+        // See `TODO/cli-surface.md`, T-116.
+        let plan = bit_cli_core::paths::plan_with(
             &layout
                 .files
                 .iter()
                 .map(|file| file.path.join("/"))
                 .collect::<Vec<_>>(),
+            index_out,
         );
         Self {
             layout,
@@ -262,7 +271,8 @@ pub fn run(
     let layout = meta.layout();
 
     let root = resolve_root(args, global, env, &meta);
-    let mut reader = PayloadReader::new(&layout, root.clone());
+    let index_out = crate::selection::index_out(&args.index_out, Some(layout.files.len()))?;
+    let mut reader = PayloadReader::new(&layout, root.clone(), &index_out);
 
     let files: Vec<FileResult> = layout
         .files

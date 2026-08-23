@@ -2030,6 +2030,13 @@
           "name": "--exclude-file",
           "type": "array",
           "value_name": "INDEX"
+        },
+        {
+          "description": "Where a file was written, as INDEX=PATH, for a payload downloaded with `-O`/`--index-out`",
+          "name": "--index-out",
+          "short": "-O",
+          "type": "array",
+          "value_name": "INDEX=PATH"
         }
       ],
       "description": "Hash-check existing data against the torrent",

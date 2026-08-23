@@ -14,7 +14,7 @@
 //! added so a magnet's metadata is resolved first rather than guessed at. See
 //! `TODO/cli-surface.md`, T-185.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use bit_cli_core::error::{Error, Result};
 
@@ -137,6 +137,64 @@ fn parse(values: &[String], flag: &str, file_count: Option<usize>) -> Result<Vec
                 out.extend(start..=end);
             }
         }
+    }
+    Ok(out)
+}
+
+/// Parse `-O`/`--index-out` into a file index to the path asked for.
+///
+/// `INDEX=PATH`, repeatable, zero-based like every other index flag here.
+/// `PATH` is relative to the output directory and `/`-separated, and it is a
+/// **request**: `paths::plan_with` sanitises, truncates and disambiguates it
+/// exactly as it does a torrent's own path, so `-O 0=../../etc/passwd` renames
+/// the file to `etc/passwd` inside the output directory rather than escaping
+/// it.
+///
+/// `file_count` is checked when it is known. An index past the end is a usage
+/// error rather than a rename that silently does nothing, because a caller who
+/// mistyped an index wants to hear about it before the download, not after.
+/// A magnet has no count before its metadata resolves, and `None` skips that
+/// check rather than guessing. See `TODO/cli-surface.md`, T-116.
+pub fn index_out(values: &[String], file_count: Option<usize>) -> Result<BTreeMap<usize, String>> {
+    let mut out = BTreeMap::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let Some((index, path)) = value.split_once('=') else {
+            return Err(
+                Error::usage(format!("--index-out `{value}` is not INDEX=PATH"))
+                    .with("value", value.to_string()),
+            );
+        };
+        let index: usize = index.trim().parse().map_err(|_| {
+            Error::usage(format!(
+                "--index-out `{value}`: `{}` is not a file index",
+                index.trim()
+            ))
+            .with("value", value.to_string())
+        })?;
+        let path = path.trim();
+        if path.is_empty() {
+            return Err(Error::usage(format!(
+                "--index-out `{value}` names no path for file {index}"
+            ))
+            .with("value", value.to_string()));
+        }
+        if let Some(count) = file_count
+            && index >= count
+        {
+            return Err(Error::usage(format!(
+                "--index-out `{value}`: the torrent has {count} file(s), so there is no file {index}"
+            ))
+            .with("value", value.to_string())
+            .with("file_count", count));
+        }
+        // Last wins, and it is not an error. Two `-O` for one index is a
+        // caller overriding an earlier argument, which is what every other
+        // repeated flag on this surface does.
+        out.insert(index, path.replace('\\', "/"));
     }
     Ok(out)
 }
@@ -274,6 +332,51 @@ mod tests {
 
     /// An open-ended range starting past the end selects nothing, which is a
     /// usage error rather than a silent empty download.
+    /// `-O`/`--index-out`, the happy shapes. T-116.
+    #[test]
+    fn index_out_parses_index_equals_path() {
+        let parsed = index_out(&args(&["0=renamed.bin", "2=sub/other.bin"]), Some(3)).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[&0], "renamed.bin");
+        assert_eq!(parsed[&2], "sub/other.bin");
+
+        // A backslash is a separator on the platform this is developed on, and
+        // the plan splits on `/`. Normalised so `-O 0=sub\x.bin` names a path
+        // rather than one component with a backslash in it.
+        let parsed = index_out(&args(&[r"0=sub\x.bin"]), Some(1)).unwrap();
+        assert_eq!(parsed[&0], "sub/x.bin");
+
+        // Repeating an index overrides the earlier one, which is what every
+        // other repeated flag on this surface does.
+        let parsed = index_out(&args(&["0=a.bin", "0=b.bin"]), Some(1)).unwrap();
+        assert_eq!(parsed[&0], "b.bin");
+
+        // A `=` in the path is part of the path: only the first splits.
+        let parsed = index_out(&args(&["0=a=b.bin"]), Some(1)).unwrap();
+        assert_eq!(parsed[&0], "a=b.bin");
+
+        assert!(index_out(&[], None).unwrap().is_empty());
+    }
+
+    /// Every way of getting it wrong is a usage error rather than a rename
+    /// that silently does nothing. T-116.
+    #[test]
+    fn index_out_refuses_what_it_cannot_use() {
+        for value in ["renamed.bin", "0", "x=renamed.bin", "0="] {
+            let err = index_out(&args(&[value]), Some(3)).unwrap_err();
+            assert_eq!(err.code(), ExitCode::Usage, "`{value}` should be refused");
+        }
+        // An index past the end, when the count is known. This is the one that
+        // matters: a caller who mistyped an index wants to hear about it
+        // before the download rather than after.
+        let err = index_out(&args(&["7=x.bin"]), Some(3)).unwrap_err();
+        assert_eq!(err.code(), ExitCode::Usage);
+        assert!(err.message().contains("3 file(s)"), "{}", err.message());
+        // And with no count, which is a magnet before its metadata resolves,
+        // it is accepted here and checked again once the count exists.
+        assert!(index_out(&args(&["7=x.bin"]), None).is_ok());
+    }
+
     #[test]
     fn an_open_ended_range_past_the_end_selects_nothing() {
         let err = resolve(&args(&["9-"]), &[], Some(5)).unwrap_err();

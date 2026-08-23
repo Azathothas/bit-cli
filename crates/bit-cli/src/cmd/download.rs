@@ -520,6 +520,11 @@ pub fn run(
             }
         };
         let files = plan_selection(&args.selection, meta.as_ref())?;
+        // Checked here, before the session starts, wherever the count is
+        // already known. A magnet's is not, and is checked once its metadata
+        // resolves. See `TODO/cli-surface.md`, T-116.
+        let file_count = meta.as_ref().map(|m| m.layout().files.len());
+        crate::selection::index_out(&args.selection.index_out, file_count)?;
         plans.push(Plan {
             index,
             source: source.clone(),
@@ -528,6 +533,7 @@ pub fn run(
             specs,
             trackers,
             files,
+            file_count,
             donations: Vec::new(),
         });
         metas.push(meta);
@@ -673,6 +679,7 @@ pub fn run(
                 init_timeout,
                 select_file: args.selection.select_file.clone(),
                 exclude_file: args.selection.exclude_file.clone(),
+                index_out: args.selection.index_out.clone(),
                 report_interval,
                 stop: stop.clone(),
                 require: args.web_seeds.web_seed_require,
@@ -792,6 +799,10 @@ struct Options {
     /// and every other plan already has. See `TODO/cli-surface.md`, T-185.
     select_file: Vec<String>,
     exclude_file: Vec<String>,
+    /// `-O`/`--index-out` as given, for the same reason: a magnet has no file
+    /// count until its metadata resolves, and the count is what makes an index
+    /// past the end a usage error. See `TODO/cli-surface.md`, T-116.
+    index_out: Vec<String>,
     report_interval: Duration,
     stop: StopConditions,
     require: bool,
@@ -870,6 +881,10 @@ struct Plan {
     /// Which files of this torrent to fetch, from `--select-file` and
     /// `--exclude-file`. See `TODO/cli-surface.md`, T-185.
     files: FileSelection,
+    /// How many files the torrent has, when this run already read the
+    /// metadata. `None` for a magnet, whose file list does not exist until it
+    /// resolves. See `TODO/cli-surface.md`, T-116.
+    file_count: Option<usize>,
     /// Files an earlier torrent in this run is proven to hold, computed from
     /// the metadata before anything starts. See `TODO/multi-source.md`, T-140.
     donations: Vec<Donation>,
@@ -1162,6 +1177,11 @@ async fn one_inner(
     let mut add = AddOptions {
         overwrite: options.overwrite,
         only_files: None,
+        // Resolved from the metadata this run already read where there is any,
+        // so an index past the end fails before the session starts rather than
+        // renaming nothing. A magnet has none yet and is checked below, once
+        // its file list exists. See `TODO/cli-surface.md`, T-116.
+        index_out: crate::selection::index_out(&options.index_out, plan.file_count)?,
         trackers: plan.trackers.clone(),
         disable_trackers: plan.trackers.as_ref().is_some_and(Vec::is_empty),
         initial_peers: options.peers.clone(),
@@ -1207,6 +1227,10 @@ async fn one_inner(
                 &options.exclude_file,
                 Some(count),
             )?;
+            // Re-parsed now that the count exists, so `-O 9=x` against a
+            // five-file magnet is the same usage error it is against a
+            // `.torrent`. T-116.
+            add.index_out = crate::selection::index_out(&options.index_out, Some(count))?;
             torrent_bytes = Some(resolved.torrent_bytes);
         }
     }
@@ -2416,7 +2440,14 @@ fn plan_selection(
             args,
             Some(meta.layout().files.len()),
         )?)),
-        None if crate::selection::needs_file_count(&args.select_file, &args.exclude_file) => {
+        // `-O` needs the count for the same reason `--exclude-file` does: an
+        // index past the end is a usage error, and the only way to know is to
+        // have the file list. Resolving first costs a magnet one metadata
+        // round trip it was going to make anyway.
+        // See `TODO/cli-surface.md`, T-116 and T-185.
+        None if crate::selection::needs_file_count(&args.select_file, &args.exclude_file)
+            || !args.index_out.is_empty() =>
+        {
             Ok(FileSelection::AwaitingCount)
         }
         None => Ok(FileSelection::Decided(selection(args, None)?)),
@@ -2766,6 +2797,175 @@ mod tests {
         assert!(wants_in_order(PieceSelector::InOrder));
         assert!(!wants_in_order(PieceSelector::Default));
         assert_eq!(PieceSelector::default(), PieceSelector::Default);
+    }
+
+    /// `-O`/`--index-out` writes a file to the path the caller named, and
+    /// `--json` reports the mapping.
+    ///
+    /// The flag parsed and reached no code at all until T-116: it was on
+    /// `cli.rs`'s own list of fields nothing outside that file reads. See
+    /// `TODO/cli-surface.md`, T-116.
+    ///
+    /// The payload comes from a web seed rather than a swarm, so the run
+    /// finishes and the bytes are really written to the renamed path rather
+    /// than the path merely being planned.
+    #[test]
+    fn index_out_writes_the_file_where_the_caller_asked() {
+        let fixture = TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let out = dir.join("out");
+        let report = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+                "-O",
+                "0=renamed/first.bin",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(report["torrents"][0]["finished"], true, "{report}");
+
+        // The mapping, which is the half of the acceptance a script reads.
+        let renamed = &report["torrents"][0]["renamed"];
+        assert_eq!(renamed.as_array().map(Vec::len), Some(1), "{report}");
+        assert_eq!(renamed[0]["index"], 0);
+        assert_eq!(renamed[0]["disk_path"], "renamed/first.bin");
+        assert_eq!(renamed[0]["reasons"][0], "requested");
+        let torrent_path = renamed[0]["torrent_path"].as_str().expect("a path");
+
+        // And the bytes, which is the half a user cares about. The file is
+        // where it was asked for, it is not where the torrent said, and it
+        // holds what the torrent says it should.
+        let landed = out.join(&fixture.name).join("renamed/first.bin");
+        assert!(landed.is_file(), "nothing at {}", landed.display());
+        let original = out.join(&fixture.name).join(torrent_path);
+        assert!(
+            !original.exists(),
+            "{} is still there too",
+            original.display()
+        );
+        assert_eq!(
+            std::fs::read(&landed).expect("read the renamed file"),
+            fixture.files[0].1,
+            "the renamed file does not hold the torrent's first file"
+        );
+    }
+
+    /// `verify` finds a file `download -O` renamed, and only when it is told.
+    ///
+    /// `verify` looks where the bytes went rather than where the torrent said
+    /// they would go, which is [T-076], but the plan it builds knows nothing
+    /// about `-O` unless it is given the same argument. Without this the tree
+    /// could rename a file its own verifier then reported as missing, which is
+    /// half a feature. See `TODO/cli-surface.md`, T-116.
+    ///
+    /// Both directions, because the second is what makes the first mean
+    /// something: without `-O`, `verify` looks at the torrent's path and finds
+    /// nothing there.
+    ///
+    /// [T-076]: `TODO/windows.md`
+    #[test]
+    fn verify_finds_a_file_renamed_by_index_out_when_it_is_told() {
+        let fixture = TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let out = dir.join("out");
+        let report = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+                "-O",
+                "0=renamed.bin",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(report["torrents"][0]["finished"], true, "{report}");
+        let data = out.join(&fixture.name);
+        let data = data.to_str().expect("utf-8 path");
+
+        let told = run_json(
+            &[
+                "verify",
+                fixture.path_str(),
+                "--data",
+                data,
+                "-O",
+                "0=renamed.bin",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(told["kind"], "verify", "{told}");
+        assert_eq!(told["files"][0]["present"], true, "{told}");
+        assert_eq!(told["complete"], true, "{told}");
+        assert_eq!(told["pieces_bad"], 0, "{told}");
+        // The mapping is in the report, with the reason, exactly as the
+        // download's was.
+        assert_eq!(told["renamed"][0]["disk_path"], "renamed.bin", "{told}");
+        assert_eq!(told["renamed"][0]["reasons"][0], "requested", "{told}");
+
+        // Not told, and the file is not where the torrent says it is. The run
+        // fails, so the document is `hash_mismatch` and the report is nested
+        // under it, which is the shape `verify` has always written for a
+        // failure.
+        let (mut env, captured) = crate::env::Env::test(
+            &["--json", "verify", fixture.path_str(), "--data", data],
+            dir.clone(),
+        );
+        assert_eq!(crate::run(&mut env), ExitCode::HashMismatch);
+        let untold: serde_json::Value = captured
+            .json()
+            .expect("the report is JSON whatever it says");
+        assert_eq!(untold["kind"], "hash_mismatch", "{untold}");
+        let nested = &untold["context"]["report"];
+        assert_eq!(nested["files"][0]["present"], false, "{untold}");
+        assert_eq!(nested["complete"], false, "{untold}");
+    }
+
+    /// An index the torrent does not have is a usage error, not a rename that
+    /// quietly does nothing. T-116.
+    #[test]
+    fn index_out_past_the_last_file_is_a_usage_error() {
+        let fixture = TorrentFixture::multi_file();
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                fixture.dir().join("out").to_str().expect("utf-8 path"),
+                "-O",
+                "9=x.bin",
+            ],
+            fixture.dir(),
+        );
+        assert_eq!(crate::run(&mut env), ExitCode::Usage, "{}", captured.err());
+        assert!(captured.err().contains("no file 9"), "{}", captured.err());
     }
 
     /// A Metalink named by URL downloads, and reports what the saved copy does.

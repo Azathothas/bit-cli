@@ -463,6 +463,7 @@ Effects: `read_only`.
 | `--per-piece` | boolean |  | `false` | Report the result of every piece, not just the failures |
 | `--select-file <INDEX>` | array |  |  | Verify only the files a `--select-file` download asked for. Accepts ranges: 1-5,8 |
 | `--exclude-file <INDEX>` | array |  |  | Skip these files, as `--select-file`'s complement |
+| `--index-out <INDEX=PATH>`, `-O` | array |  |  | Where a file was written, as INDEX=PATH, for a payload downloaded with `-O`/`--index-out` |
 
 ### `bit-cli create`
 

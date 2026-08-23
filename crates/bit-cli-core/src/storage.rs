@@ -28,7 +28,7 @@
 //! one process seeding many large torrents does not run out of descriptors.
 
 use std::cell::Cell;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::IoSlice;
 use std::path::{Path, PathBuf};
@@ -42,7 +42,9 @@ use librqbit_core::lengths::ValidPieceIndex;
 
 use crate::alloc::Allocation;
 use crate::layout::Layout;
-use crate::paths::{PathPlan, plan};
+#[cfg(test)]
+use crate::paths::plan;
+use crate::paths::{PathPlan, plan_with};
 
 /// How many payload files stay open when no cap is given.
 ///
@@ -270,6 +272,10 @@ pub struct SafeStorageFactory {
     subfolder: bool,
     allocation: Allocation,
     max_open_files: usize,
+    /// `-O`/`--index-out`: file index to the path the caller wants. Applied
+    /// inside the plan, so a requested path is sanitised and disambiguated
+    /// exactly as a torrent path is. See `TODO/cli-surface.md`, T-116.
+    index_out: BTreeMap<usize, String>,
     plan: Arc<OnceLock<PathPlan>>,
     notes: Arc<Mutex<Vec<String>>>,
     metrics: Arc<StorageMetrics>,
@@ -294,6 +300,7 @@ impl SafeStorageFactory {
             subfolder,
             allocation: Allocation::default(),
             max_open_files: DEFAULT_MAX_OPEN_FILES,
+            index_out: BTreeMap::new(),
             plan: Arc::new(OnceLock::new()),
             notes: Arc::new(Mutex::new(Vec::new())),
             metrics: Arc::new(StorageMetrics::default()),
@@ -312,6 +319,19 @@ impl SafeStorageFactory {
     /// How space is reserved for each file.
     pub fn with_allocation(mut self, allocation: Allocation) -> Self {
         self.allocation = allocation;
+        self
+    }
+
+    /// Paths the caller chose for particular file indices, from
+    /// `-O`/`--index-out`.
+    ///
+    /// The path is a request rather than an instruction: it goes through the
+    /// same sanitising, truncation and collision handling every torrent path
+    /// does, so `-O` cannot write outside the output directory, cannot name a
+    /// Windows device, and cannot make two files land on one. See
+    /// `TODO/cli-surface.md`, T-116.
+    pub fn with_index_out(mut self, index_out: BTreeMap<usize, String>) -> Self {
+        self.index_out = index_out;
         self
     }
 
@@ -359,7 +379,7 @@ impl SafeStorageFactory {
     /// the storage a download uses rather than a copy of it. See
     /// `TODO/disk-io.md`, T-017.
     pub fn for_paths(&self, torrent_paths: &[String], root: PathBuf) -> SafeStorage {
-        let planned = plan(torrent_paths);
+        let planned = plan_with(torrent_paths, &self.index_out);
         let _ = self.plan.set(planned.clone());
         SafeStorage {
             root,

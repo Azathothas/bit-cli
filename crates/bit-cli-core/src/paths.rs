@@ -31,7 +31,7 @@
 //! with the reason, and the callers put it in `--json`, so a script can
 //! reconcile the names it asked for with the names on disk.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
 
@@ -67,6 +67,14 @@ const REPLACEMENT: char = '_';
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Reason {
+    /// The caller asked for this path with `-O`/`--index-out`.
+    ///
+    /// First, because it is the only reason that is a request rather than a
+    /// defect in the torrent, and a reader scanning `reasons` should see it
+    /// before anything that looks like a complaint. A requested path is
+    /// sanitised and disambiguated like any other, so this can appear beside
+    /// the rest. See `TODO/cli-surface.md`, T-116.
+    Requested,
     /// A component the platform reads as a drive, a root, or a UNC share, so
     /// joining it would leave the output directory.
     Escape,
@@ -93,6 +101,7 @@ impl Reason {
     /// One line naming what was wrong, for an error message.
     pub const fn description(self) -> &'static str {
         match self {
+            Self::Requested => "the caller renamed this file with --index-out",
             Self::Escape => "a path component would leave the output directory",
             Self::ReservedName => "a path component is a reserved Windows device name",
             Self::IllegalCharacter => "a path component contains a character NTFS refuses",
@@ -159,14 +168,39 @@ impl PathPlan {
 /// and later ones are disambiguated. Since the torrent's file order is fixed
 /// by its info hash, so is the result.
 pub fn plan(paths: &[String]) -> PathPlan {
+    plan_with(paths, &BTreeMap::new())
+}
+
+/// [`plan`], with caller-chosen paths for some indices.
+///
+/// `overrides` is `-O`/`--index-out`: a file index to the path the caller wants
+/// it written to, relative to the output directory. An overridden path replaces
+/// the torrent's own **before** anything else happens, so it is sanitised,
+/// truncated and disambiguated exactly as a torrent path is. A caller cannot
+/// use `-O` to reach outside the output directory, to write a reserved device
+/// name, or to make two files collide, because none of those decisions moved.
+/// That is the whole reason this is one function rather than a second path.
+///
+/// An index that is not a file in this torrent is ignored here. The caller is
+/// where that is a usage error, because it is the caller that knows how many
+/// files there are and can say so before anything is fetched.
+/// See `TODO/cli-surface.md`, T-116.
+pub fn plan_with(paths: &[String], overrides: &BTreeMap<usize, String>) -> PathPlan {
     // Case-folded path -> the index that claimed it. Folding is what makes the
     // collision check match how NTFS and APFS actually compare names.
     let mut claimed: HashMap<String, usize> = HashMap::with_capacity(paths.len());
     let mut disk_paths = Vec::with_capacity(paths.len());
     let mut renames = Vec::new();
 
-    for (index, original) in paths.iter().enumerate() {
+    for (index, torrent_path) in paths.iter().enumerate() {
         let mut reasons = Vec::new();
+        let original = match overrides.get(&index) {
+            Some(requested) => {
+                push_reason(&mut reasons, Reason::Requested);
+                requested
+            }
+            None => torrent_path,
+        };
         let components: Vec<String> = original
             .split('/')
             .filter(|c| !c.is_empty() && *c != ".")
@@ -189,7 +223,12 @@ pub fn plan(paths: &[String]) -> PathPlan {
         let mut collision = None;
         let mut attempt = 1u32;
         while let Some(&other) = claimed.get(&fold(&candidate)) {
-            collision = Some(if paths[other] == *original {
+            // Against the path each file **asked** for, which is the override
+            // where there is one. Two files that ask for the same name are
+            // claiming the same path whether the ask came from the torrent or
+            // from `-O`.
+            let wanted = overrides.get(&other).unwrap_or(&paths[other]);
+            collision = Some(if *wanted == *original {
                 Reason::DuplicatePath
             } else {
                 Reason::CaseCollision
@@ -202,12 +241,16 @@ pub fn plan(paths: &[String]) -> PathPlan {
         }
 
         claimed.insert(fold(&candidate), index);
-        if candidate != *original {
+        // Against the **torrent's** path, not against what was asked for. A
+        // rename is a statement about where a caller will find the file
+        // relative to what the torrent said, and `-O 0=payload.bin` on a file
+        // already called `payload.bin` moved nothing.
+        if candidate != *torrent_path {
             reasons.sort_unstable();
             reasons.dedup();
             renames.push(Rename {
                 index,
-                torrent_path: original.clone(),
+                torrent_path: torrent_path.clone(),
                 disk_path: candidate.clone(),
                 reasons,
             });
@@ -425,6 +468,107 @@ mod tests {
 
     fn disk(paths: &[&str]) -> Vec<String> {
         plan_of(paths).disk_paths
+    }
+
+    fn plan_of_with(paths: &[&str], overrides: &[(usize, &str)]) -> PathPlan {
+        plan_with(
+            &paths.iter().map(|p| (*p).to_string()).collect::<Vec<_>>(),
+            &overrides
+                .iter()
+                .map(|(index, path)| (*index, (*path).to_string()))
+                .collect(),
+        )
+    }
+
+    /// `-O`/`--index-out` renames one file and leaves the rest alone. T-116.
+    #[test]
+    fn a_requested_path_is_used_and_reported() {
+        let plan = plan_of_with(&["a.bin", "b.bin"], &[(0, "renamed.bin")]);
+        assert_eq!(plan.disk_paths, ["renamed.bin", "b.bin"]);
+        assert_eq!(plan.renames.len(), 1);
+        assert_eq!(plan.renames[0].index, 0);
+        // The torrent's path, not the one that was asked for: a caller
+        // reconciling the two needs to see both ends of the mapping.
+        assert_eq!(plan.renames[0].torrent_path, "a.bin");
+        assert_eq!(plan.renames[0].disk_path, "renamed.bin");
+        assert_eq!(plan.renames[0].reasons, [Reason::Requested]);
+    }
+
+    /// A requested path into a subdirectory is a path, not a name.
+    #[test]
+    fn a_requested_path_may_name_a_directory() {
+        let plan = plan_of_with(&["a.bin"], &[(0, "sub/dir/renamed.bin")]);
+        assert_eq!(plan.disk_paths, ["sub/dir/renamed.bin"]);
+    }
+
+    /// **The property the whole flag rests on.** A requested path goes through
+    /// exactly the same sanitising a torrent path does, so `-O` is a rename
+    /// and never a way out of the output directory. T-116, and T-071 is the
+    /// entry that decided what each of these turns into.
+    #[test]
+    fn a_requested_path_cannot_escape_or_name_a_device() {
+        for (requested, expected, reason) in [
+            // `..` is replaced rather than dropped, which keeps the name
+            // distinct instead of quietly merging two paths into one.
+            ("../../etc/passwd", "__/__/etc/passwd", Reason::Escape),
+            ("C:/pwned.txt", "C_/pwned.txt", Reason::Escape),
+            ("CON.txt", "CON_.txt", Reason::ReservedName),
+            ("a<b.bin", "a_b.bin", Reason::IllegalCharacter),
+            ("x .", "x", Reason::TrailingDotOrSpace),
+        ] {
+            let plan = plan_of_with(&["payload.bin"], &[(0, requested)]);
+            assert_eq!(plan.disk_paths, [expected], "-O 0={requested}");
+            let reasons = &plan.renames[0].reasons;
+            assert!(reasons.contains(&Reason::Requested), "{reasons:?}");
+            assert!(reasons.contains(&reason), "{reasons:?}");
+        }
+        // A leading `/` is not in the table above, because it produces an
+        // empty component that is dropped rather than a component that is
+        // changed, so no reason is recorded for it. The path is still made
+        // relative, which is the property that matters.
+        let plan = plan_of_with(&["payload.bin"], &[(0, "/abs/x")]);
+        assert_eq!(plan.disk_paths, ["abs/x"]);
+    }
+
+    /// A requested path that collides with another file is disambiguated the
+    /// same way any collision is, rather than one file overwriting the other.
+    #[test]
+    fn a_requested_path_that_collides_is_disambiguated() {
+        let plan = plan_of_with(&["a.bin", "b.bin"], &[(1, "a.bin")]);
+        assert_eq!(plan.disk_paths, ["a.bin", "a-1.bin"]);
+        assert!(plan.renames[0].reasons.contains(&Reason::Requested));
+        assert!(plan.renames[0].reasons.contains(&Reason::DuplicatePath));
+        // And in the other order: the first file to claim a name keeps it, so
+        // an override on index 0 pushes the torrent's own file aside.
+        let plan = plan_of_with(&["a.bin", "b.bin"], &[(0, "b.bin")]);
+        assert_eq!(plan.disk_paths, ["b.bin", "b-1.bin"]);
+    }
+
+    /// Asking for the path a file already has changes nothing, and is not
+    /// reported as a rename: nothing moved.
+    #[test]
+    fn a_requested_path_that_matches_the_torrent_is_not_a_rename() {
+        let plan = plan_of_with(&["a.bin"], &[(0, "a.bin")]);
+        assert_eq!(plan.disk_paths, ["a.bin"]);
+        assert!(plan.is_clean());
+    }
+
+    /// An index with no file is ignored here. The caller refuses it, because
+    /// the caller is what knows how many files there are. T-116.
+    #[test]
+    fn an_override_for_a_file_that_does_not_exist_is_ignored() {
+        let plan = plan_of_with(&["a.bin"], &[(7, "x.bin")]);
+        assert_eq!(plan.disk_paths, ["a.bin"]);
+        assert!(plan.is_clean());
+    }
+
+    /// Overriding changes nothing about determinism: the same inputs give the
+    /// same layout, which is what lets a resumed download find its files.
+    #[test]
+    fn planning_with_overrides_is_deterministic() {
+        let once = plan_of_with(&["a.bin", "b.bin", "a.bin"], &[(1, "x/y.bin")]);
+        let twice = plan_of_with(&["a.bin", "b.bin", "a.bin"], &[(1, "x/y.bin")]);
+        assert_eq!(once, twice);
     }
 
     #[test]

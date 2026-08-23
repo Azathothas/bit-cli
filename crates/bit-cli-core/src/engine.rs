@@ -11,7 +11,7 @@
 //! what lets the rendering layer be written once and stay stable if the engine
 //! underneath changes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -202,6 +202,14 @@ pub struct AddOptions {
     pub download_rate: Option<u64>,
     /// Upload rate cap in bytes per second, for this torrent alone.
     pub upload_rate: Option<u64>,
+    /// `-O`/`--index-out`: a file index to the path the caller wants it at,
+    /// relative to the output directory.
+    ///
+    /// Applied inside the path plan, so a requested path is sanitised,
+    /// truncated and disambiguated exactly as a torrent path is: `-O` renames
+    /// a file and cannot be used to escape the output directory. See
+    /// `TODO/cli-surface.md`, T-116.
+    pub index_out: BTreeMap<usize, String>,
 }
 
 /// Coarse state of one torrent.
@@ -722,6 +730,7 @@ impl Engine {
         let storage = SafeStorageFactory::new(output_folder, options.overwrite, subfolder)
             .with_allocation(self.allocation)
             .with_max_open_files(self.max_open_files)
+            .with_index_out(options.index_out.clone())
             .with_metrics(self.storage_metrics.clone());
         let plan = storage.plan_handle();
         if let Ok(mut notes) = self.storage_notes.lock() {
