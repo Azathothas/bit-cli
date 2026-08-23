@@ -1347,7 +1347,7 @@ Source:      `reference/RESEARCH.md` section D, 2026-08-21
 Category:    peers
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T18:12Z, premise disproved
 
 Problem:     A peer's BEP 10 extended handshake carries `reqq`, the number of
              block requests it will queue. `bit-cli bench leech` reports a
@@ -1379,6 +1379,63 @@ Acceptance:  `bench leech` reports the peer's advertised `reqq` and the depth
              than the cap. A synthetic peer advertising `reqq = 8` receives no
              more than 8 outstanding requests, asserted in a test rather than
              observed in a report.
+
+**Done 2026-08-23T18:12Z, and both halves of the Problem are disproved. There
+is nothing left in this entry to build.**
+
+**`reqq` is read.** `librqbit` 9.0.1's `on_extended_handshake` at
+`vendor/rqbit/crates/librqbit/src/torrent_state/live/mod.rs:1241` takes the
+peer's `reqq`, computes `reqq.min(DEFAULT_PEER_REQUEST_WINDOW)` and assigns it
+to that peer's `flow.request_window`. It is upstream's own code: no patch in
+`patches/rqbit/` touches it and `patches/UPSTREAM.md` has no section for it, so
+it has been true since the version this repository vendored.
+`bit-cli bench probe` reads the key as well, at
+`crates/bit-cli-core/src/bench/probe.rs:417`.
+
+**And the reported depth is observed rather than fixed.** `peak_queue_depth`
+comes from `pipeline.peak_in_flight`, which the bridge counts at
+`crates/bit-cli-core/src/webseed/bridge.rs:432`. The other feeder,
+`Recorder::observe_choke`, has no caller anywhere outside its own test.
+
+### Run against the claim
+
+The bridge advertises `reqq: 250`, at `bridge.rs:72`, so the session's window
+is `min(250, 128)` and a run reports 128. That is the number the entry is named
+for, and it is the cap being reached rather than a constant being printed. The
+way to tell the two apart is to change what the bridge says and look:
+
+| `REQUEST_QUEUE` the bridge advertises | peak in flight | mean in flight | leech rate |
+| --- | --- | --- | --- |
+| 250 | **128** | 19 | 120.30 MiB/s |
+| 32 | **32** | 7 | 122.14 MiB/s |
+
+The peak follows the advertisement. `bit-cli bench leech`, 32 MiB payload, one
+connection, loopback file server, one run each. Both reports are committed:
+`bench/leech-20260823T180307071Z.json` and
+`bench/leech-20260823T180645783Z.json`.
+
+```bash
+pwsh -NoProfile -File scripts/bench-leech.ps1 -PayloadSize 32MiB -Runs 1 -ConnectionSweep "1"
+```
+
+### And the Approach is disproved as well, by the same two runs
+
+The Approach proposes replacing the fixed window with a BDP-sized depth from an
+EMA of the peer's own rate, citing `seedchamp/docs/design.md:197`. **Nothing on
+this path is short of window.** Mean in flight is 19 blocks against a window of
+128, and quartering the window to 32 left throughput where it was: 120.30
+MiB/s against 122.14, which is noise on a single run either way.
+
+A rewrite that moves no number does not ship, which is the same rule
+[RULES.md](RULES.md) section 5 applies to a flag. So this closes with no
+residual entry behind it rather than with a smaller version of itself: the
+depth is not what this path is limited by, and the measurement that would
+justify sizing it dynamically is the one that says otherwise.
+
+**What that leaves is the other three numbers in the same report**, and they
+are already somebody's: at a window of 128 the run reached 15.37 percent of
+what that depth allows, and the gap between `fetch` at 961.97 MiB/s and
+`leech` at 120.30 is [T-090](bench.md)'s question, not this one.
 
 ### T-166 BEP 10 extension ids are not proven to map in both directions
 

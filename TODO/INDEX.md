@@ -110,7 +110,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-138](peers.md) | P2 | peers | **done** | A peer that comes back waits out a backoff that grows by six |
 | [T-163](peers.md) | P2 | peers | **done** | MSE/PE peer encryption is not implemented |
 | [T-164](peers.md) | P2 | peers | partial | A peer that sends garbage keeps its connection slot |
-| [T-165](peers.md) | P2 | peers | open | The peer's reqq is ignored, so the queue depth is a fixed 128 |
+| [T-165](peers.md) | P2 | peers | **done** | The peer's reqq is ignored, so the queue depth is a fixed 128 *(title disproved: it is read, and the depth follows it)* |
 | [T-166](peers.md) | P1 | peers | **done** | BEP 10 extension ids are not proven to map in both directions |
 | [T-194](peers.md) | P0 | peers | **done** | A torrent past 131,960 pieces cannot be served or fetched at all |
 | [T-195](peers.md) | P2 | peers | done | The read side caps the same message at 262,104 pieces |
@@ -255,7 +255,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 177 items: 167 to work through, and 10 deferred to Phase C.
-25 open, 1 partial, 0 blocked, 141 done.
+24 open, 1 partial, 0 blocked, 142 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -514,10 +514,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 62 | 63 |
-| P2 | 12 | 1 | 0 | 52 | 65 |
+| P2 | 11 | 1 | 0 | 53 | 65 |
 | P3 | 12 | 0 | 0 | 15 | 27 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **25** | **1** | **0** | **141** | **177** |
+| **All** | **24** | **1** | **0** | **142** | **177** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
