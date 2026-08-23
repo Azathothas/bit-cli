@@ -81,14 +81,12 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green on all **seventeen** jobs at run **32628316314**, against commit
-  `cad1ceb`, which is the run that proved [T-215](webseed.md)'s fix.
+- **CI:** green on all **seventeen** jobs at run **32629207782**, against commit
+  `a044421`, which is the last commit of the session that changed source. It
+  carries [T-216](windows.md)'s fix and both `check-todo.ps1` changes.
 
-  **The last commit of the session is `246f341`** and it is documentation only,
-  so it carries `[skip ci]` and started no run. The commit under it, `a044421`,
-  started run **32629207782**, which was still in flight when the session ended.
-  **Read it first**: it carries [T-216](windows.md)'s fix and both script
-  changes, and nothing has confirmed them on a runner yet.
+  Two commits sit on top of it, `246f341` and `fa78ae2`, both documentation only
+  and both carrying `[skip ci]`, so neither started a run.
 
   **Two jobs went red this session and both are fixed**, [T-215](webseed.md) on
   `Test (windows-latest)` at run 32626337016 and [T-216](windows.md) on
@@ -393,12 +391,13 @@ Derived from the rows rather than from memory:
 pwsh -NoProfile -File scripts/check-todo.ps1
 ```
 
-1. **Read run 32629207782**, before anything else. It is `a044421`'s, it was
-   still in flight when the session ended, and it carries
-   [T-216](windows.md)'s fix and both `check-todo.ps1` changes:
+1. **Re-measure the baseline rather than trusting the one above**, which is what
+   [RULES.md](RULES.md) section 1 step 5 asks for. The CI run named there is
+   green on all seventeen jobs and the two commits above it are documentation
+   with `[skip ci]`, so there is no red job waiting and nothing to chase:
 
 ```bash
-gh run view 32629207782
+gh run list --limit 1
 ```
 
 2. **The six hour soak, and it is the operator's to run.** No agent session lasts
