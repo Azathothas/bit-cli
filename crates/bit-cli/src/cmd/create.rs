@@ -763,9 +763,14 @@ mod tests {
         // SHA-1 because the crate already carries it for piece hashes. This is
         // a file identity check, not a security property.
         let digest = <sha1::Sha1 as sha1::Digest>::digest(&bytes);
+        // Formatted here rather than with `{digest:x}`. `sha1` 0.11 returns
+        // `hybrid_array::Array` where 0.10 returned a `GenericArray`, and only
+        // the second implements `LowerHex`. Writing the twenty bytes out is
+        // one line and does not depend on which array type the crate is
+        // currently returning.
+        let digest: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(
-            format!("{digest:x}"),
-            "069804535e172027dfd40388bc0b7a64d8e8770b",
+            digest, "069804535e172027dfd40388bc0b7a64d8e8770b",
             "the bytes this platform wrote differ from every other platform's"
         );
     }

@@ -5,7 +5,7 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/Cargo.lock b/Cargo.lock
-index 8901d21..6ac1280 100644
+index 8901d21..f3d775d 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -17,21 +17,6 @@ dependencies = [
@@ -1329,7 +1329,7 @@ index 8901d21..6ac1280 100644
  [[package]]
  name = "network-interface"
  version = "2.0.5"
-@@ -3677,12 +2715,6 @@ dependencies = [
+@@ -3677,17 +2715,11 @@ dependencies = [
   "winapi",
  ]
  
@@ -1341,7 +1341,14 @@ index 8901d21..6ac1280 100644
 -
  [[package]]
  name = "nix"
- version = "0.30.1"
+-version = "0.30.1"
++version = "0.31.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
++checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+ dependencies = [
+  "bitflags 2.13.1",
+  "cfg-if",
 @@ -3827,223 +2859,6 @@ dependencies = [
   "autocfg",
  ]

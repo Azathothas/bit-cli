@@ -26,7 +26,7 @@ chrono = { version = "0.4.44", default-features = false, features = ["std", "clo
 clap = { version = "4.6.1", features = ["derive", "env", "wrap_help", "string"] }
 clap_complete = "4.6.1"
 clap_complete_nushell = "4.6.1"
-clap_mangen = "0.2.32"
+clap_mangen = "0.3.3"
 globset = "0.4.19"
 hdrhistogram = { version = "7.5.5", default-features = false }
 ignore = "0.4.24"
@@ -34,7 +34,7 @@ librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls"
 librqbit-bencode = "9.0.1"
 librqbit-core = { version = "9.0.1", default-features = false }
 librqbit-peer-protocol = { version = "9.0.1", default-features = false }
-md-5 = "0.10.6"
+md-5 = "0.11.0"
 percent-encoding = "2.3.2"
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 rand = "0.10.2"
@@ -43,8 +43,8 @@ rustls = { version = "0.23.41", default-features = false, features = ["std", "tl
 rustls-pki-types = "1.14.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-sha1 = "0.10.6"
-sha2 = "0.10.9"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
 tempfile = "3.24.0"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "fs"] }

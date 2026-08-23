@@ -15,6 +15,23 @@ flag and exit code, generated from the command definition. The JSON is a
 CLIspec 0.3 document, for a caller that is a program. `cargo test -p bit-cli`
 fails when any of the three stops describing the binary. See `docs/man.md`.
 
+### Message stream encryption
+
+`--encryption off|prefer|require`, defaulting to `prefer`. A peer configured to
+require encryption would not exchange a byte with `bit-cli` before this, so the
+swarm it could reach was smaller than the swarm that exists. One listening port
+serves both kinds: an accepting end tells them apart by reading the first
+twenty bytes. `--json` reports what each peer settled on as
+`peers[].encryption`.
+
+### BEP 6, the fast extension, and BEP 54
+
+Both directions of both. A peer that says `have all` in two bytes instead of
+sending a bitfield is understood, one that says `reject request` no longer
+stalls a request until it times out, and a source that loses a file retracts
+the pieces it covered on the connection it is already on rather than by
+reconnecting with a smaller bitfield.
+
 ### Fixed in the vendored trees
 
 - A torrent past 131,960 pieces could not be served or fetched at all: its
@@ -24,8 +41,24 @@ fails when any of the three stops describing the binary. See `docs/man.md`.
   seeder went on reporting itself as seeding while serving nobody.
 - Nothing reclaimed a peer row, so a long-lived session grew one per completed
   handshake forever. Bounded at 1,024 per torrent.
+- No BEP 6 at all: five message ids and a reserved bit, so a peer that spoke
+  the fast extension was answered with an unsupported-message error and
+  dropped.
+- BEP 54 `lt_donthave` was received and ignored, and honouring one now also
+  gives the retracted piece back to the queue rather than leaving it assigned
+  to the peer that just refused it.
+- A seam for wrapping a peer connection before the BitTorrent handshake, which
+  is where the encryption above plugs in.
 
 `patches/UPSTREAM.md` carries each with its measurement.
+
+### Dependencies
+
+`sha1`, `sha2` and `md-5` to 0.11, `clap_mangen` to 0.3, `nix` to 0.31 in the
+vendored workspace, and the minor and patch versions of everything else.
+`THIRD_PARTY.md` is regenerated with them: it is generated from `Cargo.lock`,
+so a bump that does not regenerate it fails the `Third party notices` job and
+nothing else.
 
 ### Vendored upstreams
 

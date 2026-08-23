@@ -1127,3 +1127,38 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```bash
 cargo test -p bit-cli-core --test bridge_protocol
 ```
+
+---
+
+## rqbit: `nix` is pinned a minor version behind
+
+```
+Unblocks:    nothing. It is dependency maintenance, and it is here because the
+             file it changes is somebody else's.
+Files:       vendor/rqbit/Cargo.toml
+             vendor/rqbit/Cargo.lock
+             patches/rqbit/0002-Cargo.toml.patch
+             patches/rqbit/0001-Cargo.lock.patch
+Upstream:    not offered, and there is nothing to offer: upstream will bump it
+             on its own schedule and this patch disappears when it does.
+Added:       2026-08-23T04:20Z
+```
+
+`nix = "0.30"` to `"0.31"`. `librqbit` uses it for one call,
+`nix::sys::uio::pwritev` in `storage/filesystem/opened_file.rs`, and nothing in
+0.31 touches that signature.
+
+**Why it has to be here.** Because `[patch.crates-io]` redirects the crate to
+this tree, so the version this repository ships is the one
+`vendor/rqbit/Cargo.toml` names, and dependabot opened a pull request against
+that file rather than against ours. Leaving it would keep this repository a
+minor version behind on a crate it does not itself depend on and cannot bump
+from its own manifest.
+
+**How it was checked.** The vendored tests, which are the only thing that
+exercises the `pwritev` path, and they are unix-only so this is the platform
+where it matters.
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+```

@@ -5,7 +5,7 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/Cargo.toml b/Cargo.toml
-index fe69a89..04cf67c 100644
+index fe69a89..2d9d7fd 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -14,7 +14,6 @@ members = [
@@ -16,3 +16,12 @@ index fe69a89..04cf67c 100644
  ]
  
  # Everything except desktop
+@@ -118,7 +117,7 @@ memmap2 = "0.9"
+ metrics-exporter-prometheus = { version = "0.18", default-features = false }
+ mime_guess = { version = "2", default-features = false }
+ network-interface = "2"
+-nix = "0.30"
++nix = "0.31"
+ notify = "8"
+ openssl = "0.10"
+ parking_lot = "0.12"

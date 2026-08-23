@@ -937,7 +937,7 @@ limitations under the License.
 
 ## Apache License 2.0
 
-Used by `librqbit-dualstack-sockets 0.7.0`, `librqbit-utp 0.7.0`, `librqbit-bencode 9.0.1`, `librqbit-buffers 9.0.1`, `librqbit-clone-to-owned 9.0.1`, `librqbit-dht 9.0.1`, `librqbit 9.0.1`, `librqbit-core 9.0.1`, `librqbit-lsd 9.0.1`, `librqbit-peer-protocol 9.0.1`, `librqbit-sha1-wrapper 9.0.1`, `librqbit-tracker-comms 9.0.1`, `librqbit-upnp 9.0.1`, `aws-lc-sys 0.41.0`, `ryu 1.0.23`, `sync_wrapper 1.0.2`
+Used by `librqbit-dualstack-sockets 0.7.0`, `librqbit-utp 0.7.0`, `librqbit-bencode 9.0.1`, `librqbit-buffers 9.0.1`, `librqbit-clone-to-owned 9.0.1`, `librqbit-dht 9.0.1`, `librqbit 9.0.1`, `librqbit-core 9.0.1`, `librqbit-lsd 9.0.1`, `librqbit-peer-protocol 9.0.1`, `librqbit-sha1-wrapper 9.0.1`, `librqbit-tracker-comms 9.0.1`, `librqbit-upnp 9.0.1`, `aws-lc-sys 0.44.0`, `ryu 1.0.23`, `sync_wrapper 1.0.2`
 
 ```
 Apache License
@@ -1154,7 +1154,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## BSD 3-Clause "New" or "Revised" License
 
-Used by `aws-lc-sys 0.41.0`
+Used by `aws-lc-sys 0.44.0`
 
 ```
 Copyright (c) <year> <owner>. 
@@ -1207,7 +1207,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Community Data License Agreement Permissive 2.0
 
-Used by `webpki-roots 1.0.8`
+Used by `webpki-roots 1.0.9`
 
 ```
 # Community Data License Agreement - Permissive - Version 2.0
@@ -1817,7 +1817,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ## ISC License
 
-Used by `rustls-webpki 0.103.13`
+Used by `rustls-webpki 0.103.15`
 
 ```
 Except as otherwise noted, this project is licensed under the following
@@ -1844,7 +1844,7 @@ third-party/chromium/LICENSE.
 
 ## ISC License
 
-Used by `aws-lc-rs 1.17.0`, `aws-lc-sys 0.41.0`
+Used by `aws-lc-rs 1.18.0`, `aws-lc-sys 0.44.0`
 
 ```
 ISC License:
@@ -1911,41 +1911,6 @@ limitations under the License.
 
 Copyright (c) 2016 Alex Crichton
 Copyright (c) 2017 The Tokio Authors
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-```
-
-## MIT License
-
-Used by `md-5 0.10.6`, `sha1 0.10.7`, `sha2 0.10.9`
-
-```
-Copyright (c) 2006-2009 Graydon Hoare
-Copyright (c) 2009-2013 Mozilla Foundation
-Copyright (c) 2016 Artyom Pavlov
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2102,7 +2067,7 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `cfg-if 1.0.4`, `futures-timer 3.0.4`, `openssl-probe 0.2.1`, `socket2 0.6.4`
+Used by `cfg-if 1.0.4`, `futures-timer 3.0.4`, `openssl-probe 0.2.1`, `socket2 0.6.5`
 
 ```
 Copyright (c) 2014 Alex Crichton
@@ -2135,7 +2100,7 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `mio 1.2.1`
+Used by `mio 1.2.2`
 
 ```
 Copyright (c) 2014 Carl Lerche and other MIO contributors
@@ -2223,7 +2188,7 @@ THE SOFTWARE.
 
 ## MIT License
 
-Used by `bitflags 2.13.0`, `log 0.4.33`, `num-complex 0.2.4`, `num-integer 0.1.46`, `num-iter 0.1.45`, `num-rational 0.2.4`, `num-traits 0.2.19`, `num 0.2.1`, `regex-automata 0.4.14`, `regex-syntax 0.8.11`, `regex 1.12.4`
+Used by `bitflags 2.13.1`, `log 0.4.34`, `num-complex 0.2.4`, `num-integer 0.1.47`, `num-iter 0.1.46`, `num-rational 0.2.4`, `num-traits 0.2.19`, `num 0.2.1`, `regex-automata 0.4.18`, `regex-syntax 0.8.11`, `regex 1.13.1`
 
 ```
 Copyright (c) 2014 The Rust Project Developers
@@ -2256,7 +2221,7 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `uuid 1.23.3`
+Used by `uuid 1.25.0`
 
 ```
 Copyright (c) 2014 The Rust Project Developers
@@ -2323,7 +2288,7 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `hyper 1.10.1`
+Used by `hyper 1.11.0`
 
 ```
 Copyright (c) 2014-2026 Sean McArthur
@@ -2378,7 +2343,7 @@ THE SOFTWARE.
 
 ## MIT License
 
-Used by `either 1.16.0`, `itertools 0.15.0`, `serde_with 3.21.0`, `serde_with_macros 3.21.0`
+Used by `either 1.18.0`, `itertools 0.15.0`, `serde_with 3.22.0`, `serde_with_macros 3.22.0`
 
 ```
 Copyright (c) 2015
@@ -2574,7 +2539,7 @@ THE SOFTWARE.
 
 ## MIT License
 
-Used by `futures-channel 0.3.32`, `futures-core 0.3.32`, `futures-executor 0.3.32`, `futures-io 0.3.32`, `futures-macro 0.3.32`, `futures-sink 0.3.32`, `futures-task 0.3.32`, `futures-util 0.3.32`, `futures 0.3.32`
+Used by `futures-channel 0.3.34`, `futures-core 0.3.34`, `futures-executor 0.3.34`, `futures-io 0.3.34`, `futures-macro 0.3.34`, `futures-sink 0.3.34`, `futures-task 0.3.34`, `futures-util 0.3.34`, `futures 0.3.34`
 
 ```
 Copyright (c) 2016 Alex Crichton
@@ -2707,7 +2672,7 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `hyper-rustls 0.27.9`, `rustls-native-certs 0.8.4`, `rustls 0.23.41`
+Used by `hyper-rustls 0.27.9`, `rustls-native-certs 0.8.4`, `rustls 0.23.43`
 
 ```
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
@@ -2955,10 +2920,13 @@ THE SOFTWARE.
 
 ## MIT License
 
-Used by `digest 0.10.7`
+Used by `md-5 0.11.0`, `sha1 0.11.0`, `sha2 0.11.0`
 
 ```
-Copyright (c) 2017 Artyom Pavlov
+Copyright (c) 2016-2026 The RustCrypto Project Developers
+Copyright (c) 2016 Artyom Pavlov
+Copyright (c) 2009-2013 Mozilla Foundation
+Copyright (c) 2006-2009 Graydon Hoare
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -3020,7 +2988,7 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `arc-swap 1.9.1`
+Used by `arc-swap 1.9.2`
 
 ```
 Copyright (c) 2017 arc-swap developers
@@ -3053,7 +3021,7 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `http 1.4.2`
+Used by `http 1.5.0`
 
 ```
 Copyright (c) 2017 http-rs authors
@@ -3152,7 +3120,41 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `bytes 1.12.0`
+Used by `digest 0.11.3`
+
+```
+Copyright (c) 2017-2025 RustCrypto Developers
+Copyright (c) 2017 Artyom Pavlov
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License
+
+Used by `bytes 1.12.1`
 
 ```
 Copyright (c) 2018 Carl Lerche
@@ -3273,39 +3275,6 @@ THE SOFTWARE.
 
 ## MIT License
 
-Used by `block-buffer 0.10.4`
-
-```
-Copyright (c) 2018-2019 The RustCrypto Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-```
-
-## MIT License
-
 Used by `dirs-sys 0.5.0`
 
 ```
@@ -3367,6 +3336,39 @@ Used by `getrandom 0.2.17`
 ```
 Copyright (c) 2018-2024 The rust-random Project Developers
 Copyright (c) 2014 The Rust Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License
+
+Used by `block-buffer 0.12.1`
+
+```
+Copyright (c) 2018-2025 The RustCrypto Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -3848,43 +3850,10 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `http-body 1.0.1`
+Used by `http-body-util 0.1.5`, `http-body 1.1.0`
 
 ```
-Copyright (c) 2019-2024 Sean McArthur & Hyper Contributors
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-```
-
-## MIT License
-
-Used by `http-body-util 0.1.3`
-
-```
-Copyright (c) 2019-2025 Sean McArthur & Hyper Contributors
+Copyright (c) 2019-2026 Sean McArthur & Hyper Contributors
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -4014,10 +3983,43 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `cpufeatures 0.2.17`, `cpufeatures 0.3.0`
+Used by `cpufeatures 0.3.0`
 
 ```
 Copyright (c) 2020-2025 The RustCrypto Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License
+
+Used by `const-oid 0.10.2`
+
+```
+Copyright (c) 2020-2026 The RustCrypto Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -4107,10 +4109,10 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `crypto-common 0.1.7`
+Used by `crypto-common 0.2.2`
 
 ```
-Copyright (c) 2021 RustCrypto Developers
+Copyright (c) 2021-2026 RustCrypto Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -4140,7 +4142,40 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `rustls-pki-types 1.14.1`
+Used by `hybrid-array 0.4.14`
+
+```
+Copyright (c) 2022-2026 The RustCrypto Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License
+
+Used by `rustls-pki-types 1.15.1`
 
 ```
 Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
@@ -4227,7 +4262,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `anstream 1.0.0`, `anstyle-parse 1.0.0`, `anstyle-query 1.1.5`, `anstyle-wincon 3.0.11`, `anstyle 1.0.14`, `clap 4.6.6`, `clap_builder 4.6.6`, `clap_complete 4.6.9`, `clap_complete_nushell 4.6.2`, `clap_derive 4.6.4`, `clap_lex 1.1.0`, `clap_mangen 0.2.33`, `colorchoice 1.0.5`, `is_terminal_polyfill 1.70.2`, `once_cell_polyfill 1.70.2`, `roff 1.1.1`, `serde_spanned 1.1.1`, `toml 1.1.2+spec-1.1.0`, `toml_datetime 1.1.1+spec-1.1.0`, `toml_parser 1.1.2+spec-1.1.0`, `toml_writer 1.1.1+spec-1.1.0`
+Used by `anstream 1.0.0`, `anstyle-parse 1.0.0`, `anstyle-query 1.1.5`, `anstyle-wincon 3.0.11`, `anstyle 1.0.14`, `clap 4.6.6`, `clap_builder 4.6.6`, `clap_complete 4.6.9`, `clap_complete_nushell 4.6.2`, `clap_derive 4.6.4`, `clap_lex 1.1.0`, `clap_mangen 0.3.3`, `colorchoice 1.0.5`, `is_terminal_polyfill 1.70.2`, `once_cell_polyfill 1.70.2`, `roff 1.1.1`, `serde_spanned 1.1.1`, `toml 1.1.4+spec-1.1.0`, `toml_datetime 1.1.1+spec-1.1.0`, `toml_parser 1.1.3+spec-1.1.0`, `toml_writer 1.1.2+spec-1.1.0`
 
 ```
 Copyright (c) Individual contributors
@@ -4254,7 +4289,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `libc 0.2.186`
+Used by `libc 0.2.189`
 
 ```
 Copyright (c) The Rust Project Developers
@@ -4368,7 +4403,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## MIT License
 
-Used by `ipnet 2.12.0`
+Used by `ipnet 2.12.1`
 
 ```
 Copyright 2017 Juniper Networks, Inc.
@@ -4383,7 +4418,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## MIT License
 
-Used by `rand 0.10.2`, `rand 0.9.4`, `rand_chacha 0.9.0`, `rand_core 0.9.5`
+Used by `rand 0.10.2`, `rand 0.9.5`, `rand_chacha 0.9.0`, `rand_core 0.9.5`
 
 ```
 Copyright 2018 Developers of the Rand project
@@ -4432,7 +4467,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ## MIT License
 
-Used by `zerocopy 0.8.52`
+Used by `zerocopy 0.8.56`
 
 ```
 Copyright 2023 The Fuchsia Authors
@@ -4586,7 +4621,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `crc32fast 1.5.0`
+Used by `crc32fast 1.5.1`
 
 ```
 MIT License
@@ -4731,7 +4766,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `tokio-macros 2.7.0`
+Used by `tokio-macros 2.7.2`
 
 ```
 MIT License
@@ -5053,7 +5088,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `tokio-stream 0.1.18`, `tokio-util 0.7.18`, `tokio 1.52.3`
+Used by `tokio-stream 0.1.19`, `tokio-util 0.7.19`, `tokio 1.53.1`
 
 ```
 MIT License
@@ -5082,7 +5117,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `simd-adler32 0.3.9`
+Used by `simd-adler32 0.3.10`
 
 ```
 MIT License
@@ -5203,7 +5238,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `rustc-hash 2.1.2`
+Used by `rustc-hash 2.1.3`
 
 ```
 Permission is hereby granted, free of charge, to any
@@ -5233,7 +5268,7 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `adler2 2.0.1`, `anyhow 1.0.104`, `async-trait 0.1.89`, `atomic-waker 1.1.2`, `displaydoc 0.2.6`, `fastrand 2.5.0`, `itoa 1.0.18`, `linux-raw-sys 0.12.1`, `once_cell 1.21.4`, `pin-project-lite 0.2.17`, `portable-atomic 1.13.1`, `proc-macro2 1.0.106`, `quote 1.0.46`, `rustix 1.1.4`, `rustversion 1.0.22`, `serde 1.0.228`, `serde_core 1.0.228`, `serde_derive 1.0.228`, `serde_html_form 0.2.8`, `serde_json 1.0.150`, `serde_path_to_error 0.1.20`, `syn 2.0.118`, `syn 3.0.3`, `thiserror-impl 1.0.69`, `thiserror-impl 2.0.18`, `thiserror 1.0.69`, `thiserror 2.0.18`, `unicode-ident 1.0.24`, `zmij 1.0.21`
+Used by `adler2 2.0.1`, `anyhow 1.0.104`, `async-trait 0.1.92`, `atomic-waker 1.1.2`, `displaydoc 0.2.7`, `fastrand 2.5.0`, `itoa 1.0.18`, `linux-raw-sys 0.12.1`, `once_cell 1.21.4`, `pin-project-lite 0.2.17`, `portable-atomic 1.15.0`, `proc-macro2 1.0.107`, `quote 1.0.47`, `rustix 1.1.4`, `rustversion 1.0.23`, `serde 1.0.229`, `serde_core 1.0.229`, `serde_derive 1.0.229`, `serde_html_form 0.2.8`, `serde_json 1.0.151`, `serde_path_to_error 0.1.20`, `syn 2.0.119`, `syn 3.0.3`, `thiserror-impl 1.0.69`, `thiserror-impl 2.0.20`, `thiserror 1.0.69`, `thiserror 2.0.20`, `unicode-ident 1.0.24`, `zmij 1.0.23`
 
 ```
 Permission is hereby granted, free of charge, to any
@@ -5295,7 +5330,7 @@ DEALINGS IN THE SOFTWARE.
 
 ## MIT License
 
-Used by `winnow 1.0.3`
+Used by `winnow 1.0.4`
 
 ```
 Permission is hereby granted, free of charge, to any person obtaining
@@ -5408,7 +5443,7 @@ THE SOFTWARE.
 
 ## MIT License
 
-Used by `aho-corasick 1.1.4`, `byteorder 1.5.0`, `globset 0.4.19`, `ignore 0.4.30`, `memchr 2.8.2`, `walkdir 2.5.0`
+Used by `aho-corasick 1.1.5`, `byteorder 1.5.0`, `globset 0.4.20`, `ignore 0.4.33`, `memchr 2.8.3`, `walkdir 2.5.0`
 
 ```
 The MIT License (MIT)
@@ -5465,7 +5500,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `nix 0.30.1`
+Used by `nix 0.31.3`
 
 ```
 The MIT License (MIT)
@@ -5553,7 +5588,7 @@ THE SOFTWARE.
 
 ## MIT License
 
-Used by `data-encoding 2.11.0`
+Used by `data-encoding 2.11.1`
 
 ```
 The MIT License (MIT)
@@ -5583,7 +5618,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `aws-lc-sys 0.41.0`
+Used by `aws-lc-sys 0.44.0`
 
 ```
 The MIT License (MIT)
@@ -5699,7 +5734,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `async-compression 0.4.42`, `compression-codecs 0.4.38`, `compression-core 0.4.32`
+Used by `async-compression 0.4.43`, `compression-codecs 0.4.38`, `compression-core 0.4.32`
 
 ```
 The MIT License (MIT)
@@ -5728,7 +5763,7 @@ SOFTWARE.
 
 ## MIT License
 
-Used by `bstr 1.12.1`
+Used by `bstr 1.13.1`
 
 ```
 The MIT License (MIT)
@@ -5757,7 +5792,7 @@ THE SOFTWARE.
 
 ## MIT License
 
-Used by `crossbeam-deque 0.8.7`, `crossbeam-epoch 0.9.20`, `crossbeam-utils 0.8.21`
+Used by `crossbeam-deque 0.8.7`, `crossbeam-epoch 0.9.20`, `crossbeam-utils 0.8.22`
 
 ```
 The MIT License (MIT)
@@ -5877,34 +5912,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-```
-
-## MIT License
-
-Used by `generic-array 0.14.7`
-
-```
-The MIT License (MIT)
-
-Copyright (c) 2015 Bartłomiej Kamiński
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 ```
 
 ## MIT License
@@ -6396,7 +6403,7 @@ authorization of the copyright holder.
 
 ## Unicode License v3
 
-Used by `icu_collections 2.2.0`, `icu_locale_core 2.2.0`, `icu_normalizer 2.2.0`, `icu_normalizer_data 2.2.0`, `icu_properties 2.2.0`, `icu_properties_data 2.2.0`, `icu_provider 2.2.0`, `litemap 0.8.2`, `potential_utf 0.1.5`, `tinystr 0.8.3`, `writeable 0.6.3`, `yoke-derive 0.8.2`, `yoke 0.8.3`, `zerofrom-derive 0.1.7`, `zerofrom 0.1.8`, `zerotrie 0.2.4`, `zerovec-derive 0.11.3`, `zerovec 0.11.6`
+Used by `icu_collections 2.3.0`, `icu_locale_core 2.3.0`, `icu_normalizer 2.3.0`, `icu_normalizer_data 2.3.0`, `icu_properties 2.3.0`, `icu_properties_data 2.3.0`, `icu_provider 2.3.1`, `litemap 0.8.3`, `potential_utf 0.1.6`, `tinystr 0.8.4`, `writeable 0.6.4`, `yoke-derive 0.8.2`, `yoke 0.8.3`, `zerofrom-derive 0.1.7`, `zerofrom 0.1.8`, `zerotrie 0.2.5`, `zerovec-derive 0.11.6`, `zerovec 0.11.8`
 
 ```
 UNICODE LICENSE V3
@@ -6450,7 +6457,7 @@ ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation a
 
 ## zlib License
 
-Used by `const_panic 0.2.15`
+Used by `const_panic 0.2.17`
 
 ```
 Copyright (c) 2021 Matias Rodriguez.
