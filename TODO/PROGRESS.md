@@ -51,7 +51,7 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-23T01:53:05Z, unattended, SESSION_ELAPSED. It was
+- **Last session:** 2026-08-23T01:53:05Z, unattended, 3h 44m. It was
   ended on the operator's word rather than by running out of work.
 - **Tests:** 1,166 passing, 0 failing. 1,131 at the start. Plus **149** in the
   vendored trees, which the workspace gates do not run, up from 142.
@@ -65,14 +65,14 @@ pwsh -NoProfile -File scripts/gates.ps1
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **CI:** green at run **32618552099** against commit `9ddafaa`, all
+- **CI:** green at run **32620536345** against commit `a289977`, all
   **seventeen** jobs, and that commit is this session's last change to source.
 - **Entries:** 161 items. 44 open, 2 partial, 0 blocked, 105 done, 10 deferred
   to Phase C. 105 of 151 workable done, 46 left.
-- **Tree:** 92 Rust files, 52,440 lines of code, 12,530 of
-  comment, `scc --no-cocomo crates/`. Excludes `vendor/`.
+- **Tree:** 92 Rust files, 52,557 lines of code, 12,567 of comment,
+  `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
-  across eighteen sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
+  across seventeen sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
   `scripts/vendor-status.ps1` exits 0.
 - **Version:** `bit-cli` 0.2.0, unchanged.
 
@@ -332,7 +332,7 @@ pwsh -NoProfile -File scripts/check-todo.ps1
    measurement, and it needs a swarm of peers that answer an extended handshake
    with a large `metadata_size` and then stall.
    `crates/bit-cli-core/src/bench/swarm.rs` already builds synthetic peers.
-9. **Offer the patches upstream.** Eighteen sections in
+9. **Offer the patches upstream.** Seventeen sections in
    [`patches/UPSTREAM.md`](../patches/UPSTREAM.md) and not one has been
    offered. [T-020](peers.md) is
    [rqbit#311](https://github.com/ikatson/rqbit/issues/311),
