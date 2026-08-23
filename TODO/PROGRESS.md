@@ -57,8 +57,10 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-23T16:18:55Z, unattended, and it was ended on the
-  operator's word. The duration is not restated here:
+- **Last session:** 2026-08-23T16:18:55Z, unattended. It stopped at a clean
+  point rather than on a word from the operator: the work order's effort S list
+  was cleared and the next item is a category pass. The duration is not
+  restated here:
   `scripts/session-report.ps1` derives it from the instant above, and a
   duration written down twice is a number two documents disagree about.
 - **Tests:** 1,290 passing, 0 failing. 1,271 at the start. Plus **149** in the
