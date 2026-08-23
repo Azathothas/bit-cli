@@ -1,6 +1,9 @@
 # Hooks
 
-Three flags run a command of yours at a point in a `bit-cli download` run.
+Flags that run a command of yours at a point in a run. Two commands have them,
+`download` and `seed`, and they do not mean quite the same thing.
+
+## `bit-cli download`
 
 | Flag | When it runs | How often |
 | --- | --- | --- |
@@ -14,6 +17,41 @@ differing. A run where one torrent finished and the other did not runs
 `--on-complete` for the first and `--on-error` for the second, in the same run.
 Every variable below that describes bytes or time describes **that torrent**;
 the four that describe the whole run say so in their names.
+
+## `bit-cli seed`
+
+| Flag | When it runs | How often |
+| --- | --- | --- |
+| `--on-complete <COMMAND>` | the payload passed its hash check and the listener is up | once, before serving |
+| `--on-error <COMMAND>` | the run failed to start, or died | once |
+
+**A seeder does not complete**, so `--on-complete` there is the moment it
+starts being useful rather than the moment it stops. It fires before the serve
+loop and not again: a seeder that runs for a week runs the hook on the first
+second of it.
+
+**`BIT_CLI_FINISHED` says whether the payload is whole, not whether the run
+succeeded.** A partial seed is a legitimate thing to be doing, so it still
+fires `--on-complete`, with `BIT_CLI_FINISHED=false` and
+`BIT_CLI_DOWNLOADED_BYTES` short of `BIT_CLI_TOTAL_BYTES`. On `download` the
+two questions are the same one and the flag that fires says the answer.
+
+**`BIT_CLI_STOPPED` is `serving`** on a seeder's `--on-complete`, which is the
+one value `download` never sets. On `--on-error` it is `error`.
+
+**Three things a seeder does not have.**
+
+- **No `--on-piece-verified`.** A seeder verifies every piece once, during the
+  hash check on add, so the hook would fire in a burst at startup and then be
+  silent for days. What a seeder would want is a hook per peer, which is a new
+  trigger rather than this one moved, and nothing has asked for it.
+- **Nothing on `--announce-only`.** That run announces and stops without ever
+  serving, so the moment `--on-complete` names does not happen in it.
+- **No hook on `peers`, `bench leech` or `bench seed`.** They accepted all
+  three flags until 2026-08-23 and ran none of them, because the flags lived in
+  the struct five commands share. They are refused now, with exit 2, which is
+  the difference between a caller learning at once and a caller waiting for a
+  notification that was never coming. See `TODO/cli-surface.md`, T-214.
 
 ## Nothing is interpolated into a command line
 
@@ -116,3 +154,12 @@ this file to it: `every_hook_variable_is_documented` fails when a variable has
 no row here, and `every_variable_a_hook_sets_is_in_the_list` fails when the
 code and the list disagree in either direction. See `TODO/cli-surface.md`,
 T-115.
+
+| Claim | Held by |
+| --- | --- |
+| `--on-complete` fires once per finished torrent, with its own info hash | `on_complete_fires_once_per_torrent_with_its_own_info_hash` |
+| A mixed run fires both hooks | `a_mixed_run_fires_on_complete_and_on_error` |
+| `--on-piece-verified` fires once per piece | `on_piece_verified_fires_once_per_piece` |
+| A seeder fires `--on-complete` once, when it is ready to serve | `on_complete_fires_once_when_the_seeder_is_ready_to_serve` |
+| A hook that fails does not fail the seeding | `a_failing_hook_does_not_fail_the_seeding` |
+| A hook that failed names the error and which hook it was | `a_failed_hook_names_the_error_and_says_which_hook_it_is` |

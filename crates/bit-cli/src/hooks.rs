@@ -286,11 +286,28 @@ pub struct Finished<'a> {
 }
 
 /// The environment `--on-complete` and `--on-error` receive.
+///
+/// Which of the two fired follows `finished`, because on a download they are
+/// the same question. On a seeder they are not: a partial seed is a legitimate
+/// thing to be serving, so [`hook_vars`] takes the name instead.
 pub fn finished_vars(one: &Finished<'_>) -> BTreeMap<String, String> {
-    let mut vars = common(match one.finished {
-        true => "on-complete",
-        false => "on-error",
-    });
+    hook_vars(
+        match one.finished {
+            true => "on-complete",
+            false => "on-error",
+        },
+        one,
+    )
+}
+
+/// The same, for a caller that knows which hook it is firing.
+///
+/// `seed` fires `--on-complete` when the hash check has passed and the
+/// listener is up, which is the only moment a seeder has, and `finished` there
+/// says whether the payload is whole rather than whether the run succeeded.
+/// See `TODO/cli-surface.md`, T-214.
+pub fn hook_vars(hook: &str, one: &Finished<'_>) -> BTreeMap<String, String> {
+    let mut vars = common(hook);
     vars.insert("BIT_CLI_INFO_HASH".to_string(), one.info_hash.to_string());
     vars.insert("BIT_CLI_NAME".to_string(), one.name.to_string());
     vars.insert("BIT_CLI_SOURCE".to_string(), one.source.to_string());

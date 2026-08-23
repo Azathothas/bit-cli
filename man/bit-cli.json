@@ -845,24 +845,6 @@
           "value_name": "RATE"
         },
         {
-          "description": "Run this command on success. Arguments arrive through the environment",
-          "name": "--on-complete",
-          "type": "string",
-          "value_name": "COMMAND"
-        },
-        {
-          "description": "Run this command on failure",
-          "name": "--on-error",
-          "type": "string",
-          "value_name": "COMMAND"
-        },
-        {
-          "description": "Run this command after every verified piece. High frequency",
-          "name": "--on-piece-verified",
-          "type": "string",
-          "value_name": "COMMAND"
-        },
-        {
           "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
           "name": "--peer",
           "type": "array",
@@ -2552,12 +2534,6 @@
           "value_name": "COMMAND"
         },
         {
-          "description": "Run this command after every verified piece. High frequency",
-          "name": "--on-piece-verified",
-          "type": "string",
-          "value_name": "COMMAND"
-        },
-        {
           "description": "Where the payload already lives. Defaults to --dir",
           "name": "--data",
           "type": "string",
@@ -3115,24 +3091,6 @@
           "value_name": "RATE"
         },
         {
-          "description": "Run this command on success. Arguments arrive through the environment",
-          "name": "--on-complete",
-          "type": "string",
-          "value_name": "COMMAND"
-        },
-        {
-          "description": "Run this command on failure",
-          "name": "--on-error",
-          "type": "string",
-          "value_name": "COMMAND"
-        },
-        {
-          "description": "Run this command after every verified piece. High frequency",
-          "name": "--on-piece-verified",
-          "type": "string",
-          "value_name": "COMMAND"
-        },
-        {
           "default": "30s",
           "description": "How long to run",
           "name": "--duration",
@@ -3440,24 +3398,6 @@
           "name": "--lowest-speed-limit",
           "type": "string",
           "value_name": "RATE"
-        },
-        {
-          "description": "Run this command on success. Arguments arrive through the environment",
-          "name": "--on-complete",
-          "type": "string",
-          "value_name": "COMMAND"
-        },
-        {
-          "description": "Run this command on failure",
-          "name": "--on-error",
-          "type": "string",
-          "value_name": "COMMAND"
-        },
-        {
-          "description": "Run this command after every verified piece. High frequency",
-          "name": "--on-piece-verified",
-          "type": "string",
-          "value_name": "COMMAND"
         },
         {
           "default": "30s",

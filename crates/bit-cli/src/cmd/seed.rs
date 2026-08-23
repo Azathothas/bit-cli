@@ -47,6 +47,14 @@ pub struct SeedReport {
     pub listen_addr: Option<String>,
     pub trackers: Vec<String>,
     pub peers: Vec<PeerSnapshot>,
+    /// What the `--on-*` commands did: how many ran and how many failed.
+    ///
+    /// Absent when no hook was given. A hook that fails is warned about and
+    /// does not change the exit code, which is `download`'s rule and is right
+    /// for the same reason: the seeding happened either way. See
+    /// `TODO/cli-surface.md`, T-214.
+    #[serde(skip_serializing_if = "crate::hooks::HookCounts::is_empty")]
+    pub hooks: crate::hooks::HookCounts,
     /// Files whose on-disk path is not the path in the torrent, and why.
     ///
     /// The same array `download --json` reports, because a seeder serves the
@@ -244,6 +252,19 @@ pub fn run(
     let init_timeout = swarm::duration_flag(&args.limits.init_timeout, "init-timeout")?;
     let source = args.source.source.clone();
     let announce_only = args.announce_only;
+    let on_complete = args.hooks.on_complete.clone();
+    let on_error = args.hooks.on_error.clone();
+    // What identifies the torrent when the run failed before there was a
+    // snapshot. A `.torrent` names both; a magnet that never resolved has an
+    // info hash and no name, which is exactly what a hook is being told about.
+    let failed_info_hash = meta
+        .as_ref()
+        .map(|meta| meta.info_hash().hex())
+        .unwrap_or_default();
+    let failed_name = meta
+        .as_ref()
+        .map(|meta| meta.layout().name)
+        .unwrap_or_default();
     let (torrent_download_rate, torrent_upload_rate) = setup.torrent_rates()?;
     let runtime = swarm::runtime()?;
     // `--tracker-list-url` is fetched on the runtime this command already
@@ -417,6 +438,38 @@ pub fn run(
             (None, _) => None,
         };
 
+        // The moment a seeder starts being useful, and the only one it has:
+        // the payload has passed its hash check and the listener is up. A
+        // seeder does not complete, so `--on-complete` means "ready to serve"
+        // here rather than "finished", which `docs/hooks.md` states and this
+        // is the only place it fires. See `TODO/cli-surface.md`, T-214.
+        let mut hook_counts = crate::hooks::HookCounts::default();
+        if let Some(command) = on_complete.as_deref() {
+            let vars = crate::hooks::hook_vars(
+                "on-complete",
+                &hook_facts(
+                    &snapshot,
+                    &source,
+                    &directory.display().to_string(),
+                    "serving",
+                    0,
+                    None,
+                ),
+            );
+            hook_counts.ran += 1;
+            match swarm::run_hook(command, &vars) {
+                Ok(0) => {}
+                Ok(code) => {
+                    hook_counts.failed += 1;
+                    renderer.warn(env, format!("hook `{command}` exited {code}"));
+                }
+                Err(error) => {
+                    hook_counts.failed += 1;
+                    renderer.warn(env, format!("hook `{command}` failed: {error}"));
+                }
+            }
+        }
+
         let lengths: Vec<u64> = layout.files.iter().map(|f| f.length).collect();
         let mut progress = Progress::new(layout.piece_count(), lengths);
         let mut ticker = tokio::time::interval(report_interval);
@@ -486,7 +539,7 @@ pub fn run(
         let view = swarm::without_probe_rows(engine.peers(&handle, &HashSet::new()), &probe_ports);
         swarm::discount_probe_peers(&mut snapshot, &view);
         let peers = view.rows;
-        let report = build(
+        let mut report = build(
             &snapshot,
             stopped,
             elapsed,
@@ -497,9 +550,53 @@ pub fn run(
             renames(&engine, &handle),
             listener.as_ref().map(|s| s.report()),
         );
+        report.hooks = hook_counts;
         engine.stop().await;
         Ok::<_, Error>(report)
-    })?;
+    });
+
+    // A seeding run that failed is the other well defined moment, and it is
+    // the one an operator watching a long-lived seeder actually wants: the
+    // process is gone and something has to be told. The snapshot the hook
+    // would describe does not exist here, because the failure is the reason
+    // there is none, so the variables that identify the torrent come from the
+    // source and the rest are what a failed run has: nothing served, nothing
+    // held. See `TODO/cli-surface.md`, T-214.
+    let report = match report {
+        Ok(report) => report,
+        Err(error) => {
+            if let Some(command) = on_error.as_deref() {
+                let text = error.to_string();
+                let vars = crate::hooks::hook_vars(
+                    "on-error",
+                    &crate::hooks::Finished {
+                        info_hash: &failed_info_hash,
+                        name: &failed_name,
+                        source: &source,
+                        directory: &directory.display().to_string(),
+                        total_bytes: 0,
+                        downloaded_bytes: 0,
+                        from_peers_bytes: 0,
+                        from_web_seeds_bytes: 0,
+                        finished: false,
+                        stopped: "error",
+                        elapsed_ms: 0,
+                        error: Some(&text),
+                        torrents: 1,
+                        completed: 0,
+                        failed: 1,
+                        run_elapsed_ms: 0,
+                    },
+                );
+                match swarm::run_hook(command, &vars) {
+                    Ok(0) => {}
+                    Ok(code) => renderer.warn(env, format!("hook `{command}` exited {code}")),
+                    Err(hook) => renderer.warn(env, format!("hook `{command}` failed: {hook}")),
+                }
+            }
+            return Err(error);
+        }
+    };
 
     // Seeding to nobody is the failure a seeding operator most needs to catch,
     // and it is indistinguishable from success in the totals alone.
@@ -509,6 +606,47 @@ pub fn run(
     };
     renderer.emit(env, "seed", &report, || lines(&report))?;
     Ok(code)
+}
+
+/// What a seeding run can tell a hook.
+///
+/// The same struct `download` fills, read for a seeder: `downloaded_bytes` is
+/// what is on disk and verified rather than what this run fetched, because a
+/// seeder fetches nothing, and `stopped` is why the run ended or `serving`
+/// when it has not. `finished` says the payload is whole, which on a seeder is
+/// a fact about the data rather than about the run: a partial seed is a
+/// legitimate thing to be doing, so it does not make the hook an error.
+/// See `TODO/cli-surface.md`, T-214.
+fn hook_facts<'a>(
+    snapshot: &'a TorrentSnapshot,
+    source: &'a str,
+    directory: &'a str,
+    stopped: &'a str,
+    elapsed_ms: u64,
+    error: Option<&'a str>,
+) -> crate::hooks::Finished<'a> {
+    crate::hooks::Finished {
+        info_hash: &snapshot.info_hash,
+        name: &snapshot.name,
+        source,
+        directory,
+        total_bytes: snapshot.total_bytes,
+        downloaded_bytes: snapshot.progress_bytes,
+        // A seeder is the other end of these two. Zero rather than absent,
+        // because the variables are documented as always set and a hook
+        // testing one of them should not have to know which command it is
+        // under.
+        from_peers_bytes: 0,
+        from_web_seeds_bytes: 0,
+        finished: snapshot.finished,
+        stopped,
+        elapsed_ms,
+        error,
+        torrents: 1,
+        completed: usize::from(error.is_none()),
+        failed: usize::from(error.is_some()),
+        run_elapsed_ms: elapsed_ms,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -529,6 +667,7 @@ fn build(
         ms => snapshot.uploaded_bytes.saturating_mul(1000) / ms,
     };
     SeedReport {
+        hooks: crate::hooks::HookCounts::default(),
         info_hash: snapshot.info_hash.clone(),
         name: snapshot.name.clone(),
         stopped,
@@ -927,6 +1066,108 @@ mod tests {
             untold["have"]["bytes"].as_u64().unwrap_or(2000) < 2000,
             "a seeder told nothing about the rename claimed the whole payload: {untold}"
         );
+    }
+
+    /// `--on-complete` fires once, when the seeder is ready to serve.
+    ///
+    /// A seeder has no completion of its own, so the trigger is the payload
+    /// passing its hash check with the listener up. The flag parsed before
+    /// this and ran nothing: `SeedArgs` flattens `LimitArgs`, which carried
+    /// all three hook flags, so `seed`, `peers`, `bench leech` and
+    /// `bench seed` each accepted three commands and ran none. See
+    /// `TODO/cli-surface.md`, T-214.
+    #[test]
+    fn on_complete_fires_once_when_the_seeder_is_ready_to_serve() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let data = fixture.dir().join("data");
+        fixture.place(&data, &[]);
+
+        // A directory named after the variables the hook was handed. `mkdir`
+        // rather than a redirect, for the reason `download`'s own hook test
+        // records: a redirect is parsed by `cmd` after Rust has quoted the
+        // argument and the two disagree about a Windows path.
+        let marks = fixture.dir().join("marks");
+        std::fs::create_dir_all(&marks).expect("make the marker directory");
+        let marks_arg = marks.to_str().expect("utf-8 path").to_string();
+        let command = match cfg!(windows) {
+            true => format!(r#"mkdir "{marks_arg}\%BIT_CLI_HOOK%-%BIT_CLI_INFO_HASH%""#),
+            false => format!(r#"mkdir -p "{marks_arg}/$BIT_CLI_HOOK-$BIT_CLI_INFO_HASH""#),
+        };
+
+        let report = crate::test_support::run_json_code(
+            &[
+                "seed",
+                fixture.path_str(),
+                "--data",
+                data.to_str().unwrap(),
+                "--port",
+                "0",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--stop-after",
+                "1s",
+                "--on-complete",
+                &command,
+            ],
+            fixture.dir(),
+            // Nothing connects, so the run stops on its deadline. The hook
+            // fired before the serve loop, which is the point: it does not
+            // wait for the run to end.
+            ExitCode::Timeout,
+        );
+
+        assert_eq!(report["hooks"]["ran"], 1, "{report}");
+        assert_eq!(report["hooks"]["failed"], 0, "{report}");
+
+        let left: Vec<String> = std::fs::read_dir(&marks)
+            .expect("read the marker directory")
+            .filter_map(|entry| Some(entry.ok()?.file_name().to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(
+            left.len(),
+            1,
+            "the hook ran {} time(s): {left:?}",
+            left.len()
+        );
+        assert_eq!(
+            left[0],
+            format!("on-complete-{}", fixture.info_hash),
+            "the hook was told which hook it was and which torrent: {left:?}"
+        );
+    }
+
+    /// A hook that fails is counted and warned about, and the seeding stands.
+    #[test]
+    fn a_failing_hook_does_not_fail_the_seeding() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let data = fixture.dir().join("data");
+        fixture.place(&data, &[]);
+
+        let report = crate::test_support::run_json_code(
+            &[
+                "seed",
+                fixture.path_str(),
+                "--data",
+                data.to_str().unwrap(),
+                "--port",
+                "0",
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--stop-after",
+                "1s",
+                "--on-complete",
+                "exit 3",
+            ],
+            fixture.dir(),
+            // The deadline, not the hook: a hook that fails is a warning.
+            ExitCode::Timeout,
+        );
+
+        assert_eq!(report["hooks"]["ran"], 1, "{report}");
+        assert_eq!(report["hooks"]["failed"], 1, "{report}");
+        assert_eq!(report["complete"], true, "{report}");
     }
 
     #[test]

@@ -212,7 +212,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-211](bench.md) | P1 | bench | **done** | Two bench tests fail on the CI runner and pass on every local run |
 | [T-212](memory.md) | P2 | memory | open | Resolving a magnet can allocate 4 GiB across 128 peers |
 | [T-213](cli-surface.md) | P3 | cli | **done** | seed cannot serve a payload renamed by --index-out |
-| [T-214](cli-surface.md) | P3 | cli | open | seed runs no hooks |
+| [T-214](cli-surface.md) | P3 | cli | **done** | seed runs no hooks |
 | [T-215](webseed.md) | P1 | bench | **done** | A third bench webseed test asserted a loaded runner cannot fail |
 | [T-216](windows.md) | P1 | ci | **done** | A seeder test waited longer for a listener than the run was allowed to live |
 | [T-217](windows.md) | P2 | ci | **done** | The text gate caught one control byte and not the other twenty-eight |
@@ -245,7 +245,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 167 items: 157 to work through, and 10 deferred to Phase C.
-29 open, 1 partial, 0 blocked, 127 done.
+28 open, 1 partial, 0 blocked, 128 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -505,9 +505,9 @@ sessions earlier.
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 56 | 57 |
 | P2 | 15 | 1 | 0 | 46 | 62 |
-| P3 | 13 | 0 | 0 | 13 | 26 |
+| P3 | 12 | 0 | 0 | 14 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **29** | **1** | **0** | **127** | **167** |
+| **All** | **28** | **1** | **0** | **128** | **167** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

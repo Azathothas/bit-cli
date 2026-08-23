@@ -695,7 +695,6 @@ pub fn run(
     // the run, started before the session and stopped after it. See
     // `docs/hooks.md` for what it costs and why it is bounded.
     let piece_hook = args
-        .limits
         .on_piece_verified
         .clone()
         .map(|command| Arc::new(crate::hooks::PieceHook::start(command)));
@@ -2843,13 +2842,13 @@ fn run_hooks(
     env: &mut Env,
 ) -> crate::hooks::HookCounts {
     let mut counts = crate::hooks::HookCounts::default();
-    if args.limits.on_complete.is_none() && args.limits.on_error.is_none() {
+    if args.hooks.on_complete.is_none() && args.hooks.on_error.is_none() {
         return counts;
     }
     for torrent in &report.torrents {
         let hook = match torrent.finished {
-            true => args.limits.on_complete.as_deref(),
-            false => args.limits.on_error.as_deref(),
+            true => args.hooks.on_complete.as_deref(),
+            false => args.hooks.on_error.as_deref(),
         };
         let Some(command) = hook else { continue };
         let vars = crate::hooks::finished_vars(&crate::hooks::Finished {

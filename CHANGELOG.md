@@ -8,6 +8,19 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### Hooks on `seed`, and three commands stop accepting flags they ignored
+
+`bit-cli seed` runs `--on-complete` once, when the payload has passed its hash
+check and the listener is up, and `--on-error` when the run fails. A seeder has
+no completion of its own, so the trigger is the moment it starts being useful.
+`docs/hooks.md` has the table for both commands.
+
+**`peers`, `bench leech` and `bench seed` no longer accept `--on-complete`,
+`--on-error` or `--on-piece-verified`.** They accepted all three and ran none:
+the flags lived in the argument struct five commands share and one honoured.
+Passing one of them to those three commands is exit 2 now. See
+`TODO/cli-surface.md`, T-214.
+
 ### The integrity guarantee is written down, and `--verify-on-complete`
 
 `docs/integrity.md` states what a finished download guarantees and what stands

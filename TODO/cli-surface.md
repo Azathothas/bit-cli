@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2568` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2346` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2382` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2077` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2596` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2374` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2410` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2105` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2568` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2596` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -3079,7 +3079,7 @@ Source:      the Problem's third clause in
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T12:10Z
 
 Problem:     `bit-cli seed` has no `--on-*` flag at all. `--on-complete`,
              `--on-error` and `--on-piece-verified` are on `download` only, so
@@ -3117,6 +3117,57 @@ Acceptance:  `bit-cli seed <TORRENT> --data <DIR> --on-complete <CMD>` runs the
              is up, with `BIT_CLI_INFO_HASH` set. `docs/hooks.md` says which
              trigger means what on `seed`, and
              `every_hook_variable_is_documented` still passes.
+
+**Done, and the Problem's own sentence is the thing that was wrong.** It says
+"This is a missing feature rather than a flag that does nothing: there is no
+flag to be inert." There were three, on four commands.
+
+`SeedArgs` flattens `LimitArgs`, and all three `--on-*` flags lived in
+`LimitArgs`. Five commands flatten it and one honoured them, so
+`bit-cli seed --on-complete notify` parsed, was documented in all three
+manuals, and ran nothing. So did `peers`, `bench leech` and `bench seed`. By
+this repository's own priority scale that is P1, "a flag does nothing", and it
+is the fourth instance after [T-181](#t-181-four-flags-are-read-and-never-acted-on),
+[T-183](#t-183---seed-ratio-and---seed-time-are-read-and-never-used) and
+[T-185](#t-185---exclude-file-on-its-own-selects-nothing-and-downloads-everything).
+
+**One command surface change, one behaviour change.** The three flags are a
+`HookArgs` struct now, flattened by `download` and `seed`. `peers`,
+`bench leech` and `bench seed` refuse them with exit 2, which is a caller
+learning at once rather than waiting for a notification that was never coming.
+`--on-piece-verified` is `download`'s alone.
+
+**The decisions the Approach asked for, all four:**
+
+- **`--on-complete` fires once, before the serve loop**, when the payload has
+  passed its hash check and the listener is up. A seeder has no completion, so
+  the useful moment is the one where it starts being useful.
+- **`BIT_CLI_FINISHED` there is about the payload, not the run.** A partial
+  seed is legitimate, so it still fires `--on-complete`, with
+  `BIT_CLI_FINISHED=false`. That is why `hook_vars` takes the hook name:
+  `finished_vars` chose it from `finished`, which is the same question on a
+  download and a different one here.
+- **`--on-error` is the run failing to start or dying**, fired on the way out
+  with the error in `BIT_CLI_ERROR` and whatever identifies the torrent, which
+  for a magnet that never resolved is an info hash and no name.
+- **`--on-piece-verified` is not ported.** Every piece is verified once, during
+  the hash check on add, so it would fire in a burst at startup and then be
+  silent for days. **No entry is filed for a per-peer hook**: the Approach names
+  it as the thing a seeder would actually want, it is a new trigger rather than
+  a port, and nothing has asked for one. `--jsonl` already carries the event.
+- **Nothing fires on `--announce-only`**, which never serves.
+
+**No new variables**, so `hooks::VARIABLES` is unchanged and both tests that
+hold it still pass. `BIT_CLI_STOPPED` carries one value a download never sets,
+`serving`.
+
+```
+$ cargo test -p bit-cli --lib on_complete_fires_once_when
+test result: ok. 1 passed; 0 failed; 0 ignored; 425 filtered out
+
+$ cargo test -p bit-cli --lib a_failing_hook_does_not
+test result: ok. 1 passed; 0 failed; 0 ignored; 425 filtered out
+```
 
 ### T-218 The next stable release fails the build on a method the bridge calls
 

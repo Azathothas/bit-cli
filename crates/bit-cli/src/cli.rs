@@ -562,6 +562,17 @@ pub struct DownloadArgs {
     pub limits: LimitArgs,
 
     #[command(flatten)]
+    pub hooks: HookArgs,
+
+    /// Run this command after every verified piece. High frequency.
+    ///
+    /// `download` only. A seeder verifies every piece once, during the hash
+    /// check on add, so the same flag there would fire in a burst at startup
+    /// and then be silent for days. See `TODO/cli-surface.md`, T-214.
+    #[arg(long, value_name = "COMMAND")]
+    pub on_piece_verified: Option<String>,
+
+    #[command(flatten)]
     pub selection: SelectionArgs,
 
     /// Listen port, or a range as START-END. `0` asks the OS for a free one.
@@ -688,6 +699,8 @@ impl DownloadArgs {
             web_seeds: WebSeedArgs::default(),
             trackers: TrackerArgs::default(),
             limits: LimitArgs::default(),
+            hooks: HookArgs::default(),
+            on_piece_verified: None,
             selection: SelectionArgs::default(),
             port: Vec::new(),
             peers: Vec::new(),
@@ -875,18 +888,29 @@ pub struct LimitArgs {
     /// Abort if the rate drops below this.
     #[arg(long, value_name = "RATE")]
     pub lowest_speed_limit: Option<String>,
+}
 
+/// Hooks: a command to run when something happens.
+///
+/// Their own struct rather than part of [`LimitArgs`], because five commands
+/// flatten that and only two of them can honour a hook. `peers`, `bench leech`
+/// and `bench seed` accepted all three and ran none, which is the shape
+/// `TODO/cli-surface.md` T-181, T-183 and T-185 each record: a flag that
+/// parses, is documented, and does nothing. See T-214.
+#[derive(Debug, Args, Clone, Default)]
+#[command(next_help_heading = "Hooks")]
+pub struct HookArgs {
     /// Run this command on success. Arguments arrive through the environment.
+    ///
+    /// On `download` that is a torrent finishing. On `seed` it is the payload
+    /// passing its hash check with the listener up, which is the moment a
+    /// seeder starts being useful: a seeder has no completion of its own.
     #[arg(long, value_name = "COMMAND")]
     pub on_complete: Option<String>,
 
     /// Run this command on failure.
     #[arg(long, value_name = "COMMAND")]
     pub on_error: Option<String>,
-
-    /// Run this command after every verified piece. High frequency.
-    #[arg(long, value_name = "COMMAND")]
-    pub on_piece_verified: Option<String>,
 }
 
 /// File selection and placement.
@@ -1459,6 +1483,9 @@ pub struct SeedArgs {
 
     #[command(flatten)]
     pub limits: LimitArgs,
+
+    #[command(flatten)]
+    pub hooks: HookArgs,
 
     /// Where the payload already lives. Defaults to --dir.
     #[arg(long, value_name = "PATH")]

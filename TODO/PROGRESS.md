@@ -94,8 +94,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
   `Test (ubuntu-latest)` at run 32627489685. Neither was a defect in `bit-cli`:
   both were tests asserting something about the runner. That is now the fourth
   and fifth of that kind.
-- **Entries:** 167 items. 29 open, 1 partial, 0 blocked, 127 done, 10 deferred
-  to Phase C. 127 of 157 workable done, 30 left.
+- **Entries:** 167 items. 28 open, 1 partial, 0 blocked, 128 done, 10 deferred
+  to Phase C. 128 of 157 workable done, 29 left.
 - **Tree:** 94 Rust files, 54,369 lines of code, 13,312 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **27 patches**

@@ -230,9 +230,6 @@ Effects: `read_only`.
 | `--stop-timeout <DUR>` | string |  |  | Give up if there is no progress for this long |
 | `--init-timeout <DUR>` | string |  | `10m` | Give up if the hash check has not finished in this long |
 | `--lowest-speed-limit <RATE>` | string |  |  | Abort if the rate drops below this |
-| `--on-complete <COMMAND>` | string |  |  | Run this command on success. Arguments arrive through the environment |
-| `--on-error <COMMAND>` | string |  |  | Run this command on failure |
-| `--on-piece-verified <COMMAND>` | string |  |  | Run this command after every verified piece. High frequency |
 | `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
 | `--no-dht` | boolean |  | `false` | Disable the DHT |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery |
@@ -576,7 +573,6 @@ Effects: `read_only`.
 | `--lowest-speed-limit <RATE>` | string |  |  | Abort if the rate drops below this |
 | `--on-complete <COMMAND>` | string |  |  | Run this command on success. Arguments arrive through the environment |
 | `--on-error <COMMAND>` | string |  |  | Run this command on failure |
-| `--on-piece-verified <COMMAND>` | string |  |  | Run this command after every verified piece. High frequency |
 | `--data <PATH>` | string |  |  | Where the payload already lives. Defaults to --dir |
 | `--index-out <INDEX=PATH>`, `-O` | array |  |  | Serve this file from this path, as INDEX=PATH |
 | `--verify <MODE>` | string | `full`, `quick`, `none` | `full` | Hash-check before announcing |
@@ -675,9 +671,6 @@ Effects: `non_idempotent`.
 | `--stop-timeout <DUR>` | string |  |  | Give up if there is no progress for this long |
 | `--init-timeout <DUR>` | string |  | `10m` | Give up if the hash check has not finished in this long |
 | `--lowest-speed-limit <RATE>` | string |  |  | Abort if the rate drops below this |
-| `--on-complete <COMMAND>` | string |  |  | Run this command on success. Arguments arrive through the environment |
-| `--on-error <COMMAND>` | string |  |  | Run this command on failure |
-| `--on-piece-verified <COMMAND>` | string |  |  | Run this command after every verified piece. High frequency |
 | `--duration <DUR>` | string |  | `30s` | How long to run |
 | `--warmup <DUR>` | string |  | `3s` | Discard measurements from this initial window |
 | `--metrics-interval <DUR>` | string |  | `1s` | Time series resolution |
@@ -733,9 +726,6 @@ Effects: `non_idempotent`.
 | `--stop-timeout <DUR>` | string |  |  | Give up if there is no progress for this long |
 | `--init-timeout <DUR>` | string |  | `10m` | Give up if the hash check has not finished in this long |
 | `--lowest-speed-limit <RATE>` | string |  |  | Abort if the rate drops below this |
-| `--on-complete <COMMAND>` | string |  |  | Run this command on success. Arguments arrive through the environment |
-| `--on-error <COMMAND>` | string |  |  | Run this command on failure |
-| `--on-piece-verified <COMMAND>` | string |  |  | Run this command after every verified piece. High frequency |
 | `--duration <DUR>` | string |  | `30s` | How long to run |
 | `--warmup <DUR>` | string |  | `3s` | Discard measurements from this initial window |
 | `--metrics-interval <DUR>` | string |  | `1s` | Time series resolution |

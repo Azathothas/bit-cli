@@ -481,15 +481,20 @@ Initialisation is reading the metadata and hash\-checking whatever is on disk, a
 .TP
 \fB\-\-lowest\-speed\-limit\fR \fI<RATE>\fR
 Abort if the rate drops below this
+.SH HOOKS
 .TP
 \fB\-\-on\-complete\fR \fI<COMMAND>\fR
-Run this command on success. Arguments arrive through the environment
+Run this command on success. Arguments arrive through the environment.
+
+On `download` that is a torrent finishing. On `seed` it is the payload passing its hash check with the listener up, which is the moment a seeder starts being useful: a seeder has no completion of its own.
 .TP
 \fB\-\-on\-error\fR \fI<COMMAND>\fR
 Run this command on failure
 .TP
 \fB\-\-on\-piece\-verified\fR \fI<COMMAND>\fR
-Run this command after every verified piece. High frequency
+Run this command after every verified piece. High frequency.
+
+`download` only. A seeder verifies every piece once, during the hash check on add, so the same flag there would fire in a burst at startup and then be silent for days. See `TODO/cli\-surface.md`, T\-214.
 .SH "FILE SELECTION"
 .TP
 \fB\-\-select\-file\fR \fI<INDEX>\fR
@@ -650,7 +655,7 @@ A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-`
 .SH NAME
 bit\-cli\-peers \- Connect, sample the swarm, report peers, then exit
 .SH SYNOPSIS
-\fBbit\-cli\-peers\fR [\fB\-\-duration\fR] [\fB\-\-count\fR] [\fB\-\-sort\fR] [\fB\-\-port\fR] [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-encryption\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-on\-complete\fR] [\fB\-\-on\-error\fR] [\fB\-\-on\-piece\-verified\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-peers\fR [\fB\-\-duration\fR] [\fB\-\-count\fR] [\fB\-\-sort\fR] [\fB\-\-port\fR] [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-encryption\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Connect, sample the swarm, report peers, then exit
 .SH OPTIONS
@@ -788,15 +793,6 @@ Initialisation is reading the metadata and hash\-checking whatever is on disk, a
 .TP
 \fB\-\-lowest\-speed\-limit\fR \fI<RATE>\fR
 Abort if the rate drops below this
-.TP
-\fB\-\-on\-complete\fR \fI<COMMAND>\fR
-Run this command on success. Arguments arrive through the environment
-.TP
-\fB\-\-on\-error\fR \fI<COMMAND>\fR
-Run this command on failure
-.TP
-\fB\-\-on\-piece\-verified\fR \fI<COMMAND>\fR
-Run this command after every verified piece. High frequency
 .TP
 \fB\-\-peer\fR \fI<ADDR>\fR
 Try this peer before any are discovered, as HOST:PORT. Repeatable
@@ -1149,7 +1145,7 @@ A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-`
 .SH NAME
 bit\-cli\-seed \- Seed existing data in the foreground
 .SH SYNOPSIS
-\fBbit\-cli\-seed\fR [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-encryption\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-on\-complete\fR] [\fB\-\-on\-error\fR] [\fB\-\-on\-piece\-verified\fR] [\fB\-\-data\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-\-verify\fR] [\fB\-\-fastresume\fR] [\fB\-\-fastresume\-dir\fR] [\fB\-\-superseed\fR] [\fB\-\-announce\-only\fR] [\fB\-\-port\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-pex\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-report\-interval\fR] [\fB\-\-exit\-when\-idle\fR] [\fB\-\-listener\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-seed\fR [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-encryption\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-on\-complete\fR] [\fB\-\-on\-error\fR] [\fB\-\-data\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-\-verify\fR] [\fB\-\-fastresume\fR] [\fB\-\-fastresume\-dir\fR] [\fB\-\-superseed\fR] [\fB\-\-announce\-only\fR] [\fB\-\-port\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-pex\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-report\-interval\fR] [\fB\-\-exit\-when\-idle\fR] [\fB\-\-listener\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Seed existing data in the foreground
 .SH OPTIONS
@@ -1275,15 +1271,15 @@ Initialisation is reading the metadata and hash\-checking whatever is on disk, a
 .TP
 \fB\-\-lowest\-speed\-limit\fR \fI<RATE>\fR
 Abort if the rate drops below this
+.SH HOOKS
 .TP
 \fB\-\-on\-complete\fR \fI<COMMAND>\fR
-Run this command on success. Arguments arrive through the environment
+Run this command on success. Arguments arrive through the environment.
+
+On `download` that is a torrent finishing. On `seed` it is the payload passing its hash check with the listener up, which is the moment a seeder starts being useful: a seeder has no completion of its own.
 .TP
 \fB\-\-on\-error\fR \fI<COMMAND>\fR
 Run this command on failure
-.TP
-\fB\-\-on\-piece\-verified\fR \fI<COMMAND>\fR
-Run this command after every verified piece. High frequency
 .TP
 \fB\-\-data\fR \fI<PATH>\fR
 Where the payload already lives. Defaults to \-\-dir
