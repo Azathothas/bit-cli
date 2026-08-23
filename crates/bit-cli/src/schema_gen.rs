@@ -240,9 +240,10 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         }
     }
 
-    // One more run of the same command, for the `hooks` block alone. It is
-    // omitted from a run that used no hook, so without this the contract would
-    // not describe a field the program emits. Folded into the same `kind`, and
+    // One more run of the same command, for the two blocks that only appear
+    // when a flag asks for them: `hooks` and `verified_files`. Both are
+    // omitted from a run that used neither, so without this the contract would
+    // not describe two fields the program emits. Folded into the same `kind`, and
     // `Sample::merge` keeps the first command, so the `From` line above stays
     // the one a reader should copy. `--on-complete` fires once per torrent, so
     // this is one process. See `docs/hooks.md` and `TODO/cli-surface.md`,
@@ -269,6 +270,7 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
                 true => "rem",
                 false => "true",
             },
+            "--verify-on-complete",
         ],
         dir.clone(),
     );

@@ -640,6 +640,19 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub hash_check_only: bool,
 
+    /// Re-read the finished payload and report a hash per file.
+    ///
+    /// Redundant by construction, and that is the point: every byte has
+    /// already been checked against the torrent's own piece hashes, once at the
+    /// source and once by the session. This is the check a caller can run
+    /// without trusting the thing that wrote the bytes, and it is the one whose
+    /// output can be compared against a digest published somewhere else.
+    ///
+    /// It reads the whole payload from disk, so it costs one full read. See
+    /// `docs/integrity.md` and `TODO/multi-source.md`, T-136.
+    #[arg(long)]
+    pub verify_on_complete: bool,
+
     /// Resume a partial download. On by default.
     #[arg(short = 'c', long, overrides_with = "no_continue")]
     pub r#continue: bool,
@@ -686,6 +699,7 @@ impl DownloadArgs {
             no_share_files: false,
             check_integrity: false,
             hash_check_only: false,
+            verify_on_complete: false,
             r#continue: true,
             no_continue: false,
             allow_overwrite: false,

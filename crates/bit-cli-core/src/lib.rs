@@ -9,6 +9,7 @@
 pub mod alloc;
 pub mod bench;
 pub mod config;
+pub mod digest;
 pub mod engine;
 pub mod equivalence;
 pub mod error;

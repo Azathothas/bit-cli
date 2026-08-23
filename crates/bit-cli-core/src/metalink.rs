@@ -91,7 +91,13 @@ impl Checksum {
     pub fn verify_file(&self, path: &Path) -> Result<Verified> {
         let mut file = std::fs::File::open(path)
             .map_err(|e| from_io(e, format!("cannot read {}", path.display())))?;
-        let mut digest = Digest::new(&self.algorithm)?;
+        let mut digest = crate::digest::Digest::new(&self.algorithm).map_err(|_| {
+            Error::usage(format!(
+                "the metalink's checksum uses {}, which this cannot compute",
+                self.algorithm
+            ))
+            .with("algorithm", self.algorithm.clone())
+        })?;
         let mut buffer = vec![0u8; 256 * 1024];
         let mut bytes_hashed = 0u64;
         loop {
@@ -129,51 +135,6 @@ pub struct Verified {
     /// declares learns whether the two documents describe the same file at
     /// all, which is a different failure from a digest that disagrees.
     pub bytes_hashed: u64,
-}
-
-/// One of the three digests, behind one interface.
-///
-/// An enum rather than a `Box<dyn Digest>`: `digest::DynDigest` would work and
-/// pulls a trait object into a loop that runs once per 256 KiB, and there are
-/// exactly three algorithms.
-enum Digest {
-    Sha256(sha2::Sha256),
-    Sha1(sha1::Sha1),
-    Md5(md5::Md5),
-}
-
-impl Digest {
-    fn new(algorithm: &str) -> Result<Self> {
-        use sha2::Digest as _;
-        match algorithm {
-            "sha256" => Ok(Self::Sha256(sha2::Sha256::new())),
-            "sha1" => Ok(Self::Sha1(sha1::Sha1::new())),
-            "md5" => Ok(Self::Md5(md5::Md5::new())),
-            other => Err(Error::usage(format!(
-                "the metalink's checksum uses {other}, which this cannot compute"
-            ))
-            .with("algorithm", other.to_string())),
-        }
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        use sha2::Digest as _;
-        match self {
-            Self::Sha256(d) => d.update(bytes),
-            Self::Sha1(d) => d.update(bytes),
-            Self::Md5(d) => d.update(bytes),
-        }
-    }
-
-    fn finish(self) -> String {
-        use sha2::Digest as _;
-        let bytes: Vec<u8> = match self {
-            Self::Sha256(d) => d.finalize().to_vec(),
-            Self::Sha1(d) => d.finalize().to_vec(),
-            Self::Md5(d) => d.finalize().to_vec(),
-        };
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
-    }
 }
 
 /// One place the bytes can be fetched from.

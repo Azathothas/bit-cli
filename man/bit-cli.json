@@ -564,6 +564,12 @@
         },
         {
           "default": "false",
+          "description": "Re-read the finished payload and report a hash per file",
+          "name": "--verify-on-complete",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
           "description": "Resume a partial download. On by default",
           "name": "--continue",
           "short": "-c",

@@ -66,7 +66,7 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 ## State
 
 - **Last session:** 2026-08-23T06:14:39Z, unattended, and running.
-- **Tests:** 1,197 passing, 0 failing. 1,166 at the start, re-measured rather
+- **Tests:** 1,204 passing, 0 failing. 1,166 at the start, re-measured rather
   than carried forward. Plus **149** in the vendored trees, which the workspace
   gates do not run.
 - **Gates:** clean, on rustc 1.98.0.
@@ -82,8 +82,8 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 - **CI:** green at run **32620536345** against commit `a289977`, all
   **seventeen** jobs. `f055328` is on top of it and is documentation only, so it
   carries `[skip ci]` and started no run.
-- **Entries:** 164 items. 40 open, 1 partial, 0 blocked, 113 done, 10 deferred
-  to Phase C. 113 of 154 workable done, 41 left.
+- **Entries:** 164 items. 39 open, 1 partial, 0 blocked, 114 done, 10 deferred
+  to Phase C. 114 of 154 workable done, 40 left.
 - **Tree:** 92 Rust files, 52,557 lines of code, 12,567 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **25 patches**
@@ -229,6 +229,37 @@ entry asked, and **failed twice**. `raw_arg` is the fix.
 Acceptance never covered: `seed` has no `--on-*` flag at all. The entry says
 what has to be decided first, because a seeder does not mean the same thing by
 "complete" that a download does.
+
+**[T-136](multi-source.md), P2, done, and half its Acceptance was already
+met.** Measuring before building found that the first clause is what
+[T-179](webseed.md) built and holds: a mirror serving one corrupt piece beside
+an honest one, every conviction naming source 0 with a piece index and two
+hashes that differ, the honest mirror surviving, and the payload arriving
+complete. The piece, the source and the mismatch. Nothing was written for it.
+
+What was owed is `--verify-on-complete` and the contract.
+`torrents[].verified_files` carries a sha256 per file, read back off the disk
+after the run. It is redundant with the piece checks by construction, which is
+the point: it is the check that does not trust the thing that wrote the bytes,
+and the only one whose output can be compared against a digest published
+somewhere else.
+
+`docs/integrity.md` is the contract the Relevance asks for, and its last two
+sections are the ones that matter: **what none of the checks tells you**, which
+is whether the `.torrent` describes the file you wanted, and a table naming the
+test behind every claim in it.
+
+**One duplicate removed.** `metalink.rs` had a private streaming digest and this
+needed the same thing; it is `bit_cli_core::digest` now and both use it. Two
+answers to "what does this file hash to" is the one place two answers is the
+whole problem. Checked against the **published** vectors rather than against
+this code's own previous output.
+
+**A test written earlier in this session turned out to assert something else.**
+T-155's metalink hash-check test started a DHT it did not need, and once the
+module had enough parallel tests it failed with "error initializing persistent
+DHT". Same class as T-215 and found the same way, by running the whole suite
+rather than the one test.
 
 ### A red job, and the fourth of its kind
 

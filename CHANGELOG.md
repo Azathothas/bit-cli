@@ -8,6 +8,19 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### The integrity guarantee is written down, and `--verify-on-complete`
+
+`docs/integrity.md` states what a finished download guarantees and what stands
+behind it: four independent checks, what each catches, what each costs, and a
+closing section on what none of them tells you. `README.md` carries the summary.
+
+`--verify-on-complete` re-reads the finished payload and reports a sha256 per
+file under `torrents[].verified_files`. It is redundant with the piece checks by
+construction: it is the check a caller can run without trusting the thing that
+wrote the bytes, and the only one whose output can be compared against a digest
+published somewhere else. It never changes the exit code. See
+`TODO/multi-source.md`, T-136.
+
 ### Hooks fire once per torrent, and `--on-piece-verified` fires at all
 
 `--on-complete` and `--on-error` ran once for the whole run, with the first

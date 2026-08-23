@@ -382,6 +382,13 @@ From `bit-cli download <TORRENT> --web-seed <URL> --json`.
 | `torrents[].total.human` | string |
 | `torrents[].uploaded.bytes` | integer |
 | `torrents[].uploaded.human` | string |
+| `torrents[].verified_files[].algorithm` | string |
+| `torrents[].verified_files[].bytes` | integer |
+| `torrents[].verified_files[].disk_path` | string |
+| `torrents[].verified_files[].hex` | string |
+| `torrents[].verified_files[].index` | integer |
+| `torrents[].verified_files[].length` | integer |
+| `torrents[].verified_files[].torrent_path` | string |
 | `total.bytes` | integer |
 | `total.human` | string |
 

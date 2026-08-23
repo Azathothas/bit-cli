@@ -535,6 +535,41 @@ it verified without serving it, so this is a hundred leeches rather than a
 swarm: a target that ranks peers by what they have uploaded sees no difference.
 Both are open under [T-092](TODO/bench.md).
 
+## What is guaranteed about the bytes
+
+**A finished download is bit-for-bit the payload the `.torrent` describes.**
+Four independent checks stand behind that, and
+[`docs/integrity.md`](docs/integrity.md) says what each one catches, what it
+costs, and what none of them can tell you.
+
+| Check | Catches | Default |
+| --- | --- | --- |
+| Per-source piece check | a mirror serving wrong bytes, **named** | on, `--web-seed-verify piece` |
+| The session's own piece check | anything wrong from any source | always on, not a flag |
+| The hash check on add | a resumed payload that changed on disk | on for a resume, `-V` to force |
+| `--verify-on-complete` | the disk, the filesystem, and this program | off |
+
+It matters more here than in a conventional client. `bit-cli` exists to point
+several sources at one payload, and a mirror on a CDN is not a peer that earned
+its place in a swarm. A piece filled from two sources where one of them lied is
+the normal case here rather than the exotic one, and it is why a block-to-source
+ledger convicts the supplier whose bytes disagree rather than everyone who
+touched the piece: a lying mirror is retired for the run and the honest one
+beside it keeps working.
+
+```bash
+bit-cli --json download release.torrent --verify-on-complete
+```
+
+That re-reads the finished payload off the disk and reports a sha256 per file
+under `verified_files`. It is redundant with the piece checks by construction,
+which is the point: it is the check that does not trust the thing that wrote the
+bytes, and the only one whose output can be compared against a digest published
+somewhere else.
+
+**What none of it tells you is whether the `.torrent` describes the file you
+wanted.** That is what the Metalink below is for.
+
 ## Metalink
 
 A Metalink carries a `.torrent`, a list of HTTP mirrors for the same bytes, and

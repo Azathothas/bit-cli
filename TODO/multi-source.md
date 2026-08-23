@@ -1141,7 +1141,7 @@ Acceptance:  A hybrid run with a stated priority order fetches every piece from
 Category:    cli
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-23T08:24Z
 
 Problem:     Scenario 5 asks for a guarantee that a finished file is bit-for-bit
              correct. The mechanisms are all there and none of them is stated
@@ -1161,6 +1161,74 @@ Acceptance:  A run against a mirror serving one corrupt byte completes from
              another source, and the report names the piece, the source, and
              the mismatch. `--verify-on-complete` on the finished payload exits
              0 and prints a hash per file.
+
+**Done 2026-08-23T08:24Z, and half the Acceptance was already met.** Measuring
+before building, which is [RULES.md](RULES.md)'s own rule, found that the first
+clause is what [T-179](webseed.md) built and holds:
+`a_mirror_that_serves_wrong_bytes_is_named_and_the_healthy_one_is_not` runs a
+mirror serving one corrupt piece beside an honest one, and asserts that every
+conviction names source 0, that each carries a piece index and two hashes that
+differ, that the honest mirror survives, and that the payload arrives complete.
+The piece, the source and the mismatch, all three. Nothing was owed there and
+nothing was written for it.
+
+What was owed is the other clause and the contract itself.
+
+**`--verify-on-complete`** re-reads the finished payload and reports a sha256
+per file under `torrents[].verified_files`. Four decisions in it, each of which
+could have gone the other way:
+
+- **`sha256`, not the torrent's `sha1`.** This digest exists to be compared
+  against one published somewhere else, and nobody publishes a per-file sha1 of
+  a torrent's contents. The piece hashes have been checked twice by the time
+  this runs, so a third sha1 would prove nothing new.
+- **Only a finished torrent.** Digests of files that are not yet the files are
+  a wrong answer rather than a missing one, and `verify_on_complete_hashes_nothing_when_the_run_did_not_finish`
+  holds it.
+- **Only selected files.** A file `--select-file` skipped was not written by
+  this run, so hashing it would report a digest of whatever was there before.
+- **It never changes the exit code.** The digests are facts about the payload
+  and this run has nothing to compare them against. A caller that does is the
+  one that can decide. A file that cannot be read carries its `error` rather
+  than being left out, so a caller counting rows is never short one.
+
+**`docs/integrity.md` is the contract**, which is what the entry's Relevance
+asks for: a guarantee nobody wrote down is not a guarantee. Four checks, what
+each catches, what each costs, which is on by default, and a closing section on
+**what none of them tells you** — that every check proves the payload matches
+the `.torrent`, and if the `.torrent` is wrong they all pass. That is what a
+Metalink is for and the file says so. `README.md` carries the summary table and
+points at it. The last section of `docs/integrity.md` names the test behind each
+claim, so a reader can check the contract against something that runs.
+
+**One duplicate removed on the way.** `metalink.rs` had a private streaming
+`Digest` enum for checking a Metalink's checksum, and this needed the same
+thing. It is `bit_cli_core::digest` now and `metalink.rs` uses it: two answers
+to "what does this file hash to" is the one place two answers is the whole
+problem. Its tests check all three algorithms against the **published** vectors
+for the empty input and for `abc` rather than against this code's own previous
+output, and one case is longer than a single read so the streaming loop is what
+is tested rather than a single `update`.
+
+**A test of this session's own turned out to assert something else**, found by
+the full-suite run rather than by the module run. T-155's
+`hash_check_only_over_a_metalink_still_reports_the_document` started a DHT it
+did not need, and once the module had enough parallel tests it failed with
+"error initializing persistent DHT". A hash check reads the disk; asserting that
+a DHT can be started is the same class of mistake as
+[T-215](webseed.md). `--port 0 --no-dht`, and the module runs clean three times
+over.
+
+```
+$ cargo test -p bit-cli --lib verify_on_complete
+test result: ok. 2 passed; 0 failed; 0 ignored; 409 filtered out
+
+$ cargo test -p bit-cli-core --lib digest::
+test result: ok. 5 passed; 0 failed; 0 ignored; 695 filtered out
+
+$ cargo test -p bit-cli --lib cmd::download
+test result: ok. 43 passed; 0 failed; 0 ignored; 368 filtered out
+```
 
 ### T-137 A cooled-down source never comes back
 

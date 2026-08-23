@@ -163,6 +163,7 @@ Effects: `idempotent`.
 | `--no-share-files` | boolean |  | `false` | Do not read a file from another torrent in this run that is proven to hold it |
 | `--check-integrity`, `-V` | boolean |  | `false` | Hash-check before starting |
 | `--hash-check-only` | boolean |  | `false` | Hash-check and exit |
+| `--verify-on-complete` | boolean |  | `false` | Re-read the finished payload and report a hash per file |
 | `--continue`, `-c` | boolean |  | `false` | Resume a partial download. On by default |
 | `--no-continue` | boolean |  | `false` | Refuse to write into a file that is already there |
 | `--allow-overwrite` | boolean |  | `false` | Overwrite existing files |

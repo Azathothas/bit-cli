@@ -98,6 +98,15 @@ pub struct TorrentReport {
     /// See `TODO/webseed.md`, T-179.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attribution: Option<LedgerStats>,
+    /// A digest per file, from `--verify-on-complete`.
+    ///
+    /// Absent unless the flag was given. It is redundant with the piece hashes
+    /// by construction and that is the point: it is the check a caller can run
+    /// without trusting the thing that wrote the bytes, and the one whose
+    /// output can be compared against a digest published somewhere else. See
+    /// `docs/integrity.md` and `TODO/multi-source.md`, T-136.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub verified_files: Vec<VerifiedFile>,
     /// The exit code this torrent's outcome produces.
     ///
     /// A run's code is the worst of its torrents'. Without this, a torrent
@@ -293,6 +302,37 @@ pub struct Redial {
     /// Live peer connections thrown away, which is what this cost.
     pub peers_dropped: u32,
     /// The reason it did not happen, when it did not. `None` on success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// One file re-read from disk after the download finished.
+///
+/// `sha256` rather than the torrent's own `sha1` piece hashes, because this
+/// digest exists to be compared against one published somewhere else and
+/// nobody publishes a per-file sha1 of a torrent's contents. The piece hashes
+/// have already been checked twice by the time this runs.
+/// See `TODO/multi-source.md`, T-136.
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifiedFile {
+    /// Index into the torrent's file list.
+    pub index: usize,
+    /// The path as the metainfo gives it, `/`-separated.
+    pub torrent_path: String,
+    /// Where it was actually read from, absolute.
+    pub disk_path: String,
+    /// The algorithm, always `sha256` today.
+    pub algorithm: String,
+    /// Lowercase hex.
+    pub hex: String,
+    /// Bytes read. A caller comparing this against `length` learns whether it
+    /// hashed the whole file.
+    pub bytes: u64,
+    /// What the torrent says the file is.
+    pub length: u64,
+    /// Why it could not be hashed, when it could not. Absent on success rather
+    /// than empty: a digest that was not computed is not one that matched, and
+    /// this is the field that says which.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -698,6 +738,7 @@ pub fn run(
                 exclude_file: args.selection.exclude_file.clone(),
                 index_out: args.selection.index_out.clone(),
                 piece_hook: piece_hook.clone(),
+                verify_on_complete: args.verify_on_complete,
                 report_interval,
                 stop: stop.clone(),
                 require: args.web_seeds.web_seed_require,
@@ -851,6 +892,9 @@ struct Options {
     /// given. Shared by every worker: one command means one queue and one
     /// thread whatever `-j` is. See `TODO/cli-surface.md`, T-115.
     piece_hook: Option<Arc<crate::hooks::PieceHook>>,
+    /// `--verify-on-complete`: re-read the finished payload and report a
+    /// digest per file. See `TODO/multi-source.md`, T-136.
+    verify_on_complete: bool,
     report_interval: Duration,
     stop: StopConditions,
     require: bool,
@@ -1204,6 +1248,7 @@ async fn one(
                 partial: Vec::new(),
                 metalink: None,
                 attribution: None,
+                verified_files: Vec::new(),
                 code: error.code(),
                 error: Some(error.to_string()),
                 phase: error
@@ -1419,6 +1464,8 @@ async fn one_inner(
         // bytes against the Metalink. `check_metalink` decides that from
         // `report.finished` and needs no branch of its own.
         // See `TODO/cli-surface.md`, T-155.
+        report.verified_files =
+            verify_on_complete(engine, &handle, options, &report, only_files.as_ref());
         apply_metalink(&mut report, plan, engine, &handle, options, tx).await;
         return Ok(report);
     }
@@ -1565,6 +1612,11 @@ async fn one_inner(
     // Set here rather than passed into `finish`, which already takes nine
     // arguments and does not otherwise know the ledger exists.
     report.attribution = (!sources.is_empty()).then(|| ledger.stats());
+    // Before the metalink check, so a Metalink run's own checksum and this
+    // run's per-file digests are both taken from the same bytes on disk with
+    // nothing between them.
+    report.verified_files =
+        verify_on_complete(engine, &handle, options, &report, only_files.as_ref());
     apply_metalink(&mut report, plan, engine, &handle, options, tx).await;
     // A finished torrent can lend its files to the ones after it. An
     // unfinished one cannot: its files are on disk but not all of their bytes
@@ -1934,6 +1986,69 @@ async fn watch(
 /// not about the bytes. Every guard that stops the check writes a
 /// `not_checked` reason, because a checksum that was not computed is not a
 /// checksum that passed. See `TODO/cli-surface.md`, T-113.
+/// Re-read the finished payload and hash every file, for `--verify-on-complete`.
+///
+/// **Redundant by construction, which is the point.** Every byte has already
+/// been checked against the torrent's own piece hashes twice: once at the
+/// source under `--web-seed-verify piece`, and once by the session before it
+/// counted the piece. This reads the files back off the disk afterwards and
+/// reports a digest a caller can compare against one published somewhere else.
+/// It is the check that does not trust the thing that wrote the bytes.
+///
+/// Nothing here changes the exit code. The digests are facts about the payload
+/// and there is nothing to compare them against inside this run; a caller that
+/// has something to compare them against is the one that can decide.
+/// A file that cannot be read carries its error rather than being left out, so
+/// a caller counting rows against the torrent's file list is never short one.
+///
+/// Only a **finished** torrent is hashed. Hashing a partial payload produces
+/// digests of files that are not the files, which is a wrong answer rather than
+/// a missing one. See `docs/integrity.md` and `TODO/multi-source.md`, T-136.
+fn verify_on_complete(
+    engine: &Engine,
+    handle: &bit_cli_core::engine::Handle,
+    options: &Options,
+    report: &TorrentReport,
+    only_files: Option<&Vec<usize>>,
+) -> Vec<VerifiedFile> {
+    if !options.verify_on_complete || !report.finished {
+        return Vec::new();
+    }
+    let Some(layout) = engine.layout(handle) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (index, file) in layout.files.iter().enumerate() {
+        // A file the run was told not to fetch is not a file this run wrote,
+        // so hashing it would report a digest of whatever was there before.
+        if only_files.is_some_and(|only| !only.contains(&index)) {
+            continue;
+        }
+        let Some(path) = payload_path(engine, handle, options, index) else {
+            continue;
+        };
+        let mut row = VerifiedFile {
+            index,
+            torrent_path: file.display_path(),
+            disk_path: path.display().to_string(),
+            algorithm: "sha256".to_string(),
+            hex: String::new(),
+            bytes: 0,
+            length: file.length,
+            error: None,
+        };
+        match bit_cli_core::digest::hash_file(&path, "sha256") {
+            Ok(digest) => {
+                row.hex = digest.hex;
+                row.bytes = digest.bytes;
+            }
+            Err(error) => row.error = Some(error.to_string()),
+        }
+        out.push(row);
+    }
+    out
+}
+
 /// Fold the Metalink's own findings into a torrent's report, and say so on the
 /// event stream.
 ///
@@ -2393,6 +2508,7 @@ fn finish(
         partial: Vec::new(),
         metalink: None,
         attribution: None,
+        verified_files: Vec::new(),
         code: stopped.code(),
         // A run that reached here got past resolving and past initialising,
         // so there is no phase to name: the code and `stopped` say it.
@@ -2885,6 +3001,137 @@ mod tests {
         assert!(wants_in_order(PieceSelector::InOrder));
         assert!(!wants_in_order(PieceSelector::Default));
         assert_eq!(PieceSelector::default(), PieceSelector::Default);
+    }
+
+    /// `--verify-on-complete` re-reads the payload and reports a digest per
+    /// file, and the run still exits 0.
+    ///
+    /// The digests are checked against the bytes the fixture wrote, hashed in
+    /// this test rather than copied from a previous run's output, so what is
+    /// asserted is that the flag reports the payload's real digest and not that
+    /// it reports the same thing it did last time.
+    ///
+    /// See `docs/integrity.md` and `TODO/multi-source.md`, T-136.
+    #[test]
+    fn verify_on_complete_reports_a_digest_per_file() {
+        let fixture = TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let out = dir.join("out");
+        let report = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+                "--verify-on-complete",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(report["torrents"][0]["finished"], true, "{report}");
+
+        let rows = report["torrents"][0]["verified_files"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no verified_files: {report}"));
+        assert_eq!(rows.len(), fixture.files.len(), "{report}");
+        for (index, (path, bytes)) in fixture.files.iter().enumerate() {
+            let row = &rows[index];
+            assert_eq!(row["index"], index, "{row}");
+            assert_eq!(row["torrent_path"], *path, "{row}");
+            assert_eq!(row["algorithm"], "sha256", "{row}");
+            assert_eq!(row["bytes"], bytes.len(), "{row}");
+            assert_eq!(row["length"], bytes.len(), "{row}");
+            assert_eq!(row["error"], serde_json::Value::Null, "{row}");
+            // Hashed here from the bytes the fixture wrote, so this compares
+            // the report against the payload rather than against itself.
+            let expected = bit_cli_core::digest::hash_file(
+                std::path::Path::new(row["disk_path"].as_str().expect("a path")),
+                "sha256",
+            )
+            .expect("hash the file on disk");
+            assert_eq!(row["hex"], expected.hex, "{row}");
+            let mut digest = bit_cli_core::digest::Digest::new("sha256").expect("a digest");
+            digest.update(bytes);
+            assert_eq!(
+                row["hex"],
+                digest.finish(),
+                "the digest is not the payload's: {row}"
+            );
+        }
+
+        // Off by default: the block is absent rather than empty, so a caller
+        // reading `verified_files` knows the difference between "nothing was
+        // checked" and "nothing was there".
+        let without = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(
+            without["torrents"][0]["verified_files"],
+            serde_json::Value::Null,
+            "{without}"
+        );
+    }
+
+    /// A run that did not finish is not hashed. Digests of files that are not
+    /// yet the files are a wrong answer rather than a missing one. T-136.
+    #[test]
+    fn verify_on_complete_hashes_nothing_when_the_run_did_not_finish() {
+        let fixture = TorrentFixture::multi_file();
+        let out = fixture.dir().join("out");
+        let report = run_json_code(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                out.to_str().expect("utf-8 path"),
+                "--web-seed-only",
+                "--web-seed",
+                "http://127.0.0.1:9/",
+                "--no-torrent-web-seed",
+                "--no-tracker",
+                "--port",
+                "0",
+                "--stop-after",
+                "2s",
+                "--verify-on-complete",
+            ],
+            fixture.dir(),
+            ExitCode::Timeout,
+        );
+        assert_eq!(report["torrents"][0]["finished"], false, "{report}");
+        assert_eq!(
+            report["torrents"][0]["verified_files"],
+            serde_json::Value::Null,
+            "{report}"
+        );
     }
 
     /// `--on-complete` fires **once per torrent**, with a different info hash
@@ -3444,8 +3691,24 @@ mod tests {
         assert_eq!(filled["torrents"][0]["finished"], true, "{filled}");
 
         // Then check what is there, and read what the document says about it.
+        //
+        // `--port 0` and `--no-dht` because this run needs no swarm at all:
+        // without them it opened a DHT alongside every other test in the
+        // module and failed with "error initializing persistent DHT" once the
+        // module grew enough parallel tests to contend. A hash check reads the
+        // disk; asserting that a DHT can be started is asserting something
+        // else.
         let checked = run_json(
-            &["download", &meta4, "--dir", &out_arg, "--hash-check-only"],
+            &[
+                "download",
+                &meta4,
+                "--dir",
+                &out_arg,
+                "--hash-check-only",
+                "--port",
+                "0",
+                "--no-dht",
+            ],
             dir.clone(),
         );
         let metalink = &checked["torrents"][0]["metalink"];

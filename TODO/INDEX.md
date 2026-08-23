@@ -223,7 +223,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-133](multi-source.md) | P1 | webseed | **done** | Two torrents holding the same file cannot share its bytes |
 | [T-134](multi-source.md) | P2 | bep | open | v1 and v2 info hashes are not reconciled |
 | [T-135](multi-source.md) | P2 | performance | open | Source selection cannot be steered by method or by priority at run time |
-| [T-136](multi-source.md) | P2 | cli | open | Nothing states the end-to-end integrity guarantee |
+| [T-136](multi-source.md) | P2 | cli | **done** | Nothing states the end-to-end integrity guarantee |
 | [T-137](multi-source.md) | P2 | webseed | **done** | A cooled-down source never comes back |
 | [T-139](multi-source.md) | P1 | cli | **done** | A resumed download charges its existing bytes to the swarm |
 | [T-140](multi-source.md) | P2 | webseed | **done** | A proven shared file is not turned into a source on its own |
@@ -242,7 +242,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 164 items: 154 to work through, and 10 deferred to Phase C.
-40 open, 1 partial, 0 blocked, 113 done.
+39 open, 1 partial, 0 blocked, 114 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -501,10 +501,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 1 | 0 | 0 | 55 | 56 |
-| P2 | 21 | 1 | 0 | 38 | 60 |
+| P2 | 20 | 1 | 0 | 39 | 60 |
 | P3 | 18 | 0 | 0 | 8 | 26 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **40** | **1** | **0** | **113** | **164** |
+| **All** | **39** | **1** | **0** | **114** | **164** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
