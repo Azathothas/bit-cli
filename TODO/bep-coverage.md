@@ -466,13 +466,26 @@ reads none of them. That is [T-233](peers.md), it is this repository's own
 code rather than upstream's, and it is carried as its own open entry with the
 trace, which is what [RULES.md](RULES.md) section 5 asks of a residual.
 
-**A dual-stack UDP socket does not carry one either.** A session that binds the
-unspecified address gets `[::]`, and a uTP transfer over it does not complete
-on this machine. Both sides binding `127.0.0.1` do. `librqbit`'s own uTP end
-to end test binds `127.0.0.1`, which is the same finding arrived at
-independently. `bit-cli` binds `[::]` by default, so **`--transport utp` is not
-usable from the command line yet** even in plaintext, and that is the second
-thing keeping this entry open.
+### A claim this entry made for an hour and that is not true
+
+**"A dual-stack UDP socket does not carry one either" was written here and is
+wrong.** It was formed early, from two command line runs over the default
+`[::]` bind that did not complete, and it was not retracted when the real cause
+turned out to be MSE. Both of those runs were at the default
+`--encryption prefer`.
+
+Measured again on purpose, with the default bind and encryption off:
+
+```
+seeder listen_addr = [::]:58143
+finished True
+```
+
+So uTP carries a torrent over the dual-stack bind, `--transport utp` **is**
+usable from the command line today with `--encryption off`, and the tests in
+`transport_e2e.rs` bind `127.0.0.1` for the two reasons `hostile_paths.rs`
+does rather than for this one. The correction is written here rather than by
+editing the claim away, which is [RULES.md](RULES.md) section 5.
 
 ### Why this stays open
 
@@ -480,9 +493,10 @@ The Acceptance is two clauses joined by "and". The first is met: a download
 over uTP completes and verifies. The second asks for **lower induced latency
 than the same run over TCP**, and nothing on this machine can show it.
 
-LEDBAT targets a fixed one-way queueing delay and yields when it rises.
-Loopback has no bottleneck link, so there is no queue to build and no latency
-to induce: the 76.19 MiB/s above is a statement about this machine's loopback
+That is now the **only** thing keeping it open, since the bind claim above
+turned out to be nothing. LEDBAT targets a fixed one-way queueing delay and
+yields when it rises. Loopback has no bottleneck link, so there is no queue to
+build and no latency to induce: the 76.19 MiB/s above is a statement about this machine's loopback
 and about neither congestion controller. Measuring the thing uTP is for needs a
 **shaped path** with a bounded queue between the two endpoints, and a rate cap
 on the sender is not one, because a sender that limits itself never fills

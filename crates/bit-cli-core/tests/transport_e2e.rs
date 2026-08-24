@@ -13,11 +13,13 @@
 //! set `ListenerOptions::mode` and left the dialer on TCP, so a `Utp` run
 //! reached a `Tcp` peer over TCP and called it a pass.
 //!
-//! Both sides bind `127.0.0.1` explicitly. That is not tidiness. A session
-//! that binds the unspecified address gets `[::]`, and a uTP transfer over a
-//! dual-stack UDP socket does not complete on this platform, which is its own
-//! finding and is recorded in the entry. `librqbit`'s own uTP end-to-end test
-//! binds `127.0.0.1` too.
+//! Both sides bind `127.0.0.1` and an OS-chosen port, for the same two reasons
+//! `hostile_paths.rs` does: a session that can only reach loopback cannot
+//! reach the network by accident, and the default nine-port range makes tests
+//! that run beside each other race for it. It is **not** because uTP needs it.
+//! A run over the default `[::]` dual-stack bind completes: that was believed
+//! for a while during T-101 and the belief was formed before the real cause
+//! was found, which is T-233.
 
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr};
