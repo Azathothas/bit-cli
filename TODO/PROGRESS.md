@@ -73,10 +73,13 @@ pwsh -NoProfile -File scripts/gates.ps1
 ```
 
 - **CI:** **twenty-one** jobs now, `Tree` added beside `Record` and `Soak fit`.
-  Green at run **32687980052**, against commit `c0c1301`. **One run this
-  session was red**, 32687202487, and it is written up under
-  [T-229](bench.md): `Test (macos-latest)` failed on an assertion that bounded
-  something the code does not bound, on a slow runner rather than on a defect.
+  Green at run **32689315662**, against commit `e0a3c18`, which is the last
+  commit of this session carrying code. **One run this session was red**,
+  32687202487, and it is written up under [T-229](bench.md):
+  `Test (macos-latest)` failed on an assertion that bounded something the code
+  does not bound, on a slow runner rather than on a defect. Six runs and one of them red,
+  which is the first red job in two sessions and is the reason T-229 has a
+  correction under it rather than nothing.
 - **Soak, finished, and most of it does not count.** The operator's second six
   hour run, `bench/soak-20260823T154716064Z`, is committed with its CSV and
   JSON. It reached its full six hours and reported "every named ceiling held".
@@ -268,10 +271,9 @@ edited into it.
 
 ### [T-233](peers.md), P1, filed and open: MSE over uTP stalls after the handshake
 
-**Every other combination of the two works.** The handshake completes, the
-extended handshake, `HaveAll` and `Unchoke` all arrive, the leecher sends
-`Interested` and about sixty requests and its uTP stream sends them, and the
-seeder's uTP stream receives nothing until its inactivity timer fires.
+**Every other combination of the two works**: uTP in plaintext, TCP under MSE,
+TCP in plaintext. Only the pair fails, and it fails after the connection is
+carrying traffic in both directions.
 
 **It is this repository's own code**: the only difference between the working
 and the failing case is whether `MseTransform` wraps the connection.
@@ -317,8 +319,9 @@ Nothing is half-written. Every entry that closed is closed in
   leech rate.
 - **[T-233](peers.md)** is open, pinned by a test, with two candidate seams
   named by line.
-- **[T-101](bep-coverage.md)** is open on a latency measurement loopback cannot
-  produce, and on the `[::]` bind.
+- **[T-101](bep-coverage.md)** is open on one thing only, a latency
+  measurement loopback cannot produce. The `[::]` bind it was also open on
+  turned out to be nothing.
 - **[T-102](bep-coverage.md)** and **[T-168](bep-coverage.md)** are open and
   untouched, and **[T-164](peers.md)** is partial, still the only partial.
 
