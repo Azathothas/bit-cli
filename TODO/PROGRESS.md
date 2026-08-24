@@ -97,8 +97,9 @@ it, and it says so in its own first paragraph.
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-two** jobs. Green at run **32731290459**, against commit
-  `5ec11e8`. Three runs this session and none was red.
+- **CI:** **twenty-two** jobs. Green at run **32751764935**, against commit
+  `e460bc5`, which is this session's last push. Two runs this session, both
+  green: the middle commit was made with `-NoPush` and pushed with the last.
 
 ```bash
 gh run list --limit 1
