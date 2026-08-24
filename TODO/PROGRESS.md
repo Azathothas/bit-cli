@@ -101,9 +101,11 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-two** jobs. Green at run **32782626829**, against commit
-  `2548451`. Two runs this session, both green: the middle commit was made with
-  `-NoPush` and pushed with the last.
+- **CI:** **twenty-two** jobs. Green at run **32787614038**, against commit
+  `acfd173`, which is this session's last push. Three runs this session and all
+  three green, but only the third has all twenty-two jobs green: the first two
+  had `Clippy (tracking beta)` failing on this session's own new code, which
+  is what that job is for. It does not fail the run.
 
 ```bash
 gh run list --limit 1
