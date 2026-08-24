@@ -695,9 +695,11 @@ upside is zero.
 
 ## 7. The corpus
 
-`reference/` holds twenty-two upstream BitTorrent implementations indexed by
-`reference/RESEARCH.md`, all permissive: twenty-one MIT and `intermodal`
-CC0-1.0. See [reference-map.md](reference-map.md).
+`reference/` holds **thirty-nine** upstream BitTorrent implementations indexed
+by `reference/RESEARCH.md`, plus `reference/HISTORY/` for text that a live
+document gave up. Most are MIT, `intermodal` is CC0-1.0, `joal` is Apache-2.0,
+and four need care: see [reference-map.md](reference-map.md), which carries the
+licence determination and the evidence for each.
 
 It is gitignored on `main` and lives on the `references` branch, which
 `scripts/git-sync.ps1` pushes. To get it on a fresh clone:
@@ -708,8 +710,11 @@ pwsh -NoProfile -File scripts/git-sync.ps1 -FetchReferences
 
 Trust `RESEARCH.md`. Every repository was read twice and verified twice more:
 119 `path:line` citations checked in range and against the symbol they name,
-every path resolved against the cleaned tree, all 22 licences read from the
-licence file on disk, and 130 issue and PR references fetched with `gh`.
+every path resolved against the cleaned tree, the licences read from the
+licence file on disk where there is one, and 130 issue and PR references
+fetched with `gh`. The seventeen trees added on 2026-08-24 record a commit SHA;
+the original twenty-two do not, because that pass captured none and stripping
+`.git` made them unrecoverable.
 
 - Do **not** re-derive a licence. Section F is the answer.
 - Do **not** re-fetch an issue or PR that `RESEARCH.md` already summarises.

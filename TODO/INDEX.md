@@ -27,9 +27,10 @@ every tree that has been read. **No entry here depends on a tree that is
 gone**: what each one needed is written into the entry, which is what
 [T-122](reference-map.md) closed.
 
-A second corpus arrived on 2026-08-21: **twenty-two upstream BitTorrent
-implementations**, indexed by `reference/RESEARCH.md`, all permissive (twenty-one
-MIT, `intermodal` CC0-1.0). Entries below cite it as
+A second corpus arrived on 2026-08-21 and grew on 2026-08-24: **thirty-nine
+upstream BitTorrent implementations**, indexed by `reference/RESEARCH.md`.
+Most are MIT, `intermodal` is CC0-1.0, `joal` is Apache-2.0, and four have a
+licence that needs care, which `reference-map.md` records. Entries below cite it as
 `repository/path/file.ext:line`. Those citations are evidence of what somebody
 else did and never evidence that `bit-cli` does it; where an entry now rests on
 one, it says which. `reference/` is gitignored and is never committed.
@@ -121,6 +122,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-033](performance.md) | P3 | performance | open | --split, -x, and -k do not reach the fetch path *(title disproved: they do not exist)* |
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
 | [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
+| [T-242](performance.md) | P2 | performance | open | The request depth is a constant, and the run sits at 40 percent of it |
 | [T-036](performance.md) | P0 | paths | **done** | A multi-file torrent with one file lands without its directory |
 | [T-037](performance.md) | P1 | performance | **done** | A run stalls for minutes, roughly once in fifty |
 | [T-040](memory.md) | P0 | memory | done | Memory and descriptors grow without bound over a long run |
@@ -179,6 +181,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-173](metainfo.md) | P3 | metainfo | **done** | A zero-length path component has no defined meaning *(title disproved: it is dropped, and the drop is reported now)* |
 | [T-174](metainfo.md) | P2 | metainfo | **done** | A piece length that is not a multiple of 16 KiB has no fixture |
 | [T-187](metainfo.md) | P3 | metainfo | **done** | Non-canonical integers are refused everywhere, with no instance behind the rule |
+| [T-241](metainfo.md) | P2 | metainfo | open | A resolved magnet keeps the payload and loses the metainfo |
 | [T-110](cli-surface.md) | P1 | cli | **done** | The --jsonl event stream is incomplete |
 | [T-111](cli-surface.md) | P2 | cli | open | piece_verified and file_completed are derived from polling |
 | [T-112](cli-surface.md) | P1 | cli | **done** | --log-file does not write or rotate anything |
@@ -263,11 +266,12 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-207](phase-c.md) | n/a | phase-c | deferred | Session-attached verbs from the old TUI |
 | [T-208](phase-c.md) | n/a | phase-c | deferred | status --follow against a live session |
 | [T-209](phase-c.md) | n/a | phase-c | deferred | Watch directories, RSS, cluster mode, and the control service |
+| [T-243](phase-c.md) | n/a | phase-c | deferred | A user interface, and which of the two kinds decision 7.4 permits |
 
 ## Counts
 
-189 items: 179 to work through, and 10 deferred to Phase C.
-29 open, 1 partial, 0 blocked, 149 done.
+192 items: 181 to work through, and 11 deferred to Phase C.
+31 open, 1 partial, 0 blocked, 149 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -526,10 +530,10 @@ sessions earlier.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 4 | 0 | 0 | 66 | 70 |
-| P2 | 15 | 1 | 0 | 53 | 69 |
+| P2 | 17 | 1 | 0 | 53 | 71 |
 | P3 | 10 | 0 | 0 | 18 | 28 |
-| Phase C | | | | 10 deferred | 10 |
-| **All** | **29** | **1** | **0** | **149** | **189** |
+| Phase C | | | | 11 deferred | 11 |
+| **All** | **31** | **1** | **0** | **149** | **192** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

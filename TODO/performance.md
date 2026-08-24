@@ -758,3 +758,74 @@ serving a byte is bounded today by `--web-seed-max-errors` on the fetch side
 and by `--timeout` or `--stop-timeout` on the run. If the counters ever show a
 run of link failures in the wild, that is when the bound gets written, against
 a number rather than a guess.
+
+---
+
+### T-242 The request depth is a constant, and the run sits at 40 percent of it
+
+Source:      `RESEARCH.md` entry 13 re-mined at
+             `4a1acdf8f196328c7ca284368e0f6652540d1a99`, 2026-08-24, against
+             [T-001](webseed.md)'s own measurement
+Category:    performance
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `librqbit`'s request window is a fixed 128 blocks and nothing
+             moves it. [T-001](webseed.md) measured that a bridge run reaches
+             that peak and then sits at **40% of what it would allow**, so the
+             window is not the bound and holding it constant is not free
+             either: it is too deep for a slow supplier and too shallow for a
+             fast one, and neither case can be told apart in the report.
+
+Premise:     Somebody else derives it. `seedchamp/docs/design.md:197` sizes the
+             per-peer depth from an exponential moving average of that peer's
+             own wire rate, `desired = 5 s * rate / 16 KiB`, with a configured
+             initial depth and a configured cap. Five seconds of that peer's
+             own throughput, in blocks.
+
+             That is bandwidth-delay product sizing with the delay fixed, and
+             the choice of five seconds is theirs and unexplained. It is also
+             **unmeasured**: `seedchamp/docs/` carries defaults and invariants
+             and no numbers from a run, and its `bench/` harness has no results
+             committed. So this is a design to test, not a result to copy.
+
+             `bit-cli` is the other way round. `bench leech` already reports
+             `summary.pipeline` with a `window_ceiling`
+             ([T-090](bench.md)), so the instrument for judging this exists
+             before the change does.
+
+Approach:    Measure first, which is the only defensible order given the
+             premise above is somebody else's default.
+
+             Three depths on one fixture at one supplier rate, then three
+             supplier rates at one depth, from `scripts/bench-leech.ps1`. If
+             the best depth is the same across supplier rates, the constant is
+             right and this entry closes as a correction with the curve under
+             it. If it moves, the derived depth is worth building and the
+             measurement says what the coefficient should be rather than
+             taking five seconds on trust.
+
+             `scripts/bench-leech.ps1` cannot hold the depth fixed today. That
+             is the first change and it is small: the depth is
+             `librqbit`'s and `vendor/` is this repository's, so it is a
+             parameter rather than a patch to negotiate.
+
+Prove:       ```
+             pwsh -NoProfile -File scripts/bench-leech.ps1 -Json bench/pipeline-sweep.json
+             ```
+
+             The committed report must carry both sweeps and the depth that won
+             each row. A comparative claim without a committed benchmark does
+             not ship here, which is why the sweep is the acceptance rather
+             than the feature.
+
+Notes:       The second half of entry 13's staging model is **not** this entry.
+             `seedchamp/docs/design.md:199` caps a per-torrent buffer pool per
+             peer, at `ceil(N/16)` of the freelist and at most two pieces when
+             the piece length is 4 MiB or more. [T-041](memory.md) closed on
+             the equivalent for HTTP sources: a total budget across sources
+             rather than per source. What `bit-cli` does not have is the
+             **per supplier fraction**, which is what stops one slow supplier
+             holding the whole pool. It is worth a separate entry once this one
+             has a curve, because the two share a fixture.

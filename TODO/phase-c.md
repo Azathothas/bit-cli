@@ -223,3 +223,115 @@ Problem:     Everything that needs a running process: RSS ingestion, watch
 Relevance:   Recorded so they are not rediscovered as Phase B ideas.
 Approach:    All need the daemon.
 Acceptance:  Deferred as a group.
+
+---
+
+### T-243 A user interface, and which of the two kinds decision 7.4 permits
+
+Source:      the operator, 2026-08-24. Corpus: `RESEARCH.md` entries 40 and 41
+Category:    phase-c
+Priority:    n/a
+Effort:      L for the native shape, XL for the browser shape
+Status:      deferred, and it is a **draft**: it needs an operator ruling
+             before it is workable at all
+
+**This entry is a draft in the Phase C backlog and nothing here is started.**
+It is filed here rather than in a category file because half of what it
+describes is Phase C by decision 7.4, and because the half that is not still
+needs a ruling.
+
+### The collision, stated so the operator rules on it with the conflict visible
+
+[RULES.md](RULES.md) section 6, decision 7.4, is "no daemon and no RPC", with
+no SQLite and no state file, and `bit-cli` must keep working with no config and
+no state. Section 6 also says the corpus's daemon stack and control-plane
+designs are for [T-200 to T-209](phase-c.md) only, and do not un-defer them.
+
+**A browser UI reverses that decision by construction.** For a page to reach
+`bit-cli`, `bit-cli` has to listen. That is [T-200](phase-c.md), the daemon,
+and [T-201](phase-c.md), the RPC. A UI that shows a torrent list across
+invocations needs [T-203](phase-c.md), session save and restore. So the
+TypeScript option the operator raised is not a UI decision with a daemon
+attached; it is the daemon decision, with a UI attached.
+
+The operator reopened the `iroh` line of section 6 on 2026-08-24 and **did
+not** reopen 7.4. This entry does not treat it as reopened.
+
+### The distinction the brief did not draw, and it is most of the answer
+
+**A native GUI does not collide with 7.4 at all.** A second binary linking
+`bit-cli-core` and driving the same session the CLI drives: no listener, no
+RPC, no state file, and `bit-cli` itself unchanged and still working with no
+config. Everything 7.4 forbids is absent because there is no server. The UI is
+the process.
+
+So the question the operator is actually being asked is not "should there be a
+UI" but "which kind", and only one of the two costs a settled decision.
+
+### The recommendation, and the runner-up
+
+**Best candidate: `egui`.** From `RESEARCH.md` entry 41, the 2026 survey of
+fifty-four Rust GUI libraries: `egui` and `slint` are the two winners, and both
+are named for input method and accessibility support rather than for looks.
+`egui` wins here on three counts that are about this repository rather than
+about the libraries:
+
+- **Immediate mode matches what `bit-cli` already produces.** The CLI's report
+  is a snapshot rebuilt every `--report-interval`, and `--jsonl` is a stream of
+  those snapshots. An immediate-mode UI redraws from a snapshot, so the data
+  path is what the terminal renderer already does with the same struct. A
+  retained-mode UI wants a model with change notifications, which is state
+  `bit-cli-core` does not keep.
+- **It is one crate and no build step.** No code generator, no separate markup
+  language, no Node in the release path. This repository builds three targets
+  on every push, and its CI is twenty-one jobs.
+- **The survey's one caveat against it is CJK font setup for input methods**,
+  which is a font to ship and not a design problem.
+
+**Runner-up: `slint`, and why it lost.** It ties `egui` on accessibility and
+input methods and its markup language is genuinely better for a table-heavy
+interface, which a torrent list is. It loses on the build: its markup files are
+compiled by a build script, so the release path gains a code generation step,
+and the survey measured its workspace at 4.2 GB against `egui`'s 1.9 GB. Both
+are tolerable and neither is free; the tie breaker is that `egui` adds nothing
+to the build at all.
+
+**The TypeScript option, evaluated honestly rather than dismissed.** It is
+genuinely better on three axes and worse on four.
+
+Better: less Rust to write and maintain; a table with sorting, filtering and
+virtual scrolling is a solved problem in a browser and is weeks of work in any
+Rust GUI; and it is reachable from a phone, which no native binary is.
+
+Worse: it needs the daemon, which is the whole of the collision above. It needs
+a Node toolchain in the release path, which this repository does not have and
+which is a second supply chain to watch after [T-199](cli-surface.md) put the
+first one under an automated bump. It needs an HTTP API surface that becomes a
+compatibility obligation the moment anybody scripts against it. And it needs a
+browser, which is a dependency the CLI does not have.
+
+**The worked example is on this exact base.** `rustTorrent`
+(`RESEARCH.md` entry 40) is `rqbit` with a React and TypeScript web UI, a full
+HTTP API, qBittorrent-compatible endpoints for the media automation tools, RSS
+automation, a Docker image and a Tauri desktop wrapper. It is the finished
+version of the browser answer, built on the engine `bit-cli` vendors, and it is
+the honest price list.
+
+### What the operator is being asked to rule on
+
+1. Is a UI wanted at all?
+2. If yes: native, which 7.4 permits, or browser, which reverses it?
+3. If browser: is 7.4 reopened, and are [T-200](phase-c.md),
+   [T-201](phase-c.md) and [T-203](phase-c.md) un-deferred with it?
+
+Recommended: yes to 1, native to 2, and 3 does not arise.
+
+### What this draft owes before it is workable
+
+Nothing is startable from this entry as it stands, and that is deliberate.
+Until the ruling, it has no acceptance command, because what would be measured
+depends on which shape is chosen. When a shape is chosen the acceptance is the
+same either way and it is worth writing down now: **the UI must not be able to
+do anything the CLI cannot**, and the check is that every action it offers maps
+to a documented `man/bit-cli.json` command, so the UI is a second face on one
+surface rather than a second surface.

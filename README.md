@@ -1877,7 +1877,7 @@ pwsh -NoProfile -File scripts/git-sync.ps1 -Message "Subject line" -Body "..."
 pwsh -NoProfile -File scripts/git-sync.ps1 -Check
 ```
 
-The research corpus is twenty-two upstream BitTorrent implementations, indexed
+The research corpus is thirty-nine upstream BitTorrent implementations, indexed
 by `reference/RESEARCH.md`. It is gitignored on `main` and lives on the
 `references` branch. On a fresh clone:
 

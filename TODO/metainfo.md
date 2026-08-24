@@ -749,3 +749,80 @@ cargo test -p bit-cli-core --lib torrent::bencode
 `README.md`, under "Reading a torrent somebody else wrote", says the same thing
 for a reader who is not going to open the parser, and says what would change
 the decision: a torrent in the wild that carries one.
+
+---
+
+### T-241 A resolved magnet keeps the payload and loses the metainfo
+
+Source:      `RESEARCH.md` entry 38's gap table, and a run, 2026-08-24
+Category:    metainfo
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `bit-cli` resolves a magnet to metainfo and never writes it out.
+             `man/bit-cli.json` has `bit-cli magnet` taking one positional
+             `source` and no `--output`, so the conversion is one way: a
+             `.torrent` becomes a magnet URI, and a magnet becomes a report.
+
+             A caller who resolves a magnet keeps the payload and keeps
+             nothing that would let them do it again offline. Resolving the
+             same magnet a second time means finding peers a second time.
+
+Premise:     **The hard half is already done, and it was measured rather than
+             read.** A 2 MiB payload, a torrent carrying no tracker, a magnet
+             carrying only `xt`, `dn` and `xl`, one seeder given by address,
+             and DHT, LSD and trackers off on both ends:
+
+             ```
+             bit-cli download "magnet:?xt=urn:btih:1d02661d..." \
+               --peer 127.0.0.1:PORT --no-dht --no-lsd --no-tracker \
+               --init-timeout 30s --json
+             ```
+
+             Exit 0, 2,097,152 bytes, `finished: true`, and the payload landed
+             byte for byte. The metainfo came over BEP 9 from that one peer.
+
+             So this entry is not "implement metadata exchange". It is
+             "keep what the exchange produced".
+
+Approach:    `--output <PATH>` on `bit-cli magnet`, writing the resolved
+             metainfo as a `.torrent`, and `-` for stdout the way
+             `bit-cli create --output` and `bit-cli edit --output` already do.
+             Checked against `man/bit-cli.json` on 2026-08-24: `magnet` has no
+             `--output` and `-o` is free on that command.
+
+             Two things it must get right, and both are already solved
+             elsewhere in this tree:
+
+             - **The info hash must not move.** The bytes written are the
+               `info` dictionary exactly as received, hashed from its recorded
+               span rather than re-encoded, which is what
+               [T-172](metainfo.md) established and what exit 15 protects on
+               `bit-cli edit`.
+             - **A magnet carries things the info dictionary does not**:
+               `tr` trackers, `ws` web seeds, `xs` and `as`. Those belong in
+               the top level of the written torrent, not inside `info`, and
+               writing them inside would change the hash.
+
+             The reverse direction is worth the same flag for symmetry but is
+             not this entry: `bit-cli info <magnet> --json` already prints what
+             was resolved.
+
+Prove:       ```
+             pwsh -NoProfile -File scripts/check-metalink.ps1
+             ```
+
+             is the wrong check. This one needs its own case in the interop
+             script, because the property that matters is cross-tool:
+
+             ```
+             pwsh -NoProfile -File scripts/interop-roundtrip.ps1
+             ```
+
+             A new case: create a torrent, print its magnet, resolve that
+             magnet from a loopback seeder with `--output`, and assert the
+             written file's info hash equals the original's **and** that
+             `aria2c` opens it. A torrent this tree wrote from a magnet that
+             another client will not open is the failure worth catching, and
+             it is the same discipline [T-084](create-seed.md) closed on.

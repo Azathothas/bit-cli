@@ -16,23 +16,43 @@ can still work through this list.
 ## The corpus as it stands
 
 The operator replaced the four-tree corpus with **twenty-two upstream
-implementations** on 2026-08-21, indexed by `reference/RESEARCH.md`. That file
-is the entry point: three tiers by usefulness, then cross-cutting sections A to
-H. Section D maps `bit-cli` TODO ids to the best source for each, section C
+implementations** on 2026-08-21 and added **seventeen more** on 2026-08-24, so
+the corpus is **thirty-nine trees**, indexed by `reference/RESEARCH.md`. That
+file is the entry point: three tiers by usefulness, then cross-cutting sections
+A to H. Section D maps `bit-cli` TODO ids to the best source for each, section C
 lists eleven metainfo shapes a parser has to survive, section F is the licence
 determination, section G records what was removed during cleaning and why.
 
-| Tree | Licence |
-| --- | --- |
-| `intermodal` | CC0-1.0 |
-| every other tree: `torrent`, `nanotorrent`, `TorrentNG`, `superseedr`, `fx-torrent`, `mkbrr`, `gosh-dl`, `vortex`, `rustorrent`, `mtorrent`, `n0-mainline`, `seedchamp`, `aria2_rust`, `FluxDown`, `aquatic`, `torrust-actix`, `create-torrent`, `parse-torrent`, `bqti`, `dht-spider`, `tc` | MIT |
+Two of the 2026-08-24 sources are not trees and are not counted in the
+thirty-nine: `TheDancingDeveloper-org`, an organisation of 33 repositories
+triaged read-only and cloned not at all, and a Rust GUI survey, which is a
+document. `RESEARCH.md` entries 40 and 41 carry both.
 
-Twenty-one MIT and one CC0-1.0. Every one is permissive and compatible with
-`bit-cli`'s MIT licence and its permissive-only `deny.toml`, so **nothing in
-this corpus needs deleting** and the deletion that T-122 records does not apply
-to any of it. `RESEARCH.md` section F carries the per-tree evidence, read from
-the licence file on disk in every case except `nanotorrent` and `mtorrent`,
-which carry no `LICENSE` file and declare MIT in their manifest instead.
+| Tree | Licence | Where the determination came from |
+| --- | --- | --- |
+| `intermodal` | CC0-1.0 | `LICENSE` |
+| `torrent`, `TorrentNG`, `superseedr`, `fx-torrent`, `mkbrr`, `gosh-dl`, `vortex`, `rustorrent`, `seedchamp`, `aria2_rust`, `FluxDown`, `aquatic`, `torrust-actix`, `create-torrent`, `parse-torrent`, `bqti`, `dht-spider`, `tc` | MIT | each tree's own licence file |
+| `nanotorrent`, `mtorrent` | MIT | `Cargo.toml` only, no licence file |
+| `n0-mainline` | **MIT OR Apache-2.0** | `LICENSE-MIT` and `LICENSE-APACHE` upstream, and `Cargo.toml`. **The corpus copy kept only `LICENSE-MIT`**, so this file recorded MIT alone until 2026-08-24 |
+| `RatioTracker`, `Seedr`, `RatioForge`, `rustatio`, `demagnetize-rs`, `dht-crawler`, `tcp-transfer-ice`, `iroh-fm`, `ed2k-server`, `fake-torrent-client` | MIT | each tree's own licence file. `fake-torrent-client`'s leaves the holder and year as the template placeholders |
+| `joal` | **Apache-2.0** | `joal/LICENSE`. The only Apache-2.0 tree in the corpus, and the one `scripts/make-client-profile.ps1` is an independent implementation from |
+| `iroh-experiments` | Apache-2.0 OR MIT | `LICENSE-APACHE` and `LICENSE-MIT` |
+| `dig-nat` | Apache-2.0 OR MIT | `Cargo.toml` and README, no licence file |
+| `Hollow` | MIT | `Cargo.toml` and README, no licence file |
+| `DOAL` | MIT, claimed | **one README line only**, and it forks Apache-2.0 `joal` |
+| `NetDrop` | **conflicting** | `LICENSE` is GPL-3.0 and `Cargo.toml` says MIT |
+| `gaia` | **none found** | no licence file, no manifest key, no statement in any document |
+
+Thirty-five permissive and unambiguous, one CC0-1.0 among them, and **four that
+need care**: `DOAL`, `NetDrop`, `gaia` and the `librtbit` family that
+`RESEARCH.md` entry 40 triages. `RESEARCH.md` section F carries the per-tree
+evidence.
+
+**Nothing in the corpus is copied into this repository**, which is what makes
+an unclear licence a reading question rather than a shipping one. The one
+exception the rules allow is `intermodal`, CC0-1.0. Three of the four above are
+read-only for a second reason as well: `NetDrop`'s GPL-3.0 file, `gaia`'s
+absence of any statement, and `DOAL`'s relicensing of an Apache-2.0 work.
 
 Two to handle with care, both recorded in section F: `tc`, whose README and
 `LICENSE` disagree, and `vortex`, whose badge and `LICENCE.txt` disagree. In

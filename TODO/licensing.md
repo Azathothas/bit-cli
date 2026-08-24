@@ -22,11 +22,15 @@ stand, is in [reference-map.md](reference-map.md), T-122.
 | --- | --- | --- | --- |
 | `kist` | MIT OR Apache-2.0 | Yes, under MIT | `LICENSE-MIT` in the fork base |
 | intermodal | CC0-1.0 | Yes, adapt directly | its `LICENSE` |
-| the other twenty-one reference trees | MIT | Yes, with the MIT notice | each tree's own licence file; `reference/RESEARCH.md` section F |
+| the other reference trees | mostly MIT, `joal` Apache-2.0, four unclear | read only. Nothing is copied from any of them | each tree's own licence file where there is one; `reference/RESEARCH.md` section F, and `TODO/reference-map.md` |
 | `rqbit` issue and PR corpus | n/a, data | It is JSON, not code | the GitHub API |
 
-**Every reference tree is permissive.** The corpus is twenty-two trees:
-`intermodal` under CC0-1.0 and twenty-one under MIT.
+**The corpus is thirty-nine trees**, and it stopped being uniformly
+permissive on 2026-08-24. `intermodal` is CC0-1.0, `joal` is Apache-2.0, most
+of the rest are MIT, and four are unclear or conflicting: `DOAL`, `NetDrop`,
+`gaia`, and the `librtbit` family that `RESEARCH.md` entry 40 triages. None of
+that reaches a shipped artefact, because nothing in the corpus is copied into
+this repository.
 [reference-map.md](reference-map.md) lists them and `reference/RESEARCH.md`
 section F carries the per-tree evidence. Copying from any of them attaches the
 MIT notice requirement and nothing more, which `cargo about` already handles for
