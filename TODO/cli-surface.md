@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2601` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2379` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2415` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2110` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2643` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2421` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2457` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2152` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2601` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2643` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 

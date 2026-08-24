@@ -373,6 +373,18 @@
           "value_name": "MODE"
         },
         {
+          "default": "tcp",
+          "description": "Which transports this run listens on and dials",
+          "enum": [
+            "tcp",
+            "utp",
+            "both"
+          ],
+          "name": "--transport",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
           "description": "Refuse this peer for the whole run. Repeatable",
           "name": "--block-peer",
           "type": "array",
@@ -785,6 +797,18 @@
             "require"
           ],
           "name": "--encryption",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "default": "tcp",
+          "description": "Which transports this run listens on and dials",
+          "enum": [
+            "tcp",
+            "utp",
+            "both"
+          ],
+          "name": "--transport",
           "type": "string",
           "value_name": "MODE"
         },
@@ -2466,6 +2490,18 @@
           "value_name": "MODE"
         },
         {
+          "default": "tcp",
+          "description": "Which transports this run listens on and dials",
+          "enum": [
+            "tcp",
+            "utp",
+            "both"
+          ],
+          "name": "--transport",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
           "description": "Refuse this peer for the whole run. Repeatable",
           "name": "--block-peer",
           "type": "array",
@@ -3035,6 +3071,18 @@
           "value_name": "MODE"
         },
         {
+          "default": "tcp",
+          "description": "Which transports this run listens on and dials",
+          "enum": [
+            "tcp",
+            "utp",
+            "both"
+          ],
+          "name": "--transport",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
           "description": "Refuse this peer for the whole run. Repeatable",
           "name": "--block-peer",
           "type": "array",
@@ -3340,6 +3388,18 @@
             "require"
           ],
           "name": "--encryption",
+          "type": "string",
+          "value_name": "MODE"
+        },
+        {
+          "default": "tcp",
+          "description": "Which transports this run listens on and dials",
+          "enum": [
+            "tcp",
+            "utp",
+            "both"
+          ],
+          "name": "--transport",
           "type": "string",
           "value_name": "MODE"
         },

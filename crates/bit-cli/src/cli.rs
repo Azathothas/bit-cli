@@ -809,6 +809,21 @@ pub struct LimitArgs {
     #[arg(long, value_name = "MODE", default_value = "prefer")]
     pub encryption: EncryptionMode,
 
+    /// Which transports this run listens on and dials.
+    ///
+    /// `tcp` is the default and is what every run before 2026-08-24 did.
+    /// `utp` is BEP 29 over UDP, which carries the same peer wire protocol
+    /// under LEDBAT congestion control: it yields to other traffic on the same
+    /// link instead of competing with it, which is what keeps a seeding box
+    /// from making its own connection unusable. `both` listens on each and
+    /// lets the peer decide.
+    ///
+    /// One port number serves both, because they are different protocols:
+    /// `--port 6881` is TCP 6881 and UDP 6881. See `TODO/bep-coverage.md`,
+    /// T-101.
+    #[arg(long, value_name = "MODE", default_value = "tcp")]
+    pub transport: TransportMode,
+
     /// Refuse this peer for the whole run. Repeatable.
     ///
     /// An address, an inclusive `START-END` range, or a CIDR block, in either
@@ -972,6 +987,33 @@ impl From<EncryptionMode> for bit_cli_core::mse::Encryption {
             EncryptionMode::Off => Self::Off,
             EncryptionMode::Prefer => Self::Prefer,
             EncryptionMode::Require => Self::Require,
+        }
+    }
+}
+
+/// Which transports a run listens on and dials.
+///
+/// Mirrors [`bit_cli_core::engine::Transport`] for the same reason
+/// [`EncryptionMode`] mirrors its core type: the core crate does not depend on
+/// `clap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum TransportMode {
+    /// TCP only. What every run did before this flag existed.
+    #[default]
+    Tcp,
+    /// uTP only, BEP 29. Nothing reaches a TCP-only peer.
+    Utp,
+    /// Listen on both and let the peer choose.
+    Both,
+}
+
+impl From<TransportMode> for bit_cli_core::engine::Transport {
+    fn from(mode: TransportMode) -> Self {
+        match mode {
+            TransportMode::Tcp => Self::Tcp,
+            TransportMode::Utp => Self::Utp,
+            TransportMode::Both => Self::Both,
         }
     }
 }

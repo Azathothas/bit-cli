@@ -399,6 +399,98 @@ hand-rolled uTP is a real and recurring maintenance cost, and this entry is P3
 partly for that reason. If it is built, `librqbit-utp` already being in the
 tree is the cheapest route by a wide margin.
 
+## The flag is built and measured, 2026-08-24, and it stays open on its second half
+
+**`--transport tcp|utp|both`, default `tcp`.** It is on `LimitArgs`, so every
+command that starts a session takes it. `bit_cli_core::engine::Transport` is
+the core type and `TransportMode` mirrors it in `cli.rs`, which is the split
+every other enum flag here uses.
+
+**Nothing was hand-rolled.** `librqbit-utp` is already vendored and
+`ListenerMode` already existed; the work was finding that **two** settings
+decide the answer and that only one of them is obvious.
+
+### Setting the listener alone is a flag that says nothing
+
+`SessionOptions::listen.mode` chooses which listeners are bound.
+`SessionOptions::connect.enable_tcp` chooses whether the **dialer** may use
+TCP, it defaults to true whatever the listener says, and
+`stream_connect.rs:251` tries TCP first and only reaches uTP a second later.
+
+The first version of this flag set the listener alone, and it produced two
+wrong answers in one run:
+
+| seeder | leecher | with the listener alone | with the dialer too |
+| --- | --- | --- | --- |
+| `tcp` | `utp` | **completes**, over TCP | does not connect |
+| `utp` | `utp` | times out | completes |
+
+The first row is the one that matters: a run asking for uTP reached a TCP-only
+peer and reported success. `a_utp_leecher_does_not_reach_a_tcp_seeder` is that
+row as a test, and it is what makes every other case in the file mean
+something.
+
+### Measured, and the flag moves a number
+
+`scripts/check-transport.ps1`, 32 MiB over loopback, one seeder and one
+leecher per case, `--peer` and nothing else. Committed at
+`bench/transport-20260824T033000Z.json`:
+
+| case | seeder | leecher | encryption | finished | rate |
+| --- | --- | --- | --- | --- | --- |
+| `tcp` | tcp | tcp | prefer | yes | 152.38 MiB/s |
+| `utp` | utp | utp | off | yes | **76.19 MiB/s** |
+| `both` | both | both | prefer | yes | 152.38 MiB/s |
+| `mixed` | tcp | utp | off | **no**, and that is the control | |
+| `utp-mse` | utp | utp | require | **no**, and that is [T-233](peers.md) | |
+| `tcp-mse` | tcp | tcp | require | yes | 160 MiB/s |
+
+```bash
+pwsh -NoProfile -File scripts/check-transport.ps1
+```
+
+Six cases in `crates/bit-cli-core/tests/transport_e2e.rs` cover the same
+ground in-process, at 512 KiB, and run in the workspace suite.
+
+```bash
+cargo test -p bit-cli-core --test transport_e2e
+```
+
+### What the measurement found that the entry did not predict
+
+**uTP does not carry a torrent under MSE.** Every other combination of the two
+works: uTP in plaintext works, TCP under MSE works, TCP in plaintext works.
+The handshake completes, the extended handshake, `HaveAll` and `Unchoke` all
+arrive, the leecher sends `Interested` and its first requests, and the seeder
+reads none of them. That is [T-233](peers.md), it is this repository's own
+code rather than upstream's, and it is carried as its own open entry with the
+trace, which is what [RULES.md](RULES.md) section 5 asks of a residual.
+
+**A dual-stack UDP socket does not carry one either.** A session that binds the
+unspecified address gets `[::]`, and a uTP transfer over it does not complete
+on this machine. Both sides binding `127.0.0.1` do. `librqbit`'s own uTP end
+to end test binds `127.0.0.1`, which is the same finding arrived at
+independently. `bit-cli` binds `[::]` by default, so **`--transport utp` is not
+usable from the command line yet** even in plaintext, and that is the second
+thing keeping this entry open.
+
+### Why this stays open
+
+The Acceptance is two clauses joined by "and". The first is met: a download
+over uTP completes and verifies. The second asks for **lower induced latency
+than the same run over TCP**, and nothing on this machine can show it.
+
+LEDBAT targets a fixed one-way queueing delay and yields when it rises.
+Loopback has no bottleneck link, so there is no queue to build and no latency
+to induce: the 76.19 MiB/s above is a statement about this machine's loopback
+and about neither congestion controller. Measuring the thing uTP is for needs a
+**shaped path** with a bounded queue between the two endpoints, and a rate cap
+on the sender is not one, because a sender that limits itself never fills
+anybody's queue.
+
+So what is left is one of: a shaped loopback path, or a second machine. Both
+are larger than the flag was.
+
 ### T-102 BEP 55 holepunch is not implemented
 
 Source:      https://github.com/ikatson/rqbit/issues/463 (open)

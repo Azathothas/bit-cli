@@ -166,7 +166,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-149](bench.md) | P1 | bench | **done** | The last window of a leech bench was never counted |
 | [T-152](bench.md) | P1 | bench | **done** | A disk bench shorter than one sample interval reported no series at all |
 | [T-100](bep-coverage.md) | P2 | bep | **done** | BEP 6 fast extension is not implemented |
-| [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested *(title disproved: it is not reachable)* |
+| [T-101](bep-coverage.md) | P3 | bep | open | uTP is available but untested *(title disproved: it was not reachable; `--transport` reaches it now and the latency half is unmeasured)* |
 | [T-102](bep-coverage.md) | P3 | bep | open | BEP 55 holepunch is not implemented |
 | [T-103](bep-coverage.md) | P2 | bep | **done** | Filenames that are not valid UTF-8 are refused *(title disproved: they are decoded lossily)* |
 | [T-167](bep-coverage.md) | P2 | bep | **done** | BEP 54 lt_donthave is not implemented |
@@ -231,6 +231,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-230](cli-surface.md) | P1 | ci | **done** | A run's output reached the remote because nothing said what belongs here |
 | [T-231](memory.md) | P1 | memory | **done** | A soak killed mid-write reads as a final sample of zeros |
 | [T-232](memory.md) | P1 | memory | open | A six hour soak reported a pass on a workload that stopped after 78 minutes |
+| [T-233](peers.md) | P1 | peers | open | MSE over uTP stalls after the handshake |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -258,8 +259,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-181 items: 171 to work through, and 10 deferred to Phase C.
-23 open, 1 partial, 0 blocked, 147 done.
+182 items: 172 to work through, and 10 deferred to Phase C.
+24 open, 1 partial, 0 blocked, 147 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -517,11 +518,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 2 | 0 | 0 | 65 | 67 |
+| P1 | 3 | 0 | 0 | 65 | 68 |
 | P2 | 11 | 1 | 0 | 53 | 65 |
 | P3 | 10 | 0 | 0 | 17 | 27 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **23** | **1** | **0** | **147** | **181** |
+| **All** | **24** | **1** | **0** | **147** | **182** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

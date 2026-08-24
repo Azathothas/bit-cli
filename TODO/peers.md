@@ -1863,3 +1863,115 @@ being sent an extended message it did not ask for, and building a peer that
 refuses BEP 10 to prove it is [T-166](#t-166-bep-10-extension-ids-are-not-proven-to-map-in-both-directions)'s
 shape of work rather than this one's. What is certain from reading is that the
 bit came from a constructor rather than from the wire.
+
+### T-233 MSE over uTP stalls after the handshake
+
+Source:      measured while building [T-101](bep-coverage.md)'s
+             `--transport` flag, 2026-08-24
+Category:    peers
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     A torrent does not move between two `bit-cli` sessions when the
+             transport is uTP **and** message stream encryption is in use.
+             Every other combination of the two works, which is what says this
+             is about the pair rather than about either half.
+
+             `scripts/check-transport.ps1`, 32 MiB over loopback, committed at
+             `bench/transport-20260824T033000Z.json`:
+
+             | transport | encryption | result |
+             | --- | --- | --- |
+             | tcp | prefer | 152.38 MiB/s |
+             | tcp | require | 160.00 MiB/s |
+             | utp | off | 76.19 MiB/s |
+             | utp | prefer | **stalls** |
+             | utp | require | **stalls** |
+
+             **It stalls in one direction, after the connection is working.**
+             Traced on both ends at `--log-level trace`:
+
+             - the leecher connects over uTP and the MSE handshake succeeds,
+               with no fallback: nothing logs
+               "encrypted handshake failed, dialling again in plaintext";
+             - the seeder reads the BitTorrent handshake and decodes it
+               correctly, info hash and all, so the cipher is in step;
+             - the seeder sends its extended handshake, `HaveAll` and
+               `Unchoke`, and the leecher **receives and decodes all three**;
+             - the leecher logs `about to send: Message(Interested)` and about
+               sixty `Message(Request(..))`, and its uTP stream sends them:
+               `sent ST_DATA payload_size=528`, `991`, `662`;
+             - the seeder's uTP stream receives **nothing** after the
+               handshake, and ten seconds later its inactivity timer fires:
+               `reader is dead, could not send UtpMesage to it`.
+
+             So bytes leave one uTP stream and do not arrive at the other,
+             after several hundred bytes have crossed in both directions
+             successfully.
+Relevance:   **It is this repository's own code, not upstream's.** The only
+             thing that differs between the working and the failing case is
+             whether `MseTransform` wraps the connection:
+             `crates/bit-cli-core/src/mse/mod.rs:179`, `StreamTransform`, is a
+             fork addition, and `Encryption::Off` returns the streams
+             unwrapped while every other policy returns `Prefixed` over the
+             read half and `EncryptedWrite` over the write half
+             (`crates/bit-cli-core/src/mse/stream.rs`). uTP is what exposes it:
+             the same wrappers over TCP move 160 MiB/s.
+
+             **It is P1 rather than P3 because of what it implies about TCP.**
+             The two streams differ in how readily they return `Poll::Pending`
+             from a write: `vendor/librqbit-utp/src/stream_tx.rs:163` yields
+             deliberately every 8,192 bytes, and its `poll_write` returns
+             `Pending` rather than `Ok(0)` when its ring is full. A loopback
+             TCP socket almost never does either. If the defect is in how the
+             wrappers handle a partial or deferred write, then TCP is not
+             immune, it is merely never asked, and a congested peer or a slow
+             link is the same condition.
+
+             It also blocks half of [T-101](bep-coverage.md): `--transport utp`
+             cannot be recommended while the default `--encryption prefer`
+             makes it stall.
+Approach:    Reproduce it below the session, then bisect the wrapper.
+
+             The two candidates named by the trace, in order:
+
+             - **`EncryptedWrite::poll_write`**,
+               `crates/bit-cli-core/src/mse/stream.rs:172`. It buffers the
+               ciphertext in `pending` and reports plaintext bytes consumed
+               only after `poll_drain` has pushed all of it, which is correct
+               for a caller that retries with the same buffer. What it is not
+               is cancellation safe: a `poll_write` that returns `Pending` and
+               is then dropped leaves `pending` holding ciphertext the caller
+               believes was never written, and the next write with a different
+               buffer drains the stale bytes and reports the wrong count.
+               `a_round_trip_survives_any_write_size` covers partial writes and
+               does not cover a cancelled one.
+             - **`Prefixed::poll_read_vectored`**, same file. The reader
+               (`vendor/rqbit/crates/librqbit/src/read_buf.rs:258`) reads into
+               a ring buffer's `unfilled_ioslices()`, which can be two slices
+               and can include an empty one, and the decrypt loop assumes the
+               inner filled them in order and contiguously.
+
+             **Write the reproduction against a stream that behaves like uTP
+             rather than against a duplex pipe**, because a duplex pipe is what
+             the existing unit tests already use and they pass. A pair of real
+             `librqbit_utp` streams in one process is the fixture, and
+             `vendor/librqbit-utp`'s own tests have the setup for it.
+Acceptance:  A test below the session moves bytes through `EncryptedWrite` and
+             `Prefixed` over a stream that defers writes the way uTP does, and
+             fails before the fix. Then
+             `mse_over_utp_does_not_carry_a_torrent` in
+             `crates/bit-cli-core/tests/transport_e2e.rs` is inverted to assert
+             the transfer completes, and `scripts/check-transport.ps1`'s
+             `utp-mse` case expects `finished`.
+
+**Pinned, not left silent.** `mse_over_utp_does_not_carry_a_torrent` asserts
+the failure and names this entry, beside `mse_over_tcp_carries_a_torrent`,
+which is what says the pin is about the pair. A change that makes the transfer
+complete fails that test and is read as progress, which is the shape
+[T-173](metainfo.md) used.
+
+```bash
+cargo test -p bit-cli-core --test transport_e2e
+```

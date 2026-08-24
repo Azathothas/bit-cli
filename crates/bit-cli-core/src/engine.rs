@@ -134,6 +134,11 @@ pub struct EngineOptions {
     /// cost of every peer that cannot. See [`crate::mse`] and `TODO/peers.md`,
     /// T-163.
     pub encryption: crate::mse::Encryption,
+    /// Which transports this session listens on and dials.
+    ///
+    /// [`Transport::Tcp`] is the default and is what every run did before
+    /// 2026-08-24. See `TODO/bep-coverage.md`, T-101.
+    pub transport: Transport,
     /// Peer addresses this run refuses, as inclusive ranges.
     ///
     /// The session checks these before it reads an incoming handshake and
@@ -165,7 +170,56 @@ impl Default for EngineOptions {
             allocation: crate::alloc::Allocation::default(),
             max_open_files: crate::storage::DEFAULT_MAX_OPEN_FILES,
             encryption: crate::mse::Encryption::default(),
+            transport: Transport::default(),
             blocked_peers: Vec::new(),
+        }
+    }
+}
+
+/// Which transports a session listens on and dials.
+///
+/// BEP 29 uTP carries the same peer wire protocol as TCP does, over UDP, under
+/// LEDBAT congestion control. What that buys is not throughput: LEDBAT targets
+/// a fixed one-way queueing delay and backs off when it rises, so a seeder
+/// yields to other traffic on the same link rather than competing with it.
+///
+/// The default is [`Transport::Tcp`] and it stays there. `librqbit`'s own
+/// `ListenerOptions` says "once uTP is stable upgrade default to both", and
+/// this repository has no measurement that would justify moving first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Transport {
+    /// TCP only.
+    #[default]
+    Tcp,
+    /// uTP only. Nothing reaches a TCP-only peer.
+    Utp,
+    /// Both, on the same port number, and the peer chooses.
+    Both,
+}
+
+impl Transport {
+    /// The name this appears under in `--json` and in a trace line.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Utp => "utp",
+            Self::Both => "both",
+        }
+    }
+}
+
+impl std::fmt::Display for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<Transport> for librqbit::ListenerMode {
+    fn from(transport: Transport) -> Self {
+        match transport {
+            Transport::Tcp => Self::TcpOnly,
+            Transport::Utp => Self::UtpOnly,
+            Transport::Both => Self::TcpAndUtp,
         }
     }
 }
@@ -451,8 +505,25 @@ impl Engine {
             persistence: None,
             listen: Some(ListenerOptions {
                 listen_addr,
+                mode: options.transport.into(),
                 ipv4_only: options.ipv4_only,
                 max_pending_incoming_handshake_checks: PENDING_HANDSHAKE_CHECKS,
+                ..Default::default()
+            }),
+            // Which transports this run **dials**, which is a separate setting
+            // from which it listens on and defaults to TCP whatever the
+            // listener says.
+            //
+            // Setting only the listener is what `--transport` did when it was
+            // first written, and it produced two wrong answers on the same
+            // run: `--transport utp` against a TCP-only peer connected anyway,
+            // over TCP, and `--transport utp` against a uTP-only peer timed
+            // out. The dialer tries TCP first and only reaches uTP a second
+            // later, so a flag that leaves `enable_tcp` true is a flag that
+            // says nothing about what the connection turns out to be. See
+            // `TODO/bep-coverage.md`, T-101.
+            connect: Some(librqbit::ConnectionOptions {
+                enable_tcp: !matches!(options.transport, Transport::Utp),
                 ..Default::default()
             }),
             ratelimits: LimitsConfig {
