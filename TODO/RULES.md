@@ -626,6 +626,14 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   Same rule for `python -c` and `python - <<'PY'`: a heredoc is fine for code
   with no apostrophes and no backslashes, and a Windows path in a Python string
   literal has both. Prefer a file.
+
+  **The way that one fails is worse than an error**, and it has now happened
+  three times in one session. A backslash escape that survives the trip loses
+  one backslash on the way, and Python then reads what is left as an escape
+  sequence: `\b` becomes a backspace and `\f` becomes a form feed.
+  The file is written, nothing errors, and the regex that was supposed to end
+  in a word boundary now ends in a byte no editor shows. `check-tree.ps1` is what
+  catches it, by file and byte offset, and it is the reason that check exists.
 - **Variable names are case-insensitive**, `$args` inside a function is an
   automatic variable that silently swallows a parameter of that name, and
   `-match` is case-insensitive so `'FAILED'` matches `"0 failed"`. Name locals
