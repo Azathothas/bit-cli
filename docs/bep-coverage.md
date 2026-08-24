@@ -4,11 +4,11 @@ What `bit-cli` implements, what it does not, and the argument for each. The
 entries behind this are in
 [`TODO/bep-coverage.md`](../TODO/bep-coverage.md).
 
-Three statuses, and the difference between them matters. **Yes** means
-`bit-cli`'s own code implements it and a test covers it; the symbol column
-names where. **Inherited** means `librqbit` provides it, `bit-cli` reaches it
-through the session, and `bit-cli` has no test of its own. **No** means it is
-not there, and the entry that closes it is named.
+**Yes** means `bit-cli`'s own code implements it and a test covers it; the
+symbol column names where. **Inherited** means `librqbit` provides it,
+`bit-cli` reaches it through the session, and `bit-cli` has no test of its own.
+**Partial** and **read only** each name what is missing in the row itself.
+**No** means it is not there, and the entry that closes it is named.
 
 | BEP | What | Status | Where |
 | --- | --- | --- | --- |
@@ -33,10 +33,13 @@ not there, and the entry that closes it is named.
 | 53 | Magnet file selection, `so=` | yes | `torrent/magnet.rs:211` |
 | 6 | Fast extension | partial | the allowed-fast derivation is `fast_set.rs`, with BEP 6's mask and aria2's; `bench swarm` reads all five messages and reports which mask a target used. Nothing sends one: [T-100](../TODO/bep-coverage.md), and the vendored `librqbit` has no BEP 6 either |
 | 16 | Superseeding | no | [T-082](../TODO/create-seed.md). `--superseed` is accepted and warns |
-| 29 | uTP | no | [T-101](../TODO/bep-coverage.md). No flag enables it |
+| 29 | uTP | partial | `--transport tcp|utp|both`, default `tcp`, on every command that starts a session. A transfer completes over uTP with `--encryption off` and stalls with encryption on, which is T-233 in [`../TODO/peers.md`](../TODO/peers.md). What is unmeasured is the induced latency uTP exists for, and loopback cannot show it: [T-101](../TODO/bep-coverage.md) |
 | 52 | BitTorrent v2 | no | [T-081](../TODO/create-seed.md), [T-134](../TODO/multi-source.md) |
 | 54 | `lt_donthave` | partial | received and honoured: the vendored `librqbit` clears the bit, `extended/mod.rs` `LtDontHave`. Nothing sends one: [T-167](../TODO/bep-coverage.md) |
 | 55 | Holepunch | no | [T-102](../TODO/bep-coverage.md) |
+| 33 | DHT scrape | no | [T-169](../TODO/dht.md) |
+| 44 | DHT mutable items | no | [T-170](../TODO/dht.md) |
+| 51 | DHT infohash indexing | no | [T-169](../TODO/dht.md) |
 | MSE/PE | Peer encryption | no | [T-163](../TODO/peers.md) |
 
 `TODO/bep-coverage.md` tracks the gaps.

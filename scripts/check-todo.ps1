@@ -72,7 +72,29 @@ $patchDocs = @("TASKS.md", "UPSTREAM.md", "README.md") |
     ForEach-Object { Join-Path $repo "patches/$_" } |
     Where-Object { Test-Path $_ } |
     ForEach-Object { Get-Item $_ }
-$scanFiles = @($files) + @($patchDocs)
+
+# The corpus index cites the corpus, and until 2026-08-24 nothing checked
+# those citations at all: the pass below resolved a corpus path written in a
+# `TODO/` entry and never one written in `reference/RESEARCH.md`, which is
+# where almost all of them are. 327 of them, and a trim that moved a path
+# would have broken every one silently.
+#
+# `reference/` is gitignored and absent on a fresh clone, so this adds nothing
+# to a run that cannot see it.
+$corpusDocs = @()
+$corpusRoot = Join-Path $repo "reference"
+if (Test-Path $corpusRoot -PathType Container) {
+    foreach ($name in @("RESEARCH.md", "README.md")) {
+        $candidate = Join-Path $corpusRoot $name
+        if (Test-Path $candidate) { $corpusDocs += Get-Item $candidate }
+    }
+    $historyDir = Join-Path $corpusRoot "HISTORY"
+    if (Test-Path $historyDir -PathType Container) {
+        $corpusDocs += @(Get-ChildItem -Path $historyDir -Filter *.md -File)
+    }
+}
+
+$scanFiles = @($files) + @($patchDocs) + @($corpusDocs)
 
 # ---------------------------------------------------------------------------
 # 0. Bytes, before anything reads these as text
@@ -343,6 +365,9 @@ function Test-Citation([string]$Path, [string]$Cited, [int]$Cursor, [string]$Pro
 }
 
 foreach ($file in $scanFiles) {
+    # A document under `reference/` cites somebody else's tree, so a path in it
+    # is read differently below.
+    $isCorpusDoc = $file.FullName.StartsWith((Join-Path $repo "reference"), [System.StringComparison]::OrdinalIgnoreCase)
     $text = [System.IO.File]::ReadAllText($file.FullName)
     $lineNo = 0
     # Inside a fenced block the text is quoted output, a command, or a
@@ -384,6 +409,16 @@ foreach ($file in $scanFiles) {
         # `.github/workflows/ci.yml` and none was checked.
         foreach ($m in [regex]::Matches($line, '(?<![\w/-])(?<p>(?:crates|scripts|docs|vendor|patches|man|\.github)/[A-Za-z0-9._/-]+\.(?:rs|ps1|md|toml|json|jq|yml|patch))(?::(?<l>\d+))?')) {
             $cited = $m.Groups['p'].Value
+            # A corpus document cites somebody else's tree, and `crates/` and
+            # `docs/` are directory names inside those trees as well as in this
+            # one. `crates/rt-utp/src/x.rs` is TorrentNG's and resolving it
+            # here reports twenty paths this repository was never supposed to
+            # have. So in a corpus document a path is only this tree's when its
+            # first two components name a real directory here.
+            if ($isCorpusDoc) {
+                $head = ($cited -split '/')[0..1] -join '/'
+                if (-not (Test-Path (Join-Path $repo $head) -PathType Container)) { continue }
+            }
             # A path written with an ellipsis is deliberately abbreviated and
             # there is nothing to resolve.
             if ($cited -match '\.\.\.') { continue }
@@ -425,7 +460,7 @@ foreach ($file in $scanFiles) {
             # is far more often this tree's `crates/bit-cli-core/src/torrent/`
             # written short than it is the corpus tree called `torrent`, and a
             # checker that cries wolf is a checker nobody runs.
-            foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<r>[A-Za-z0-9_-]+)/(?<p>[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\.(?:rs|go|py|ts|js|md|toml|json|patch))(?::(?<l>\d+))?')) {
+            foreach ($m in [regex]::Matches($line, '(?<![\w./-])(?<r>[A-Za-z0-9_-]+)/(?<p>[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\.(?:rst|json|toml|patch|go|js|md|py|rs|ts))(?![A-Za-z0-9])(?::(?<l>\d+))?')) {
                 $tree = $m.Groups['r'].Value
                 $treeRoot = Join-Path $corpus $tree
                 if (-not (Test-Path $treeRoot -PathType Container)) { continue }
@@ -437,7 +472,12 @@ foreach ($file in $scanFiles) {
                     continue
                 }
                 if ($m.Groups['l'].Success) {
-                    $count = (Get-Content -LiteralPath $path | Measure-Object -Line).Lines
+                    # `Measure-Object -Line` does not count blank lines, an
+                    # undercount of eight to ten percent that reads like a
+                    # precise figure. It reported `herp_test.go` as 77 lines
+                    # when it has 86, and called a correct citation at :80
+                    # dead. Count the array instead.
+                    $count = @(Get-Content -LiteralPath $path).Count
                     if ([int]$m.Groups['l'].Value -gt $count) {
                         Problem "dead-corpus-line" "$($file.Name):$lineNo cites ${cited}:$($m.Groups['l'].Value) and that file has $count lines"
                     }

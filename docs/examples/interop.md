@@ -4,8 +4,20 @@ A torrent this tree wrote that another client will not open, or a payload this
 tree seeded that another client cannot take, is the failure worth catching. It
 is checked rather than assumed.
 
+The binaries and the fixtures have to exist first, and `--bins --examples` is
+the part that is easy to leave out: `--examples` on its own builds the fixtures
+and no binary.
+
+```bash
+cargo build --workspace --bins --examples
+```
+
 ```bash
 pwsh -NoProfile -File scripts/interop-roundtrip.ps1
+```
+
+```bash
+pwsh -NoProfile -File scripts/interop-roundtrip.ps1 -Client rqbit
 ```
 
 ## What it drives
@@ -66,6 +78,28 @@ is the only widely deployed BEP 52 implementation, so it is the only thing that
 could validate T-081's v2 and hybrid creation once that is built. Every other
 client in the corpus would take a v2 torrent and refuse it for the same reason
 this one cannot make it.
+
+## Nothing reaches the network
+
+The tracker and the web seed are two fixtures in this repository, both bound to
+`127.0.0.1`. Either can be run on its own:
+
+```bash
+cargo run -p bit-cli-core --example loopback-tracker
+```
+
+```bash
+cargo run -p bit-cli-core --example loopback-fileserver -- --root .
+```
+
+Each prints its URL on the first line of stdout and logs every request to
+stderr, so a script reads the port rather than guessing it. `loopback-tracker`
+also takes `--announce-log <PATH>`, which appends one JSON object per announce
+carrying the raw query as received; `scripts/check-announce.ps1` is what reads
+it.
+
+A third fixture, `loopback-churn`, generates connection churn against a target
+and is what `scripts/soak.ps1` drives.
 
 ## Interoperability that is not a client
 

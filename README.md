@@ -113,9 +113,11 @@ carries the commands behind it.
 
 ## BEP coverage
 
-Three statuses, and the difference matters. **Yes** means `bit-cli`'s own code
-implements it and a test covers it. **Inherited** means the vendored engine
-provides it and `bit-cli` has no test of its own. **No** means it is not there.
+**Yes** means `bit-cli`'s own code implements it and a test covers it.
+**Inherited** means the vendored engine provides it and `bit-cli` has no test of
+its own. **Partial** and **read only** each name what is missing in the row
+itself. **No** means it is not there, and the entry that would close it is
+named.
 
 [`docs/bep-coverage.md`](docs/bep-coverage.md) is the whole table with the
 symbol behind every row and the entry behind every gap. The short version:
@@ -124,25 +126,25 @@ symbol behind every row and the entry behind every gap. The short version:
 | --- | --- |
 | yes | 7, 10, 12, 15, 17, 19, 20, 21, 23, 27, 39, 48, 53 |
 | inherited | 3, 5, 9, 11, 14 |
-| partial | 6 fast extension, 47 padding files read but not written |
-| no | 16, 29 uTP with encryption, 33, 44, 51, 52, 55, WebTorrent |
+| partial | 6 fast extension, 29 uTP, 54 `lt_donthave` |
+| read only | 47 padding files, parsed and skipped but never written |
+| no | 16, 33, 44, 51, 52, 55, and WebTorrent |
 
 ## Exit codes
 
-Eighteen, and every one is in [`man/bit-cli.json`](man/bit-cli.json) with its
-`kind`, its meaning, and whether a retry could succeed.
+Seventeen failures and success, and every one is in
+[`man/bit-cli.json`](man/bit-cli.json) with its `kind`, its meaning, and
+whether a retry could succeed.
 [`docs/exit-codes.md`](docs/exit-codes.md) is the table with the argument for
-each.
+each, and `bit-cli version` prints it too.
 
 ```bash
 bit-cli version
 ```
 
-prints them too.
-
 ## Documentation
 
-| | |
+| page | what it covers |
 | --- | --- |
 | [webseed.md](docs/webseed.md) | the addressing model: source, scope, composition |
 | [integrity.md](docs/integrity.md) | what is guaranteed about the bytes |
@@ -168,7 +170,7 @@ prints them too.
 
 ### Worked examples
 
-| | |
+| page | the task it walks |
 | --- | --- |
 | [cloudflare-webseed.md](docs/examples/cloudflare-webseed.md) | serving a payload from R2 or a Worker, and proving the origin honours `Range` |
 | [multi-source.md](docs/examples/multi-source.md) | a swarm, a CDN, a signed URL and a local copy, at once |
@@ -182,14 +184,29 @@ prints them too.
 
 ```bash
 cargo build --release --locked
+```
+
+```bash
 cargo test --workspace
 ```
 
+The fixtures the acceptance scripts drive are built by `--examples`, and the
+binary by `--bins`. Leaving one out is the commonest way a check exits 2:
+
+```bash
+cargo build --release --bins --examples
+```
+
 Windows release builds link the C runtime statically, set in
-`.cargo/config.toml`. Verify it:
+`.cargo/config.toml`, and the musl targets carry no interpreter at all. Verify
+either:
 
 ```bash
 pwsh -NoProfile -File scripts/check-static.ps1
+```
+
+```bash
+pwsh -NoProfile -File scripts/check-static.ps1 -Path target/release/bit-cli
 ```
 
 Every gate in one command:

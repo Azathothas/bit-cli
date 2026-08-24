@@ -8,6 +8,32 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### `README.md` is a map, and the detail moved into `docs/`
+
+`README.md` was 83 KB across 37 sections and is 12 KB across nine: what
+`bit-cli` is, install, the command surface as a table, features and BEP
+coverage as tables with a document per row, exit codes, building,
+interoperability and licence. Every row links to the page that carries the
+commands behind it.
+
+Nothing was dropped. The 353 line addressing model is `docs/webseed.md`, the
+path planning is `docs/windows.md`, the four stage cost attribution is
+`docs/examples/mirror-benchmark.md`, and the rest is in the twelve topic pages
+`README.md` now indexes. Seven worked examples are new, including
+`docs/examples/cloudflare-webseed.md`, which is the origin story written out:
+serving a payload from R2 or a Worker and proving the origin honours `Range`.
+
+**Two rows of the BEP table were wrong and are corrected.** BEP 29 said "no.
+No flag enables it", and `--transport tcp|utp|both` has enabled it since 0.2.0;
+it is `partial` now, because what is left is a latency figure loopback cannot
+produce. BEP 33, 44 and 51 were named in the prose under it and had no row at
+all.
+
+`scripts/check-docs.ps1` is new and runs in the gates and in CI. It resolves
+every relative link and anchor in `README.md` and `docs/`, every `scripts/`
+path, and every flag and command an example names against `man/bit-cli.json`,
+so a renamed flag cannot leave a runnable-looking example behind.
+
 ### Hooks on `seed`, and three commands stop accepting flags they ignored
 
 `bit-cli seed` runs `--on-complete` once, when the payload has passed its hash
