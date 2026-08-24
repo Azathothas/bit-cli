@@ -236,7 +236,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-243](phase-c.md) | n/a | phase-c | deferred | A user interface, and which of the two kinds decision 7.4 permits |
 | [T-244](cli-surface.md) | P2 | cli | open | A web page is not a source, and nothing extracts a link from one |
 | [T-245](cli-surface.md) | P1 | cli | open | Four commands refuse the URL download accepts |
-| [T-246](cli-surface.md) | P2 | cli | open | A directory and a mistyped subcommand both report a file error |
+| [T-246](cli-surface.md) | P2 | cli | open | Three inputs report a file error and two of them name the wrong cause |
 | [T-247](cli-surface.md) | P2 | cli | open | A dry run over a URL prints zero for a count it never took |
 | [T-248](metainfo.md) | P2 | metainfo | open | There is no way to ask what two torrents disagree about |
 | [T-249](metainfo.md) | P3 | metainfo | open | A torrent's shape is only ever printed as a flat list |

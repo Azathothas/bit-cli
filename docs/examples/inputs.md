@@ -70,8 +70,13 @@ surprises you.
 | local `.torrent` | yes | yes |
 | stdin | yes | yes |
 | HTTP(S) URL | **no** | yes |
-| magnet or info hash | no | yes |
-| Metalink | no | yes |
+| magnet or info hash | no | yes, after a swarm lookup |
+| Metalink | no | yes, after fetching the torrent it names |
+
+Every `no` in that table was run and every one of them exits 4. On the other
+side, a `.torrent` URL was run end to end under `download`, and the two rows
+that need the network to resolve were checked as far as `--dry-run` goes, which
+is the argument and the plan rather than the lookup.
 
 **A URL is the surprising row.** `download` fetches it and completes; the other
 four refuse it:
@@ -152,11 +157,26 @@ A local Metalink is the one case that is fully readable with nothing running:
 the document's own claims, its mirrors and its checksums are all in the file.
 What needs the network is the `.torrent` the document names by URL.
 
-## The exit codes this page produces
+## Everything on this page exits 4
 
-| code | name | when |
-| --- | --- | --- |
-| 2 | usage | the argument is not a form anything recognises |
-| 4 | source resolution | the form is recognised and this command cannot resolve it |
+Every source that fails, fails as **4, source resolution**. There is no input
+to a `SOURCE` argument that produces a usage error, because the last rule in
+the classifier is "treat it as a path" and a path that is not there is a
+resolution failure rather than a usage one.
 
-[`../exit-codes.md`](../exit-codes.md) has all seventeen.
+That includes a scheme nothing here speaks:
+
+```bash
+bit-cli info ftp://host/x.torrent
+```
+
+```text
+error: cannot read C:\...\ftp://host/x.torrent: The filename, directory name,
+or volume label syntax is incorrect. (os error 123)
+```
+
+An `ftp://` URL is read as a relative filename. It is the same shape as the
+directory case above and is filed with it, under
+[T-246](../../TODO/cli-surface.md).
+
+[`../exit-codes.md`](../exit-codes.md) has all seventeen codes.

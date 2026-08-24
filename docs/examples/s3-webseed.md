@@ -18,10 +18,16 @@ That is 2,410,916 bytes. A torrent over it, with a piece length small enough
 that a sweep has something to sweep:
 
 ```bash
-bit-cli create OR_ABI-L1b-RadC-M6C01_G16_s20240010001173_e20240010003546_c20240010004005.nc --piece-length 256KiB --no-creation-date
+bit-cli create OR_ABI-L1b-RadC-M6C01_G16_s20240010001173_e20240010003546_c20240010004005.nc --output goes16.torrent --piece-length 256KiB --no-creation-date
 ```
 
-Everything after this points a web seed at the bucket the object came from.
+Everything after this points a web seed at the bucket the object came from, and
+every command below uses that torrent and the object's URL. The shell variable
+holding the URL is the one this page calls `$OBJECT`:
+
+```bash
+OBJECT=https://noaa-goes16.s3.amazonaws.com/ABI-L1b-RadC/2024/001/00/OR_ABI-L1b-RadC-M6C01_G16_s20240010001173_e20240010003546_c20240010004005.nc
+```
 
 ## The key layout is what breaks first
 
@@ -51,7 +57,7 @@ relationship to the torrent's name at all.
 ## One request says whether the bucket works
 
 ```bash
-bit-cli webseed test goes16.torrent --web-seed-exact "https://noaa-goes16.s3.amazonaws.com/ABI-L1b-RadC/2024/001/00/OR_ABI-L1b-RadC-M6C01_G16_s20240010001173_e20240010003546_c20240010004005.nc"
+bit-cli webseed test goes16.torrent --web-seed-exact "$OBJECT"
 ```
 
 ```text

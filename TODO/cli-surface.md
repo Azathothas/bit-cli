@@ -4157,7 +4157,7 @@ Acceptance:  `bit-cli info`, `files`, `magnet` and `verify` each resolve a
              local file reports, field for field under `--json`. A URL that
              serves markup still fails, with a message naming what arrived.
 
-### T-246 A directory and a mistyped subcommand both report a file error
+### T-246 Three inputs report a file error and two of them name the wrong cause
 
 Source:      measured 2026-08-24 while checking the operator's brief
 Category:    cli
@@ -4165,7 +4165,8 @@ Priority:    P2
 Effort:      S
 Status:      open
 
-Problem:     Two inputs produce an error that names the wrong cause.
+Problem:     Three inputs produce a file error and two of them name the wrong
+             cause.
 
              A directory:
 
@@ -4190,11 +4191,30 @@ Problem:     Two inputs produce an error that names the wrong cause.
 
              The root command takes positional sources, so `tree` is read as a
              source named `tree`. A typo becomes a missing file.
-Relevance:   Both are the first thing a new caller does. `bit-cli info <dir>`
+
+             And a scheme nothing here speaks:
+
+             ```
+             $ bit-cli info ftp://host/x.torrent
+             error: cannot read C:\...\ftp://host/x.torrent: The filename,
+             directory name, or volume label syntax is incorrect. (os error 123)
+             ```
+
+             `classify` tests for `http://` and `https://` and falls through
+             to "treat it as a path" for everything else, so a URL of any other
+             scheme is a relative filename. `source.rs:68` is the test and
+             `source.rs:87` is the fall-through.
+Relevance:   All three are the first thing a new caller does. `bit-cli info <dir>`
              is what somebody types when they mean `create`, and a wrong
              subcommand is what somebody types when they are guessing at the
-             surface. Neither error says what to do, and one of them says
+             surface. No error says what to do, and two of the three say
              something untrue.
+
+             There is a fourth fact that ties them together and is worth
+             stating once: **no input to a `SOURCE` argument produces a usage
+             error.** Every one of these exits 4, because the classifier's last
+             rule is "treat it as a path". Exit 2 is reachable from a flag and
+             not from a source.
 Approach:    Test for a directory before the read and say so, naming `create`
              as the command that takes one. Map `EISDIR` and
              `ERROR_ACCESS_DENIED` on a path that is a directory to the same
@@ -4208,7 +4228,8 @@ Approach:    Test for a directory before the read and say so, naming `create`
 Acceptance:  `bit-cli info <directory>` exits 2 naming `create`, on Windows and
              on Linux, with the same message. `bit-cli tre one.torrent` exits 2
              suggesting `tree`, and `bit-cli ./tre` still reports a missing
-             file.
+             file. `bit-cli info ftp://host/x` names the scheme and the three
+             that are supported.
 
 ### T-247 A dry run over a URL prints zero for a count it never took
 

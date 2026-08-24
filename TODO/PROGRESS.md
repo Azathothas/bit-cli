@@ -89,8 +89,8 @@ it, and it says so in its own first paragraph.
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-two** jobs. Green at run **32714679692**, against commit
-  `87bb9bf`. No run was red this session.
+- **CI:** **twenty-two** jobs. Green at run **32721082818**, against commit
+  `553b5ae`. No run was red this session.
 
 ```bash
 gh run list --limit 1
@@ -268,6 +268,43 @@ It is deliberately **not** in `gates.ps1`. It needs the network, and a gate
 that fails when a network is down is a gate people learn to ignore. It was
 proved able to fail by mutating one guard pattern, which produced exit 1 and
 named the file, before the pattern was restored.
+
+### What the two reviews found
+
+Both reviews found real things, which is the argument for doing them after the
+work rather than instead of it.
+
+**The first review checks every claim against the code or the path it cites.**
+Six citations were wrong and are corrected: `source.rs:66` is 68, `:33` is 32,
+`:172` is 189, `cmd/download.rs:3017` is 3018, qBittorrent's
+`version.h.in:39-43` is 40-44, and Transmission's `session.cc:194-207` is
+196-206. One claim was weaker than the truth: `rquest` and
+`reqwest-impersonate` are not "stalled at 0.0.0", they have 152 and 62
+published versions and **every one of them is yanked**, and `wreq`'s newest
+published version is a `6.0.0` release candidate rather than the 0.16.0 stable
+the dependency numbers come from.
+
+**The second is a cold read for a document contradicting another document.**
+Four things:
+
+- The S3 page said `bit-cli` surfaces no response header while its own output
+  shows `server AmazonS3`. `Server` is the one header that is carried, and both
+  the page and [T-254](webseed.md) say so now.
+- The Cloudflare page's opening said every command in it was run against a
+  local origin, and its closing section now says otherwise. The opening was the
+  stale half.
+- `inputs.md` claimed exit 2 for an unrecognised source. **No input to a
+  `SOURCE` argument produces a usage error**: every one exits 4, because the
+  classifier's last rule is "treat it as a path". That was measured over four
+  shapes rather than reasoned about.
+- Which found the third case for [T-246](cli-surface.md):
+  `bit-cli info ftp://host/x.torrent` is read as a relative filename and
+  reports "The filename, directory name, or volume label syntax is incorrect".
+
+**And one thing the gates caught rather than a review.** Writing these files
+through a shell heredoc put a `0x08` and a `0x0C` into three of them, invisible
+in an editor. `check-tree.ps1` names the file and the byte offset, and was
+proved to still do so by planting one on purpose.
 
 ## In progress
 
