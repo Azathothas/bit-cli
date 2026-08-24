@@ -434,10 +434,12 @@ if ($SkipUdp) {
     $failed = @($judgedResults | Where-Object { -not $_.ok })
     $udpJudged = ($judgedResults.Count -gt 0)
     $udpOk = ($failed.Count -eq 0)
+    # Counted rather than written out. The fidelity cases are six today and a
+    # seventh would otherwise leave this line saying "six" forever.
     $udpDetail = if ($failed.Count -gt 0) {
         "$($failed.Count) of $($judgedResults.Count) failed: " + (($failed | ForEach-Object { "$($_.case) ($($_.detail))" }) -join "; ")
     } else {
-        "$($judgedResults.Count) of six judged and all hold over $($udpMine.Count) announce(s)"
+        "$($judgedResults.Count) of $($udpResults.Count) judged and all hold over $($udpMine.Count) announce(s)"
     }
 }
 Add-Case "udp" $udpJudged $udpOk $udpDetail

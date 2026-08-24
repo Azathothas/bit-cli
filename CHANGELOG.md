@@ -8,6 +8,46 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### A UDP announce carries the same three events an HTTP one does
+
+`bit-cli` sends `started` once, `completed` once when a download finishes, and
+`stopped` when the run ends. Over a `udp://` tracker the announces in between
+carried an event too: a torrent still downloading repeated `started` at every
+interval, and one that had finished repeated `completed`. A seeder, which has
+the whole file before it starts, sent `completed` on every announce, and BEP 3
+says a client in that position does not send it at all.
+
+Measured over one 22 second run with the same payload on both protocols: five
+`started` events over UDP against one over HTTP.
+
+The cost was the tracker's rather than this client's, and it was invisible from
+here. `completed` is how a tracker counts finished downloads, which is the
+`downloaded` field of a BEP 48 scrape, so one seeder announcing every five
+minutes added 288 a day to a number that should never have moved.
+
+Nothing about an HTTP announce changed, and the events a run sends are
+unchanged: what stopped is the ones it sent in between.
+
+### `bit-cli trackers` reads a `.torrent` named by a URL
+
+It was the one command that offered "an HTTP(S) URL" in its `SOURCE` help and
+refused it, saying "an info hash is needed to announce, and this source does not
+carry one" when the document behind the URL carries one. A URL and the same
+file on disk now produce the same report, including `left`, which is the
+torrent's total length and so can only be right if the fetch happened. A
+metalink resolves the same way, and `--scrape` takes both.
+
+A magnet and a bare info hash are unchanged: they carry the hash an announce
+needs and no length, so `left` is a placeholder and `known` is false.
+
+### `loopback-tracker` speaks BEP 15, and can redirect or refuse
+
+The test fixture under `crates/bit-cli-core/examples/` answers UDP announces
+and scrapes as well as HTTP ones, refusing a connection id it never issued.
+`--redirect-announce <N>` answers the first `N` announces with a `302`, and
+`--fail-announce <REASON>` answers every one with a `failure reason` key.
+`scripts/check-announce.ps1` has nine judged cases where it had six.
+
 ### One peer id, and it is `bit-cli`'s own
 
 `bit-cli` announces and hand shakes as **`-CL0200-`** now: `-CL` is this

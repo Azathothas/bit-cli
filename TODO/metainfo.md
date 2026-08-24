@@ -834,7 +834,7 @@ re-estimate changed both the size and the shape.
 
 **`S` was measured against the wrong thing.** Writing a `.torrent` out of a
 resolved magnet is a few lines. Getting a resolved magnet in `bit-cli magnet`
-is the entry: `run` at `crates/bit-cli/src/cmd/magnet.rs:79` takes the
+is the entry: `run` at `crates/bit-cli/src/cmd/magnet.rs:80` takes the
 `Kind::Magnet` arm and reports what the URI itself carries, with no swarm, no
 tracker and no DHT anywhere in the command. `resolve_blocking` at
 `crates/bit-cli/src/source.rs:304` sends a magnet straight to `load_local`,

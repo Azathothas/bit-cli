@@ -1,9 +1,9 @@
 {
   "kind": "announce",
-  "generated_at": "2026-08-24T21:48:36.448Z",
+  "generated_at": "2026-08-24T22:21:23.899Z",
   "payload_bytes": 8388608,
-  "announce_url": "http://127.0.0.1:50664/announce",
-  "udp_announce_url": "udp://127.0.0.1:50664/announce",
+  "announce_url": "http://127.0.0.1:60763/announce",
+  "udp_announce_url": "udp://127.0.0.1:56783/announce",
   "min_interval": 5,
   "announces_total": 10,
   "announces_subject": 6,
@@ -20,7 +20,7 @@
     "key"
   ],
   "user_agent": "bit-cli 0.2.0",
-  "peer_id": "-CL0200-kenf08bd7620",
+  "peer_id": "-CL0200-2s5bwnu09m1r",
   "cases": [
     {
       "case": "started-left",
@@ -62,7 +62,7 @@
       "case": "udp",
       "judged": true,
       "ok": true,
-      "detail": "6 of six judged and all hold over 6 announce(s)"
+      "detail": "6 of 6 judged and all hold over 6 announce(s)"
     },
     {
       "case": "redirect",
@@ -112,7 +112,7 @@
       "case": "interval",
       "judged": true,
       "ok": true,
-      "detail": "smallest gap 5.01s against a min interval of 5s over 3 ordinary announces"
+      "detail": "smallest gap 5.02s against a min interval of 5s over 3 ordinary announces"
     }
   ],
   "failures": [],

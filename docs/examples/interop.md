@@ -98,11 +98,14 @@ also takes `--announce-log <PATH>`, which appends one JSON object per announce
 carrying the raw query as received; `scripts/check-announce.ps1` is what reads
 it.
 
-`loopback-tracker` speaks BEP 15 as well as BEP 3, on the same port number, and
-prints a `udp://` URL after its two HTTP ones. Two more flags make it behave
-like the trackers a client actually meets: `--redirect-announce <N>` answers
-the first `N` announces with a `302`, and `--fail-announce <REASON>` answers
-every one with a `failure reason` key at HTTP 200, or BEP 15 action 3 over UDP.
+`loopback-tracker` speaks BEP 15 as well as BEP 3 and prints a `udp://` URL
+after its two HTTP ones. Read that line rather than assuming the ports match:
+it asks for the HTTP port and falls back to any free one, because on Windows a
+UDP bind inside a reserved range fails even when the same TCP port was free.
+Two more flags make it behave like the trackers a client actually meets:
+`--redirect-announce <N>` answers the first `N` announces with a `302`, and
+`--fail-announce <REASON>` answers every one with a `failure reason` key at
+HTTP 200, or BEP 15 action 3 over UDP.
 
 ```bash
 cargo run -p bit-cli-core --example loopback-tracker -- --fail-announce "not tracked here"

@@ -44,10 +44,12 @@
 //! - **`--fail-announce <REASON>`** answers every announce with `REASON` in a
 //!   `failure reason` key: HTTP 200 over TCP, BEP 15 action 3 over UDP.
 //!
-//! **UDP is always on**, on the same port number as HTTP, and speaks BEP 15:
-//! a connect exchange, then an announce. A connection id this tracker did not
-//! issue is refused with action 3, so a client that skips the connect is
-//! caught rather than served.
+//! **UDP is always on** and speaks BEP 15: a connect exchange, then an
+//! announce. A connection id this tracker did not issue is refused with
+//! action 3, so a client that skips the connect is caught rather than served.
+//! It asks for the HTTP port and does not always get it, so the `udp://` line
+//! on stdout is the one to read rather than the HTTP port with the scheme
+//! changed. See the bind below for why.
 
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};

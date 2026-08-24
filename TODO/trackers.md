@@ -675,7 +675,7 @@ Prove:       ```
 #### Closed 2026-08-24, and the third path was hiding a defect
 
 Nine judged cases where there were six, all holding.
-`bench/announce-20260824T214800Z.json` is the run.
+`bench/announce-20260824T222123899Z.json` is the run.
 
 ```
 case           judged   ok detail
@@ -685,7 +685,7 @@ stopped          True True events: started,completed,-,-,-,stopped
 left-monotonic   True True left: 8388608 -> 0 -> 0 -> 0 -> 0 -> 0
 totals-match     True True announced downloaded 8388608, uploaded 0; report downloaded 8388608, uploaded 0
 interval         True True smallest gap 5.01s against a min interval of 5s over 3 ordinary announces
-udp              True True 6 of six judged and all hold over 6 announce(s)
+udp              True True 6 of 6 judged and all hold over 6 announce(s)
 redirect         True True followed, exit 0, same up=0 down=0 left=8388608 across the hop
 failure-reason   True True 2 of 2 row(s) carry the reason, responded 0, exit 6, 2 announce(s) reached the tracker
 ```
@@ -909,6 +909,7 @@ Measured over loopback before the change, one torrent served by
 | command | before |
 | --- | --- |
 | `info`, `files`, `tree`, `magnet`, `peers` | exit 0 |
+| `verify` | exit 7, which is the answer: it read the torrent and the payload was not beside it |
 | `trackers` | exit 4, the refusal above |
 
 `run` at `crates/bit-cli/src/cmd/trackers.rs:95` read the metainfo for

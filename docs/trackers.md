@@ -154,6 +154,8 @@ a well-formed empty swarm rather than an error.
 | One endpoint cannot stand for several trackers | `a_named_scrape_endpoint_is_refused_when_the_run_has_several_trackers` |
 | The torrent's own trackers come before the caller's | `a_tracker_added_at_runtime_is_a_tier_after_the_torrents_own` |
 | A repeated tracker is announced to once | `a_repeated_tracker_is_announced_to_once` |
+| A torrent named by URL announces what the same file on disk does | `a_torrent_named_by_url_announces_the_same_as_one_on_disk` |
+| A magnet announces from its hash, with no length to send | `a_magnet_announces_from_its_hash_with_no_metainfo` |
 
 ## Using the command
 

@@ -4849,8 +4849,8 @@ Problem:     `bit-cli seed --jsonl` and `bit-cli download --jsonl` both emit
              `docs/schema.md`'s `progress` section is the **union** of the two
              and credits it to one command: it says
              "From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`" and
-             lists `peer_detail[]` and the five `listener.*` rows, none of
-             which that command has ever emitted.
+             lists `peer_detail[]` and six `listener.*` rows, none of which
+             that command has ever emitted.
 Premise:     Measured, not read. Both commands were run against the same
              torrent and the key sets compared. The schema section was then
              read against both.
@@ -4868,7 +4868,7 @@ Approach:    **The guard is the cheap half and it is already written for the
              other case.** `fold_document` at
              `crates/bit-cli/src/schema_gen.rs:71` panics when two commands
              claim one `kind`, naming both. `observe_events` at
-             `crates/bit-cli/src/schema_gen.rs:120` keys by `type` and merges
+             `crates/bit-cli/src/schema_gen.rs:122` keys by `type` and merges
              whatever arrives, with no such check. Giving events the same
              guard is a few lines and it fails on `progress` immediately,
              which is the point: the guard is what makes the second half
@@ -4983,7 +4983,59 @@ Prove:       ```
 
              Two runs of the same length, one before and one after, with the
              seeder's stdout byte count and its last record's size beside each
-             other. What has to hold is that the per-record size stops growing
-             with the number of peers seen: flat across the run rather than
-             rising with `peers.seen`. The run's own numbers must not change,
+             other. **See the correction below for what has to hold**: the
+             assertion is not that the record stops growing, which it already
+             does after two hours, but that the size it settles at is a small
+             fraction of today's 270 KB. The run's own numbers must not change,
              which is what the existing soak ceilings already assert.
+
+#### Correction, same session: it plateaus, and that is worse rather than better
+
+The Problem above says the per-record size grows with the number of peers ever
+seen, "so the total grows with the square of the run length". **The first half
+is true only until the row bound engages and the second half is false.** The
+numbers in the first table were also taken at two instants and presented as
+one, which is how the error survived being written down.
+
+Re-measured against the same run in one pass, every sixtieth record:
+
+| seq | at | bytes | rows | peers seen |
+| --- | --- | --- | --- | --- |
+| 1 | 16:46:08 | 504 | 0 | 0 |
+| 60 | 17:15:38 | 74,378 | 235 | 235 |
+| 120 | 17:45:39 | 145,406 | 460 | 460 |
+| 180 | 18:15:39 | 215,809 | 681 | 681 |
+| 240 | 18:45:40 | 283,435 | 894 | 898 |
+| 300 | 19:15:40 | 281,554 | 896 | 1,146 |
+| 420 | 20:15:41 | 275,696 | 883 | 1,620 |
+| 540 | 21:15:42 | 270,411 | 869 | 2,102 |
+| 660 | 22:15:44 | 271,546 | 873 | 2,591 |
+
+The record grows with `peers.seen` for the first two hours because every peer
+seen is still a row. At about 894 rows `rows` stops following `seen`, and the
+record size stops with it. From `t+2h` to `t+5.5h` `peers.seen` nearly triples
+and the record moves by under five percent.
+
+**894 is not [T-040](memory.md)'s ceiling and the difference matters.** That
+bound is 1,024 rows per torrent and the table never reaches it: what holds the
+count in a band from 869 to 896 is the reclaim T-040 added, keeping up with
+the arrival rate. So the plateau is a rate balance rather than a cap, and a
+run with a faster leech rate would sit higher, up to 1,024 and no further.
+
+**So the honest statement is a constant, not a curve.** Every tick after the
+bound carries about 270 KB, for as long as the process runs: 32 MB an hour at
+a 30 second interval, indefinitely, for a 16 MiB payload. The run's whole
+output was 151,679,859 bytes over 666 records at
+2026-08-24T22:18:14Z, 5.5 hours in.
+
+That is the finding this entry keeps. It is not a leak and it is not
+accelerating; it is a fixed and fairly large per-tick cost, paid to re-send
+rows for peers that disconnected hours ago. The Approach below is unchanged by
+the correction, because what it proposes is that a tick carries the peers
+currently connected, and at the last sample that is **zero** of the 873 rows
+sent.
+
+The `Prove` section's assertion has to change with it, and the change makes it
+easier rather than harder to check: not "the per-record size stops growing
+with peers seen", which is already true after two hours, but that **the record
+size after the bound engages is a small fraction of what it is today**.

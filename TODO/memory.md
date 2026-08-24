@@ -871,7 +871,7 @@ Source:      the operator's six hour soak, 2026-08-23T09:01:32Z
 Category:    memory
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     The first soak to reach its full six hour window reports
              **3.708 MiB/h at r squared 0.717** for `rss_bytes`, against a
@@ -1130,6 +1130,73 @@ pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Leechers 4 -ListenerCheck 6
 the thing that made this reading expensive: `-LeechFailurePercent` defaults to
 5, the failing run is at 78.37, and `soak.ps1 -ReadCsv` says so on any finished
 run without anybody counting a column by hand.
+
+
+#### Closed 2026-08-24 on the measurement: the step does not reproduce, and what is there instead is the sawtooth
+
+The Acceptance has two halves. The first was built on 2026-08-23 and is above.
+The second offered two ways to finish: name the step's cause with a file, or
+show with two runs at different leech rates that it is not tied to completed
+work. **It is the second.** The run is the operator's
+`bench/soak-20260824T164609340Z`, six hours at `-Leechers 4 -ListenerCheck 60s`,
+and it completed **2,812 leech cycles with none failed** over 704 samples.
+
+| | committed, 2 leechers | this run, 4 leechers |
+| --- | --- | --- |
+| samples | 681 over 5.992 h | 704 over 5.993 h |
+| leech cycles | 1,360 completed, 0 failed | 2,812 completed, 0 failed |
+| `rss_bytes` per hour | 3.71 MiB, r2 0.72 | 1.81 MiB, r2 0.65 |
+| largest single rise | **11.61 MiB at t+1.16 h** | 7.82 MiB at t+4.92 h |
+| largest single fall | -7.23 MiB | -7.13 MiB |
+
+**There is no step in this run.** The committed run's is one move that stays:
+15.68, 15.85, then **27.46**, and 27.51 and 27.63 after it. This run never does
+that. What it does instead, from `t+1.045 h` to the end, is oscillate: **126**
+single interval changes over 3 MiB, and every rise is matched by a fall of
+nearly the same size within a sample or two.
+
+```
+t+  3761s   16.39 ->  19.79 MiB  (+3.41)  cycles 496
+t+  3791s   19.79 ->  16.70 MiB  (-3.09)  cycles 500
+...
+t+ 20348s   26.05 ->  18.91 MiB  (-7.13)  cycles 2656
+t+ 20378s   18.91 ->  25.17 MiB  (+6.26)  cycles 2660
+```
+
+The floor of that band holds between 16.5 and 19.3 MiB for the whole run while
+its ceiling drifts from 20 to 26, so the amplitude grows from 3.4 MiB to about
+7. That is a high-water mark rising slowly, which is what this entry proposed
+before there was a second run to check it against: **an allocator or a cache,
+not a leak.**
+
+**The step is not tied to completed work, and the cycle counts are what say
+so.** The committed run's step lands at sample 132, `t+4178s`, with **264 leech
+cycles** completed. This run passed 264 cycles inside its first thirty-five
+minutes and nothing happened there: its first change over 3 MiB is at `t+3761s`
+and 496 cycles, and it is a tooth rather than a step. A threshold in completed
+torrents would have to fire at a similar cycle count in both, and the two are
+264 and 496 for the first movement and 264 against 2,332 for the largest.
+
+**What this does not claim.** It does not name the allocation. Nothing here
+identifies which cache or which pool holds the high-water mark, and the entry
+closes without that because the Acceptance offered this branch instead: the
+question it was filed to answer is whether the reported slope described a leak
+tied to work, and the answer is measured and no.
+
+**The reported number is still the thing to be careful about**, and that is the
+part of this entry which outlives it. A single linear fit across a rise and a
+fall of similar size describes neither, and it moves with the window: the same
+run reports a different slope depending on how long it ran. The `step up`,
+`at h` and `step down` columns exist so a reader is told not to trust the fit
+alone, and they are what this closing is written from.
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260824T164609340Z.csv
+```
+
+[T-227](#t-227-the-window-cache-budget-is-per-source-so-the-total-is-whatever-the-source-count-makes-it)
+is where a named cache with a budget is still open, and it is the entry to
+reach for if the high-water mark is ever worth chasing to its source.
 
 ### T-227 The window cache budget is per source, so the total is whatever the source count makes it
 
@@ -1430,3 +1497,80 @@ has left:
 ```bash
 pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Leechers 4 -ListenerCheck 60s -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
 ```
+
+#### The second half ran, 2026-08-24, and the stop did not reproduce
+
+The operator's run is `bench/soak-20260824T164609340Z`, six hours,
+`-Leechers 4 -ListenerCheck 60s`, which is the command this entry and
+[T-224](#t-224-the-six-hour-soaks-rss-slope-is-one-step-and-a-sawtooth-not-a-leak)
+asked for between them. **704 samples over 5.9999 hours, 2,812 leech cycles
+completed, none failed**, and the run's own verdict is "every named ceiling
+held over 6 hours" with an empty failure list. This time that verdict describes
+a busy seeder, which is what the first half of this entry exists to
+distinguish.
+
+**Neither branch of the Acceptance's second half triggers**, because there was
+no stop: nothing to attribute to a leecher, and the seeder never exited 17.
+
+**And the parameters were never the variable.** The two runs of 2026-08-23 are
+the same configuration in every field:
+
+| | 09:01:32Z | 15:47:16Z | 2026-08-24, this one |
+| --- | --- | --- | --- |
+| minutes | 360 | 360 | 360 |
+| sample seconds | 30 | 30 | 30 |
+| workload | steady | steady | steady |
+| payload | 16 MiB | 16 MiB | 16 MiB |
+| leechers | 2 | 2 | **4** |
+| listener check | none | none | **60s** |
+| leech cycles | **1,360 completed, 0 failed** | **298 completed, 1,080 failed** | **2,812 completed, 0 failed** |
+
+Two runs with identical parameters, one healthy for six hours and one dead
+after 78 minutes. So the stop is not a configuration this entry can choose, and
+it is not the leech rate either: doubling the rate produced 2,812 clean cycles.
+It is a race or something outside the run, and picking parameters cannot
+reproduce it on demand.
+
+#### What this run did find is a hole in the instrument, and it is the thing to fix next
+
+**A finished soak says the listener check was on and never says what it saw.**
+`bench/soak-20260824T164609340Z.json` carries `parameters.listener_check:
+"60s"` and no result anywhere: there is no `listener` key, the CSV has no
+listener column, and `self_reported` carries only `peak_rss_bytes` and
+`open_handles`.
+
+The seeder does report it. Read out of the running seeder's own progress
+events at `t+4.3 h`, this run was at:
+
+```json
+"listener":{"consecutive_failures":0,"failed":0,"healthy":true,"last_rtt_ms":0,"probes":257}
+```
+
+That was read from `.tmp/soak/seed.out` **while the run was in flight**, and
+that file is gone: `$Root` is deleted when the run ends, which this entry
+already records as the reason the failing run could not be asked anything
+afterwards.
+
+**So the Acceptance's first branch could not have been answered even if the
+stop had reproduced.** "Reproduces the stop with the seeder still answering"
+needs the seeder's listener health in the record, and only the exit 17 branch
+survives into a finished report. That is the same defect this entry is about,
+one level up: the instrument reports a pass and cannot be asked what it was
+measuring.
+
+**The fix is small and the seam is already there.** `self_reported` is built
+from the seeder's own progress events, which is where `listener` already
+arrives. Carrying `listener` into it, and the last event's values into the
+report, costs one field and makes the flag worth setting.
+
+**The entry stays open** on that, rather than on waiting for a recurrence. What
+it needs is no longer a lucky run: it is the listener figures in the report, so
+that the next occurrence answers the question by itself. The harness half is
+otherwise finished, and the failure output capture built on 2026-08-23 is what
+will name the leecher when one happens.
+
+**One thing this run does settle**: `--listener-check` at 60 seconds over six
+hours costs nothing a ceiling notices. `tcp_close_wait` is 0 at every one of
+704 samples and the handle series has an r squared of 0.06, so the flag can be
+left on in future soaks rather than being the thing that makes two runs
+incomparable.

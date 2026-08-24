@@ -214,7 +214,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-221](windows.md) | P1 | ci | **done** | A seeder fixture treated a bound port as a session ready to answer |
 | [T-222](cli-surface.md) | P1 | cli | **done** | A config file reaches `config show` and nothing else |
 | [T-223](bench.md) | P1 | bench | **done** | The leech bench reads its transfer counters before deciding to stop |
-| [T-224](memory.md) | P2 | memory | open | The six hour soak's RSS slope is one step and a sawtooth, not a leak |
+| [T-224](memory.md) | P2 | memory | **done** | The six hour soak's RSS slope is one step and a sawtooth, not a leak *(the step does not reproduce, and the sawtooth is what a second rate shows)* |
 | [T-225](create-seed.md) | P1 | ci | **done** | The interop script hashes files the client it just killed still holds |
 | [T-226](cli-surface.md) | P1 | cli | **done** | `download --out` is parsed and never read |
 | [T-227](memory.md) | P2 | memory | open | The window cache budget is per source, so the total is whatever the source count makes it |
@@ -253,7 +253,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 207 items: 196 to work through, and 11 deferred to Phase C.
-33 open, 3 partial, 0 blocked, 160 done.
+32 open, 3 partial, 0 blocked, 161 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -262,10 +262,10 @@ when a number here disagrees with them.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 3 | 0 | 0 | 69 | 72 |
-| P2 | 21 | 3 | 0 | 58 | 82 |
+| P2 | 20 | 3 | 0 | 59 | 82 |
 | P3 | 9 | 0 | 0 | 21 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **33** | **3** | **0** | **160** | **207** |
+| **All** | **32** | **3** | **0** | **161** | **207** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was
