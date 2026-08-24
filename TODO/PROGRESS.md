@@ -97,7 +97,7 @@ gh run list --limit 1
 
 - **Entries:** 182 items. 23 open, 1 partial, 0 blocked, 148 done, 10 deferred
   to Phase C. 148 of 172 workable done, 24 left.
-- **Tree:** 97 Rust files, 57,880 lines of code, 14,897 of comment,
+- **Tree:** 97 Rust files, 57,893 lines of code, 14,905 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **31 patches**
   across twenty-one sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
