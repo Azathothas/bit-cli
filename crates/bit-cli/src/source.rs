@@ -66,6 +66,16 @@ impl Kind {
             return Ok(Self::Magnet(Box::new(Magnet::parse(trimmed)?)));
         }
         let lower = trimmed.to_ascii_lowercase();
+        // A scheme this tree does not speak is named as one, rather than
+        // falling through to "treat it as a path" and coming back as a
+        // filename that no filesystem would accept. See
+        // `TODO/cli-surface.md`, T-246.
+        if let Some(scheme) = foreign_scheme(&lower) {
+            return Err(Error::usage(format!(
+                "`{scheme}:` is not a scheme this reads. A source is an http:// or https:// URL, a magnet: URI, a .torrent or metalink path, a bare info hash, or `-` for stdin"
+            ))
+            .with("scheme", scheme.to_string()));
+        }
         if lower.starts_with("http://") || lower.starts_with("https://") {
             // The extension is read from the **path**, not from the whole
             // string. `?file=x.meta4` is a query naming a file and
@@ -160,6 +170,48 @@ fn is_metalink_name(lower: &str) -> bool {
     lower.ends_with(".meta4") || lower.ends_with(".metalink")
 }
 
+/// The scheme of a `scheme://` URL this tree does not speak, if that is what
+/// the source is.
+///
+/// `http` and `https` return `None` because they are spoken, and `magnet:` is
+/// classified before this is asked. The scheme has to be **two or more**
+/// characters: a Windows drive letter is one character followed by a colon,
+/// and `C://Users/x` is a path rather than a URL under a scheme called `C`.
+///
+/// Only the `://` form is tested. `mailto:x` and `urn:btih:...` carry no
+/// authority, and the second of those is a shape a caller may reasonably paste
+/// in, so neither is turned into an error here. See `TODO/cli-surface.md`,
+/// T-246.
+fn foreign_scheme(lower: &str) -> Option<&str> {
+    let scheme = lower.split_once("://")?.0;
+    if scheme.len() < 2 || scheme == "http" || scheme == "https" {
+        return None;
+    }
+    let mut characters = scheme.chars();
+    let first_is_alpha = characters.next().is_some_and(|c| c.is_ascii_alphabetic());
+    let rest_is_scheme = characters.all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
+    (first_is_alpha && rest_is_scheme).then_some(scheme)
+}
+
+/// Read a `.torrent` from disk, naming a directory as one rather than letting
+/// the operating system describe it.
+///
+/// Opening a directory as a file is `ERROR_ACCESS_DENIED` on Windows and
+/// `EISDIR` on Unix, so the same input produced two different explanations and
+/// neither was true: nothing is denied and the caller almost always meant
+/// `create`. See `TODO/cli-surface.md`, T-246.
+pub fn read_torrent_file(path: &Path) -> Result<Metainfo> {
+    if path.is_dir() {
+        return Err(Error::usage(format!(
+            "{} is a directory, not a .torrent. `bit-cli create` is the command that takes a directory",
+            path.display()
+        ))
+        .with("path", path.display().to_string())
+        .with("source_kind", "directory"));
+    }
+    Metainfo::read(path)
+}
+
 /// Load full metadata for a source that is already on this machine.
 ///
 /// **This is the local-only path and it is not what a command should call.**
@@ -173,7 +225,7 @@ fn is_metalink_name(lower: &str) -> bool {
 /// Commands that can do the lookup call the engine directly.
 pub fn load_local(kind: &Kind, env: &mut Env) -> Result<Metainfo> {
     match kind {
-        Kind::File(path) => Metainfo::read(path),
+        Kind::File(path) => read_torrent_file(path),
         Kind::Stdin => {
             let mut bytes = Vec::new();
             std::io::stdin()
@@ -793,6 +845,100 @@ mod tests {
         assert!(Kind::classify(HEX, &env()).unwrap().needs_network());
     }
 
+    /// T-246's third case. `classify` tested for `http://` and `https://` and
+    /// fell through to "treat it as a path" for everything else, so a URL
+    /// under any other scheme came back as a relative filename and the
+    /// operating system described a name it could not parse.
+    #[test]
+    fn a_scheme_this_does_not_speak_is_named_as_a_scheme() {
+        let env = env();
+        for source in [
+            "ftp://host/x.torrent",
+            "FTP://HOST/x.torrent",
+            "sftp://host/x",
+            "file:///tmp/x.torrent",
+            "ws://host/x",
+        ] {
+            let err = Kind::classify(source, &env).unwrap_err();
+            assert_eq!(
+                err.code(),
+                bit_cli_core::ExitCode::Usage,
+                "{source}: {}",
+                err.message()
+            );
+            assert!(err.message().contains("is not a scheme"), "{source}");
+            assert!(err.message().contains("http:// or https://"), "{source}");
+            assert!(err.message().contains("magnet:"), "{source}");
+            assert!(err.context().contains_key("scheme"), "{source}");
+        }
+    }
+
+    /// The three that are spoken keep working, and a Windows path is not a
+    /// URL under a scheme called `C`.
+    #[test]
+    fn the_schemes_that_are_spoken_still_classify() {
+        let env = env();
+        assert!(matches!(
+            Kind::classify("http://host/x.torrent", &env),
+            Ok(Kind::Url(_))
+        ));
+        assert!(matches!(
+            Kind::classify("https://host/x.torrent", &env),
+            Ok(Kind::Url(_))
+        ));
+        assert!(matches!(
+            Kind::classify(&format!("magnet:?xt=urn:btih:{HEX}"), &env),
+            Ok(Kind::Magnet(_))
+        ));
+        assert!(matches!(
+            Kind::classify("https://host/x.meta4", &env),
+            Ok(Kind::MetalinkUrl(_))
+        ));
+        assert!(matches!(
+            Kind::classify("C://Users/me/x.torrent", &env),
+            Ok(Kind::File(_))
+        ));
+    }
+
+    /// T-246's first case. Opening a directory as a file is
+    /// `ERROR_ACCESS_DENIED` on Windows and `EISDIR` on Unix, so the same
+    /// input produced two different explanations and neither was true.
+    #[test]
+    fn a_directory_is_named_as_one_rather_than_as_a_permission_problem() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let err = read_torrent_file(temp.path()).unwrap_err();
+        assert_eq!(err.code(), bit_cli_core::ExitCode::Usage);
+        assert!(
+            err.message().contains("is a directory"),
+            "{}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("bit-cli create"),
+            "{}",
+            err.message()
+        );
+        assert!(!err.context().contains_key("io_kind"), "{err:?}");
+    }
+
+    /// And the command a caller actually types reaches it.
+    #[test]
+    fn a_directory_as_a_source_exits_two_from_the_command_line() {
+        use crate::test_support::{TorrentFixture, run_err};
+
+        let fixture = TorrentFixture::multi_file();
+        let directory = fixture.payload_dir();
+        for command in ["info", "files", "tree", "verify", "magnet"] {
+            let err = run_err(
+                &[command, directory.to_str().expect("utf-8")],
+                fixture.dir(),
+                bit_cli_core::ExitCode::Usage,
+            );
+            assert!(err.contains("is a directory"), "{command}: {err}");
+            assert!(err.contains("bit-cli create"), "{command}: {err}");
+        }
+    }
+
     /// A metalink is a local file whose torrent is not. The layout is not
     /// known until the `<metaurl>` has been fetched, so a caller that skips
     /// the network cannot resolve one.
@@ -817,17 +963,21 @@ mod tests {
         assert!(err.context().contains_key("hint"));
     }
 
-    /// T-245's acceptance. All four commands offer an HTTP URL in their
-    /// `SOURCE` help and all four refused one, while `download` fetched the
-    /// same URL and completed.
+    /// T-245's acceptance. Every one of these commands offers an HTTP URL in
+    /// its `SOURCE` help and every one refused it, while `download` fetched
+    /// the same URL and completed.
     ///
     /// Every field but two has to match the same torrent read off disk:
     /// "it worked" and "it reported the same torrent" are different claims,
     /// and only the second one is worth anything. The two are the timestamp,
     /// which is two runs, and `source_kind`, which differs because the source
     /// genuinely was a URL.
+    ///
+    /// The name carries no count on purpose. It said `four_commands_` until
+    /// `tree` became the fifth, and a count in a test name is one more number
+    /// two documents can disagree about. See `TODO/metainfo.md`, T-249.
     #[test]
-    fn four_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports() {
+    fn read_only_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports() {
         use crate::test_support::{FileServer, TorrentFixture, run_json};
 
         let fixture = TorrentFixture::multi_file();
@@ -836,7 +986,7 @@ mod tests {
         let server = FileServer::start(fixture.dir());
         let url = format!("{}album.torrent", server.base);
 
-        for command in ["info", "files", "magnet", "verify"] {
+        for command in ["info", "files", "tree", "magnet", "verify"] {
             let local = run_json(&[command, fixture.path_str()], fixture.dir());
             let remote = run_json(&[command, &url], fixture.dir());
             let (local, remote) = (strip(local), strip(remote));

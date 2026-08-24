@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2643` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2421` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2457` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2152` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2665` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2443` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2479` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2174` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -1547,7 +1547,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1311` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1334` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2643` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2665` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -4205,7 +4205,7 @@ Closed:      `crates/bit-cli/src/source.rs` gained `resolve`, which fetches,
                was returned rather than what was held.
 
              The acceptance was run as a test rather than by hand:
-             `four_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports`
+             `read_only_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports`
              compares all four commands' `--json` against the same torrent read
              off disk. Every field matches but `generated_at`, which is two
              runs, and `source_kind`, which differs because the source was a
@@ -4228,7 +4228,7 @@ Source:      measured 2026-08-24 while checking the operator's brief
 Category:    cli
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     Three inputs produce a file error and two of them name the wrong
              cause.
@@ -4296,13 +4296,87 @@ Acceptance:  `bit-cli info <directory>` exits 2 naming `create`, on Windows and
              file. `bit-cli info ftp://host/x` names the scheme and the three
              that are supported.
 
+Closed:      All three exit 2 now and each says what to do. Run against the
+             release binary:
+
+             ```
+             $ bit-cli info ideas/payload
+             error: C:\...\ideas/payload is a directory, not a .torrent. `bit-cli create` is the command that takes a directory
+             $ echo $LASTEXITCODE
+             2
+             $ bit-cli tre album.torrent
+             error: `tre` is not a command, and there is no file of that name. Did you mean `bit-cli tree`?
+             2
+             $ bit-cli ./tre
+             error: cannot read C:\...\./tre: The system cannot find the file specified. (os error 2)
+             4
+             $ bit-cli info ftp://host/x.torrent
+             error: `ftp:` is not a scheme this reads. A source is an http:// or https:// URL, a magnet: URI, a .torrent or metalink path, a bare info hash, or `-` for stdin
+             2
+             ```
+
+             The `--json` form of the first carries
+             `"context": {"source_kind": "directory"}` and no `io_kind` at
+             all, where it used to carry `"io_kind": "PermissionDenied"`.
+
+             **The message is this tree's rather than the operating system's,
+             which is what makes it the same on Windows and on Linux.**
+             `source::read_torrent_file` at
+             `crates/bit-cli/src/source.rs:203` tests `path.is_dir()` before
+             the read, so neither `ERROR_ACCESS_DENIED` nor `EISDIR` is ever
+             reached and there is no per-platform text to keep in step. **Nine**
+             call sites read a caller-supplied `.torrent` path and all nine go
+             through it: `source.rs:228` inside `load_local`,
+             `download.rs:545` and `:2909`, `seed.rs:162`, `trackers.rs:95`,
+             `edit.rs:68`, and `bench.rs:107`, `:1115` and `:1362`.
+
+             `Kind::classify` gained `foreign_scheme`
+             (`crates/bit-cli/src/source.rs:185`). Two things it deliberately
+             does not do. A scheme of one character is not a scheme, because
+             `C://Users/me/x.torrent` is a path and a drive letter; and only
+             the `://` form is tested, so `urn:btih:<hash>` is still read as
+             what it is rather than refused as a scheme called `urn`.
+
+             The subcommand half is `mistyped_subcommand`
+             (`crates/bit-cli/src/lib.rs:201`), on the one dispatch arm where
+             a bare positional is a source. **Four conditions, and three of
+             them exist to keep a real file out of the branch**: the word
+             carries no `/`, `\`, `.` or `:`; nothing of that name is on
+             disk; it classifies as a plain path rather than a URL, a magnet,
+             an info hash or `-`; and a subcommand is within **one** edit of
+             it. So `./tre` and `tre.torrent` are paths, a torrent actually
+             named `tre` is downloaded, and `quuxly` is a missing file rather
+             than a guess. The names come from `Cli::command()` rather than a
+             list, so a subcommand added later is suggestible with nothing for
+             anybody to remember.
+
+             **The entry's own example went stale between filing and
+             closing.** It used `bit-cli tree one.torrent` as the subcommand
+             that does not exist, and [T-249](metainfo.md) built `tree` earlier
+             in the same session. That is why the acceptance reads `tre`, and
+             why `tree` is the name the suggester now offers for it.
+
+             **The fourth fact in Relevance is no longer true, which was the
+             point of writing it down.** "No input to a `SOURCE` argument
+             produces a usage error" held when the entry was filed. Three
+             inputs produce one now, and the exit code is the difference
+             between "this source could not be resolved", which a retry might
+             fix, and "this is not a source", which no retry fixes.
+             `docs/exit-codes.md` already calls 2 an argument error and 4 a
+             resolution failure, so nothing in the contract moved.
+
+             Ten tests. `a_directory_as_a_source_exits_two_from_the_command_line`
+             drives `info`, `files`, `tree`, `verify` and `magnet`, because one
+             command proving it says nothing about the other four.
+             `docs/exit-codes.md` gained the three shapes under "What exits 2".
+
 ### T-247 A dry run over a URL prints zero for a count it never took
 
 Source:      measured 2026-08-24
 Category:    cli
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     `download --dry-run` over a URL prints:
 
@@ -4337,6 +4411,54 @@ Acceptance:  `download --dry-run <URL>` prints no count it did not take and
              says why, and `download --dry-run <LOCAL>` still prints
              `trackers 1` for a torrent with one tracker. The `--json` shape
              does not change.
+
+Closed:      The text form says what it did not do, and counts only what it
+             took. Against a `loopback-fileserver` serving the same torrent
+             that is also on disk:
+
+             ```
+             $ bit-cli download --dry-run http://127.0.0.1:8099/tracked.torrent
+             source               http://127.0.0.1:8099/tracked.torrent
+             not fetched          a dry run does not fetch the torrent, so its own web seeds and trackers are not counted
+             web seeds            0 so far
+             trackers             0 so far
+
+             $ bit-cli download --dry-run .tmp/treedemo/tracked.torrent
+             source               .tmp/treedemo/tracked.torrent
+             name                 album
+             web seeds            1
+             trackers             1
+             ```
+
+             That torrent carries one tracker and one web seed, so the second
+             run is the acceptance's other half: a count that was taken is
+             printed with no qualifier on it.
+
+             **`0 so far` rather than nothing, because zero is not always what
+             a dry run over a URL knows.** A `--web-seed` or a `--tracker` on
+             the command line is a real source that a real count can be taken
+             of, and so is a Metalink's mirror list, which is read without the
+             network. The same run with one of each prints `1 so far` for both.
+             Suppressing the line entirely would have lost that, and printing
+             it bare would have said the torrent has one.
+
+             The condition is `torrent["name"].as_str()`, which is present
+             exactly when the metainfo was read: `dry_run` builds a `Metainfo`
+             for `Kind::File` and for nothing else, and `name`, `info_hash` and
+             `total_bytes` are all `None` together. `cmd/download.rs:3027`.
+
+             **The `--json` shape is untouched**, which the acceptance asks and
+             `the_dry_run_json_still_carries_the_nulls_that_said_so` holds. The
+             document already said the torrent had not been read, through those
+             three nulls and `needs_network`. It is the rendering a person
+             reads that was the wrong one, which is the inverse of
+             [T-156](#t-156-a-dry-run-writes-a-different-shape-under-the-same-document-kind):
+             that was two shapes under one name, this was one shape rendered
+             two ways that did not agree.
+
+             Three tests. [`docs/examples/inputs.md`](../docs/examples/inputs.md)
+             carried a paragraph telling a reader to read the JSON instead when
+             the source is a URL; it carries the output above instead.
 
 ### T-250 Nothing reports how an input was resolved
 
@@ -4520,3 +4642,73 @@ written on this run.
 That is fifteen rows for thirteen fields: `redirects[]` and `tls` are objects
 whose members each get a row, which is how every other nested field in the
 document is written.
+
+### T-255 Regenerating the schema deletes four hand-written sections and nothing fails
+
+Source:      measured 2026-08-24 while adding the `tree` document to
+             `docs/schema.md`, T-249
+Category:    cli
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `docs/schema.md` is generated, and the generator renders the
+             generated half only. The file ends with four sections nothing
+             produces, written by hand: "Machine output, from the README",
+             "Keeping a log", "On Windows", and "Reading a download as it
+             arrives". That last one carries the only committed measurement of
+             what seven PowerShell redirection forms do to non-ASCII output,
+             which is `scripts/check-redirect.ps1`'s whole subject.
+
+             ```bash
+             BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema
+             ```
+
+             That deleted **130 lines**, all four sections, on 2026-08-24. The
+             diff read `40 insertions(+), 130 deletions(-)` and the insertions
+             were the new document kind.
+
+             **Both gates then passed on the truncated file**, measured by
+             stripping the tail again and running each one unpiped:
+
+             | check | on the truncated file |
+             | --- | --- |
+             | `cargo test -p bit-cli --lib schema` | exit 0, 11 passed |
+             | `scripts/check-docs.ps1` | exit 0, "everything resolves" |
+
+             `schema_gen.rs:1334`
+             `the_committed_schema_matches_what_the_program_writes` is a
+             containment check over **fields**, so prose is invisible to it.
+             `check-docs.ps1` resolves links and would have caught an
+             unreferenced page, and `docs/examples/machine-output.md` is
+             linked twice from `README.md:106` and `:183` as well as from the
+             deleted paragraph, so it stayed reachable.
+Relevance:   It is a silent deletion of the only copy of a measurement, on the
+             one command a session is told to run whenever it adds a field. It
+             happened this session and was caught by reading a diff, which is
+             the check RULES.md section 2 step 4 calls review 1 and which no
+             gate performs.
+
+             [T-158](#t-158-regenerating-the-schema-deletes-fields-the-sample-did-not-produce)
+             is the same shape one level down: regenerating used to delete
+             **fields** the sample had not produced, and the fix was to make
+             the generator union rather than replace. This is that fix not
+             reaching the prose, and the note under "How this file is kept
+             true" says regenerating is lossy without saying what it costs.
+Approach:    Union rather than replace, the same answer T-158 took. The
+             generated content ends at the last event section, so everything
+             after it in the committed file is carried across verbatim.
+
+             `schema::render` at `crates/bit-cli/src/schema.rs:273` builds the
+             whole document, and the writer is `schema_gen.rs:1316`. The
+             cheapest correct version reads the committed file first, finds the
+             first heading that is not one the generator emits, and appends
+             from there.
+
+             A test is the other half and it is what makes this stick: write a
+             marker section into a copy of the file, regenerate, and assert the
+             marker survived.
+Acceptance:  `BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema` on a
+             tree whose `docs/schema.md` carries the four sections leaves all
+             four in place, `git diff --stat` reports no deletion, and a test
+             fails when the carry-across is removed.

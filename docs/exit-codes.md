@@ -41,3 +41,30 @@ regenerated, so neither can drift from the binary.
 ```bash
 pwsh -NoProfile -File scripts/check-man.ps1 -Fix
 ```
+
+## What exits 2, and what exits 4
+
+The two are easy to confuse and the difference is worth stating: **2 is "this
+is not a source", 4 is "this source could not be resolved".** A retry fixes
+neither, but only one of them is fixed by editing the command line.
+
+Three shapes exit 2 rather than 4, and each one used to come back as a file
+error naming something that was not the cause:
+
+| what you typed | what you get |
+| --- | --- |
+| a directory | `<path> is a directory, not a .torrent` and the name of the command that takes one |
+| a subcommand with a typo, as `bit-cli tre album.torrent` | `` `tre` is not a command `` and the nearest command it could be |
+| a URL under another scheme, as `ftp://host/x.torrent` | `` `ftp:` is not a scheme this reads `` and the forms that are read |
+
+The second only fires on a bare word with nothing of that name on disk. A
+source written as a path is a path: `./tre` and `tre.torrent` are read as
+files, present or missing, and a torrent actually named `tre` is downloaded.
+
+```bash
+bit-cli info ./album
+```
+
+Exit 4 is what is left: a `.torrent` that is not there, a URL that answered
+with something that is not a torrent, a magnet whose metadata could not be
+resolved.

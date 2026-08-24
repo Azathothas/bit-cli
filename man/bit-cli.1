@@ -157,6 +157,9 @@ Parse a torrent, magnet, or metalink and print its metadata
 bit\-cli\-files(1)
 List files with index, path, size, and priority
 .TP
+bit\-cli\-tree(1)
+Print the torrent\*(Aqs directory structure, rolled up
+.TP
 bit\-cli\-peers(1)
 Connect, sample the swarm, report peers, then exit
 .TP
@@ -662,6 +665,32 @@ Sort key, as KEY or KEY:ORDER. Keys: index, path, size
 Also report which files another torrent holds identically. Repeatable.
 
 Two torrents that hold the same file are two downloads of the same bytes unless something connects them, and connecting them safely means knowing they are the same first. Each match says what the answer rests on: `piece\-hashes` when the pieces line up and their hashes agree, which proves the bytes equal; `length` when only the size matches, which proves nothing and is what a differing piece length leaves.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fISOURCE\fR>
+A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
+
+`help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bit-cli-tree 1  "bit-cli-tree " 
+.SH NAME
+bit\-cli\-tree \- Print the torrent\*(Aqs directory structure, rolled up
+.SH SYNOPSIS
+\fBbit\-cli\-tree\fR [\fB\-\-depth\fR] [\fB\-\-no\-sizes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+.SH DESCRIPTION
+Print the torrent\*(Aqs directory structure, rolled up
+.SH OPTIONS
+.TP
+\fB\-\-depth\fR \fI<N>\fR
+Stop at this depth and roll the rest up. The root is depth 0.
+
+A directory whose children are cut off still reports what is below it, and the line under it says how many files and directories that was, so a limit never drops anything in silence.
+.TP
+\fB\-\-no\-sizes\fR
+Print the piece ranges without the size and file count columns
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

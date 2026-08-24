@@ -14,7 +14,6 @@ use std::time::Duration;
 use bit_cli_core::ExitCode;
 use bit_cli_core::engine::{AddOptions, Engine, PeerSnapshot, TorrentSnapshot};
 use bit_cli_core::error::{Error, Result};
-use bit_cli_core::torrent::Metainfo;
 use bit_cli_core::units::{Size, format_rate, format_size};
 use serde::Serialize;
 use serde_json::json;
@@ -160,7 +159,7 @@ pub fn run(
 
     let kind = Kind::classify(&args.source.source, env)?;
     let meta = match &kind {
-        Kind::File(path) => Some(Metainfo::read(path)?),
+        Kind::File(path) => Some(crate::source::read_torrent_file(path)?),
         _ => None,
     };
 

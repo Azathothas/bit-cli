@@ -39,6 +39,7 @@ These are accepted by every command.
 | `bit-cli download` | idempotent | Fetch to completion in the foreground, then exit |
 | `bit-cli info` | read_only | Parse a torrent, magnet, or metalink and print its metadata |
 | `bit-cli files` | read_only | List files with index, path, size, and priority |
+| `bit-cli tree` | read_only | Print the torrent's directory structure, rolled up |
 | `bit-cli peers` | read_only | Connect, sample the swarm, report peers, then exit |
 | `bit-cli trackers` | read_only | Announce or scrape, report the result, then exit |
 | `bit-cli webseed` | read_only | Inspect, validate, and read from HTTP sources |
@@ -191,6 +192,18 @@ Effects: `read_only`.
 | `source <SOURCE>` | string |  |  | A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin |
 | `--sort <KEY>` | string |  | `index` | Sort key, as KEY or KEY:ORDER. Keys: index, path, size |
 | `--against <TORRENT>` | array |  |  | Also report which files another torrent holds identically. Repeatable |
+
+### `bit-cli tree`
+
+Print the torrent's directory structure, rolled up
+
+Effects: `read_only`.
+
+| option | type | accepts | default | what it does |
+| --- | --- | --- | --- | --- |
+| `source <SOURCE>` | string |  |  | A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin |
+| `--depth <N>` | string |  |  | Stop at this depth and roll the rest up. The root is depth 0 |
+| `--no-sizes` | boolean |  | `false` | Print the piece ranges without the size and file count columns |
 
 ### `bit-cli peers`
 

@@ -890,7 +890,7 @@ Source:      the operator's brief of 2026-08-24, measured the same day
 Category:    metainfo
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     `bit-cli files` prints one row per file, sorted by index, path,
              or size:
@@ -928,3 +928,82 @@ Acceptance:  `bit-cli tree` over a torrent with three levels and a padding file
              prints the three levels, the padding file marked, and directory
              totals that sum to the value `bit-cli info` reports. The output is
              ASCII on a console whose code page is IBM437.
+
+Closed:      `crates/bit-cli/src/cmd/tree.rs`, with `TreeArgs` at
+             `crates/bit-cli/src/cli.rs:1088`. Fifteen tests, and the whole
+             acceptance is
+             `three_levels_a_padding_file_and_totals_that_add_up`.
+
+             ```
+             PATH                   SIZE      FILES  PIECES
+             padded/                2.49 KiB  3      0-2
+             |-- disc 1/            1.95 KiB  2      0-2+
+             |   |-- lossless/      1.46 KiB  1      0-1+
+             |   |   `-- a.flac     1.46 KiB         0-1+
+             |   `-- notes.nfo      500 B            2-2
+             `-- .pad/              548 B     1      1-1+
+                 `-- 548 (padding)  548 B            1-1+
+
+             3 files, 3 directories, 2.49 KiB
+             1 padding file, 548 B, counted in every total above
+             a + on a piece range means the span also holds bytes of a file outside that entry
+             ```
+
+             `bit-cli info` on the same torrent reports `size 2.49 KiB` and
+             `files 3`, which is what the root row carries. The fixture is
+             `TorrentFixture::padded`, hand-bencoded because `create` writes no
+             `attr` key.
+
+             **The approach's stated reason for the piece range is not true of
+             the piece range on its own**, and the fixture above is the proof.
+             The span says whether a subtree can be fetched without touching
+             the rest only when no piece straddles its boundary, and one
+             straddling piece belongs to both sides. Every row above carries a
+             `+` except `notes.nfo`, which is the one file the padding pushes
+             onto a piece boundary. So a `shared_pieces` count sits beside the
+             span, and it is the field that answers the question the approach
+             asked: zero means the span is the subtree's own.
+
+             That correction cost nothing to find and it inverts what a reader
+             would have concluded. Reading `disc 1  0-2` without it says that
+             directory is pieces 0 to 2 and nothing else is, and piece 1 is
+             half a padding file.
+
+             **The acceptance's last clause needed a second condition, not
+             just `--color`.** Tying the glyphs to colour alone leaves an
+             interactive console at `IBM437` getting box drawing, which is the
+             case the approach names. `Env::out_is_unicode` is the second
+             condition: on Windows it is `GetConsoleOutputCP() == 65001`, read
+             through the same raw kernel32 declaration
+             `crates/bit-cli-core/src/sysinfo.rs:399` already uses for
+             `GetCurrentProcess`; elsewhere it is a UTF-8 locale. It is asked
+             only when stdout is a terminal, because a file or a pipe carries
+             the bytes verbatim.
+
+             This machine's console output code page is **437**, from
+             `[Console]::OutputEncoding.CodePage`, which is the value that
+             Win32 call returns. The decision is held by
+             `a_console_that_cannot_carry_the_glyphs_gets_ascii_anyway`, which
+             drives the whole binary with `--color always` against a terminal
+             that cannot carry the glyphs and gets `` `-- ``.
+
+             Two things that fell out of building it and are not this entry's:
+
+             - **`BIT_CLI_UPDATE_SCHEMA=1` deleted four hand-written sections
+               from `docs/schema.md` and nothing failed.** The generator
+               renders the generated half only, the schema test is a
+               containment check over fields, and no page links an anchor into
+               that tail, so `check-docs.ps1` saw nothing either. Put back by
+               hand. [T-255](cli-surface.md) is the entry.
+             - The URL parity test lost its count: it was
+               `four_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports`
+               and `tree` made it five. It is
+               `read_only_commands_resolve_a_torrent_over_http_...` now, and
+               [`docs/examples/inputs.md`](../docs/examples/inputs.md) names
+               the commands rather than counting them.
+
+             `docs/metainfo.md` carries what the command does under "The shape
+             a torrent carries", and `tree` is a `kind` in
+             [`docs/schema.md`](../docs/schema.md). `nodes` is a flat list in
+             pre-order rather than a nested structure, so the schema carries
+             one row per field instead of one per field per depth.

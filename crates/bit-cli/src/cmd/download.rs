@@ -542,7 +542,7 @@ pub fn run(
     for (index, source) in args.sources.iter().enumerate() {
         let one = resolved.remove(&index);
         let meta = match (&kinds[index], &one) {
-            (Kind::File(path), _) => Some(Metainfo::read(path)?),
+            (Kind::File(path), _) => Some(crate::source::read_torrent_file(path)?),
             (Kind::Metalink(_) | Kind::MetalinkUrl(_), Some(one)) => Some(one.meta.clone()),
             _ => None,
         };
@@ -2906,7 +2906,7 @@ fn dry_run(
     for source in &args.sources {
         let kind = Kind::classify(source, env)?;
         let meta = match &kind {
-            Kind::File(path) => Some(Metainfo::read(path)?),
+            Kind::File(path) => Some(crate::source::read_torrent_file(path)?),
             _ => None,
         };
         // A dry run reads the Metalink and does not fetch the torrent it
@@ -3016,17 +3016,34 @@ fn dry_run(
                 "source",
                 torrent["source"].as_str().unwrap_or_default(),
             ));
-            if let Some(name) = torrent["name"].as_str() {
+            // `name` is present exactly when the metainfo was read, which is
+            // the one fact both counts below depend on. A dry run does not
+            // fetch, so a URL, a magnet and a metalink all reach here with the
+            // torrent's own web seeds and trackers unknown, and printing `0`
+            // for them said the torrent had none. The `--json` form always
+            // said so, through `name`, `info_hash` and `total_bytes` being
+            // null; the text form is the one a person reads. See
+            // `TODO/cli-surface.md`, T-247.
+            let read = torrent["name"].as_str();
+            if let Some(name) = read {
                 out.push(field("name", name));
+            } else {
+                out.push(field(
+                    "not fetched",
+                    "a dry run does not fetch the torrent, so its own web seeds and trackers are not counted",
+                ));
             }
-            out.push(field(
-                "web seeds",
-                torrent["web_seeds"].as_array().map_or(0, Vec::len),
-            ));
-            out.push(field(
-                "trackers",
-                torrent["trackers"].as_array().map_or(0, Vec::len),
-            ));
+            let counted = |key: &str, value: &serde_json::Value| {
+                let count = value.as_array().map_or(0, Vec::len);
+                match read {
+                    Some(_) => field(key, count),
+                    // Whatever was named without the torrent: the command
+                    // line, a `--web-seed-file`, a metalink's mirrors.
+                    None => field(key, format!("{count} so far")),
+                }
+            };
+            out.push(counted("web seeds", &torrent["web_seeds"]));
+            out.push(counted("trackers", &torrent["trackers"]));
         }
         out
     })?;
@@ -3367,7 +3384,9 @@ mod tests {
 
     use super::*;
     use crate::cli::SelectionArgs;
-    use crate::test_support::{TorrentFixture, run_err, run_json, run_json_code};
+    use crate::test_support::{
+        FileServer, TorrentFixture, run_err, run_json, run_json_code, run_ok,
+    };
 
     /// Every selector value maps to one of two behaviours, and which is which
     /// is stated once.
@@ -4363,6 +4382,74 @@ mod tests {
             payload.len(),
             "{metalink}"
         );
+    }
+
+    /// T-247. The text form printed `trackers 0` for a torrent it had not
+    /// read, so the two renderings of one document disagreed and the one a
+    /// person reads was the wrong one.
+    #[test]
+    fn a_dry_run_over_a_url_prints_no_count_it_did_not_take() {
+        let fixture = TorrentFixture::multi_file();
+        let server = FileServer::start(fixture.dir());
+        let url = format!("{}album.torrent", server.base);
+
+        let out = run_ok(&["download", &url, "--dry-run"], fixture.dir());
+        assert!(out.contains("not fetched"), "{out}");
+        assert!(out.contains("web seeds            0 so far"), "{out}");
+        assert!(out.contains("trackers             0 so far"), "{out}");
+        assert!(!out.contains("name  "), "the name cannot be known: {out}");
+
+        // What is known without the torrent is still counted, and still says
+        // it is only what is known so far.
+        let out = run_ok(
+            &[
+                "download",
+                &url,
+                "--dry-run",
+                "--web-seed",
+                "https://mirror.example.com/pub/",
+                "--tracker",
+                "udp://t.example.com:80",
+            ],
+            fixture.dir(),
+        );
+        assert!(out.contains("web seeds            1 so far"), "{out}");
+        assert!(out.contains("trackers             1 so far"), "{out}");
+    }
+
+    /// The other half: a torrent that **was** read still reports what it
+    /// carries, with no qualifier on it.
+    #[test]
+    fn a_dry_run_over_a_local_torrent_counts_what_it_read() {
+        let fixture = TorrentFixture::multi_file();
+        let out = run_ok(
+            &["download", fixture.path_str(), "--dry-run"],
+            fixture.dir(),
+        );
+        assert!(out.contains("name                 album"), "{out}");
+        // The fixture carries one tier of one tracker and one web seed.
+        assert!(out.contains("web seeds            1"), "{out}");
+        assert!(out.contains("trackers             1"), "{out}");
+        assert!(!out.contains("so far"), "{out}");
+        assert!(!out.contains("not fetched"), "{out}");
+    }
+
+    /// And the JSON shape is untouched, which is what the acceptance asks.
+    /// The document already said the torrent was not read, through three
+    /// nulls and `needs_network`.
+    #[test]
+    fn the_dry_run_json_still_carries_the_nulls_that_said_so() {
+        let fixture = TorrentFixture::multi_file();
+        let server = FileServer::start(fixture.dir());
+        let url = format!("{}album.torrent", server.base);
+        let doc = run_json(&["download", &url, "--dry-run"], fixture.dir());
+        let torrent = &doc["torrents"][0];
+        assert_eq!(torrent["name"], serde_json::Value::Null);
+        assert_eq!(torrent["info_hash"], serde_json::Value::Null);
+        assert_eq!(torrent["total_bytes"], serde_json::Value::Null);
+        assert_eq!(torrent["needs_network"], true);
+        assert_eq!(torrent["web_seeds"].as_array().map(Vec::len), Some(0));
+        assert_eq!(torrent["trackers"].as_array().map(Vec::len), Some(0));
     }
 
     /// A dry run and a real run are two documents, so they carry two kinds.

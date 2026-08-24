@@ -18,6 +18,7 @@
         "bit-cli download",
         "bit-cli info",
         "bit-cli files",
+        "bit-cli tree",
         "bit-cli peers",
         "bit-cli trackers",
         "bit-cli webseed",
@@ -653,6 +654,33 @@
       "description": "List files with index, path, size, and priority",
       "effects": "read_only",
       "name": "bit-cli files"
+    },
+    {
+      "args": [
+        {
+          "description": "A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin",
+          "name": "source",
+          "positional": true,
+          "required": true,
+          "type": "string",
+          "value_name": "SOURCE"
+        },
+        {
+          "description": "Stop at this depth and roll the rest up. The root is depth 0",
+          "name": "--depth",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "default": "false",
+          "description": "Print the piece ranges without the size and file count columns",
+          "name": "--no-sizes",
+          "type": "boolean"
+        }
+      ],
+      "description": "Print the torrent's directory structure, rolled up",
+      "effects": "read_only",
+      "name": "bit-cli tree"
     },
     {
       "args": [

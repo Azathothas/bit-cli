@@ -36,6 +36,7 @@ fn effects_of(path: &str) -> &'static str {
         // Read something and print it. None of these opens a file for writing.
         "bit-cli info"
         | "bit-cli files"
+        | "bit-cli tree"
         | "bit-cli magnet"
         | "bit-cli version"
         | "bit-cli completions"

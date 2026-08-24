@@ -236,20 +236,21 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-243](phase-c.md) | n/a | phase-c | deferred | A user interface, and which of the two kinds decision 7.4 permits |
 | [T-244](cli-surface.md) | P2 | cli | open | A web page is not a source, and nothing extracts a link from one |
 | [T-245](cli-surface.md) | P1 | cli | **done** | Four commands refuse the URL download accepts *(nine of them, and a metalink too)* |
-| [T-246](cli-surface.md) | P2 | cli | open | Three inputs report a file error and two of them name the wrong cause |
-| [T-247](cli-surface.md) | P2 | cli | open | A dry run over a URL prints zero for a count it never took |
+| [T-246](cli-surface.md) | P2 | cli | **done** | Three inputs report a file error and two of them name the wrong cause *(all three exit 2 now, where no source input could)* |
+| [T-247](cli-surface.md) | P2 | cli | **done** | A dry run over a URL prints zero for a count it never took |
 | [T-248](metainfo.md) | P2 | metainfo | open | There is no way to ask what two torrents disagree about |
-| [T-249](metainfo.md) | P3 | metainfo | open | A torrent's shape is only ever printed as a flat list |
+| [T-249](metainfo.md) | P3 | metainfo | **done** | A torrent's shape is only ever printed as a flat list *(the span alone does not say a subtree stands alone, so `shared_pieces` sits beside it)* |
 | [T-250](cli-surface.md) | P2 | cli | open | Nothing reports how an input was resolved |
 | [T-251](trackers.md) | P2 | trackers | open | A web seed has twelve knobs of its own and a tracker has none |
 | [T-252](cli-surface.md) | P3 | cli | open | The run's numbers exist in JSON and cannot be asked for as text |
 | [T-253](cli-surface.md) | P2 | cli | partial | The schema sample takes one path, so thirteen real fields went undocumented |
 | [T-254](webseed.md) | P2 | webseed | open | No report carries a response header, so a CDN cache hit is invisible |
+| [T-255](cli-surface.md) | P2 | cli | open | Regenerating the schema deletes four hand-written sections and nothing fails |
 
 ## Counts
 
-203 items: 192 to work through, and 11 deferred to Phase C.
-39 open, 2 partial, 0 blocked, 151 done.
+204 items: 193 to work through, and 11 deferred to Phase C.
+37 open, 2 partial, 0 blocked, 154 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -258,10 +259,10 @@ when a number here disagrees with them.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 3 | 0 | 0 | 68 | 71 |
-| P2 | 24 | 2 | 0 | 53 | 79 |
-| P3 | 12 | 0 | 0 | 18 | 30 |
+| P2 | 23 | 2 | 0 | 55 | 80 |
+| P3 | 11 | 0 | 0 | 19 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **39** | **2** | **0** | **151** | **203** |
+| **All** | **37** | **2** | **0** | **154** | **204** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

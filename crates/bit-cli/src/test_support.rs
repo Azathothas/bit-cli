@@ -166,6 +166,83 @@ impl TorrentFixture {
         }
     }
 
+    /// Three levels of directory and a BEP 47 padding file between two real
+    /// ones.
+    ///
+    /// `disc 1/lossless/a.flac` is 1500 bytes, `.pad/548` pads it up to the
+    /// 2048 byte boundary, and `disc 1/notes.nfo` starts there. So the padding
+    /// does what padding is for, the second file begins on a piece, and the
+    /// deepest path is three components.
+    ///
+    /// The bencode is written by hand because `create` writes no `attr` key,
+    /// which is correct on the creating side: a torrent this tree produces has
+    /// no padding in it. Reading one that has is the case here. See
+    /// `TODO/metainfo.md`, T-249.
+    pub fn padded() -> Self {
+        use std::collections::BTreeMap;
+
+        use bit_cli_core::torrent::bencode::{Value, encode};
+        use sha1::{Digest, Sha1};
+
+        const PIECE_LENGTH: usize = 1024;
+        let spec: [(&str, usize, u8, bool); 3] = [
+            ("disc 1/lossless/a.flac", 1500, 0xA1, false),
+            (".pad/548", 548, 0x00, true),
+            ("disc 1/notes.nfo", 500, 0xB2, false),
+        ];
+
+        let mut payload = Vec::new();
+        let mut files = Vec::new();
+        let mut recorded = Vec::new();
+        for (path, length, fill, padding) in spec {
+            let bytes = vec![fill; length];
+            payload.extend_from_slice(&bytes);
+            let mut entry = BTreeMap::from([
+                (b"length".to_vec(), Value::Int(length as i64)),
+                (
+                    b"path".to_vec(),
+                    Value::List(
+                        path.split('/')
+                            .map(|component| Value::Bytes(component.as_bytes().to_vec()))
+                            .collect(),
+                    ),
+                ),
+            ]);
+            if padding {
+                entry.insert(b"attr".to_vec(), Value::Bytes(b"p".to_vec()));
+            }
+            files.push(Value::Dict(entry));
+            recorded.push((path.to_string(), bytes));
+        }
+
+        let mut pieces = Vec::new();
+        for chunk in payload.chunks(PIECE_LENGTH) {
+            pieces.extend_from_slice(&Sha1::digest(chunk));
+        }
+        let info = Value::Dict(BTreeMap::from([
+            (b"files".to_vec(), Value::List(files)),
+            (b"name".to_vec(), Value::Bytes(b"padded".to_vec())),
+            (b"piece length".to_vec(), Value::Int(PIECE_LENGTH as i64)),
+            (b"pieces".to_vec(), Value::Bytes(pieces)),
+        ]));
+        let bytes = encode(&Value::Dict(BTreeMap::from([(b"info".to_vec(), info)])));
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().to_path_buf();
+        let torrent = root.join("padded.torrent");
+        std::fs::write(&torrent, &bytes).expect("write torrent");
+
+        Self {
+            _temp: temp,
+            name: "padded".to_string(),
+            multi_file: true,
+            root,
+            torrent,
+            info_hash: Metainfo::parse(&bytes).expect("parse").info_hash().hex(),
+            files: recorded,
+        }
+    }
+
     fn build(name: &str, multi_file: bool, spec: &[(&str, usize, u8)]) -> Self {
         let temp = tempfile::tempdir().expect("temp dir");
         let root = temp.path().to_path_buf();

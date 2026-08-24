@@ -23,6 +23,7 @@ pub mod peers;
 pub mod seed;
 pub mod spec;
 pub mod trackers;
+pub mod tree;
 pub mod verify;
 pub mod version;
 pub mod webseed;

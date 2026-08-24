@@ -37,7 +37,7 @@ use bit_cli_core::webseed::binding::BindingSet;
 use crate::cli::{BenchCommand, BenchShared, BenchWebseedArgs, Global, ReportArgs, ReportFormat};
 use crate::env::Env;
 use crate::output::Renderer;
-use crate::source::Kind as SourceKind;
+use crate::source::{Kind as SourceKind, read_torrent_file};
 use crate::swarm::{self, AttachedSource, SessionSetup};
 use crate::webseed_args;
 
@@ -104,7 +104,7 @@ fn probe(
     if let Some(source) = &args.source {
         let kind = SourceKind::classify(source, env)?;
         let resolved = match &kind {
-            SourceKind::File(path) => Some(Metainfo::read(path)?.info_hash()),
+            SourceKind::File(path) => Some(read_torrent_file(path)?.info_hash()),
             _ => kind.info_hash(),
         };
         match resolved {
@@ -1112,7 +1112,7 @@ pub fn leech(
 
     let kind = SourceKind::classify(&args.source.source, env)?;
     let meta = match &kind {
-        SourceKind::File(path) => Some(Metainfo::read(path)?),
+        SourceKind::File(path) => Some(read_torrent_file(path)?),
         _ => None,
     };
     if global.dry_run {
@@ -1359,7 +1359,7 @@ pub fn seed(
 
     let kind = SourceKind::classify(&args.source.source, env)?;
     let meta = match &kind {
-        SourceKind::File(path) => Some(Metainfo::read(path)?),
+        SourceKind::File(path) => Some(read_torrent_file(path)?),
         _ => None,
     };
     if global.dry_run {

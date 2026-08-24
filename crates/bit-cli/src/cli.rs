@@ -297,6 +297,9 @@ pub enum Command {
     /// List files with index, path, size, and priority.
     Files(FilesArgs),
 
+    /// Print the torrent's directory structure, rolled up.
+    Tree(TreeArgs),
+
     /// Connect, sample the swarm, report peers, then exit.
     Peers(PeersArgs),
 
@@ -1078,6 +1081,25 @@ pub struct FilesArgs {
     /// which proves nothing and is what a differing piece length leaves.
     #[arg(long = "against", value_name = "TORRENT")]
     pub against: Vec<String>,
+}
+
+/// `bit-cli tree`.
+#[derive(Debug, Args)]
+pub struct TreeArgs {
+    #[command(flatten)]
+    pub source: SourceArgs,
+
+    /// Stop at this depth and roll the rest up. The root is depth 0.
+    ///
+    /// A directory whose children are cut off still reports what is below it,
+    /// and the line under it says how many files and directories that was, so
+    /// a limit never drops anything in silence.
+    #[arg(long, value_name = "N")]
+    pub depth: Option<usize>,
+
+    /// Print the piece ranges without the size and file count columns.
+    #[arg(long = "no-sizes")]
+    pub no_sizes: bool,
 }
 
 /// `bit-cli peers`.

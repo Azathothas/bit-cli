@@ -387,7 +387,7 @@ connection cap and `--web-seed-connections` is a per-source one, which differ
 when two sources share a host, so an alias that is close but not identical is
 the failure this project's own short-flag rules exist to prevent.
 `docs/flags.md` states the rule: an `aria2` letter is never reassigned to a
-different concept, and `cli.rs:2457` `short_flags_never_contradict_aria2`
+different concept, and `cli.rs:2479` `short_flags_never_contradict_aria2`
 enforces it. Under that rule `-x` may only be taken if it means what aria2
 means.
 
@@ -470,7 +470,7 @@ warning on first use of `-x`, naming that it caps connections per source rather
 than per server, and that the two differ when two sources share a host. The
 same rule that would have refused the alias is what the warning satisfies: the
 difference is stated rather than hidden, which is what
-`cli.rs:2457` `short_flags_never_contradict_aria2` exists to prevent losing.
+`cli.rs:2479` `short_flags_never_contradict_aria2` exists to prevent losing.
 
 `-s` and `-x` meaning nearly the same thing here is the part to get right in
 the man page before the code, per [T-198](cli-surface.md). A script passing

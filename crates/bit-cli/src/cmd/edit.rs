@@ -65,7 +65,7 @@ pub fn run(
     env: &mut Env,
 ) -> Result<ExitCode> {
     let input = env.resolve(&args.torrent);
-    let mut meta = Metainfo::read(&input)?;
+    let mut meta = crate::source::read_torrent_file(&input)?;
     let before = meta.info_hash();
     let mut changes = Vec::new();
 

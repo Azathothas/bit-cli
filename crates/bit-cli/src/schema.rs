@@ -40,6 +40,10 @@ pub const DOCUMENT_KINDS: &[(&str, &str)] = &[
         "The files in a torrent, with sizes, offsets, and piece ranges.",
     ),
     (
+        "tree",
+        "The torrent's directory structure, rolled up. The nodes are a flat list in pre-order rather than a nested one, so a field sits at the same path whatever its depth. See `TODO/metainfo.md`, T-249.",
+    ),
+    (
         "magnet",
         "A magnet URI built from a torrent, and its parts.",
     ),

@@ -83,19 +83,33 @@ pub struct Env {
     pub out_is_terminal: bool,
     /// Whether stderr is a terminal.
     pub err_is_terminal: bool,
+    /// Whether stdout can carry a code point outside ASCII.
+    ///
+    /// `bit-cli` writes UTF-8 whatever is downstream, so this is a question
+    /// about the sink rather than about the program: a file or a pipe takes
+    /// the bytes verbatim and a console decodes them at its own code page.
+    /// Only a terminal can therefore turn a box-drawing character into
+    /// mojibake, which is what `bit-cli tree` asks this before it draws one.
+    ///
+    /// See `TODO/metainfo.md`, T-249, and `docs/schema.md`'s Windows section
+    /// for the encodings a console gets wrong.
+    pub out_is_unicode: bool,
 }
 
 impl Env {
     /// The real process environment.
     pub fn real() -> std::io::Result<Self> {
+        let out_is_terminal = std::io::stdout().is_terminal();
+        let vars: BTreeMap<String, String> = std::env::vars().collect();
         Ok(Self {
             args: std::env::args().collect(),
             cwd: std::env::current_dir()?,
-            vars: std::env::vars().collect(),
             out: Stream::stdout(),
             err: Stream::stderr(),
-            out_is_terminal: std::io::stdout().is_terminal(),
+            out_is_terminal,
             err_is_terminal: std::io::stderr().is_terminal(),
+            out_is_unicode: terminal_takes_unicode(out_is_terminal, &vars),
+            vars,
         })
     }
 
@@ -116,6 +130,9 @@ impl Env {
             err,
             out_is_terminal: false,
             err_is_terminal: false,
+            // A buffer takes the bytes exactly as they were written, so the
+            // one thing that can garble a code point is not present here.
+            out_is_unicode: true,
         };
         (
             env,
@@ -170,6 +187,49 @@ impl Env {
     /// Write a line of diagnostics to stderr.
     pub fn note(&mut self, line: impl AsRef<str>) -> std::io::Result<()> {
         writeln!(self.err, "{}", line.as_ref())
+    }
+}
+
+/// Whether a terminal at the far end of stdout can render a code point
+/// outside ASCII.
+///
+/// Asked only when stdout **is** a terminal: a file or a pipe carries the
+/// bytes to whatever reads them next and decodes nothing, so there is nothing
+/// there to get wrong.
+///
+/// On Windows the answer is the console output code page, which is `IBM437`
+/// out of the box on an English install and is not UTF-8 until somebody
+/// changes it. Elsewhere it is the locale, which is what a terminal emulator
+/// and the C library both read; POSIX defaults to the C locale, so no locale
+/// set is not a UTF-8 one.
+fn terminal_takes_unicode(out_is_terminal: bool, vars: &BTreeMap<String, String>) -> bool {
+    if !out_is_terminal {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        let _ = vars;
+        /// `CP_UTF8`.
+        const CP_UTF8: u32 = 65001;
+
+        unsafe extern "system" {
+            fn GetConsoleOutputCP() -> u32;
+        }
+
+        // SAFETY: the function takes nothing, returns a plain integer, and
+        // has no failure mode beyond returning zero when the process has no
+        // console. Zero is not `CP_UTF8`, which is the conservative answer.
+        unsafe { GetConsoleOutputCP() == CP_UTF8 }
+    }
+    #[cfg(not(windows))]
+    {
+        ["LC_ALL", "LC_CTYPE", "LANG"]
+            .iter()
+            .find_map(|name| vars.get(*name))
+            .is_some_and(|value| {
+                let value = value.to_ascii_lowercase();
+                value.contains("utf-8") || value.contains("utf8")
+            })
     }
 }
 
@@ -252,6 +312,34 @@ mod tests {
         assert!(!env.out_is_terminal);
         assert!(!env.err_is_terminal);
         assert!(!env.wants_color(ColorChoice::Auto));
+    }
+
+    /// A file and a pipe carry whatever bytes were written, so the question
+    /// only has a wrong answer when a terminal is decoding them.
+    #[test]
+    fn anything_that_is_not_a_terminal_takes_unicode() {
+        assert!(terminal_takes_unicode(false, &BTreeMap::new()));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_terminal_takes_unicode_when_the_locale_says_so() {
+        let locale =
+            |name: &str, value: &str| BTreeMap::from([(name.to_string(), value.to_string())]);
+        assert!(terminal_takes_unicode(true, &locale("LANG", "en_US.UTF-8")));
+        assert!(terminal_takes_unicode(true, &locale("LC_ALL", "C.utf8")));
+        assert!(!terminal_takes_unicode(true, &locale("LANG", "C")));
+        assert!(!terminal_takes_unicode(true, &locale("LANG", "en_US")));
+        // POSIX defaults to the C locale, so nothing set is not UTF-8.
+        assert!(!terminal_takes_unicode(true, &BTreeMap::new()));
+        // The most specific variable set is the one that answers.
+        assert!(!terminal_takes_unicode(
+            true,
+            &BTreeMap::from([
+                ("LC_ALL".to_string(), "C".to_string()),
+                ("LANG".to_string(), "en_US.UTF-8".to_string()),
+            ])
+        ));
     }
 
     #[test]

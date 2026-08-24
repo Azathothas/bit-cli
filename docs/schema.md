@@ -121,6 +121,46 @@ From `bit-cli files <TORRENT> --json`.
 | `total.bytes` | integer |
 | `total.human` | string |
 
+### `tree`
+
+The torrent's directory structure, rolled up. The nodes are a flat list in pre-order rather than a nested one, so a field sits at the same path whatever its depth. See `TODO/metainfo.md`, T-249.
+
+From `bit-cli tree <TORRENT> --json`.
+
+| field | type |
+| --- | --- |
+| `bit_cli_version` | string |
+| `depth_limit` | integer |
+| `directory_count` | integer |
+| `file_count` | integer |
+| `generated_at` | string |
+| `info_hash` | string |
+| `kind` | string |
+| `max_depth` | integer |
+| `name` | string |
+| `name_encoding.detected` | string |
+| `name_encoding.utf8_keys` | bool |
+| `nodes[].depth` | integer |
+| `nodes[].directory_count` | integer |
+| `nodes[].file_count` | integer |
+| `nodes[].first_piece` | integer |
+| `nodes[].hidden.directories` | integer |
+| `nodes[].hidden.files` | integer |
+| `nodes[].index` | integer |
+| `nodes[].kind` | string |
+| `nodes[].last_piece` | integer |
+| `nodes[].name` | string |
+| `nodes[].path` | string |
+| `nodes[].shared_pieces` | integer |
+| `nodes[].size.bytes` | integer |
+| `nodes[].size.human` | string |
+| `padding_count` | integer |
+| `padding_total.bytes` | integer |
+| `padding_total.human` | string |
+| `schema_version` | string |
+| `total.bytes` | integer |
+| `total.human` | string |
+
 ### `magnet`
 
 A magnet URI built from a torrent, and its parts.

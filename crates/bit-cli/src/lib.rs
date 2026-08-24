@@ -180,10 +180,92 @@ fn end_session(
     code
 }
 
+/// The error for `bit-cli tre album.torrent`, where `tre` was meant to be a
+/// subcommand and is read as a source instead.
+///
+/// The root command takes positional sources, so `bit-cli <word>` is always a
+/// download of something called `<word>` and a typo comes back as a missing
+/// file. Four conditions have to hold before that is called a typo, and each
+/// one exists to keep a real file out of this branch:
+///
+/// - it is a bare word: no separator, no extension, no drive letter, so
+///   `./tre` and `tre.torrent` are paths and are treated as such;
+/// - nothing of that name is on disk, so a torrent actually called `tre` is
+///   still downloaded;
+/// - it is not a URL, a magnet, an info hash or `-`, which is what
+///   `Kind::classify` answers;
+/// - a subcommand is within one edit of it, so an unrelated word is left
+///   alone rather than corrected to whatever happens to be nearest.
+///
+/// See `TODO/cli-surface.md`, T-246.
+fn mistyped_subcommand(source: &str, env: &Env) -> Option<Error> {
+    let word = source.trim();
+    if word.is_empty()
+        || word.contains(['/', '\\', '.', ':'])
+        || !matches!(source::Kind::classify(word, env), Ok(source::Kind::File(_)))
+        || env.resolve(std::path::Path::new(word)).exists()
+    {
+        return None;
+    }
+    let lower = word.to_ascii_lowercase();
+    let nearest = subcommand_names()
+        .into_iter()
+        .map(|name| (edit_distance(&lower, &name), name))
+        .filter(|(distance, _)| *distance <= 1)
+        .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))?;
+    Some(
+        Error::usage(format!(
+            "`{word}` is not a command, and there is no file of that name. Did you mean `bit-cli {}`?",
+            nearest.1
+        ))
+        .with("given", word.to_string())
+        .with("nearest", nearest.1)
+        .with(
+            "hint",
+            format!("to download a file called `{word}`, write it as a path: ./{word}"),
+        ),
+    )
+}
+
+/// Every subcommand of the root, from `clap` rather than from a list.
+///
+/// Read from the parser so a subcommand that is added is suggestible with
+/// nothing for anybody to remember, which is the same reason
+/// `cmd/spec.rs` walks `Cli::command()` instead of enumerating.
+fn subcommand_names() -> Vec<String> {
+    use clap::CommandFactory;
+    Cli::command()
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_string())
+        .collect()
+}
+
+/// Levenshtein distance, iterative, one row at a time.
+///
+/// Only ever called on two short words, and only to answer "is this within one
+/// edit", so the row-at-a-time form is the whole implementation rather than a
+/// step toward a faster one.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut row: Vec<usize> = (0..=right.len()).collect();
+    for (i, l) in left.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, r) in right.iter().enumerate() {
+            let cost = usize::from(l != *r);
+            let next = (row[j] + 1).min(row[j + 1] + 1).min(diagonal + cost);
+            diagonal = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[right.len()]
+}
+
 fn dispatch(cli: &Cli, renderer: &mut Renderer, env: &mut Env) -> Result<ExitCode, Error> {
     match &cli.command {
         Some(Command::Info(args)) => cmd::info::run(args, &cli.global, renderer, env),
         Some(Command::Files(args)) => cmd::files::run(args, &cli.global, renderer, env),
+        Some(Command::Tree(args)) => cmd::tree::run(args, &cli.global, renderer, env),
         Some(Command::Magnet(args)) => cmd::magnet::run(args, &cli.global, renderer, env),
         Some(Command::Verify(args)) => cmd::verify::run(args, &cli.global, renderer, env),
         Some(Command::Create(args)) => cmd::create::run(args, &cli.global, renderer, env),
@@ -200,6 +282,9 @@ fn dispatch(cli: &Cli, renderer: &mut Renderer, env: &mut Env) -> Result<ExitCod
         Some(Command::Bench(args)) => cmd::bench::run(args, &cli.global, renderer, env),
         // `bit-cli <SOURCE>` is `bit-cli download <SOURCE>`.
         None if !cli.sources.is_empty() => {
+            if let Some(error) = mistyped_subcommand(&cli.sources[0], env) {
+                return Err(error);
+            }
             let args = cli::DownloadArgs::from_sources(cli.sources.clone());
             cmd::download::run(&args, &cli.global, renderer, env)
         }
@@ -359,6 +444,79 @@ mod tests {
                 .contains("nope.torrent"),
             "{last}"
         );
+    }
+
+    /// T-246's second case. The root command takes positional sources, so a
+    /// mistyped subcommand used to come back as a missing file.
+    #[test]
+    fn a_mistyped_subcommand_is_a_usage_error_naming_the_nearest_one() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let (mut env, captured) = Env::test(&["tre", fixture.path_str()], fixture.dir());
+        assert_eq!(run(&mut env), ExitCode::Usage);
+        let err = captured.err();
+        assert!(err.contains("is not a command"), "{err}");
+        assert!(err.contains("bit-cli tree"), "{err}");
+    }
+
+    /// The other half, and it is what keeps a real file out of the branch: a
+    /// path written as a path is a path, present or missing.
+    #[test]
+    fn a_source_written_as_a_path_is_never_read_as_a_subcommand() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        for source in ["./tre", "tre.torrent", "sub/tre"] {
+            let (mut env, captured) = Env::test(&[source], fixture.dir());
+            assert_eq!(
+                run(&mut env),
+                ExitCode::SourceResolution,
+                "{source} was not read as a path: {}",
+                captured.err()
+            );
+            assert!(captured.err().contains("cannot read"), "{source}");
+        }
+    }
+
+    /// A bare word two or more edits from every subcommand is a source, not a
+    /// typo. Correcting it would be guessing.
+    #[test]
+    fn a_word_that_is_near_nothing_is_still_a_source() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let (mut env, captured) = Env::test(&["quuxly"], fixture.dir());
+        assert_eq!(run(&mut env), ExitCode::SourceResolution);
+        assert!(captured.err().contains("cannot read"), "{}", captured.err());
+    }
+
+    /// A file whose name happens to be a near-miss for a subcommand is
+    /// downloaded rather than corrected, because it is on disk.
+    #[test]
+    fn a_file_named_like_a_typo_is_read_rather_than_corrected() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        std::fs::copy(fixture.path_str(), fixture.dir().join("tre")).expect("copy the fixture");
+        let (mut env, captured) = Env::test(&["--dry-run", "tre"], fixture.dir());
+        assert_eq!(run(&mut env), ExitCode::Success, "{}", captured.err());
+    }
+
+    #[test]
+    fn the_edit_distance_is_the_ordinary_one() {
+        assert_eq!(edit_distance("tre", "tree"), 1);
+        assert_eq!(edit_distance("tree", "tree"), 0);
+        assert_eq!(edit_distance("", "tree"), 4);
+        assert_eq!(edit_distance("tree", ""), 4);
+        assert_eq!(edit_distance("infp", "info"), 1);
+        // Same length, and only the trailing `y` matches.
+        assert_eq!(edit_distance("quuxly", "verify"), 5);
+    }
+
+    /// Every name the suggester can offer is a name `clap` will accept, so a
+    /// suggestion cannot point at a command that does not exist.
+    #[test]
+    fn every_suggestible_name_is_a_real_subcommand() {
+        let names = subcommand_names();
+        assert!(names.contains(&"tree".to_string()), "{names:?}");
+        assert!(names.contains(&"download".to_string()), "{names:?}");
+        for name in names {
+            let parsed = Cli::try_parse_from(["bit-cli", &name, "--help"]);
+            assert!(parsed.is_err(), "`{name}` did not reach clap as a command");
+        }
     }
 
     /// The event is a `--jsonl` surface only. `--json` carries one document

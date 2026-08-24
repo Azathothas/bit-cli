@@ -72,6 +72,64 @@ integer's byte form would have to be recorded per value to be reportable at
 all. If a torrent in the wild turns up with one, this becomes the same work
 key order was.
 
+## The shape a torrent carries
+
+`bit-cli files` prints one row per file. `bit-cli tree` prints the directory
+structure those files are in, with each directory rolled up to its total size,
+its file count, and the pieces it spans.
+
+```bash
+bit-cli tree album.torrent
+```
+
+```
+PATH                   SIZE      FILES  PIECES
+padded/                2.49 KiB  3      0-2
+|-- disc 1/            1.95 KiB  2      0-2+
+|   |-- lossless/      1.46 KiB  1      0-1+
+|   |   `-- a.flac     1.46 KiB         0-1+
+|   `-- notes.nfo      500 B            2-2
+`-- .pad/              548 B     1      1-1+
+    `-- 548 (padding)  548 B            1-1+
+
+3 files, 3 directories, 2.49 KiB
+1 padding file, 548 B, counted in every total above
+a + on a piece range means the span also holds bytes of a file outside that entry
+```
+
+Three things in that output are the reason for the command.
+
+**A `+` on a piece range means the span is not the entry's own.** A piece that
+straddles a boundary holds bytes of a file on both sides of it, so a subtree
+whose range carries a `+` cannot be fetched without fetching part of something
+else. `notes.nfo` is the one row without one: the padding file in front of it
+pushes it onto a piece boundary, which is what BEP 47 padding is for. Asking
+for it means asking for piece 2, and piece 2 holds nothing else.
+
+**A padding file is marked, not hidden.** Its bytes are in every total above
+it, including the one `bit-cli info` reports as `size`, so a reader subtracting
+them has to be able to see them.
+
+**The order is the torrent's own.** Each directory sits where its first file
+put it, and inside a directory the entries are in the order the torrent lists
+them. Nothing is sorted by name or by size. Grouping is the one thing that
+moves a row: `notes.nfo` is file 2 and prints above the padding file, which is
+file 1, because its directory came first.
+
+`--depth N` stops at that depth and rolls the rest up, with a line under the
+last directory shown saying how many files and directories that was. `N` counts
+from the root, which is zero. `--no-sizes` prints the paths and the piece
+ranges alone.
+
+The tree is drawn in ASCII. Box-drawing characters need two things: colour on,
+which is the decision `--color` already makes, and an output that can carry
+them, which on Windows is a console code page of UTF-8 and elsewhere is a UTF-8
+locale. That second one is asked only when stdout is a terminal, because a file
+or a pipe takes the bytes as they were written. Everything the text form shows is a field of
+`--json`, where `nodes` is a flat list in pre-order rather than a nested
+structure: `depth` says where a node sits and the order says what it sits
+under.
+
 ## Metalink
 
 A Metalink carries a `.torrent`, a list of HTTP mirrors for the same bytes, and

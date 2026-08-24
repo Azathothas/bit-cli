@@ -159,6 +159,13 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
     let named = TorrentFixture::names_that_are_not_utf8();
     let named_torrent = named.path_str().to_string();
 
+    // A third, for `tree`: the padding file and the `hidden` block a `--depth`
+    // produces are fields no other fixture can reach, and one command run two
+    // ways covers both. See `TODO/cli-surface.md`, T-253, on what a single
+    // sample path costs.
+    let padded = TorrentFixture::padded();
+    let padded_torrent = padded.path_str().to_string();
+
     // The commands that touch nothing.
     for (label, args) in [
         (
@@ -180,6 +187,22 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
         (
             "bit-cli files <TORRENT> --json, where the names are not UTF-8",
             vec!["--json", "files", &named_torrent],
+        ),
+        (
+            "bit-cli tree <TORRENT> --json",
+            vec!["--json", "tree", &torrent],
+        ),
+        (
+            "bit-cli tree <TORRENT> --json, over a torrent with a padding file",
+            vec!["--json", "tree", &padded_torrent],
+        ),
+        (
+            "bit-cli tree <TORRENT> --depth <N> --json",
+            vec!["--json", "tree", "--depth", "1", &padded_torrent],
+        ),
+        (
+            "bit-cli tree <TORRENT> --json, where the names are not UTF-8",
+            vec!["--json", "tree", &named_torrent],
         ),
         (
             "bit-cli magnet <TORRENT> --json",

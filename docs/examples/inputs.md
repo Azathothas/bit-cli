@@ -68,7 +68,7 @@ surprises you.
 The split is one question: does the form name a document that one `GET` can
 answer, or does it name something only a swarm can.
 
-| form | `info`, `files`, `magnet`, `verify`, `webseed`, `bench webseed` | `download`, `seed` |
+| form | `info`, `files`, `tree`, `magnet`, `verify`, `webseed`, `bench webseed` | `download`, `seed` |
 | --- | --- | --- |
 | local `.torrent` | yes | yes |
 | stdin | yes | yes |
@@ -76,11 +76,11 @@ answer, or does it name something only a swarm can.
 | Metalink, local or by URL | yes, after fetching the torrent it names | yes |
 | magnet or info hash | no | yes, after a swarm lookup |
 
-Every cell was run. For the URL row the four read-only commands had their
-`--json` output compared field for field against the same torrent read off
-disk: everything matches but `generated_at`, which is two runs, and
+Every cell was run. For the URL row `info`, `files`, `tree`, `magnet` and
+`verify` had their `--json` output compared field for field against the same
+torrent read off disk: everything matches but `generated_at`, which is two runs, and
 `source_kind`, which differs because the source genuinely was a URL. That
-comparison is a test, `four_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports`,
+comparison is a test, `read_only_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports`,
 so it holds on every build rather than on the day it was written.
 
 Two commands are not in either column. `bit-cli peers` takes every form the
@@ -136,11 +136,6 @@ direction, turning a `.torrent` into a URI without any network at all.
 
 ## What is not an input yet
 
-**A directory.** Only `bit-cli create` takes one, and it takes it as a
-positional path rather than as a `SOURCE`. Handing a directory to a command
-that wants a torrent reports the operating system's reason rather than the real
-one, which is [T-246](../../TODO/cli-surface.md).
-
 **A web page.** A URL is assumed to name a `.torrent` itself. A page that
 *links* to one is fetched and handed to the bencode parser, which fails and
 names the content type it got. There is no HTML parsing anywhere in the tree.
@@ -177,36 +172,63 @@ bit-cli download album.torrent --dry-run
 Resolve, validate, report, write nothing. It prints the directory, the source,
 the name, and the web seed and tracker counts.
 
-Over a URL it prints less, because a dry run does not fetch and there is
-nothing to count. The text rendering shows those counts as `0`, which reads as
-"the torrent has none" and means "nothing looked". The `--json` form of the same
-run is correct and carries `null`. Read the JSON when the source is a URL, and
-see [T-247](../../TODO/cli-surface.md).
+Over a URL it says what it did not do, because a dry run does not fetch and the
+torrent's own web seeds and trackers are therefore unknown:
+
+```text
+source               http://127.0.0.1:8099/tracked.torrent
+not fetched          a dry run does not fetch the torrent, so its own web seeds and trackers are not counted
+web seeds            0 so far
+trackers             0 so far
+```
+
+`so far` is what was named without the torrent: the command line, a
+`--web-seed-file`, a Metalink's mirrors. The same torrent read off disk prints
+`name`, and the counts with no qualifier on them, because they are then
+complete.
 
 A local Metalink is the one case that is fully readable with nothing running:
 the document's own claims, its mirrors and its checksums are all in the file.
 What needs the network is the `.torrent` the document names by URL.
 
-## Everything on this page exits 4
+## What a failing source exits with
 
-Every source that fails, fails as **4, source resolution**. There is no input
-to a `SOURCE` argument that produces a usage error, because the last rule in
-the classifier is "treat it as a path" and a path that is not there is a
-resolution failure rather than a usage one.
+Most of them exit **4, source resolution**: the source names something, and
+that something could not be read. A `.torrent` that is not there, a URL that
+answered with a page, a magnet whose metadata never arrived.
 
-That includes a scheme nothing here speaks:
+Three exit **2** instead, because they are not sources at all and no retry
+makes them one. A directory:
+
+```bash
+bit-cli info ideas/payload
+```
+
+```text
+error: C:\...\ideas/payload is a directory, not a .torrent. `bit-cli create` is the command that takes a directory
+```
+
+A scheme nothing here speaks:
 
 ```bash
 bit-cli info ftp://host/x.torrent
 ```
 
 ```text
-error: cannot read C:\...\ftp://host/x.torrent: The filename, directory name,
-or volume label syntax is incorrect. (os error 123)
+error: `ftp:` is not a scheme this reads. A source is an http:// or https:// URL, a magnet: URI, a .torrent or metalink path, a bare info hash, or `-` for stdin
 ```
 
-An `ftp://` URL is read as a relative filename. It is the same shape as the
-directory case above and is filed with it, under
-[T-246](../../TODO/cli-surface.md).
+And a subcommand with a typo. The root command takes positional sources, so
+`bit-cli tre album.torrent` is a download of something called `tre` unless
+something says otherwise, and this is what says otherwise:
 
-[`../exit-codes.md`](../exit-codes.md) has all seventeen codes.
+```text
+error: `tre` is not a command, and there is no file of that name. Did you mean `bit-cli tree`?
+```
+
+That last one only fires on a bare word with nothing of that name on disk. A
+source written as a path is a path: `./tre` exits 4 with a missing file, and a
+torrent actually named `tre` is downloaded.
+
+[`../exit-codes.md`](../exit-codes.md) has all seventeen codes and the rule for
+when 2 is right rather than 4.

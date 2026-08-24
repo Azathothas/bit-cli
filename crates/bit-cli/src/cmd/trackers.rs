@@ -92,7 +92,7 @@ pub fn run(
 ) -> Result<ExitCode> {
     let kind = Kind::classify(&args.source.source, env)?;
     let meta = match &kind {
-        Kind::File(path) => Some(Metainfo::read(path)?),
+        Kind::File(path) => Some(crate::source::read_torrent_file(path)?),
         Kind::Stdin => Some(crate::source::load_local(&kind, env)?),
         _ => None,
     };
