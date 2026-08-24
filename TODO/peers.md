@@ -1975,3 +1975,79 @@ complete fails that test and is read as progress, which is the shape
 ```bash
 cargo test -p bit-cli-core --test transport_e2e
 ```
+
+## Measured the same day, and it eliminates the Approach's first candidate
+
+**Four paired traces, both ends at `--log-level trace`, and a probe added to
+`EncryptedWrite`.** What they establish is narrower and more useful than the
+Approach above guessed.
+
+### `EncryptedWrite` is not stuck, and that is measured rather than argued
+
+The probe reports every `poll_write` and what the writer below accepted. On a
+failing run the leecher's sequence is:
+
+```
+encrypted write accepted written=68     the BitTorrent handshake
+encrypted write accepted written=112    the extended handshake
+encrypted write accepted written=5      unchoke
+encrypted write accepted written=17     a request, and twenty-two more
+```
+
+**Every byte handed to the wrapper was accepted by the stream below it, in
+order, with no deferral and no error.** So "a `poll_write` that returns
+`Pending` and is then dropped leaves stale ciphertext in `pending`" is not what
+is happening here: nothing ever returned `Pending`.
+
+The probe is kept, under `--trace handshake`, because it is what the next
+attempt will want first.
+
+```bash
+bit-cli download <torrent> --peer HOST:PORT --transport utp --encryption require --trace handshake
+```
+
+### No bytes are lost, in either direction
+
+Every paired trace agrees to the byte on what the leecher's uTP stream sent and
+what the seeder's received: 1,305 and 1,305, then 1,109 and 1,109. **uTP is
+delivering everything it is given.** So the failure is not a dropped segment
+and not a stream that stops carrying.
+
+### And where it stalls is not the same twice
+
+This is the part that matters for the next attempt, and it is why the trace
+above should not be read as one story:
+
+| run | leecher put on the wire | seeder decoded |
+| --- | --- | --- |
+| `require` | 1,305 B, the MSE handshake only | nothing, "timeout reading" |
+| `require` | 1,109 B, the MSE handshake only | nothing, "timeout reading" |
+| `require`, probe build | 3,486 B, handshake **and** all the requests | not traced |
+| `prefer` | handshake, then the requests | the BitTorrent handshake, the extended handshake, `HaveAll`, `Unchoke`, then nothing |
+
+So sometimes the MSE handshake itself does not complete over uTP, and sometimes
+it completes and the peer wire messages that follow are never acted on. **A
+first reading of this entry said "the bytes never leave the leecher". That is
+true of one run and not of another, and it is corrected here rather than left
+standing.**
+
+### What that leaves, and what to do first
+
+The write side is eliminated and the transport is eliminated. What is left is
+the **read** side, and the shape of the evidence points at it: bytes arrive,
+nothing is lost, and the reader does not make progress on them.
+
+- **`mse::handshake::Buffered`**, `crates/bit-cli-core/src/mse/handshake.rs:146`.
+  It reads into a 512 byte chunk and loops until it has what it needs, which
+  handles a short read. What it has never been driven by is a stream that
+  delivers the same bytes in a different number of pieces, which is exactly
+  what uTP does and TCP on loopback does not.
+- **`Prefixed::poll_read_vectored`**, `crates/bit-cli-core/src/mse/stream.rs`,
+  reached through `read_buf.rs`'s ring buffer, which can hand it two slices and
+  can hand it an empty one.
+
+**The fixture is still the thing to build first**, and the Approach's last
+paragraph stands: a pair of real `librqbit_utp` streams in one process, driven
+through the MSE handshake and then through peer wire traffic. A duplex pipe is
+what the existing unit tests use and they pass, so it is not the fixture that
+will show this.

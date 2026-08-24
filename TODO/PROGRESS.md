@@ -274,10 +274,20 @@ extended handshake, `HaveAll` and `Unchoke` all arrive, the leecher sends
 seeder's uTP stream receives nothing until its inactivity timer fires.
 
 **It is this repository's own code**: the only difference between the working
-and the failing case is whether `MseTransform` wraps the connection. **P1
-because of what it implies about TCP.** The two streams differ in how readily a
-write defers, and if the defect is in how the wrappers handle a deferred or
-cancelled write then TCP is not immune, it is merely never asked.
+and the failing case is whether `MseTransform` wraps the connection.
+
+**Then it was measured, and that narrowed it twice.** A probe on
+`EncryptedWrite`, kept under `--trace handshake`, shows every byte handed to
+the wrapper accepted by the stream below it, in order, with no deferral: the
+write side is **eliminated**. Four paired traces agree to the byte on what one
+end sent and the other received: uTP is **eliminated** as a carrier. What is
+left is the read side.
+
+**And where it stalls is not the same twice**, which is why the entry says so:
+sometimes the MSE handshake itself does not complete, and sometimes it
+completes and the peer wire messages that follow are never acted on. A first
+reading of the entry said "the bytes never leave the leecher"; that is true of
+one run and not of another, and the correction is written under it.
 
 ### [T-228](cli-surface.md), P3, done, and the third fixed path was not in the entry
 
@@ -361,11 +371,13 @@ pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Leechers 4 -ListenerCheck 6
    the cycles failed and when the last one completed.
 
 3. **[T-233](peers.md), P1, effort M**, and it is the largest thing this
-   session found. MSE over uTP, two candidate seams named with their lines in
-   `crates/bit-cli-core/src/mse/stream.rs`. The entry says to reproduce **below
-   the session**, against a stream that defers writes the way uTP does, because
+   session found. Read its second half first: the write side and the transport
+   are both **eliminated by measurement**, so the two candidates left are on
+   the read side and are named with their lines. Build the fixture before
+   anything else, a pair of real `librqbit_utp` streams in one process, because
    a duplex pipe is what the existing unit tests use and they pass.
-   `mse_over_utp_does_not_carry_a_torrent` is the pin to invert.
+   `mse_over_utp_does_not_carry_a_torrent` is the pin to invert, and the probe
+   the last session used is still there under `--trace handshake`.
 
 4. **Then the category pass, and `bep-coverage.md` is still first.**
    [T-101](bep-coverage.md) is advanced but open, and what is left of it is a

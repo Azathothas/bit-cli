@@ -187,9 +187,28 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for EncryptedWrite<W> {
             this.source_len = take;
             this.sent = 0;
         }
-        ready!(this.poll_drain(cx))?;
+        // Under `--trace handshake`, because this is what says whether a stall
+        // on an encrypted connection is this wrapper's or the stream's below
+        // it. T-233 is uTP under MSE not completing a transfer, and these three
+        // lines are what took `EncryptedWrite` out of the suspect list: every
+        // byte handed to it was accepted by the writer under it, in order, and
+        // the transfer still did not complete. See `TODO/peers.md`, T-233.
+        match this.poll_drain(cx) {
+            Poll::Pending => {
+                tracing::trace!(
+                    target: "bit_cli::handshake",
+                    pending = this.pending.len(),
+                    sent = this.sent,
+                    "encrypted write deferred by the stream below"
+                );
+                return Poll::Pending;
+            }
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+            Poll::Ready(Ok(())) => {}
+        }
         let written = this.source_len;
         this.source_len = 0;
+        tracing::trace!(target: "bit_cli::handshake", written, "encrypted write accepted");
         Poll::Ready(Ok(written))
     }
 
