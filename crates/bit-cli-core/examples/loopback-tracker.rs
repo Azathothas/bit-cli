@@ -355,15 +355,26 @@ fn serve(mut stream: TcpStream, fixture: &Fixture) -> std::io::Result<()> {
 
 /// Take one redirect from the budget, or report that there is none left.
 ///
-/// `fetch_update` rather than a load and a store, because both accept loops
-/// and every connection thread share the counter and `--redirect-announce 1`
-/// has to mean one announce in total rather than one per thread that looks.
+/// A compare and exchange loop rather than a load and a store, because both
+/// accept loops and every connection thread share the counter and
+/// `--redirect-announce 1` has to mean one announce in total rather than one
+/// per thread that looks.
+///
+/// Written out rather than as `fetch_update`, which does exactly this and is
+/// deprecated on beta in favour of `try_update`. CI's beta clippy job caught
+/// it the day it was written; `try_update` is not on stable yet, so neither
+/// name is portable and the loop is.
 fn take_redirect(left: &AtomicU32) -> bool {
-    left.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| match n {
-        0 => None,
-        n => Some(n - 1),
-    })
-    .is_ok()
+    let mut current = left.load(Ordering::SeqCst);
+    loop {
+        if current == 0 {
+            return false;
+        }
+        match left.compare_exchange_weak(current, current - 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 /// Append one JSON object describing the announce exactly as it arrived.

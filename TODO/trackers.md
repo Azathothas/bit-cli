@@ -726,6 +726,14 @@ written down was that the running soak's leechers held the port, which twelve
 consecutive clean starts disproved. The fixture falls back to an OS-chosen
 port and prints whichever it got.
 
+**And CI's beta clippy job caught the fixture on the day it was written.**
+`take_redirect` used `AtomicU32::fetch_update`, which is deprecated on beta in
+favour of `try_update`. `try_update` is not on stable yet, so neither name is
+portable and the compare and exchange loop both of them wrap is what shipped.
+That job exists for exactly this and it is the second time it has paid, after
+[T-218](cli-surface.md): it fails without failing the run, so the warning
+arrives while the code is still in hand.
+
 Notes:       **The `udp` case failed the first time it was run, and it was
              right to.** That is [T-256](trackers.md), and it is the reason
              this entry is worth more than the three rows it added.

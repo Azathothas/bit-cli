@@ -301,6 +301,14 @@ would have tripped on.
   It asks for that port and does not always get it, which the fixture's own
   fallback exists for, so both now say to read the printed line.
 
+**Review 3, and it was CI's rather than a person's.** The `Clippy (tracking
+beta)` job failed on the first push, on this session's own new code:
+`AtomicU32::fetch_update` is deprecated on beta in favour of `try_update`,
+which is not on stable yet. Neither name is portable, so the fixture uses the
+compare and exchange loop both of them wrap. That job fails without failing the
+run, which is what made the warning arrive while the code was still in hand.
+It is the second time it has paid, after [T-218](cli-surface.md).
+
 **And a measurement that disproved a suspicion rather than a premise.** A
 `download` with nothing to talk to looked like it exited 0, which would have
 been a defect worth an entry. It exits **9**. The 0 was the measuring script's:
