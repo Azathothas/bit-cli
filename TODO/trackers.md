@@ -529,3 +529,145 @@ claim.
 $ cargo test -p bit-cli --lib trackers::
 test result: ok. 20 passed; 0 failed; 0 ignored; 396 filtered out
 ```
+
+---
+
+### T-235 Nothing compares the numbers a tracker sees against the run that made them
+
+Source:      the operator, 2026-08-24. Corpus: `RESEARCH.md` entry 29,
+             `RatioTracker/ratiotracker.py` at
+             `45dc7d40a365921dc9d050bff06c57a16cd82ab7`
+Category:    trackers
+Priority:    P1
+Effort:      S
+Status:      **done 2026-08-24**
+
+Problem:     `uploaded`, `downloaded` and `left` are the only thing a tracker
+             knows about a client, and nothing in this repository compared them
+             against what the run itself reported. Every other announce
+             property had a check: [T-062](trackers.md) covers the events,
+             [T-063](trackers.md) the tier order, [T-064](trackers.md) the UDP
+             backoff, [T-060](trackers.md) and [T-061](trackers.md) the port.
+             The three numbers had none.
+
+             A wrong number there is invisible locally, permanent on the
+             tracker, and indistinguishable from cheating.
+
+Approach:    `scripts/check-announce.ps1`, driving the fixtures that already
+             exist rather than new ones: `loopback-tracker` for the tracker,
+             `bit-cli seed` for the swarm, `bit-cli download` as the subject.
+             Loopback only, and it changes no number it reports.
+
+             The evidence had to come from the tracker rather than from the
+             client, because the client is what is under test.
+             `crates/bit-cli-core/examples/loopback-tracker.rs` gains
+             `--announce-log <PATH>`, which appends one JSON object per
+             announce. It carries the **raw query string** as received, the
+             request headers, and the parsed fields.
+
+             The raw query is the part that matters and it is why the log is
+             not built from the parsed map: `parse_query` returns a
+             `BTreeMap`, which has already sorted the parameter order away, and
+             order is what a real tracker fingerprints
+             (`RESEARCH.md` entry 25). Nothing else can recover it afterwards.
+
+             The headers are kept for the same reason. Before this the fixture
+             drained them with a comment saying nothing depends on any of them.
+
+Prove:       ```
+             pwsh -NoProfile -File scripts/check-announce.ps1
+             ```
+
+             Six cases, all judged, all holding on 2026-08-24 at 8 MiB over
+             loopback with a 5 second announce interval, 10 announces recorded
+             and 6 from the subject:
+
+             | case | what it asserts | result |
+             | --- | --- | --- |
+             | started-left | the first event is `started` and `left` is the whole payload | `started`, left 8,388,608 of 8,388,608 |
+             | completed | `completed` is sent exactly once and `left` is 0 by then | one event, left 0 |
+             | stopped | `stopped` is sent | `started,completed,-,-,-,stopped` |
+             | left-monotonic | `left` never rises | 8,388,608 then 0 five times |
+             | totals-match | the last announce covers the payload and does not exceed the report | announced 8,388,608, report 8,388,608 |
+             | interval | the gap between ordinary announces is at least `min interval` | smallest 5.01s against 5s over 3 |
+
+             `totals-match` asserts a bound rather than equality on purpose.
+             The tracker's figure is taken at the last announce and the
+             report's at exit, so requiring them equal to the byte would be
+             asserting a scheduling outcome, which is the line
+             [RULES.md](RULES.md) section 5 draws and the reason
+             [T-148](bench.md), [T-160](cli-surface.md) and
+             [T-162](webseed.md) each cost a red job.
+
+             `interval` allows one second of slack for the same reason: the
+             tracker stamps on arrival and the client times from its own clock.
+
+Notes:       **The six cases passed and the run still found two things**, both
+             about identity rather than about the numbers, and both printed
+             beside the verdict because the check reports what it saw:
+
+             - The peer id prefix is `-rQ9010-`, and `bit-cli trackers` uses
+               `-BC0100-`. That is [T-236](peers.md).
+             - The query order is `info_hash`, `peer_id`, `event`, `port`,
+               `uploaded`, `downloaded`, `left`, `compact`, `no_peer_id`,
+               `key`. No client in `RESEARCH.md` entry 23's ninety-four
+               profiles puts `event` third, and none omits `numwant`. That is
+               design input for [T-234](peers.md) rather than a defect.
+             - The `User-Agent` is `bit-cli 0.2.0`, with a space. Every profile
+               in entry 23 uses `Name/version`.
+
+             What this does not cover, said plainly rather than left to be
+             discovered: a redirected announce, a tracker that answers with a
+             `failure reason`, and the UDP announce path. The first two are one
+             case each against a fixture that does not exist yet; the third
+             needs a UDP tracker fixture, and `loopback-tracker` is HTTP.
+             Filed as [T-237](trackers.md).
+
+             Nothing from `RatioTracker`'s eight tests was ported. All eight
+             send a number the run did not make, which is the one thing this
+             harness must never do.
+
+---
+
+### T-237 Three announce paths have no fidelity case
+
+Source:      [T-235](trackers.md)'s own closing, 2026-08-24
+Category:    trackers
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `scripts/check-announce.ps1` covers the ordinary HTTP announce and
+             says so. Three paths it does not reach, each of which is one case
+             against a fixture that does not exist:
+
+             - **A redirected announce.** `scripts/check-redirect.ps1` exists
+               and is about `--json` capture on Windows, not about trackers, so
+               the name is taken and the coverage is not there. A tracker that
+               answers `301` or `302` to `/announce` is ordinary, and what
+               matters is whether the redirected request still carries the same
+               `uploaded`, `downloaded` and `left`.
+             - **A `failure reason`.** `RESEARCH.md` entry 29 records the rule:
+               a rejection is a non-200 **or** a 200 whose bencode carries
+               `failure reason`, and a check reading only the status calls the
+               second one a success. `loopback-tracker` has a `failure()`
+               helper already and no way to ask it for one.
+             - **The UDP announce.** `loopback-tracker` is HTTP.
+               [T-064](trackers.md) covers the BEP 15 backoff with its own
+               fixture; the three numbers over UDP are uncovered.
+
+Approach:    Two flags on the fixture and one on the check, rather than a
+             second fixture: `--redirect-announce <N>` to answer the first N
+             announces with a 302 to itself, and `--fail-announce <REASON>` to
+             answer with a bencoded failure. The UDP path is the larger half
+             and is the reason this is S rather than XS.
+
+Prove:       ```
+             pwsh -NoProfile -File scripts/check-announce.ps1
+             ```
+
+             Three more judged cases in its table: `redirect` shows the
+             redirected request carrying the same three numbers as the one that
+             was redirected; `failure-reason` shows a non-zero exit and the
+             reason in `--json` rather than a reported success; and `udp` shows
+             the same six assertions over a UDP announce.

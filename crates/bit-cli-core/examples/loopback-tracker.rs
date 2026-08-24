@@ -19,6 +19,14 @@
 //! stdout as a single line before the first request is served, so a script can
 //! read it and pass it to `--announce`. Every announce is logged to stderr
 //! with an ISO 8601 UTC millisecond timestamp.
+//!
+//! `--announce-log <PATH>` additionally appends one JSON object per announce,
+//! carrying the **raw query string** and the request headers as received. That
+//! is what `scripts/check-announce.ps1` reads to decide whether the numbers a
+//! tracker sees are the numbers `bit-cli` reports (`TODO/trackers.md`, T-235).
+//! The raw query is kept rather than a re-serialisation of the parsed map,
+//! because parameter order is part of what a real tracker fingerprints and the
+//! `BTreeMap` the parser produces sorts it away.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -53,12 +61,16 @@ struct Peer {
 /// instead: a peer has one address in each and both are worth keeping.
 type PeerKey = (Vec<u8>, bool);
 
+/// Where `--announce-log` writes, or `None` when it was not asked for.
+type AnnounceLog = Arc<Mutex<Option<String>>>;
+
 /// Every swarm the tracker has seen, keyed by info hash then by peer record.
 type Swarms = Arc<Mutex<HashMap<Vec<u8>, HashMap<PeerKey, Peer>>>>;
 
 fn main() {
     let mut port: u16 = 0;
     let mut interval: i64 = 5;
+    let mut announce_log: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -68,8 +80,11 @@ fn main() {
                     .parse()
                     .expect("--interval")
             }
+            "--announce-log" => announce_log = Some(next_value(&mut args, "--announce-log")),
             "--help" | "-h" => {
-                println!("usage: loopback-tracker [--port PORT] [--interval SECONDS]");
+                println!(
+                    "usage: loopback-tracker [--port PORT] [--interval SECONDS] [--announce-log PATH]"
+                );
                 return;
             }
             other => {
@@ -109,14 +124,20 @@ fn main() {
     }
 
     let swarms: Swarms = Swarms::default();
+    // The path rather than an open handle, behind a mutex: a run that never
+    // announces leaves no file, and two accept threads cannot interleave a
+    // line into one.
+    let log: AnnounceLog = Arc::new(Mutex::new(announce_log));
     for listener in [Some(listener), listener6].into_iter().flatten() {
         let swarms = swarms.clone();
+        let log = log.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
                 let swarms = swarms.clone();
+                let log = log.clone();
                 std::thread::spawn(move || {
-                    if let Err(err) = serve(stream, &swarms, interval) {
+                    if let Err(err) = serve(stream, &swarms, interval, &log) {
                         eprintln!("{} connection failed: {err}", now_iso());
                     }
                 });
@@ -145,16 +166,27 @@ fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
 /// Answer one HTTP/1.1 request and close. No keep-alive: a tracker announce is
 /// infrequent enough that the extra connection costs nothing, and closing
 /// keeps the parser to the few lines below.
-fn serve(mut stream: TcpStream, swarms: &Swarms, interval: i64) -> std::io::Result<()> {
+fn serve(
+    mut stream: TcpStream,
+    swarms: &Swarms,
+    interval: i64,
+    log: &AnnounceLog,
+) -> std::io::Result<()> {
     let peer_ip = stream.peer_addr()?.ip();
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
-    // Drain the headers. Nothing here depends on any of them.
+    // The headers are kept now rather than drained. `User-Agent` is part of
+    // what a tracker sees of a client, so a check that asks whether the
+    // advertised identity reached the wire needs them.
+    let mut headers: Vec<(String, String)> = Vec::new();
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 || line == "\r\n" || line == "\n" {
             break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
         }
     }
 
@@ -166,7 +198,10 @@ fn serve(mut stream: TcpStream, swarms: &Swarms, interval: i64) -> std::io::Resu
     let params = parse_query(query);
 
     let body = match path {
-        "/announce" => announce(&params, peer_ip, swarms, interval),
+        "/announce" => {
+            record_announce(log, query, &headers, &params, peer_ip);
+            announce(&params, peer_ip, swarms, interval)
+        }
         "/scrape" => scrape(&params, swarms),
         _ => failure("unknown path"),
     };
@@ -178,6 +213,123 @@ fn serve(mut stream: TcpStream, swarms: &Swarms, interval: i64) -> std::io::Resu
     )?;
     stream.write_all(&body)?;
     stream.flush()
+}
+
+/// Append one JSON object describing the announce exactly as it arrived.
+///
+/// Written by hand rather than through a serialiser, because this is an
+/// example and the crate's `Value` encoder is bencode. Every string that can
+/// carry a byte outside the JSON grammar goes through `json_string`.
+///
+/// `query_order` is derived from the **raw** query rather than from `params`,
+/// which is a `BTreeMap` and has already sorted it. Order is the thing
+/// `scripts/check-announce.ps1` cannot recover any other way.
+fn record_announce(
+    log: &AnnounceLog,
+    query: &str,
+    headers: &[(String, String)],
+    params: &BTreeMap<String, Vec<u8>>,
+    peer_ip: std::net::IpAddr,
+) {
+    let guard = log.lock().expect("announce log lock");
+    let Some(path) = guard.as_ref() else { return };
+
+    let order: Vec<&str> = query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| pair.split('=').next().unwrap_or(""))
+        .collect();
+
+    let mut out = String::new();
+    out.push('{');
+    out.push_str(&format!("\"at\":{}", json_string(&now_iso())));
+    out.push_str(&format!(",\"from\":{}", json_string(&peer_ip.to_string())));
+    out.push_str(&format!(
+        ",\"family\":\"ip{}\"",
+        if peer_ip.is_ipv4() { "v4" } else { "v6" }
+    ));
+    out.push_str(&format!(",\"raw_query\":{}", json_string(query)));
+    out.push_str(",\"query_order\":[");
+    for (i, name) in order.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&json_string(name));
+    }
+    out.push(']');
+    out.push_str(",\"headers\":[");
+    for (i, (name, value)) in headers.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "{{\"name\":{},\"value\":{}}}",
+            json_string(name),
+            json_string(value)
+        ));
+    }
+    out.push(']');
+
+    // The fields a fidelity check reads. `info_hash` and `peer_id` are twenty
+    // arbitrary bytes, so they go out as hex rather than as text.
+    if let Some(v) = params.get("info_hash") {
+        out.push_str(&format!(",\"info_hash\":{}", json_string(&hex(v))));
+    }
+    if let Some(v) = params.get("peer_id") {
+        out.push_str(&format!(",\"peer_id_hex\":{}", json_string(&hex(v))));
+        out.push_str(&format!(",\"peer_id\":{}", json_string(&printable(v))));
+    }
+    for name in [
+        "port",
+        "uploaded",
+        "downloaded",
+        "left",
+        "event",
+        "numwant",
+        "key",
+        "compact",
+        "corrupt",
+        "no_peer_id",
+        "supportcrypto",
+        "redundant",
+        "ipv6",
+    ] {
+        if let Some(value) = text(params, name) {
+            out.push_str(&format!(",{}:{}", json_string(name), json_string(&value)));
+        }
+    }
+    out.push_str("}\n");
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = file.write_all(out.as_bytes());
+    }
+}
+
+/// A JSON string literal, with the five escapes JSON requires and a `\u` form
+/// for every other control byte.
+///
+/// A raw control byte in a JSON document is invalid however forgiving the
+/// reader is, and a tracker sees whatever a client chose to send.
+fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Record the announcing peer and answer with the rest of the swarm.

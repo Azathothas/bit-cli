@@ -628,10 +628,29 @@ pwsh -NoProfile -Command "Get-Process bit-cli,loopback-fileserver,loopback-track
   daemon reference stack in `TorrentNG` and an offline/online control-plane
   design in `superseedr`; both are for the deferred Phase C entries
   [T-200 to T-209](phase-c.md) only. Do not un-defer them.
-- **`iroh` is not being adopted.** BEP 55 needs no NAT library; the blocker is
-  librqbit's `PeerConnectionHandler`. [T-102](bep-coverage.md) carries the
-  whole flow inline and the design rationale from `torrent/NOTES.md:15-31`.
-  Do not reach for a NAT crate.
+- **Compliance is the floor, not the ceiling** (operator ruling, 2026-08-24).
+  In the operator's words: `bit-cli` will be BEP and RFC compliant, but it will
+  not limit itself to BEPs and RFCs that were written long ago, because in the
+  real world NATs and heavily censored networks are everywhere.
+
+  So NAT crates, relays and traversal mechanisms beyond the BEPs are
+  candidates. Two conditions, and they are not negotiable. A mechanism must not
+  break a peer that speaks only the BEPs, and it must degrade to plain BEP 55
+  and plain TCP or uTP when the other side has nothing else. An entry proposing
+  one says, per mechanism, **what a standards-only peer sees**.
+
+  This replaces a paragraph that ruled the other way and closed the question
+  with "do not reach for a NAT crate". The superseded text and why it was
+  written are in `reference/HISTORY/RULES-section-6-iroh.md`.
+
+  [T-238](peers.md) is where the question lives now. Its recommendation for
+  `iroh` specifically is still no, on a different argument: an `iroh` peer is
+  an ed25519 node id, a BitTorrent peer is an `IP:port`, and there is nowhere
+  in BEP 5, BEP 11 or a tracker response to publish a node id that another
+  client would understand. The measured cost is there too: 113 crates this tree
+  does not already have, replacing nothing.
+  [T-102](bep-coverage.md) keeps its inline BEP 55 flow and the design
+  rationale from `torrent/NOTES.md:15-31`.
 - **MSRV is 1.88 and is measured, not chosen.** Raising it needs
   `cargo metadata` to say so.
 - **Nothing in `patches/` is ever offered upstream.** The vendored trees are

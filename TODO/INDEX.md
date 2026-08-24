@@ -132,6 +132,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-052](dht.md) | P3 | dht | open | DHT is not reported |
 | [T-169](dht.md) | P3 | dht | open | BEP 33 DHT scrape and BEP 51 infohash indexing are not implemented |
 | [T-170](dht.md) | P3 | dht | open | BEP 44 mutable items are not implemented |
+| [T-240](dht.md) | P3 | dht | open | A DHT node that answers slowly or emptily is queried again at the same rank |
 | [T-060](trackers.md) | P1 | trackers | **done** | The announced port is wrong when no port is configured |
 | [T-061](trackers.md) | P1 | trackers | **done** | bit-cli trackers announces a fixed port |
 | [T-062](trackers.md) | P1 | trackers | **done** | Announce timing has no started, completed, or stopped events |
@@ -139,6 +140,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-064](trackers.md) | P2 | trackers | **done** | UDP tracker retry does not follow the BEP 15 backoff |
 | [T-065](trackers.md) | P3 | trackers | **done** | Scrape is only implemented for the BEP 48 URL convention |
 | [T-180](trackers.md) | P2 | trackers | **done** | A negative left in a tracker exchange has no decided handling |
+| [T-235](trackers.md) | P1 | trackers | **done** | Nothing compares the numbers a tracker sees against the run that made them |
+| [T-237](trackers.md) | P2 | trackers | open | Three announce paths have no fidelity case |
 | [T-070](windows.md) | P1 | windows | **done** | A downloaded executable cannot be run until the process exits |
 | [T-071](windows.md) | P0 | windows | **done** | Reserved device names in torrent paths are not sanitised |
 | [T-072](windows.md) | P0 | windows | **done** | Case-colliding paths silently overwrite |
@@ -232,6 +235,10 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-231](memory.md) | P1 | memory | **done** | A soak killed mid-write reads as a final sample of zeros |
 | [T-232](memory.md) | P1 | memory | open | A six hour soak reported a pass on a workload that stopped after 78 minutes |
 | [T-233](peers.md) | P1 | peers | open | MSE over uTP stalls after the handshake |
+| [T-234](peers.md) | P2 | peers | open | bit-cli cannot present itself as a client a restrictive peer will talk to |
+| [T-236](peers.md) | P1 | peers | open | bit-cli announces under two peer ids and neither one is bit-cli |
+| [T-238](peers.md) | P2 | peers | open | NAT traversal beyond the BEPs, and what a relay would actually buy |
+| [T-239](peers.md) | P2 | peers | open | Nothing says what shape of network bit-cli is on, or whether a peer path is direct |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -259,8 +266,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-182 items: 172 to work through, and 10 deferred to Phase C.
-23 open, 1 partial, 0 blocked, 148 done.
+189 items: 179 to work through, and 10 deferred to Phase C.
+29 open, 1 partial, 0 blocked, 149 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -518,11 +525,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 3 | 0 | 0 | 65 | 68 |
-| P2 | 11 | 1 | 0 | 53 | 65 |
-| P3 | 9 | 0 | 0 | 18 | 27 |
+| P1 | 4 | 0 | 0 | 66 | 70 |
+| P2 | 15 | 1 | 0 | 53 | 69 |
+| P3 | 10 | 0 | 0 | 18 | 28 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **23** | **1** | **0** | **148** | **182** |
+| **All** | **29** | **1** | **0** | **149** | **189** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

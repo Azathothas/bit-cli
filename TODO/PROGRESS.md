@@ -57,8 +57,8 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-24T02:09:05Z, unattended. The duration is not
-  restated here:
+- **Last session:** 2026-08-24T07:51:30Z, unattended, documentation and
+  research. The duration is not restated here:
   `scripts/session-report.ps1` derives it from the instant above, and a
   duration written down twice is a number two documents disagree about.
 - **Tests:** 1,298 passing, 0 failing. 1,290 at the start. Plus **149** in the
@@ -95,8 +95,8 @@ pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.c
 gh run list --limit 1
 ```
 
-- **Entries:** 182 items. 23 open, 1 partial, 0 blocked, 148 done, 10 deferred
-  to Phase C. 148 of 172 workable done, 24 left.
+- **Entries:** 189 items. 29 open, 1 partial, 0 blocked, 149 done, 10 deferred
+  to Phase C. 149 of 179 workable done, 30 left.
 - **Tree:** 97 Rust files, 57,893 lines of code, 14,905 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **31 patches**
@@ -105,6 +105,31 @@ gh run list --limit 1
   [T-173](metainfo.md) is why that is worth saying: the patch it expected to
   need turned out to be unnecessary.
 - **Version:** `bit-cli` 0.2.0, unchanged.
+
+## What this session is doing
+
+Documentation and research. It writes prose, records and three pieces of
+tooling, and it files new work rather than implementing it.
+
+1. Mine the references the operator supplied: client masking, announce
+   fidelity against a loopback tracker, NAT traversal beyond the BEPs,
+   throughput, the magnet and DHT toolkit, the `TheDancingDeveloper-org`
+   sweep, and the web UI survey. One reference at a time, its corpus entry
+   and its filed entries written before the next one starts.
+2. Reconcile `reference/RESEARCH.md` and `reference/README.md` against what
+   has since landed, archive what is closed to `reference/HISTORY/`, then
+   rewrite [INDEX.md](INDEX.md) once with the new entries in it.
+3. Rewrite `README.md` as a map and move its topic prose into `docs/`, adding
+   an agent orientation page, a reference-mining procedure, a task-authoring
+   procedure and a set of worked examples.
+4. Sweep the docs for project history, and add a docs check to the gates and
+   to CI.
+5. Two deep reviews, the summary, the kickoff.
+
+Three pieces of tooling are built and run here rather than filed: the client
+profile generator ported from `joal`, the announce fidelity check ported from
+`RatioTracker`, and the docs check. The features the findings describe are
+filed and left.
 
 ## What the last session did
 

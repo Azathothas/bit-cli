@@ -285,3 +285,76 @@ Acceptance:  `bit-cli` reads a mutable item by public key and salt, verifies
              re-read from a second process. Both directions, with the sequence
              number visible in `--json`, because a reader has to be able to
              tell a stale read from a current one.
+
+---
+
+### T-240 A DHT node that answers slowly or emptily is queried again at the same rank
+
+Source:      `RESEARCH.md` entry 37, `gaia/docs/future_plan_peer_quality.md`,
+             2026-08-24
+Category:    dht
+Priority:    P3
+Effort:      M
+Status:      open
+
+Problem:     `bit-cli` selects DHT nodes for an iterative lookup by XOR
+             distance. Distance says which nodes are worth asking about a
+             target; it says nothing about which nodes answer. A routing table
+             entry that has timed out four times in a row is asked again at the
+             same rank as one that answered 40 ms ago.
+
+             `bit-cli`'s DHT is `librqbit_dht` in `vendor/`, so this is a
+             vendored change and [T-052](dht.md) is what would report it.
+
+Premise:     The model is somebody else's and it is a **plan rather than an
+             implementation**, which the corpus entry says plainly: grepping
+             `gaia` for its own vocabulary finds the words in two documents and
+             in no source file. So this is a design to evaluate rather than
+             code to port, and its own numbers are absent.
+
+             What it proposes, per node: `last_response_time`, `rtt_ema`,
+             `query_count`, `fail_count`, and `last_useful_response`. That last
+             field is the one worth having and the one a naive version misses:
+             it separates a node that **answered** from a node that answered
+             with something, and an empty `get_peers` response is a successful
+             query that was worth nothing.
+
+             Selection combines distance with reputation rather than replacing
+             one with the other. The fields ride in the routing table snapshot
+             that is already persisted, so there is no new store.
+
+             Its two other mechanisms are already this repository's:
+             a short-term negative peer cache is [T-164](peers.md), partial and
+             blocked on `Session::blocklist` being immutable, and the
+             per-source cooldown for HTTP sources is
+             [T-137](multi-source.md), done. That the document arrives at both
+             independently is corroboration for them rather than new work.
+
+             Its warning against a **global cross-torrent positive peer cache**
+             is worth recording so nobody builds one: a peer that had torrent A
+             need not have torrent B, addresses and NAT mappings churn, and the
+             peers that are stable across torrents are seedboxes, so relying on
+             them concentrates load on a few addresses and invites being
+             blocked by them.
+
+Approach:    Measure before building, which is [RULES.md](RULES.md) section 5's
+             line and the reason this entry is P3 rather than P2. The claim is
+             that reputation-ranked selection reduces wasted queries. Nothing
+             here has measured how many queries are currently wasted.
+
+             So the first half is instrumentation, not selection: count
+             queries, timeouts, and responses that carried no peer and no node,
+             per lookup, and report them under `bit-cli` DHT output. If the
+             wasted fraction is small the rest of the entry is not worth its
+             vendored change.
+
+Prove:       A new check beside the existing ones, `check-dht-quality.ps1`,
+             named without its directory because it does not exist yet.
+
+             Against a loopback DHT fixture holding a mix of nodes that answer
+             fast, answer slow, answer empty, and never answer, the check must
+             show the wasted query fraction before and after, from the same
+             fixture and the same target, with the ranking as the only
+             difference. A comparative claim needs a committed benchmark, which
+             is why the fixture is part of the entry rather than a detail of
+             it.
