@@ -17,6 +17,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use bit_cli_core::error::{Error, Result, from_io};
 use bit_cli_core::metalink::{Metalink, MetalinkFile, Mirror};
@@ -159,7 +160,13 @@ fn is_metalink_name(lower: &str) -> bool {
     lower.ends_with(".meta4") || lower.ends_with(".metalink")
 }
 
-/// Load full metadata for a source that carries it.
+/// Load full metadata for a source that is already on this machine.
+///
+/// **This is the local-only path and it is not what a command should call.**
+/// [`resolve_blocking`] is: it reads a local source through this and fetches a
+/// remote one, which is what every command's `SOURCE` help text has always
+/// promised. This stays for a caller that must not touch the network, and for
+/// the two kinds that no single `GET` can answer.
 ///
 /// A magnet or a bare info hash has no piece hashes, so this returns an error
 /// naming what would be needed instead of quietly starting a swarm lookup.
@@ -198,38 +205,208 @@ pub fn load_local(kind: &Kind, env: &mut Env) -> Result<Metainfo> {
     }
 }
 
+/// Resolve a source to full metadata, fetching it when it is remote.
+///
+/// **This is what a command calls**, and [`load_local`] is the half of it that
+/// never touches the network. The difference between the two used to be the
+/// difference between `download` and every other command: `download` handed a
+/// URL to the session, which fetched it, and the nine commands that read the
+/// torrent themselves refused the same URL their own help text offers. See
+/// `TODO/cli-surface.md`, T-245.
+///
+/// A magnet and a bare info hash are still refused, and the refusal is still
+/// [`load_local`]'s. Those two need the swarm rather than one `GET`, which is
+/// a different operation with a different cost, and the commands that can do
+/// it call the engine directly.
+pub async fn resolve(
+    kind: &Kind,
+    env: &mut Env,
+    user_agent: &str,
+    deadline: Duration,
+) -> Result<Metainfo> {
+    match kind {
+        Kind::Url(url) => Ok(fetch_torrent(url, user_agent, deadline).await?.0),
+        Kind::Metalink(path) => {
+            let document = Metalink::read(path)?;
+            Ok(resolve_metalink(&document, user_agent, deadline)
+                .await?
+                .meta)
+        }
+        Kind::MetalinkUrl(url) => {
+            let document = fetch_metalink(url, user_agent, deadline).await?;
+            Ok(resolve_metalink(&document, user_agent, deadline)
+                .await?
+                .meta)
+        }
+        _ => load_local(kind, env),
+    }
+}
+
+/// [`resolve`] for a command that is synchronous, which is all of them.
+///
+/// The runtime is built **only when the source needs one**, so reading a local
+/// `.torrent` costs exactly what it did before: no threads, no reactor. Every
+/// caller runs before it has built a runtime of its own, and a caller that
+/// changes gets an error naming the mistake rather than tokio's panic, which
+/// is what `a_fetch_from_inside_a_runtime_is_an_error_not_a_panic` holds.
+pub fn resolve_blocking(
+    kind: &Kind,
+    env: &mut Env,
+    user_agent: &str,
+    deadline: Duration,
+) -> Result<Metainfo> {
+    if !kind.needs_network() {
+        return load_local(kind, env);
+    }
+    // A magnet and a bare info hash reach `load_local`'s refusal without a
+    // runtime being built for a fetch that is not going to happen.
+    if matches!(kind, Kind::Magnet(_) | Kind::InfoHash(_)) {
+        return load_local(kind, env);
+    }
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(Error::generic(
+            "a source fetch was started from inside a runtime, and this is the blocking entry point",
+        )
+        .with("source_kind", kind.name()));
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Error::generic(format!("cannot build a runtime to fetch the source: {e}")))?;
+    runtime.block_on(resolve(kind, env, user_agent, deadline))
+}
+
+/// [`resolve_blocking`] with the two things the command line decides read out
+/// of it, so a command resolves its source in one call.
+///
+/// `user_agent` is the command's own `--web-seed-user-agent` where it has one.
+/// A caller that set an identity for its mirrors meant it for the document
+/// those mirrors are described by too, and a command with no such flag gets
+/// the same default every other HTTP request here uses.
+pub fn resolve_source(
+    kind: &Kind,
+    env: &mut Env,
+    global: &crate::cli::Global,
+    user_agent: Option<&str>,
+) -> Result<Metainfo> {
+    let agent = user_agent
+        .map(str::to_string)
+        .unwrap_or_else(bit_cli_core::webseed::fetch::default_user_agent);
+    let timeout = crate::swarm::optional_duration(&global.timeout, "timeout")?;
+    resolve_blocking(kind, env, &agent, deadline(timeout))
+}
+
+/// The deadline for one document fetch, from `--timeout` when it was given.
+///
+/// `--timeout` is the whole operation's deadline, and for a command that reads
+/// a torrent and prints it the fetch **is** the operation, so the flag is the
+/// deadline rather than a bound on it. Absent, [`FETCH_TIMEOUT`] applies.
+pub fn deadline(timeout: Option<Duration>) -> Duration {
+    timeout.unwrap_or(FETCH_TIMEOUT)
+}
+
+/// Largest `.torrent` accepted over HTTP, in bytes.
+///
+/// Sixteen mebibytes holds 838,860 SHA-1 piece hashes, which is past the
+/// 262,104 pieces the read side caps a bitfield at, so this ceiling cannot be
+/// what refuses a torrent this tree could otherwise handle. See
+/// `TODO/peers.md`, T-195. It exists for the same reason
+/// [`MAX_METALINK_BYTES`] does: the URL comes from the caller and the body
+/// comes from whoever answers it.
+const MAX_TORRENT_BYTES: usize = 16 * 1024 * 1024;
+
 /// Fetch a `.torrent` over HTTP, keeping the bytes as well as the parse.
 ///
 /// Both, because the caller hands the exact bytes to the session rather than
 /// handing it the URL again. Fetching a URL twice can return two different
 /// documents, and a run whose report describes one torrent while the session
 /// downloads another is the worst kind of wrong answer.
-pub async fn fetch_torrent(url: &str, user_agent: &str) -> Result<(Metainfo, Vec<u8>)> {
-    let bytes = fetch_bytes(url, user_agent).await?;
-    let meta =
-        Metainfo::parse(&bytes).map_err(|e| Error::source_resolution(format!("{url}: {e}")))?;
-    Ok((meta, bytes))
+pub async fn fetch_torrent(
+    url: &str,
+    user_agent: &str,
+    deadline: Duration,
+) -> Result<(Metainfo, Vec<u8>)> {
+    let body = fetch_bytes(url, user_agent, MAX_TORRENT_BYTES, deadline).await?;
+    let meta = Metainfo::parse(&body.bytes).map_err(|e| {
+        // What arrived, not only where the parse gave up. A URL that serves a
+        // directory listing fails on byte 0 being `<`, and "the server sent
+        // text/html" is the sentence that tells a caller they pasted the page
+        // rather than the file. See `TODO/cli-surface.md`, T-245.
+        // `e` already begins "not a valid torrent", so this says what arrived
+        // and lets the parser say what was wrong with it. Saying both in one
+        // sentence made the message read "not a torrent: not a valid torrent".
+        let error = Error::source_resolution(match &body.content_type {
+            Some(kind) => format!("{url}: the server answered with {kind}: {e}"),
+            None => format!("{url}: {e}"),
+        })
+        .with("url", url.to_string())
+        .with("bytes", body.bytes.len());
+        match &body.content_type {
+            Some(kind) => error.with("content_type", kind.clone()),
+            None => error,
+        }
+    })?;
+    Ok((meta, body.bytes))
+}
+
+/// A fetched body and the one header that says what it is.
+///
+/// `Content-Type` is carried because a failure to parse is answered by what
+/// arrived rather than by where the parse stopped.
+struct Body {
+    bytes: Vec<u8>,
+    content_type: Option<String>,
 }
 
 /// Fetch a URL and return its body, failing on any status that is not success.
-async fn fetch_bytes(url: &str, user_agent: &str) -> Result<Vec<u8>> {
-    let client = reqwest_client(user_agent)?;
-    let response = client
+///
+/// The body is read in chunks and stopped at `max_bytes`, so the cap bounds
+/// what is held in memory rather than only what is returned. Reading it whole
+/// and measuring it afterwards is what the Metalink path did until T-245, and
+/// a server declaring a small `Content-Length` and sending more was read in
+/// full before anything checked it.
+async fn fetch_bytes(
+    url: &str,
+    user_agent: &str,
+    max_bytes: usize,
+    deadline: Duration,
+) -> Result<Body> {
+    let client = reqwest_client(user_agent, deadline)?;
+    let mut response = client
         .get(url)
         .send()
         .await
-        .map_err(|e| Error::network(format!("cannot fetch {url}: {e}")))?;
+        .map_err(|e| fetch_error(e, url, "cannot fetch", deadline))?;
     let status = response.status();
     if !status.is_success() {
         return Err(Error::source_resolution(format!("{url}: {status}"))
             .with("url", url.to_string())
             .with("http_status", status.as_u16()));
     }
-    response
-        .bytes()
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map(|b| b.to_vec())
-        .map_err(|e| Error::network(format!("cannot read the body of {url}: {e}")))
+        .map_err(|e| fetch_error(e, url, "cannot read the body of", deadline))?
+    {
+        body.extend_from_slice(&chunk);
+        if body.len() > max_bytes {
+            return Err(Error::source_resolution(format!(
+                "{url} answered with more than {max_bytes} bytes, which is larger than any document a source can be"
+            ))
+            .with("url", url.to_string())
+            .with("max_bytes", max_bytes));
+        }
+    }
+    Ok(Body {
+        bytes: body,
+        content_type,
+    })
 }
 
 /// A Metalink read, and the `.torrent` it names fetched.
@@ -271,17 +448,9 @@ const MAX_METALINK_BYTES: usize = 1024 * 1024;
 /// A document with relative mirror URLs would need a base to resolve against,
 /// and `bit-cli` refuses those on both paths rather than resolving one kind
 /// and not the other. See `TODO/cli-surface.md`, T-154.
-pub async fn fetch_metalink(url: &str, user_agent: &str) -> Result<Metalink> {
-    let bytes = fetch_bytes(url, user_agent).await?;
-    if bytes.len() > MAX_METALINK_BYTES {
-        return Err(Error::source_resolution(format!(
-            "{url}: the metalink is {} bytes, and the ceiling is {MAX_METALINK_BYTES}",
-            bytes.len()
-        ))
-        .with("url", url.to_string())
-        .with("bytes", bytes.len()));
-    }
-    Metalink::parse(&bytes).map_err(|e| Error::source_resolution(format!("{url}: {e}")))
+pub async fn fetch_metalink(url: &str, user_agent: &str, deadline: Duration) -> Result<Metalink> {
+    let body = fetch_bytes(url, user_agent, MAX_METALINK_BYTES, deadline).await?;
+    Metalink::parse(&body.bytes).map_err(|e| Error::source_resolution(format!("{url}: {e}")))
 }
 
 /// Read a Metalink and fetch the torrent it names.
@@ -290,7 +459,11 @@ pub async fn fetch_metalink(url: &str, user_agent: &str) -> Result<Metalink> {
 /// `.torrent` itself. They are tried in the document's own preferred order and
 /// the first that parses wins; the failures are kept so the report can say the
 /// preferred one was not the one used.
-pub async fn resolve_metalink(document: &Metalink, user_agent: &str) -> Result<ResolvedMetalink> {
+pub async fn resolve_metalink(
+    document: &Metalink,
+    user_agent: &str,
+    deadline: Duration,
+) -> Result<ResolvedMetalink> {
     let file = document.single_file()?.clone();
     // Owned, because the fetch below moves `file` into the result while the
     // loop is still walking the list.
@@ -309,7 +482,7 @@ pub async fn resolve_metalink(document: &Metalink, user_agent: &str) -> Result<R
     }
     let mut torrent_errors = Vec::new();
     for mirror in &torrents {
-        match fetch_torrent(&mirror.url, user_agent).await {
+        match fetch_torrent(&mirror.url, user_agent, deadline).await {
             Ok((meta, torrent_bytes)) => {
                 return Ok(ResolvedMetalink {
                     version: document.version.as_str(),
@@ -336,11 +509,13 @@ pub async fn resolve_metalink(document: &Metalink, user_agent: &str) -> Result<R
     .with("torrents_tried", tried))
 }
 
-/// Longest a list fetch may take, connect and body together.
+/// Longest one fetch may take by default, connect and body together.
 ///
-/// A tracker list that never finishes arriving must not hold up a download
-/// that has everything else it needs.
-const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// A tracker list, a `.torrent` or a Metalink that never finishes arriving
+/// must not hold up the command that asked for it. A list fetch is always
+/// bounded by this; a source fetch takes `--timeout` instead when the caller
+/// set one, which is what [`deadline`] decides.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Largest list body accepted, in bytes.
 ///
@@ -378,7 +553,7 @@ pub async fn fetch_list(url: &str, user_agent: &str) -> Result<String> {
 
     let client = reqwest::Client::builder()
         .user_agent(user_agent)
-        .timeout(LIST_TIMEOUT)
+        .timeout(FETCH_TIMEOUT)
         .build()
         .map_err(|e| Error::network(format!("cannot build an HTTP client: {e}")))?;
     let response = client
@@ -433,9 +608,33 @@ pub fn list_fetcher<'a>(
     move |url: &str| runtime.block_on(fetch_list(url, user_agent))
 }
 
-fn reqwest_client(user_agent: &str) -> Result<reqwest::Client> {
+/// Turn a `reqwest` failure into an error that says whether the deadline ended
+/// it.
+///
+/// A body that runs out of time comes back as "error decoding response body",
+/// which is true of the transport and says nothing about the flag the caller
+/// set. A run that gave up because its deadline fired exits 9 and names the
+/// deadline, which is the number a caller can change. See
+/// `TODO/cli-surface.md`, T-245.
+fn fetch_error(err: reqwest::Error, url: &str, what: &str, deadline: Duration) -> Error {
+    if err.is_timeout() {
+        return Error::timeout(format!(
+            "{url}: no answer within {}ms, which is what --timeout allows",
+            deadline.as_millis()
+        ))
+        .with("url", url.to_string())
+        .with(
+            "timeout_ms",
+            u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX),
+        );
+    }
+    Error::network(format!("{what} {url}: {err}"))
+}
+
+fn reqwest_client(user_agent: &str, deadline: Duration) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent(user_agent)
+        .timeout(deadline)
         .build()
         .map_err(|e| Error::network(format!("cannot build an HTTP client: {e}")))
 }
@@ -616,6 +815,230 @@ mod tests {
             err.message()
         );
         assert!(err.context().contains_key("hint"));
+    }
+
+    /// T-245's acceptance. All four commands offer an HTTP URL in their
+    /// `SOURCE` help and all four refused one, while `download` fetched the
+    /// same URL and completed.
+    ///
+    /// Every field but two has to match the same torrent read off disk:
+    /// "it worked" and "it reported the same torrent" are different claims,
+    /// and only the second one is worth anything. The two are the timestamp,
+    /// which is two runs, and `source_kind`, which differs because the source
+    /// genuinely was a URL.
+    #[test]
+    fn four_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports() {
+        use crate::test_support::{FileServer, TorrentFixture, run_json};
+
+        let fixture = TorrentFixture::multi_file();
+        // `verify` hashes the payload, so it has to be where the torrent says.
+        fixture.place(&fixture.dir(), &[]);
+        let server = FileServer::start(fixture.dir());
+        let url = format!("{}album.torrent", server.base);
+
+        for command in ["info", "files", "magnet", "verify"] {
+            let local = run_json(&[command, fixture.path_str()], fixture.dir());
+            let remote = run_json(&[command, &url], fixture.dir());
+            let (local, remote) = (strip(local), strip(remote));
+            assert_eq!(local, remote, "`bit-cli {command}` disagrees with itself");
+        }
+    }
+
+    /// Everything two runs of the same command differ in for reasons that are
+    /// not the source: when they ran, and what the source was.
+    fn strip(mut doc: serde_json::Value) -> serde_json::Value {
+        if let Some(object) = doc.as_object_mut() {
+            object.remove("generated_at");
+            object.remove("source_kind");
+        }
+        doc
+    }
+
+    /// The other half of T-245's acceptance: a URL that serves something else
+    /// still fails, and says **what arrived** rather than only where the parse
+    /// stopped. A caller who pasted a directory listing reads "text/html" and
+    /// knows what they did; "unexpected byte `<`" needs them to know bencode.
+    #[test]
+    fn a_url_that_serves_a_page_fails_and_names_what_arrived() {
+        use crate::test_support::{TorrentFixture, run_err};
+
+        let fixture = TorrentFixture::multi_file();
+        let port = answer_once(PAGE, "text/html; charset=utf-8");
+        let url = format!("http://127.0.0.1:{port}/downloads/");
+
+        let err = run_err(
+            &["info", &url],
+            fixture.dir(),
+            bit_cli_core::ExitCode::SourceResolution,
+        );
+        assert!(err.contains(&url), "the URL is not in the message: {err}");
+        assert!(
+            err.contains("the server answered with text/html"),
+            "the content type is not in the message: {err}"
+        );
+        assert!(err.contains("not a valid torrent"), "{err}");
+    }
+
+    /// A server with no `Content-Type` still fails, and says the one thing it
+    /// can. The branch matters because plenty of object stores answer a
+    /// `.torrent` with no type at all.
+    #[test]
+    fn a_body_that_is_not_a_torrent_fails_without_a_content_type_too() {
+        use crate::test_support::{TorrentFixture, run_err};
+
+        let fixture = TorrentFixture::multi_file();
+        let port = answer_once(b"nope!", "");
+        let url = format!("http://127.0.0.1:{port}/album.torrent");
+
+        let err = run_err(
+            &["info", &url],
+            fixture.dir(),
+            bit_cli_core::ExitCode::SourceResolution,
+        );
+        assert!(!err.contains("the server answered with"), "{err}");
+        assert!(err.contains("not a valid torrent"), "{err}");
+    }
+
+    /// A directory listing, which is what a caller who pasted the wrong URL
+    /// gets back. Its length is taken rather than written down, because a
+    /// `Content-Length` that disagrees with the body is a hang rather than a
+    /// failed assertion.
+    const PAGE: &[u8] = b"<!doctype html><html><body>Index of /pub</body></html>";
+
+    /// Bind loopback, answer the first request with `body`, and stop.
+    ///
+    /// Small enough to hold the whole exchange in the test that reads it,
+    /// which `FileServer` is not: this needs to control the response headers,
+    /// and `FileServer` exists to serve files. An empty `content_type` sends
+    /// no such header at all, which is the other branch under test.
+    fn answer_once(body: &'static [u8], content_type: &str) -> u16 {
+        let listener =
+            std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind loopback");
+        let port = listener.local_addr().expect("local addr").port();
+        let mut head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+        if !content_type.is_empty() {
+            head.push_str(&format!("Content-Type: {content_type}\r\n"));
+        }
+        head.push_str("\r\n");
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            // The request is read out before anything is written. A response
+            // sent while the request is still arriving is a reset on Windows,
+            // which reads as a network failure rather than as the body this
+            // test is about.
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => request.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body);
+            let _ = stream.flush();
+        });
+        port
+    }
+
+    /// `resolve_blocking` is what a synchronous command calls, and every one of
+    /// them runs before it has built a runtime of its own. A caller that
+    /// changes gets an error naming the mistake rather than tokio's "cannot
+    /// block the current thread from within a runtime" panic, which names
+    /// nothing a reader of this tree can act on. T-245.
+    #[tokio::test]
+    async fn a_fetch_from_inside_a_runtime_is_an_error_not_a_panic() {
+        let mut env = env();
+        let kind = Kind::classify("https://e.com/x.torrent", &env).unwrap();
+        let err = resolve_blocking(&kind, &mut env, "agent", Duration::from_secs(1)).unwrap_err();
+        assert!(
+            err.message().contains("inside a runtime"),
+            "{}",
+            err.message()
+        );
+        assert_eq!(err.context()["source_kind"], "torrent_url");
+    }
+
+    /// And the guard sits after the local shortcut rather than before it, so a
+    /// source that needs no fetch resolves from anywhere. `files --against`
+    /// reads several local torrents and must not care what it is called from.
+    #[tokio::test]
+    async fn a_local_source_resolves_from_inside_a_runtime_because_it_never_fetches() {
+        use crate::test_support::TorrentFixture;
+
+        let fixture = TorrentFixture::multi_file();
+        let mut env = Env::test(&[], fixture.dir()).0;
+        let kind = Kind::classify(fixture.path_str(), &env).unwrap();
+        let meta = resolve_blocking(&kind, &mut env, "agent", Duration::from_secs(1)).unwrap();
+        assert_eq!(meta.info_hash().hex(), fixture.info_hash);
+    }
+
+    /// A magnet reaches the refusal without a runtime being built for a fetch
+    /// that was never going to happen. The message is `load_local`'s, because
+    /// the reason is the same one it has always given.
+    #[tokio::test]
+    async fn a_magnet_is_refused_without_a_fetch_being_attempted() {
+        let mut env = env();
+        let kind = Kind::classify(&format!("magnet:?xt=urn:btih:{HEX}"), &env).unwrap();
+        let err = resolve_blocking(&kind, &mut env, "agent", Duration::from_secs(1)).unwrap_err();
+        assert!(
+            err.message().contains("no piece hashes"),
+            "{}",
+            err.message()
+        );
+    }
+
+    /// A deadline that fires is exit 9 and says so. `reqwest` calls a body
+    /// that ran out of time "error decoding response body", which is a
+    /// statement about the transport and says nothing about the flag the
+    /// caller set. T-245.
+    ///
+    /// Nothing here waits on a duration: the server accepts and never answers,
+    /// so the request's own deadline is the only thing that can end it, and
+    /// the assertion is on the code and the message rather than on the clock.
+    #[test]
+    fn a_fetch_that_runs_out_of_time_exits_nine_and_names_the_deadline() {
+        let listener =
+            std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind loopback");
+        let port = listener.local_addr().expect("local addr").port();
+        std::thread::spawn(move || {
+            // Held rather than dropped: a closed socket is a refused request,
+            // which fails for a different reason and would prove nothing.
+            let held = listener.accept();
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            drop(held);
+        });
+
+        let mut env = env();
+        let url = format!("http://127.0.0.1:{port}/x.torrent");
+        let kind = Kind::classify(&url, &env).unwrap();
+        let err =
+            resolve_blocking(&kind, &mut env, "agent", Duration::from_millis(300)).unwrap_err();
+        assert_eq!(err.code(), bit_cli_core::ExitCode::Timeout);
+        assert!(err.message().contains("--timeout"), "{}", err.message());
+        assert_eq!(err.context()["timeout_ms"], 300);
+    }
+
+    /// `--timeout` is the operation's deadline rather than a ceiling on it, so
+    /// a caller who allowed ten minutes gets ten minutes and one who allowed
+    /// three seconds gets three.
+    #[test]
+    fn the_fetch_deadline_is_the_timeout_flag_when_one_was_given() {
+        assert_eq!(deadline(None), FETCH_TIMEOUT);
+        assert_eq!(
+            deadline(Some(Duration::from_secs(3))),
+            Duration::from_secs(3)
+        );
+        assert_eq!(
+            deadline(Some(Duration::from_secs(600))),
+            Duration::from_secs(600)
+        );
     }
 
     #[test]

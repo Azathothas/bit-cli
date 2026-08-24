@@ -4103,9 +4103,10 @@ Acceptance:  A page served by `loopback-fileserver` carrying one `.torrent`
              carrying two of each exits non-zero naming both. The header set
              and the TLS fingerprint are asserted against a recorded capture
              rather than eyeballed.
-Notes:       [T-245](#t-245-four-commands-refuse-the-url-download-accepts) is
-             the prerequisite: a page cannot resolve under `info` until a plain
-             `.torrent` URL does.
+Notes:       [T-245](#t-245-four-commands-refuse-the-url-download-accepts) was
+             the prerequisite, and it closed on 2026-08-24: a plain `.torrent`
+             URL resolves under `info` now, so a page is the remaining step
+             rather than the second of two.
 
 ### T-245 Four commands refuse the URL download accepts
 
@@ -4113,7 +4114,7 @@ Source:      measured 2026-08-24 while checking the operator's brief
 Category:    cli
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     `info`, `files`, `magnet` and `verify` all document their
              positional as "A .torrent path, an HTTP(S) URL, a magnet URI, an
@@ -4156,6 +4157,70 @@ Acceptance:  `bit-cli info`, `files`, `magnet` and `verify` each resolve a
              `.torrent` served by `loopback-fileserver` and report what the
              local file reports, field for field under `--json`. A URL that
              serves markup still fails, with a message naming what arrived.
+
+Correction:  **The title undercounts it. Nine commands refuse the URL, not
+             four**, and a tenth refuses it with a different message that is
+             also wrong. Measured by running every command against one URL
+             before anything was changed, 2026-08-24:
+
+             | command | before |
+             | --- | --- |
+             | `info`, `files`, `magnet`, `verify` | exit 4, "has to be fetched before it can be read" |
+             | `webseed list`, `test`, `probe`, `fetch` | exit 4, the same message |
+             | `bench webseed` | exit 4, the same message |
+             | `trackers` | exit 4, "an info hash is needed to announce, and this source does not carry one" |
+             | `download`, `seed`, `peers`, `bench leech` | works |
+
+             `trackers` is the interesting one: the URL **does** carry an info
+             hash, once fetched. It reaches `load_local` only for
+             `Kind::Stdin`, at `crates/bit-cli/src/cmd/trackers.rs:96`, and its
+             own classifier decides before that. It is left as it was and is
+             carried by [T-251](../TODO/trackers.md), which is the entry that
+             owns what a tracker command knows about its source.
+
+             **And a metalink is the same defect in the same help string.**
+             Every one of those nine offers "a metalink" in its `SOURCE` text
+             and every one refused both metalink shapes. Fixed with the URL,
+             because it is one code path and one sentence of help.
+
+Closed:      `crates/bit-cli/src/source.rs` gained `resolve`, which fetches,
+             and `resolve_blocking`, which is what a synchronous command calls.
+             `load_local` stays as the local-only path and keeps the magnet and
+             info hash refusal, because those need the swarm rather than one
+             `GET`. Nine commands call `resolve_source` now, which reads
+             `--timeout` and `--web-seed-user-agent` for them.
+
+             Three bounds, all of them measured:
+
+             - The deadline is `--timeout` when set and 30s otherwise. Against
+               a `--stall-after 64` file server, `--timeout 2s` gave up at
+               2,081ms and `--timeout 5s` at 5,090ms.
+             - A fetch that runs out of time exits **9** and names the deadline
+               in milliseconds. It exited 5 saying "error decoding response
+               body" until that was fixed, which is `reqwest` describing the
+               transport rather than the flag the caller set.
+             - A `.torrent` body is capped at 16 MiB and a metalink at 1 MiB,
+               counted as the bytes arrive. `fetch_metalink` read the whole
+               body and measured it afterwards, so its 1 MiB cap bounded what
+               was returned rather than what was held.
+
+             The acceptance was run as a test rather than by hand:
+             `four_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports`
+             compares all four commands' `--json` against the same torrent read
+             off disk. Every field matches but `generated_at`, which is two
+             runs, and `source_kind`, which differs because the source was a
+             URL.
+
+Prove:       ```
+             cargo test -p bit-cli --lib source::
+             ```
+
+             Twenty-four tests, seven of them new: the four-command
+             acceptance, the page that fails naming its content type, the body
+             with no content type that fails without inventing one, the
+             deadline that exits 9, the runtime guard, the local source that
+             resolves from inside a runtime anyway, and the magnet that is
+             refused without a fetch being attempted.
 
 ### T-246 Three inputs report a file error and two of them name the wrong cause
 

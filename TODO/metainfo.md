@@ -874,9 +874,10 @@ Approach:    Ruled on by the operator on 2026-08-24: **one `diff`, several
              `less`. `--json` carries `added`, `removed`, `changed` and
              `same`, because a script wants the sets rather than the rendering.
 
-             It needs [T-245](cli-surface.md) first: diffing a magnet against a
-             page URL is the case the operator asked for, and neither side
-             resolves outside `download` today.
+             It needed [T-245](cli-surface.md) first, and that closed on
+             2026-08-24: a `.torrent` URL and a metalink resolve under every
+             read-only command now. A magnet still does not, and a page never
+             did, which is [T-244](cli-surface.md).
 Acceptance:  `bit-cli diff a.torrent b.torrent` over two torrents differing in
              one tracker, one web seed and one file prints exactly those three
              differences and nothing else. `--by files` produces the same

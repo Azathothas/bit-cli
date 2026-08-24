@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::cli::{Global, SourceArgs};
 use crate::env::Env;
 use crate::output::{Renderer, field};
-use crate::source::{Kind, load_local};
+use crate::source::{Kind, resolve_source};
 
 /// What `bit-cli info` reports.
 #[derive(Debug, Clone, Serialize)]
@@ -170,12 +170,12 @@ impl Report {
 /// Run the command.
 pub fn run(
     args: &SourceArgs,
-    _global: &Global,
+    global: &Global,
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
     let kind = Kind::classify(&args.source, env)?;
-    let meta = load_local(&kind, env)?;
+    let meta = resolve_source(&kind, env, global, None)?;
     let report = Report::new(&meta, kind.name());
     renderer.emit(env, "info", &report, || report.lines())?;
     Ok(ExitCode::Success)

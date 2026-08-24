@@ -65,32 +65,53 @@ The forms above are what the argument parser understands. What a command can
 then do with one is narrower, and the difference is worth knowing before it
 surprises you.
 
-| form | `info`, `files`, `magnet`, `verify` | `download`, `seed` |
+The split is one question: does the form name a document that one `GET` can
+answer, or does it name something only a swarm can.
+
+| form | `info`, `files`, `magnet`, `verify`, `webseed`, `bench webseed` | `download`, `seed` |
 | --- | --- | --- |
 | local `.torrent` | yes | yes |
 | stdin | yes | yes |
-| HTTP(S) URL | **no** | yes |
+| HTTP(S) URL | yes | yes |
+| Metalink, local or by URL | yes, after fetching the torrent it names | yes |
 | magnet or info hash | no | yes, after a swarm lookup |
-| Metalink | no | yes, after fetching the torrent it names |
 
-Every `no` in that table was run and every one of them exits 4. On the other
-side, a `.torrent` URL was run end to end under `download`, and the two rows
-that need the network to resolve were checked as far as `--dry-run` goes, which
-is the argument and the plan rather than the lookup.
+Every row was run. The four read-only commands were run against all five forms
+and their `--json` output compared field for field against the same torrent
+read off disk: everything matches but `generated_at`, which is two runs, and
+`source_kind`, which differs because the source genuinely was a URL.
 
-**A URL is the surprising row.** `download` fetches it and completes; the other
-four refuse it:
+**A URL and a Metalink are fetched, not refused.** A `.torrent` at a URL is one
+request:
 
 ```bash
 bit-cli info https://host/album.torrent
 ```
 
-```text
-error: https://host/album.torrent has to be fetched before it can be read
+A Metalink is two, because the document names its `.torrent` and that has to be
+fetched as well. Both shapes work, the local `.meta4` and the one named by URL.
+
+Two bounds apply to any of those fetches, and neither is configurable except
+through `--timeout`:
+
+- The deadline is `--timeout` when you set one and 30 seconds when you do not.
+  A fetch that runs out of time exits **9** and names the deadline in
+  milliseconds, rather than reporting a decoding failure.
+- A `.torrent` body is capped at 16 MiB and a Metalink at 1 MiB, measured as
+  the bytes arrive rather than after the whole body is in memory. Over the cap
+  is exit 4.
+
+A URL that answers with something that is not a torrent fails and says what
+arrived, naming the declared content type when the server sent one:
+
+```bash
+bit-cli info https://host/downloads/
 ```
 
-The exit code is 4, source resolution. That is a gap rather than a design, and
-it is [T-245 in the TODO](../../TODO/cli-surface.md).
+```text
+error: https://host/downloads/: the server answered with text/html: not a
+valid torrent: unexpected byte '<' at byte 0, expected a bencode value
+```
 
 **A magnet and a bare info hash carry no piece hashes**, so there is nothing to
 report until the metadata has been pulled from the swarm. The refusal says so
@@ -112,10 +133,10 @@ that wants a torrent reports the operating system's reason rather than the real
 one, which is [T-246](../../TODO/cli-surface.md).
 
 **A web page.** A URL is assumed to name a `.torrent` itself. A page that
-*links* to one is fetched and handed to the bencode parser, which fails. There
-is no HTML parsing anywhere in the tree. That is
-[T-244](../../TODO/cli-surface.md), and the design there is static extraction
-with a browser opt-in.
+*links* to one is fetched and handed to the bencode parser, which fails and
+names the content type it got. There is no HTML parsing anywhere in the tree.
+That is [T-244](../../TODO/cli-surface.md), and the design there is static
+extraction with a browser opt-in.
 
 ## Several sources in one invocation
 

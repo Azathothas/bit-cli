@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::cli::{Global, SourceArgs};
 use crate::env::Env;
 use crate::output::{Renderer, field};
-use crate::source::{Kind, load_local};
+use crate::source::{Kind, resolve_source};
 
 /// What `bit-cli magnet` reports.
 #[derive(Debug, Clone, Serialize)]
@@ -79,7 +79,7 @@ impl Report {
 /// Run the command.
 pub fn run(
     args: &SourceArgs,
-    _global: &Global,
+    global: &Global,
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
@@ -87,7 +87,7 @@ pub fn run(
     let (report, uri_only) = match &kind {
         Kind::Magnet(magnet) => (Report::from_magnet(magnet), false),
         _ => {
-            let meta = load_local(&kind, env)?;
+            let meta = resolve_source(&kind, env, global, None)?;
             (Report::from_magnet(&Magnet::from_metainfo(&meta)), true)
         }
     };

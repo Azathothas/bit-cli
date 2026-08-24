@@ -37,7 +37,7 @@ use bit_cli_core::webseed::binding::BindingSet;
 use crate::cli::{BenchCommand, BenchShared, BenchWebseedArgs, Global, ReportArgs, ReportFormat};
 use crate::env::Env;
 use crate::output::Renderer;
-use crate::source::{Kind as SourceKind, load_local};
+use crate::source::Kind as SourceKind;
 use crate::swarm::{self, AttachedSource, SessionSetup};
 use crate::webseed_args;
 
@@ -351,7 +351,7 @@ pub fn webseed(
     let parameters = parameters(&args.shared)?;
     let request_size = size(args.shared.request_size.as_deref(), "request-size")?;
 
-    let (meta, layout, bindings) = resolve(&args.source.source, &args.web_seeds, env)?;
+    let (meta, layout, bindings) = resolve(&args.source.source, &args.web_seeds, global, env)?;
     let mut report = Report::new(
         Kind::Webseed,
         Environment::begin(
@@ -2124,14 +2124,24 @@ fn emit(
     Ok(code)
 }
 
-/// Resolve a source and its bindings without touching the network.
+/// Resolve a source and its bindings.
+///
+/// The source itself may be fetched. The bindings are still resolved without
+/// the network, which is `no_network` below and is about `--web-seed-list-url`
+/// rather than about the source. See `TODO/cli-surface.md`, T-245.
 fn resolve(
     source: &str,
     web_seeds: &crate::cli::WebSeedArgs,
+    global: &Global,
     env: &mut Env,
 ) -> Result<(Metainfo, Layout, BindingSet)> {
     let kind = SourceKind::classify(source, env)?;
-    let meta = load_local(&kind, env)?;
+    let meta = crate::source::resolve_source(
+        &kind,
+        env,
+        global,
+        web_seeds.web_seed_user_agent.as_deref(),
+    )?;
     let layout = meta.layout();
     let specs = webseed_args::collect(web_seeds, Some(&meta), None, env, webseed_args::no_network)?;
     if specs.is_empty() {

@@ -75,8 +75,8 @@ it, and it says so in its own first paragraph.
 
 ## State
 
-- **Last session:** 2026-08-24T10:05:00Z, unattended, verification and
-  documentation. The duration is not restated here:
+- **Last session:** 2026-08-24T11:48:11Z, unattended, and it is working the
+  entries rather than filing them. The duration is not restated here:
   `scripts/session-report.ps1` derives it from the instant above, and a
   duration written down twice is a number two documents disagree about.
 - **Tests:** 1,298 passing, 0 failing, unchanged. No `crates/` source changed
@@ -105,8 +105,8 @@ gh run list --limit 1
 pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.csv
 ```
 
-- **Entries:** 203 items. 41 open, 2 partial, 0 blocked, 149 done, 11 deferred
-  to Phase C. 149 of 192 workable done, 43 left.
+- **Entries:** 203 items. 40 open, 2 partial, 0 blocked, 150 done, 11 deferred
+  to Phase C. 150 of 192 workable done, 42 left.
 - **Tree:** 97 Rust files, 58,058 lines of code, 14,899 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
@@ -120,6 +120,26 @@ pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.c
 - **Version:** `bit-cli` 0.2.0, unchanged.
 
 ## What the last session did
+
+**This section is a plan until the session ends, by [RULES.md](RULES.md)
+section 1 step 4.** What is below the plan is the session before this one, kept
+until this one rewrites it.
+
+### The plan, written before the work
+
+The work order below is followed in its own order. The soak is printed for the
+operator and not started, per the standing instruction.
+
+1. [T-245](cli-surface.md), P1, effort M, `crates/bit-cli/src/source.rs` and
+   the six commands that call `load_local`. Four entries are blocked behind it.
+2. [T-236](peers.md), P1, effort S, `crates/bit-cli/src/cmd/trackers.rs`,
+   `crates/bit-cli/src/cmd/bench.rs` and wherever the one constant ends up.
+3. [T-246](cli-surface.md), [T-247](cli-surface.md) and
+   [T-249](metainfo.md), all effort S, which share one fixture.
+
+Anything past that is taken from the work order in order.
+
+---
 
 Verification, then documentation. **Eleven entries filed, none of the open ones
 worked on**, and eight operator decisions settled. The assignment was to take

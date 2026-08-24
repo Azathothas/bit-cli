@@ -20,7 +20,7 @@ use sha1::{Digest, Sha1};
 use crate::cli::{Global, VerifyArgs};
 use crate::env::Env;
 use crate::output::{Renderer, field};
-use crate::source::{Kind, load_local};
+use crate::source::{Kind, resolve_source};
 
 /// One piece's result, when `--per-piece` is given.
 #[derive(Debug, Clone, Serialize)]
@@ -267,7 +267,7 @@ pub fn run(
     env: &mut Env,
 ) -> Result<ExitCode> {
     let kind = Kind::classify(&args.source.source, env)?;
-    let meta = load_local(&kind, env)?;
+    let meta = resolve_source(&kind, env, global, None)?;
     let layout = meta.layout();
 
     let index_out = crate::selection::index_out(&args.index_out, Some(layout.files.len()))?;

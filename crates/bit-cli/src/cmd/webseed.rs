@@ -23,7 +23,7 @@ use crate::cli::{
 };
 use crate::env::Env;
 use crate::output::{Renderer, field, table};
-use crate::source::{Kind, load_local};
+use crate::source::{Kind, resolve_source};
 use crate::webseed_args;
 
 /// One source, as `webseed list` reports it.
@@ -246,14 +246,21 @@ impl ListReport {
     }
 }
 
-/// Resolve a source and its bindings without touching the network.
+/// Resolve a source and its bindings.
+///
+/// The source itself may be fetched, which is what `SOURCE`'s help text has
+/// always offered and what four `webseed` subcommands used to refuse. The
+/// bindings are still resolved without the network: `no_network` below is
+/// about `--web-seed-list-url`, which is a different fetch with a different
+/// entry that T-183 already decided. See `TODO/cli-surface.md`, T-245.
 fn resolve(
     source: &str,
     web_seeds: &crate::cli::WebSeedArgs,
+    global: &Global,
     env: &mut Env,
 ) -> Result<(Metainfo, Layout, BindingSet)> {
     let kind = Kind::classify(source, env)?;
-    let meta = load_local(&kind, env)?;
+    let meta = resolve_source(&kind, env, global, web_seeds.web_seed_user_agent.as_deref())?;
     let layout = meta.layout();
     let specs = webseed_args::collect(web_seeds, Some(&meta), None, env, webseed_args::no_network)?;
     if specs.is_empty() {
@@ -267,8 +274,13 @@ fn resolve(
 }
 
 /// `bit-cli webseed list`.
-pub fn list(args: &WebseedListArgs, renderer: &mut Renderer, env: &mut Env) -> Result<ExitCode> {
-    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, env)?;
+pub fn list(
+    args: &WebseedListArgs,
+    global: &Global,
+    renderer: &mut Renderer,
+    env: &mut Env,
+) -> Result<ExitCode> {
+    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, global, env)?;
     let report = ListReport::new(&meta, &layout, &set);
     warn_about_cache(&set, renderer, env);
 
@@ -344,7 +356,7 @@ pub fn fetch(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, env)?;
+    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, global, env)?;
 
     // Work out which bytes were asked for. Exactly one selector is allowed,
     // and the clap definition already refuses the conflicting combinations.
@@ -633,7 +645,7 @@ pub fn test(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, env)?;
+    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, global, env)?;
     if global.dry_run {
         // A dry run of a probe is `webseed list`: the addressing without the
         // network. Saying so is more useful than probing anyway.
@@ -644,6 +656,7 @@ pub fn test(
                 },
                 web_seeds: args.web_seeds.clone(),
             },
+            global,
             renderer,
             env,
         );
@@ -839,7 +852,7 @@ pub fn probe(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, env)?;
+    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, global, env)?;
     let duration = bit_cli_core::units::parse_duration(&args.duration)
         .map_err(|e| Error::usage(format!("--duration: {e}")))?;
     let sweep = parse_sweep(&args.concurrency_sweep)?;
@@ -984,7 +997,7 @@ pub fn run(
     env: &mut Env,
 ) -> Result<ExitCode> {
     match command {
-        WebseedCommand::List(args) => list(args, renderer, env),
+        WebseedCommand::List(args) => list(args, global, renderer, env),
         WebseedCommand::Test(args) => test(args, global, renderer, env),
         WebseedCommand::Probe(args) => probe(args, global, renderer, env),
         WebseedCommand::Fetch(args) => fetch(args, global, renderer, env),

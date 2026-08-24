@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::cli::{FilesArgs, Global};
 use crate::env::Env;
 use crate::output::{Renderer, table};
-use crate::source::{Kind, load_local};
+use crate::source::{Kind, resolve_source};
 
 /// One row of the listing.
 #[derive(Debug, Clone, Serialize)]
@@ -155,12 +155,12 @@ fn sort_rows(rows: &mut [FileRow], spec: &str) -> Result<()> {
 /// Run the command.
 pub fn run(
     args: &FilesArgs,
-    _global: &Global,
+    global: &Global,
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
     let kind = Kind::classify(&args.source.source, env)?;
-    let meta = load_local(&kind, env)?;
+    let meta = resolve_source(&kind, env, global, None)?;
     let layout = meta.layout();
     let total = layout.total_length;
 
@@ -169,7 +169,7 @@ pub fn run(
     let mut others = Vec::with_capacity(args.against.len());
     for source in &args.against {
         let kind = Kind::classify(source, env)?;
-        let other = load_local(&kind, env)?;
+        let other = resolve_source(&kind, env, global, None)?;
         others.push((source.clone(), other));
     }
 

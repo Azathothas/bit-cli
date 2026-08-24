@@ -478,6 +478,10 @@ pub fn run(
     // the session because a Metalink has to be resolved over HTTP before the
     // plans can be built, and resolving it needs somewhere to run.
     let runtime = swarm::runtime()?;
+    // The Metalink fetch below is bounded by `--timeout` the same way a source
+    // fetch in every other command is, so one flag means one thing everywhere.
+    // See `TODO/cli-surface.md`, T-245.
+    let fetch_deadline = crate::source::deadline(stop.timeout);
     let user_agent = args
         .web_seeds
         .web_seed_user_agent
@@ -507,10 +511,11 @@ pub fn run(
                 let document = match &from {
                     Document::Local(path) => Metalink::read(path)?,
                     Document::Remote(url) => {
-                        crate::source::fetch_metalink(url, &user_agent).await?
+                        crate::source::fetch_metalink(url, &user_agent, fetch_deadline).await?
                     }
                 };
-                let one = crate::source::resolve_metalink(&document, &user_agent).await?;
+                let one =
+                    crate::source::resolve_metalink(&document, &user_agent, fetch_deadline).await?;
                 renderer.event(
                     env,
                     "metalink_resolved",

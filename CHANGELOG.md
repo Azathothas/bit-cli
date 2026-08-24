@@ -8,6 +8,35 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### A `.torrent` URL and a metalink resolve under every command, not just `download`
+
+Nine commands offered "an HTTP(S) URL" and "a metalink" in their `SOURCE` help
+and refused both. `bit-cli info https://host/album.torrent` exited 4 saying the
+URL "has to be fetched before it can be read", while `bit-cli download` fetched
+the same URL and completed. `info`, `files`, `magnet`, `verify`, all four
+`webseed` subcommands and `bench webseed` are the nine.
+
+They resolve it now, and report exactly what the same torrent read off disk
+reports: every `--json` field matches but `generated_at` and `source_kind`.
+A magnet and a bare info hash are still refused, because those need a swarm
+lookup rather than one `GET`, and that refusal already said so.
+
+Three bounds apply to the fetch:
+
+- `--timeout` is the deadline, and 30 seconds when it is not set.
+- A fetch that runs out of time exits **9** and names the deadline in
+  milliseconds. It exited 5 saying "error decoding response body" before, which
+  described the transport rather than the flag the caller set.
+- A `.torrent` body is capped at 16 MiB and a metalink at 1 MiB, counted as the
+  bytes arrive. The metalink cap was applied after the whole body was already in
+  memory, so it bounded what was returned rather than what was held.
+
+A URL that answers with something else fails naming the content type the server
+declared, rather than only the byte the bencode parser stopped on.
+
+[`docs/examples/inputs.md`](docs/examples/inputs.md) carries the matrix, which
+was measured rather than reasoned about.
+
 ### `README.md` is a map, and the detail moved into `docs/`
 
 `README.md` was 83 KB across 37 sections and is 12 KB across nine: what

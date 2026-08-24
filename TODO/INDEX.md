@@ -235,7 +235,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-242](performance.md) | P2 | performance | open | The request depth is a constant, and the run sits at 40 percent of it |
 | [T-243](phase-c.md) | n/a | phase-c | deferred | A user interface, and which of the two kinds decision 7.4 permits |
 | [T-244](cli-surface.md) | P2 | cli | open | A web page is not a source, and nothing extracts a link from one |
-| [T-245](cli-surface.md) | P1 | cli | open | Four commands refuse the URL download accepts |
+| [T-245](cli-surface.md) | P1 | cli | **done** | Four commands refuse the URL download accepts *(nine of them, and a metalink too)* |
 | [T-246](cli-surface.md) | P2 | cli | open | Three inputs report a file error and two of them name the wrong cause |
 | [T-247](cli-surface.md) | P2 | cli | open | A dry run over a URL prints zero for a count it never took |
 | [T-248](metainfo.md) | P2 | metainfo | open | There is no way to ask what two torrents disagree about |
@@ -249,7 +249,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 203 items: 192 to work through, and 11 deferred to Phase C.
-41 open, 2 partial, 0 blocked, 149 done.
+40 open, 2 partial, 0 blocked, 150 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -257,11 +257,11 @@ when a number here disagrees with them.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 5 | 0 | 0 | 66 | 71 |
+| P1 | 4 | 0 | 0 | 67 | 71 |
 | P2 | 24 | 2 | 0 | 53 | 79 |
 | P3 | 12 | 0 | 0 | 18 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **41** | **2** | **0** | **149** | **203** |
+| **All** | **40** | **2** | **0** | **150** | **203** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was
