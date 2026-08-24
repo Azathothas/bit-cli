@@ -19,7 +19,7 @@
 # script's own output. A check that recomputes the fit itself passes when the
 # script it is checking is wrong, and it was written that way first.
 #
-# Three cases:
+# Five cases:
 #
 #   the mode   `-ReadCsv` runs, exits 0, and prints the step columns. It sits
 #              above the trap and above every `Start-Child` in `soak.ps1`, and
@@ -33,8 +33,15 @@
 #              nothing else. Four times the slope, no step: its largest
 #              single-interval rise must be the per-sample increment and no
 #              more.
+#   truncated  that same ramp with a zero fill on the end, which is what NTFS
+#              leaves when a soak is killed mid-append. Its last sample must be
+#              the last one written rather than a row of zeros. T-231.
+#   stalled    the committed run of 2026-08-23T15:47:16Z, whose workload
+#              stopped at t+4653s and which reported a pass over six hours
+#              anyway. It must not read as having measured its workload, and
+#              the healthy six hour run must. T-232.
 #
-# Nothing here starts a soak or waits on a clock. Both fixtures are a CSV and a
+# Nothing here starts a soak or waits on a clock. Every fixture is a CSV and a
 # read, so this runs in seconds and belongs in CI.
 #
 # Usage:
@@ -44,7 +51,7 @@
 # Exits 0 when every case holds, 1 when one does not, and 2 when the check
 # could not run.
 #
-# See TODO/memory.md, T-224.
+# See TODO/memory.md, T-224, T-231 and T-232.
 
 [CmdletBinding()]
 param(
@@ -52,6 +59,10 @@ param(
     # a check that picks up whichever soak ran last measures a different thing
     # every session.
     [string]$WithStep = "bench/soak-20260823T090132499Z.csv",
+    # The run whose workload stopped 1.29 hours into its six, and which
+    # reported "every named ceiling held over 6 hours" anyway. Named for the
+    # same reason as the one above. See TODO/memory.md, T-232.
+    [string]$WithStalledWorkload = "bench/soak-20260823T154716064Z.csv",
     [string]$Root = ".tmp/soak-fit",
     [string]$Json
 )
@@ -67,6 +78,7 @@ function Exit-With([int]$code, [string]$message) {
 
 if (-not (Test-Path $soak)) { Exit-With 2 "no scripts/soak.ps1 at $soak" }
 if (-not (Test-Path (Join-Path $repo $WithStep))) { Exit-With 2 "no CSV at $WithStep" }
+if (-not (Test-Path (Join-Path $repo $WithStalledWorkload))) { Exit-With 2 "no CSV at $WithStalledWorkload" }
 
 $workDir = Join-Path $repo $Root
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
@@ -222,6 +234,54 @@ if ($truncatedRun.printed -notmatch 'truncated:') {
         expected     = $lastReal
         judged       = $true
         ok           = ($truncatedRss.last -eq $lastReal) -and ($truncatedRun.fits.dropped_rows -ge 1)
+    })
+
+# ---------------------------------------------------------------------------
+# A run whose workload stopped
+# ---------------------------------------------------------------------------
+#
+# Every ceiling this script's subject is judged against is a statement about
+# the seeder, and a seeder nobody is talking to holds all of them. The run of
+# 2026-08-23T15:47:16Z stopped completing leech cycles at t+4653s and spent the
+# remaining 4.7 hours alive, listening, and using 47 milliseconds of CPU. Its
+# report says "every named ceiling held over 6 hours" with an empty failures
+# list, and every number in it is true.
+#
+# Two runs, because a check that only sees the stalled one passes against a
+# script that calls every run stalled. The healthy six hour run read at the top
+# is the control: same length, same workload, 1,360 cycles and none failed.
+
+$stalledRun = Invoke-Read $WithStalledWorkload "stalled"
+if (-not $stalledRun.fits) { Exit-With 1 "soak.ps1 -ReadJson wrote nothing for $WithStalledWorkload" }
+$stalled = $stalledRun.fits.workload
+$healthy = $stepRun.fits.workload
+if (-not $stalled -or -not $healthy) { Exit-With 1 "the -ReadJson report carries no workload block" }
+
+if ($stalled.measured_its_workload) {
+    [void]$failures.Add("$WithStalledWorkload reads as having measured its workload, and it failed $($stalled.leech_failed) of $($stalled.leech_failed + $stalled.leech_completed) cycles")
+}
+if ($stalled.leech_failed_percent -le 50) {
+    [void]$failures.Add("$WithStalledWorkload reports $($stalled.leech_failed_percent) percent failed, expected over 50")
+}
+# The stop is at a wall clock inside the run rather than at its end, which is
+# what separates "the workload stopped" from "the run ended".
+if ($stalled.last_progress_s -lt 4000 -or $stalled.last_progress_s -gt 5200) {
+    [void]$failures.Add("$WithStalledWorkload puts its last completed cycle at t+$($stalled.last_progress_s)s, expected between 4000 and 5200")
+}
+if ($stalledRun.printed -notmatch 'workload:') {
+    [void]$failures.Add("the -ReadCsv output does not carry a workload line")
+}
+if (-not $healthy.measured_its_workload) {
+    [void]$failures.Add("$WithStep reads as not having measured its workload, and it failed $($healthy.leech_failed) cycles")
+}
+[void]$cases.Add([ordered]@{
+        case          = "a_run_whose_workload_stopped_does_not_read_as_a_pass"
+        stalled_csv   = $WithStalledWorkload
+        failed_percent = $stalled.leech_failed_percent
+        last_progress_s = $stalled.last_progress_s
+        control_failed = $healthy.leech_failed
+        judged        = $true
+        ok            = (-not $stalled.measured_its_workload) -and $healthy.measured_its_workload
     })
 
 # ---------------------------------------------------------------------------

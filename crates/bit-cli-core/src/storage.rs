@@ -421,11 +421,51 @@ impl StorageFactory for SafeStorageFactory {
         _shared: &ManagedTorrentShared,
         metadata: &TorrentMetadata,
     ) -> anyhow::Result<SafeStorage> {
+        // Planned from the metainfo's own components, not from the `PathBuf`
+        // the session built out of them.
+        //
+        // `FileInfo::relative_filename` is a `PathBuf`, and `PathBuf::push`
+        // drops an empty component on the way in. Reading the path back out of
+        // one therefore cannot see a component that was dropped, so the
+        // planner could not report a drop it never saw, and `path: ["", "foo"]`
+        // landed correctly and silently. See `TODO/metainfo.md`, T-173.
+        //
+        // `iter_file_details_ext` is the same iterator `TorrentMetadata::new`
+        // builds `file_infos` from, in the same order, so this list still
+        // lines up with `file_infos` index for index. Both decode with the
+        // encoding `detect_encoding` chose, which is the one decoding rule
+        // T-103 left in place.
+        //
+        // It also takes the platform out of the answer. `PathBuf::push` treats
+        // a backslash as a separator on Windows and as an ordinary character
+        // on Linux, so a component holding one used to lay the torrent out two
+        // different ways depending on the target. Joined with `/` and handed to
+        // `plan_with`, it is an illegal character on both.
         let torrent_paths: Vec<String> = metadata
-            .file_infos
-            .iter()
-            .map(|file| slash_path(&file.relative_filename))
+            .info
+            .iter_file_details_ext()
+            .map(|file| file.details.filename.to_vec().join("/"))
             .collect();
+
+        // The two lists are the same iterator read twice, so they line up, and
+        // this is the line that says what happens if they ever stop.
+        //
+        // `padding` below is indexed off `file_infos` while `disk_paths` comes
+        // from the list above, and the piece-to-file mapping is by index in
+        // both. A pair that disagreed in length would put bytes in the wrong
+        // file rather than fail, which is the worst shape a defect can have
+        // here. It is upstream's iterator and upstream is a vendored tree that
+        // moves on reconciliation, so the invariant is checked rather than
+        // assumed.
+        if torrent_paths.len() != metadata.file_infos.len() {
+            anyhow::bail!(
+                "the metainfo lists {} file(s) and the session's file list has {}. \
+                 These are the same iterator read twice and a mismatch means the vendored \
+                 tree changed underneath. See TODO/metainfo.md, T-173.",
+                torrent_paths.len(),
+                metadata.file_infos.len()
+            );
+        }
 
         let root = match self.subfolder.then(|| subfolder_for(metadata)).flatten() {
             Some(name) => join_relative(&self.output_folder, &name),

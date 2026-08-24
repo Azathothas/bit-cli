@@ -173,7 +173,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-168](bep-coverage.md) | P3 | bep | open | WebTorrent peers and WSS trackers are not supported |
 | [T-171](metainfo.md) | P2 | metainfo | **done** | httpseeds written as a bencoded string is silently dropped |
 | [T-172](metainfo.md) | P2 | metainfo | **done** | Strictness on read is undecided, and the error does not say |
-| [T-173](metainfo.md) | P3 | metainfo | open | A zero-length path component has no defined meaning *(title disproved: it is dropped; what is missing is the report)* |
+| [T-173](metainfo.md) | P3 | metainfo | **done** | A zero-length path component has no defined meaning *(title disproved: it is dropped, and the drop is reported now)* |
 | [T-174](metainfo.md) | P2 | metainfo | **done** | A piece length that is not a multiple of 16 KiB has no fixture |
 | [T-187](metainfo.md) | P3 | metainfo | **done** | Non-canonical integers are refused everywhere, with no instance behind the rule |
 | [T-110](cli-surface.md) | P1 | cli | **done** | The --jsonl event stream is incomplete |
@@ -230,6 +230,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-228](cli-surface.md) | P3 | ci | open | Two gate runs at once fail on a locked file rather than on being two |
 | [T-230](cli-surface.md) | P1 | ci | **done** | A run's output reached the remote because nothing said what belongs here |
 | [T-231](memory.md) | P1 | memory | **done** | A soak killed mid-write reads as a final sample of zeros |
+| [T-232](memory.md) | P1 | memory | open | A six hour soak reported a pass on a workload that stopped after 78 minutes |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -257,8 +258,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-180 items: 170 to work through, and 10 deferred to Phase C.
-23 open, 1 partial, 0 blocked, 146 done.
+181 items: 171 to work through, and 10 deferred to Phase C.
+23 open, 1 partial, 0 blocked, 147 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -516,11 +517,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 1 | 0 | 0 | 65 | 66 |
+| P1 | 2 | 0 | 0 | 65 | 67 |
 | P2 | 11 | 1 | 0 | 53 | 65 |
-| P3 | 11 | 0 | 0 | 16 | 27 |
+| P3 | 10 | 0 | 0 | 17 | 27 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **23** | **1** | **0** | **146** | **180** |
+| **All** | **23** | **1** | **0** | **147** | **181** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

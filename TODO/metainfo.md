@@ -379,7 +379,7 @@ Source:      `reference/RESEARCH.md` section C, 2026-08-21
 Category:    metainfo
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-24
 
 Problem:     A file entry may carry `path: ["", "foo"]`. Nothing in `bit-cli`
              says what that means, and the path planner has no test for it.
@@ -486,6 +486,76 @@ there and is read as progress.
 ```bash
 cargo test -p bit-cli-core --test hostile_paths
 ```
+
+## Done 2026-08-24, on the operator's ruling, and the seam needed no patch
+
+**The ruling.** The drop is to be reported. The wider instruction it came with
+is the one that shaped the change: upstream must not be able to alter this
+tree's behaviour without something here saying so.
+
+**The seam is closed by planning from a different place, not by patching
+`librqbit_core`.** The entry named two ways to close it and expected the first:
+a patch so `FileDetails` carries the raw components beside the built
+`PathBuf`. It carries them already. `FileIteratorName::to_vec` is public, it
+returns the components decoded with the same encoding `to_pathbuf` uses, and
+`ValidatedTorrentMetaV1Info::iter_file_details_ext` is the public iterator
+`TorrentMetadata::new` builds `file_infos` from in the first place. Nothing had
+to be added to the vendored tree, so **`vendor/` is untouched and there is no
+new section in `patches/UPSTREAM.md`.** A patch not carried is a patch no
+reconciliation has to re-apply.
+
+`SafeStorageFactory::create` plans from those components joined with `/`
+instead of from `slash_path(&file.relative_filename)`. One expression, and the
+planner it feeds already did the rest: `plan_with` splits on `/`, reports
+`Reason::DroppedComponent` when any component is empty, and drops it.
+
+| torrent path | disk path | reported |
+| --- | --- | --- |
+| `/lead.bin` | `lead.bin` | `DroppedComponent` |
+| `mid//dle.bin` | `mid/dle.bin` | `DroppedComponent` |
+| `trail.bin/` | `trail.bin` | `DroppedComponent` |
+
+**Where the bytes land does not move**, which is the half that had to hold: the
+`disk_paths` assertion in the test is the one that was there before and it is
+unchanged. What is new beside it is the reason.
+
+**It also takes the platform out of the answer, which was not the point and is
+the better half of it.** `PathBuf::push` treats a backslash as a separator on
+Windows and as an ordinary character elsewhere, so a component holding one used
+to lay the same torrent out two different ways depending on the target. Joined
+with `/` and handed to `plan_with`, it is an illegal character on both, which
+is what `sanitize_component` already said it was for.
+
+**The invariant is checked rather than assumed.** `disk_paths` comes from the
+list above and `padding` is indexed off `file_infos`, and the piece-to-file
+mapping is by index in both, so a pair that disagreed in length would put bytes
+in the wrong file rather than fail. `create` bails with both counts and this
+entry's id. It is upstream's iterator, and upstream is a tree that moves on
+reconciliation.
+
+**Three tests.** `an_empty_path_component_lands_as_if_it_were_not_there` is
+inverted: it asserted the report was absent and now asserts what it says, which
+is what [RULES.md](RULES.md) section 5 asks of an exemption when the entry it
+belonged to closes. `a_path_with_nothing_wrong_with_it_is_reported_as_nothing`
+is new and is the guard: this change reaches every torrent rather than only the
+hostile ones, and a planner that reported a rename on a path nothing changed
+would make `renames.is_empty()` useless to every caller that tests it.
+`an_entry_that_collapses_onto_another_is_refused_whole` is unchanged, and the
+argument above for keeping that refusal is unchanged with it.
+
+**Run against the defect**: this closed by making an existing test fail. The
+change was made first and `an_empty_path_component_lands_as_if_it_were_not_there`
+failed naming T-173 and printing all three renames, which is the pin doing
+exactly what it was written to do.
+
+```bash
+cargo test -p bit-cli-core --test hostile_paths
+```
+
+What a reader sees is `renames` in `download --json`, through
+`engine.path_plan(&handle)` at `crates/bit-cli/src/cmd/download.rs:2435`, which
+is the same `PlanHandle` the test reads. That layer has its own cover in
+`an_ordinary_torrent_reports_no_renames`.
 
 ### T-174 A piece length that is not a multiple of 16 KiB has no fixture
 

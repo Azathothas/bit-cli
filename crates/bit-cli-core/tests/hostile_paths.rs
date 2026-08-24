@@ -413,21 +413,22 @@ async fn two_one_file_torrents_with_the_same_file_name_do_not_collide() {
     assert_eq!(tree(out.path()), ["first/movie.bin", "second/movie.bin"]);
 }
 
-/// A zero-length path component lands as if it were not there.
+/// A zero-length path component lands as if it were not there, and says so.
 ///
 /// `TODO/metainfo.md` T-173. `path: ["", "foo"]` is `/foo` once joined and BEP
 /// 3 gives an empty component no meaning, so the file lands at `foo`. Three
 /// shapes, all of them: leading, doubled in the middle, and trailing.
 ///
-/// **The drop is not reported, and the reason is a seam rather than an
-/// oversight.** `SafeStorage` plans from `TorrentMetadata::file_infos`, whose
-/// `relative_filename` is a `PathBuf` the vendored session has already built
-/// (`crates/bit-cli-core/src/storage.rs:427`), and `PathBuf::push` drops an
-/// empty component on the way in. So by the time this repository's planner
-/// sees the path there is nothing left to drop and nothing to report.
-/// `Reason::DroppedComponent` exists and fires on the one path where the raw
-/// components do reach the planner, which is `--index-out`; the entry carries
-/// what closing the rest would need.
+/// **The drop is reported now, and where it is planned from is the whole
+/// change.** `SafeStorage` used to plan from `TorrentMetadata::file_infos`,
+/// whose `relative_filename` is a `PathBuf` the vendored session built, and
+/// `PathBuf::push` drops an empty component on the way in: the planner could
+/// not report a drop it never saw. It plans from the metainfo's own components
+/// now, through the same `iter_file_details_ext` that list is built from, so
+/// the paths are unchanged and the reason arrives with them.
+///
+/// The `disk_paths` assertion is the half that must not move. A report is
+/// worth having only if where the bytes land is the same as before.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_empty_path_component_lands_as_if_it_were_not_there() {
     let torrent = hostile_torrent("album", &["/lead.bin", "mid//dle.bin", "trail.bin/"], 1024);
@@ -438,12 +439,54 @@ async fn an_empty_path_component_lands_as_if_it_were_not_there() {
         ["lead.bin", "mid/dle.bin", "trail.bin"]
     );
     assert_eq!(tree(run.root()).len(), 3);
-    // Pinned rather than asserted as correct: this is the measurement the
-    // entry rests on, and a change that started reporting the drop should
-    // fail here and be read as progress.
+
+    let reported: Vec<(&str, &str)> = run
+        .plan
+        .renames
+        .iter()
+        .map(|rename| (rename.torrent_path.as_str(), rename.disk_path.as_str()))
+        .collect();
+    assert_eq!(
+        reported,
+        [
+            ("/lead.bin", "lead.bin"),
+            ("mid//dle.bin", "mid/dle.bin"),
+            ("trail.bin/", "trail.bin"),
+        ],
+        "every one of the three shapes is named with what it was and what it became"
+    );
+    for rename in &run.plan.renames {
+        assert_eq!(
+            rename.reasons,
+            [Reason::DroppedComponent],
+            "the drop is the only thing that happened to {}",
+            rename.torrent_path
+        );
+    }
+}
+
+/// An ordinary path is still not a rename.
+///
+/// The guard on the test above. Planning from the raw components rather than
+/// from the built `PathBuf` reaches every torrent, not only the hostile ones,
+/// and a planner that reported a change on a path nothing changed would make
+/// `renames.is_empty()` useless to every caller that tests it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_path_with_nothing_wrong_with_it_is_reported_as_nothing() {
+    let torrent = hostile_torrent(
+        "album",
+        &["lead.bin", "mid/dle.bin", "deep/er/still.bin"],
+        1024,
+    );
+    let run = add(&torrent).await;
+
+    assert_eq!(
+        run.plan.disk_paths,
+        ["lead.bin", "mid/dle.bin", "deep/er/still.bin"]
+    );
     assert!(
-        run.plan.renames.is_empty(),
-        "the drop is reported now, which closes T-173: {:?}",
+        run.plan.is_clean(),
+        "nothing changed, so nothing is reported: {:?}",
         run.plan.renames
     );
 }

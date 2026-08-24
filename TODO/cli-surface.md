@@ -3818,6 +3818,28 @@ path.
 cargo test -p bit-cli --lib out_writes_a_multi_file out_names_the_file a_relative_out_resolves out_with_more_than_one
 ```
 
+### The operator ruled on 2026-08-24: `--out` may leave the output directory
+
+The question this entry raised was whether `--out ../../x` beside `--dir out`
+should be allowed to write above the working directory. It is allowed, and it
+stays allowed.
+
+The argument is the one the question already carried. `--out` is the caller's
+own path, typed on their own command line, and `--dir` is allowed anywhere
+already. The neighbour it reads inconsistently against is `-O`/`--index-out`,
+which is sanitised, and the difference is that `-O`'s path is a file **inside**
+the output directory while `--out` names the destination itself.
+
+`out_may_leave_the_output_directory_because_it_is_the_callers_path` pins it:
+`--dir <tmp>/base --out ../beside` lands the payload at `<tmp>/beside`, asserts
+nothing landed under `base`, and asserts the report's `output_directory` names
+the resolved path rather than one carrying a `..`. Tightening this later is now
+a decision somebody makes against a passing test.
+
+```bash
+cargo test -p bit-cli --lib out_may_leave_the_output_directory
+```
+
 ### T-228 Two gate runs at once fail on a locked file rather than on being two
 
 Source:      hit while closing T-041, 2026-08-23

@@ -75,6 +75,28 @@ param(
     [double]$RssCeilingMiBPerHour = 0,
     [double]$HandleCeilingPerHour = 0,
     [double]$CloseWaitCeilingPerHour = 0,
+    # How many leech cycles may fail, as a percentage of the cycles attempted,
+    # before the run stops being a measurement of the workload it names.
+    #
+    # This is not a ceiling like the three above and it is judged whether or
+    # not one is named, because it is not about the subject. It is about
+    # whether the subject was doing anything. The run of 2026-08-23T15:47:16Z
+    # completed 298 cycles, failed 1,080, and stopped completing any at
+    # t+1.29h; its seeder then sat at a flat 168 handles and no CPU for the
+    # remaining 4.7 hours and the report said "every named ceiling held over 6
+    # hours". Every number in it is true and the run measured an idle process.
+    #
+    # Zero turns the judgement off for a run that is deliberately hostile to
+    # its own leechers, which -Workload churn is.
+    [double]$LeechFailurePercent = 5,
+    # Pass a duration to give the seeder --listener-check.
+    #
+    # Off by default so the two committed six hour runs stay comparable: the
+    # check costs one loopback connection and one peer row per interval, which
+    # are two of the series this script measures. Turn it on for a run that is
+    # asking whether the seeder is still answering, which is the question the
+    # run above left open. See TODO/memory.md, T-232.
+    [string]$ListenerCheck,
     [string]$Root = ".tmp/soak",
     [string]$ReportDir = "bench",
     [ValidateSet("debug", "release")]
@@ -255,12 +277,41 @@ if ($ReadCsv) {
     if ($read.Count -lt 2) { Exit-With 2 "$ReadCsv has $($read.Count) sample(s), which fits nothing" }
     $readHours = [double]$read[-1].elapsed_s / 3600.0
 
+    # The workload, from the two counters the sampler writes into every row.
+    #
+    # A finished run is read many times after it and the fits below are all
+    # about the seeder. Whether anything was talking to the seeder is the
+    # question to answer before any of them mean something, and it is in the
+    # CSV already. See TODO/memory.md, T-232.
+    $readDone = [int]$read[-1].leech_completed
+    $readFailed = [int]$read[-1].leech_failed
+    $readAttempted = $readDone + $readFailed
+    $readShare = if ($readAttempted -gt 0) { [math]::Round(100.0 * $readFailed / $readAttempted, 2) } else { 0 }
+    # The last sample at which a cycle completed. A run whose workload stopped
+    # has flat series after this point and they are flat because nothing was
+    # happening.
+    $lastProgress = $null
+    for ($i = $read.Count - 1; $i -gt 0; $i--) {
+        if ([int]$read[$i].leech_completed -gt [int]$read[$i - 1].leech_completed) {
+            $lastProgress = $read[$i]
+            break
+        }
+    }
+
     Write-Host ""
     Write-Host "csv:       $ReadCsv"
     Write-Host "samples:   $($read.Count) over $([math]::Round($readHours, 3)) hours"
     if ($dropped -gt 0) {
         Write-Host "truncated: $dropped line(s) are not samples and are excluded from every fit below."
         Write-Host "           A soak killed mid-write leaves the file extended and zero filled."
+    }
+    if ($readAttempted -gt 0) {
+        Write-Host "workload:  $readDone leech cycles completed, $readFailed failed ($readShare percent)"
+        if ($readShare -gt $LeechFailurePercent -and $LeechFailurePercent -gt 0) {
+            $stoppedAt = if ($lastProgress) { "t+$($lastProgress.elapsed_s)s, $([math]::Round([double]$lastProgress.elapsed_s / 3600.0, 3)) hours" } else { "before the first sample" }
+            Write-Host "           OVER the $LeechFailurePercent percent this run treats as still measuring its workload."
+            Write-Host "           The last cycle completed at $stoppedAt. Every fit below is mostly of an idle process."
+        }
     }
     Write-Host ""
     $readRows = [System.Collections.ArrayList]::new()
@@ -294,6 +345,13 @@ if ($ReadCsv) {
             samples      = $read.Count
             dropped_rows = $dropped
             hours        = [math]::Round($readHours, 4)
+            workload     = [ordered]@{
+                leech_completed      = $readDone
+                leech_failed         = $readFailed
+                leech_failed_percent = $readShare
+                last_progress_s      = if ($lastProgress) { [int]$lastProgress.elapsed_s } else { $null }
+                measured_its_workload = -not (($LeechFailurePercent -gt 0) -and ($readShare -gt $LeechFailurePercent))
+            }
             slopes       = $readFits
         }
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $repo $ReadJson)) | Out-Null
@@ -399,6 +457,12 @@ $seedArgs = @(
     "--jsonl"
 )
 if (-not $wantAnnounce) { $seedArgs += "--no-tracker" }
+# A seeder that stops answering handshakes while its listening socket stays
+# bound looks exactly like a healthy idle one from outside: the process is
+# alive, the port is open, and the ratio is still reported. --listener-check
+# dials this run's own port and completes a real handshake, and three failures
+# in a row stop the run with exit 17. See TODO/memory.md, T-232.
+if ($ListenerCheck) { $seedArgs += @("--listener-check", $ListenerCheck) }
 Write-Step "starting the seeder: $Workload for $Minutes minutes, sampling every ${SampleSeconds}s"
 $seed = Start-Child $bitCli $seedArgs "seed"
 
@@ -420,6 +484,7 @@ Write-Step "seeder listening on 127.0.0.1:$port, pid $($seed.Id)"
 $leechSlots = @{}
 $leechDone = 0
 $leechFailed = 0
+$script:LeechFailures = [System.Collections.ArrayList]::new()
 $churnRuns = 0
 $churnProcess = $null
 
@@ -569,6 +634,26 @@ function Write-SoakSummary([bool]$Complete) {
         [void]$summaryFailures.Add("CLOSE_WAIT grew $($summarySlopes["tcp_close_wait"].slope_per_hour)/hour, over the ceiling of $CloseWaitCeilingPerHour")
     }
 
+    # The workload, before the subject.
+    #
+    # Every ceiling above is a statement about the seeder, and a seeder nobody
+    # is talking to holds all of them. The run of 2026-08-23T15:47:16Z stopped
+    # completing leech cycles at t+1.29h, failed 1,080 of the 1,378 it
+    # attempted, and reported "every named ceiling held over 6 hours" with an
+    # empty failures list. Its last 4.7 hours measured an idle process and
+    # nothing in the report said so.
+    #
+    # Judged whether or not a ceiling is named, because this is not a ceiling:
+    # it is whether the run measured what it says it measured. See
+    # TODO/memory.md, T-232.
+    $leechAttempted = $leechDone + $leechFailed
+    $leechFailShare = if ($leechAttempted -gt 0) { [math]::Round(100.0 * $leechFailed / $leechAttempted, 2) } else { 0 }
+    if ($wantLeech -and $LeechFailurePercent -gt 0 -and $leechAttempted -gt 0 -and
+        $leechFailShare -gt $LeechFailurePercent) {
+        [void]$summaryFailures.Add(
+            "$leechFailed of $leechAttempted leech cycles failed, $leechFailShare percent, over the $LeechFailurePercent percent this run treats as still measuring its workload")
+    }
+
     $summaryJudged = ($RssCeilingMiBPerHour -gt 0) -or ($HandleCeilingPerHour -gt 0) -or ($CloseWaitCeilingPerHour -gt 0)
     $summaryVerdict = switch ($true) {
         ($summaryFailures.Count -gt 0) { "$($summaryFailures.Count) ceiling(s) or the run itself did not hold"; break }
@@ -600,7 +685,9 @@ function Write-SoakSummary([bool]$Complete) {
                 rss_mib_per_hour    = $RssCeilingMiBPerHour
                 handles_per_hour    = $HandleCeilingPerHour
                 close_wait_per_hour = $CloseWaitCeilingPerHour
+                leech_failure_percent = $LeechFailurePercent
             }
+            listener_check    = $ListenerCheck
         }
         info_hash        = $infoHash
         csv              = $csvPath
@@ -609,6 +696,9 @@ function Write-SoakSummary([bool]$Complete) {
         cycles           = [ordered]@{
             leech_completed         = $leechDone
             leech_failed            = $leechFailed
+            leech_failed_percent    = $leechFailShare
+            # Why, the first five times. Empty on a run whose workload held.
+            leech_failures          = @($script:LeechFailures)
             churn_runs              = $churnRuns
             churn_connections_total = $churnRuns * $ChurnConnections
             progress_events         = $script:SelfEvents
@@ -637,7 +727,8 @@ function Write-SoakSummary([bool]$Complete) {
             "largest_rise and largest_fall are the biggest move between two consecutive samples, with the elapsed hour each happened at, and step_share is largest_rise over the run's whole rise. They are here because a slope and an r squared cannot say that a fit spans a step: the run of 2026-08-23T09:01:32Z read 3.708 MiB/h at r squared 0.717 across one interval that rose 11.61 MiB and never came back. Read the magnitude first; step_share is high and meaningless on a run that barely moved. See TODO/memory.md, T-224.",
             "peak_rss_bytes is a high-water mark rather than a level, so its slope is bounded below by zero and says nothing on its own. rss_bytes is the series that can fall as well as rise, and it is the one a leak shows in.",
             "The loopback tracker never expires a peer, so under -Workload announce or all the peer list handed to the seeder grows for the whole run. That is deliberate: it is the shape a busy tracker has, and it is the path T-040's report points at.",
-            "complete is false while the run is still sampling. This file is rewritten after every sample, so a run that is killed leaves the report it had reached rather than nothing at all."
+            "complete is false while the run is still sampling. This file is rewritten after every sample, so a run that is killed leaves the report it had reached rather than nothing at all.",
+            "leech_failed_percent is judged whether or not a ceiling is named, because every ceiling here is a statement about the seeder and a seeder nobody is talking to holds all of them. leech_failures says why the first few failed, which is the thing a finished run cannot be asked afterwards. See TODO/memory.md, T-232."
         )
         # Written beside the report and renamed over it, never into it. A
         # `Set-Content` straight onto $jsonPath truncates first and fills
@@ -692,7 +783,33 @@ while ((Get-Date) -lt $endAt) {
             for ($slot = 0; $slot -lt $Leechers; $slot++) {
                 $running = $leechSlots[$slot]
                 if ($running -and $running.HasExited) {
-                    if ($running.ExitCode -eq 0) { $leechDone++ } else { $leechFailed++ }
+                    if ($running.ExitCode -eq 0) { $leechDone++ }
+                    else {
+                        $leechFailed++
+                        # Why it failed, the first few times, because the
+                        # answer is gone otherwise. Both redirect files are
+                        # overwritten by the next cycle and $Root is deleted at
+                        # the end, so the run of 2026-08-23T15:47:16Z failed
+                        # 1,080 cycles and left nothing that said what any of
+                        # them hit. Capped, because a run that fails a thousand
+                        # times fails the same way a thousand times.
+                        if ($script:LeechFailures.Count -lt 5) {
+                            $errText = ""
+                            foreach ($tail in @("leech-$slot.err", "leech-$slot.out")) {
+                                $lines = @(Get-Content (Join-Path $Root $tail) -Tail 4 -ErrorAction SilentlyContinue |
+                                        Where-Object { $_ -and $_.Trim() })
+                                if ($lines.Count -gt 0) { $errText = ($lines -join " | "); break }
+                            }
+                            [void]$script:LeechFailures.Add([ordered]@{
+                                    sample    = $sample
+                                    elapsed_s = [int]($clock.Elapsed.TotalSeconds)
+                                    slot      = $slot
+                                    exit_code = $running.ExitCode
+                                    said      = $errText
+                                })
+                            Write-Step "  leecher $slot exited $($running.ExitCode): $errText"
+                        }
+                    }
                     $leechSlots[$slot] = $null
                     $running = $null
                 }
@@ -800,7 +917,12 @@ Write-Host ""
         "step down" = $entry.largest_fall
     }
 } | Format-Table -AutoSize | Out-String | Write-Host
-Write-Host "leech cycles: $leechDone completed, $leechFailed failed. churn bursts: $churnRuns."
+$closingAttempted = $leechDone + $leechFailed
+$closingShare = if ($closingAttempted -gt 0) { [math]::Round(100.0 * $leechFailed / $closingAttempted, 1) } else { 0 }
+Write-Host "leech cycles: $leechDone completed, $leechFailed failed ($closingShare percent). churn bursts: $churnRuns."
+foreach ($why in $script:LeechFailures) {
+    Write-Host "  first failures: t+$($why.elapsed_s)s slot $($why.slot) exit $($why.exit_code) $($why.said)"
+}
 if ($script:LoadErrors -gt 0) {
     Write-Host "load errors carried past: $script:LoadErrors"
 }

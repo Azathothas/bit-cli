@@ -1056,16 +1056,80 @@ The Acceptance's second half asks for the cause named with a file, **or** two
 runs at different leech rates showing the step is not tied to completed work.
 One run at the same rate is not the second of those. What would close it is
 one more run with `-Leechers` changed, which is the operator's to start for
-the reason every soak is:
-
-```bash
-pwsh -NoProfile -File scripts/soak.ps1 -Minutes 120 -Leechers 4 -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
-```
+the reason every soak is.
 
 The reproduction was still running when this was written, at 161 samples of
 its 360 minutes, so it may yet step later at a point neither run has reached.
 That would be a different finding from the one filed, and the column now
 reports it without anybody fitting a line by hand.
+
+## The reproduction finished, 2026-08-24, and most of it does not count
+
+It ran its full six hours. **No step**, and the whole-run figures are the
+flattest this repository has recorded:
+
+```
+series     first  last   max per hour   r2 step up at h step down unit
+rss_bytes  13.95 17.71 17.72     0.46 0.54    1.99 3.02     -2.07 MiB
+```
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.csv
+```
+
+**And 78 percent of it is a measurement of an idle process.** Its workload
+stopped at `t+4653s`, 1.292 hours in: 298 leech cycles completed, 1,080 failed,
+none completed after that point, and the seeder spent the remaining 4.7 hours
+alive and using 47 milliseconds of CPU. That is
+[T-232](#t-232-a-six-hour-soak-reported-a-pass-on-a-workload-that-stopped-after-78-minutes),
+filed on this reading, and the same command prints it now.
+
+**What survives, and it is the half this entry needed.** The step being
+answered is at `t+1.161h`, and the workload was still running then: cycles were
+completing right up to `t+1.292h`. So the reproduction **did** cross the step
+point under load and **did not step**, with a largest single rise of 1.99 MiB
+against 11.61, and the crossing is not in the part that is idle.
+
+**What does not survive is everything after `t+1.3h`.** The flat 4.7 hours are
+not evidence that a busy seeder is flat. This is why the entry does not close
+on "two six hour runs and only one stepped": the second one is a busy run of
+1.29 hours with a long flat tail, and its 0.461 MiB/h is fitted mostly through
+the tail.
+
+| | committed, 09:01:32Z | reproduction, 15:47:16Z |
+| --- | --- | --- |
+| samples | 681 over 5.992 h | 690 over 5.993 h |
+| leech cycles | 1,360 completed, **0 failed** | 298 completed, **1,080 failed** |
+| workload ran for | the whole run | **1.292 h of 5.993** |
+| largest single rise | **11.61 MiB at t+1.161 h** | 1.99 MiB at t+3.02 h |
+| rss at t+1.3 h | 27.09 MiB | 15.57 MiB |
+
+`bench/soak-20260823T154716064Z.csv` and its `.json` are committed as the
+evidence for both entries.
+
+### So: is another soak needed? Yes, and it is one soak rather than two
+
+The operator asked whether this is definitive. It is not, for two reasons that
+the same run answers:
+
+- **This entry** still has one run at one leech rate. The reproduction was
+  meant to be the second data point and it is only one for the first 1.29
+  hours of its window.
+- **[T-232](#t-232-a-six-hour-soak-reported-a-pass-on-a-workload-that-stopped-after-78-minutes)**
+  needs a run that can say whether the seeder stopped answering or the
+  leechers stopped calling.
+
+`-Leechers 4` is the different rate this entry wants and `-ListenerCheck 60s`
+is what T-232 needs, and neither interferes with the other:
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Leechers 4 -ListenerCheck 60s -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
+```
+
+**And the harness will not report a pass on a dead workload again**, which is
+the thing that made this reading expensive: `-LeechFailurePercent` defaults to
+5, the failing run is at 78.37, and `soak.ps1 -ReadCsv` says so on any finished
+run without anybody counting a column by hand.
 
 ### T-227 The window cache budget is per source, so the total is whatever the source count makes it
 
@@ -1225,4 +1289,138 @@ the new case fails on all four assertions and the other three pass.
 
 ```bash
 pwsh -NoProfile -File scripts/check-soak-fit.ps1
+```
+
+### T-232 A six hour soak reported a pass on a workload that stopped after 78 minutes
+
+Source:      the operator's second six hour soak,
+             `bench/soak-20260823T154716064Z`, read 2026-08-24
+Category:    memory
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     The run's own summary line says
+             `leech cycles: 298 completed, 1080 failed`, and its report says
+             `"verdict": "every named ceiling held over 6 hours"` with
+             `"failures": []`.
+
+             Both are true. At sample 149, `t+4653s`, which is **1.293
+             hours**, three things happen in the same interval and none of
+             them ever comes back:
+
+             | | s148, t+4616 | s149, t+4653 | rest of the run |
+             | --- | --- | --- | --- |
+             | `leech_completed` | 296 | 298 | **298** for 540 samples |
+             | `cpu_ms` | 38,234 | 38,250 | **38,297** at t+21,303 |
+             | `tcp_established` | 1 | 0 | 0 at every sample |
+             | `handles` | 180 | 168 | **168**, not one sample off it |
+             | `threads` | 26 | 22 | **22**, likewise |
+
+             From there the seeder spends **4.7 hours** alive, listening,
+             emitting its progress event every 30 seconds, and using
+             **47 milliseconds of CPU**. Every leech cycle after it fails, two
+             per sample, 1,080 of them, each inside one 30 second tick rather
+             than waiting out its `--stop-after 120s`.
+
+             `tcp_listen` is 1 the whole time. The socket is bound and nothing
+             is accepted through it.
+Relevance:   **The flat lines that follow are the report's evidence, and they
+             are flat because nothing was happening.** `rss_bytes` holds
+             between 15.4 and 17.7 MiB for the last 4.7 hours, `handles` does
+             not move by one, and the run's 0.461 MiB/h is fitted mostly
+             through that. A soak measures a busy seeder; this one measured a
+             busy seeder for 1.29 hours and an idle process for 4.7.
+
+             **It is the third instrument defect in two sessions**, after
+             [T-229](bench.md) and [T-231](#t-231-a-soak-killed-mid-write-reads-as-a-final-sample-of-zeros),
+             and it is the one that costs the most: the run was started to
+             answer [T-224](#t-224-the-six-hour-soaks-rss-slope-is-one-step-and-a-sawtooth-not-a-leak),
+             and 78 percent of it cannot be used for that.
+
+             **What it is not.** It is not a cycle count. A `steady` run at
+             four leechers and a five second sample interval, on the same
+             binary, completed **552 cycles in 14 minutes with none failed**,
+             nearly twice the 298 the failing run stopped at, at eight times
+             the cycle rate. It is not the committed run either, which
+             completed 1,360 and failed none over the full six hours at the
+             failing run's own rate.
+
+             ```bash
+             pwsh -NoProfile -File scripts/soak.ps1 -Minutes 14 -SampleSeconds 5 -Leechers 4 -Workload steady
+             ```
+
+             `bench/soak-20260824T023232248Z` is that run. It is committed as
+             the negative result, because "298 cycles is not the trigger" is
+             the only thing about this that is settled.
+
+             **What the shape suggests, and it is a suggestion.** A process
+             holding a bound listening socket and accepting nothing is the
+             shape `--listener-check` exists for: `crates/bit-cli/src/cli.rs:1581`
+             calls it out in those words, "the process is alive, the port is
+             open, and the ratio still gets reported", and
+             [T-020](peers.md) is the accept loop defect it was written
+             against. The soak does not pass that flag, so the seeder was
+             never asked whether it still answered.
+
+             It is equally consistent with the leechers never opening a
+             connection. Nothing in the run distinguishes the two, because
+             the leech process's own output is overwritten by the next cycle
+             and `$Root` is deleted when the run ends.
+Approach:    Two halves. Make the instrument able to answer the question, then
+             ask it.
+
+             **The instrument.** A verdict that reads as a pass on a run whose
+             workload died is worse than no verdict. And a failing cycle has
+             to leave behind why.
+
+             **The question.** `--listener-check` on the seeder splits the two
+             candidates in one run: if the seeder answers its own handshake
+             while the leechers fail, the fault is the leecher's, and if it
+             stops the run at exit 17 the fault is the seeder's and the run
+             says so at the instant it happens rather than four hours later.
+Acceptance:  A soak whose leech cycles stop completing reports that as a
+             failure and names the exit code and the first line of output of
+             the cycles that failed. **And** a run with `-ListenerCheck` set
+             either reproduces the stop with the seeder still answering, which
+             names the leecher, or stops at exit 17, which names the seeder.
+
+#### The first half is built, 2026-08-24
+
+**`soak.ps1` judges its workload, and does it whether or not a ceiling is
+named.** Every ceiling the script takes is a statement about the seeder, and a
+seeder nobody is talking to holds all three of them; whether the run measured
+its workload is a different question and is not optional.
+`-LeechFailurePercent` defaults to 5 and the failing run is at **78.4**. The
+committed run of 2026-08-23T09:01:32Z is at 0, and so is the twelve minute
+reproduction. Zero turns it off, for `-Workload churn`, which is hostile to
+its own leechers on purpose.
+
+`leech_failed_percent` and `leech_failures` are in the report, and the closing
+summary prints the first failures with their exit code and what they said.
+
+**A failing cycle leaves why behind now**, capped at five, because a run that
+fails a thousand times fails the same way a thousand times. That is the line
+the finished run cannot be asked for afterwards: 1,080 failures and not one
+recorded exit code.
+
+**`-ListenerCheck <DUR>` passes `--listener-check` to the seeder.** Off by
+default, so the two committed six hour runs stay comparable: the check costs
+one loopback connection and one peer row per interval, and those are two of
+the series this script measures. The run that asks the question turns it on.
+
+**Run against the defect** is the finished run itself. With
+`-LeechFailurePercent 5`, `bench/soak-20260823T154716064Z` fails on
+`1080 of 1378 leech cycles failed, 78.37 percent`, where it reported
+"every named ceiling held over 6 hours". Nothing else about that run changes,
+which is the point: the numbers were never wrong.
+
+#### The second half is one run, and it is the operator's
+
+Both open questions fit in one soak, at a leech rate the committed run did not
+use, which is also what [T-224](#t-224-the-six-hour-soaks-rss-slope-is-one-step-and-a-sawtooth-not-a-leak)
+has left:
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Leechers 4 -ListenerCheck 60s -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
 ```

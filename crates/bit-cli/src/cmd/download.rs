@@ -3875,6 +3875,67 @@ mod tests {
         );
     }
 
+    /// `--out` may name a path outside the output directory, and that is the
+    /// decision rather than an oversight.
+    ///
+    /// The operator ruled on it on 2026-08-24: `--out` is the caller's own
+    /// path, typed on their own command line, and `--dir` is already allowed
+    /// anywhere. The neighbour it reads inconsistently against is
+    /// `-O`/`--index-out`, which is sanitised, and the difference is that
+    /// `-O` names a file **inside** the output directory while `--out` names
+    /// the destination itself.
+    ///
+    /// Pinned so that tightening it later is a decision somebody makes against
+    /// a passing test rather than a change nobody notices. T-226.
+    #[test]
+    fn out_may_leave_the_output_directory_because_it_is_the_callers_path() {
+        let fixture = TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        let server = crate::test_support::FileServer::start(dir.clone());
+        let base = dir.join("base");
+        let report = run_json(
+            &[
+                "download",
+                fixture.path_str(),
+                "--dir",
+                base.to_str().expect("utf-8 path"),
+                "--out",
+                "../beside",
+                "--web-seed",
+                &format!("{}payload/", server.base),
+                "--web-seed-mode",
+                "prefix",
+                "--web-seed-only",
+                "--no-torrent-web-seed",
+                "--allow-overwrite",
+                "--port",
+                "0",
+                "--stop-after",
+                "30s",
+            ],
+            dir.clone(),
+        );
+        assert_eq!(report["torrents"][0]["finished"], true, "{report}");
+        let landed = dir.join("beside").join(&fixture.files[0].0);
+        assert!(
+            landed.is_file(),
+            "nothing at {}, so --out no longer leaves --dir",
+            landed.display()
+        );
+        assert!(
+            !base.join("beside").exists(),
+            "the `..` was swallowed and the payload stayed inside --dir"
+        );
+        // The report says where it went, with the `..` resolved. A report that
+        // still carried one would be naming a path the reader has to resolve
+        // themselves.
+        assert_eq!(
+            report["torrents"][0]["output_directory"],
+            dir.join("beside").display().to_string(),
+            "{report}"
+        );
+    }
+
     /// `--out` names where one payload goes, so a run with two sources is a
     /// usage error before the session starts rather than two torrents writing
     /// over each other. T-226.
