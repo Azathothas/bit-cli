@@ -578,7 +578,12 @@ fn client_of(id: &[u8; 20]) -> Option<String> {
     let code = std::str::from_utf8(&id[1..3]).ok()?;
     let version = std::str::from_utf8(&id[3..7]).ok()?;
     let name = match code {
-        "BC" => "bit-cli",
+        // This client's own, so a probe of a `bit-cli` seeder reads as one.
+        // It said `BC` until T-236, which is BitComet's code and not this
+        // one's, so a probe of a real BitComet peer reported `bit-cli`. See
+        // `TODO/peers.md`.
+        "CL" => "bit-cli",
+        "BC" => "BitComet",
         "rQ" | "RQ" => "rqbit",
         "qB" => "qBittorrent",
         "lt" | "LT" => "libtorrent",
@@ -643,8 +648,12 @@ mod tests {
         id[..8].copy_from_slice(b"-rQ9000-");
         assert_eq!(client_of(&id).as_deref(), Some("rqbit 9000"));
 
+        id[..8].copy_from_slice(b"-CL0200-");
+        assert_eq!(client_of(&id).as_deref(), Some("bit-cli 0200"));
+
+        // And the code this used to answer to belongs to somebody else.
         id[..8].copy_from_slice(b"-BC0100-");
-        assert_eq!(client_of(&id).as_deref(), Some("bit-cli 0100"));
+        assert_eq!(client_of(&id).as_deref(), Some("BitComet 0100"));
 
         // A peer id that is not Azureus style is left alone rather than
         // guessed at.
@@ -655,10 +664,10 @@ mod tests {
     #[test]
     fn a_peer_id_keeps_its_printable_bytes_and_escapes_the_rest() {
         let mut id = [0u8; 20];
-        id[..8].copy_from_slice(b"-BC0100-");
+        id[..8].copy_from_slice(b"-CL0200-");
         assert_eq!(
             printable(&id),
-            "-BC0100-%00%00%00%00%00%00%00%00%00%00%00%00"
+            "-CL0200-%00%00%00%00%00%00%00%00%00%00%00%00"
         );
     }
 

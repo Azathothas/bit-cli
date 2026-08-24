@@ -2362,7 +2362,7 @@ Source:      found by running [T-235](trackers.md)'s
 Category:    peers
 Priority:    P1
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     One binary announces under two different client identities, and
              one of them belongs to a real client that is not this one.
@@ -2449,6 +2449,90 @@ Prove:       ```
              the new value rather than deleted, which is the rule
              [RULES.md](RULES.md) section 5 states under testing and
              [T-020](peers.md) is the worked example of.
+
+Correction:  **Two undercounts, both found by grepping for the prefix rather
+             than by trusting the table above.**
+
+             It was **six** identities, not two, and five of the six claimed
+             BitComet's code:
+
+             | where | prefix |
+             | --- | --- |
+             | the session, `SessionOptions::peer_id` left `None` | `-rQ9010-` |
+             | `bit-cli trackers` | `-BC0100-` |
+             | `bit-cli bench probe` | `-BC0100-` |
+             | the web seed bridge, `webseed/bridge.rs:48` | `-BCws01-` |
+             | the swarm bench's synthetic peer, `bench/swarm.rs:96` | `-BCsw01-` |
+             | the listener health check, `listener.rs:50` | `-BClc01-` |
+
+             Only the first three reach a tracker or a remote peer. The other
+             three are loopback inside one process, and they are fixed anyway:
+             an identity that is wrong in a log is still wrong, and the point
+             of one module is that a seventh cannot appear.
+
+             There was a seventh, at `listener.rs:186`, and it is **not** ours:
+             a test fixture standing in for whatever remote peer answers. It
+             said `-BCzz01-` and now says so in a comment as well as in its
+             bytes, because a fixture replying with this client's own prefix
+             would hide a self-connect rather than exercise one.
+
+             **And `-bC` is not taken.** The entry said it was. Checked against
+             libtorrent `v2.0.11` `src/identify_client.cpp:150-270`, which
+             carries 93 Azureus-style codes, against
+             `aquatic/crates/peer_id/src/lib.rs:100-120`, and against the four
+             independent implementations of the same table in the corpus:
+             `bC`, `bt`, `bl`, `bi`, `CL` and `cl` are all free in all six.
+
+Closed:      `crates/bit-cli-core/src/peer_id.rs` is the one place, and every
+             one of the six reads it.
+
+             **The code is `CL`**, and it was chosen on the one property that
+             separated the candidates. Every code containing `b` has a case
+             twin already in the registry, and the lookup is a byte comparison
+             so a twin is legal but confusable: `bC` twins `BC`, which is the
+             client this was being mistaken for, `bt` twins `BT` (BitTorrent
+             mainline), `bl` twins `BL` (BitBlinder), `bi` twins `BI`
+             (BiglyBT). `CL` has no twin in any of the six registries in
+             either case, and it reads as the command line, which is the one
+             thing that distinguishes this client from every entry in that
+             table.
+
+             The version is `bit-cli`'s own and is built at compile time from
+             `CARGO_PKG_VERSION_*`, so `-CL0200-` moves when this crate does
+             and never when the vendored tree does. Two compile-time
+             assertions rather than runtime checks: a version component past
+             61 has no single-character encoding and fails the build, and a
+             prerelease version fails the build because the fourth character
+             is still `0` and Transmission puts `B` or `Z` there. Both are
+             raised in the release that would have needed them.
+
+             **The suffix is printable now**, twelve characters from the
+             operating system's generator. It was twelve raw bytes on the
+             session path, which is why the peer id in the check's own output
+             used to be half percent escapes. Two of the six generators seeded
+             themselves from `SystemTime::now()` and one derived all twelve
+             characters from a single nanosecond reading.
+
+Prove:       ```
+             pwsh -NoProfile -File scripts/check-announce.ps1
+             ```
+
+             Every judged case holds and the printed identity is
+             `peer id:     -CL0200-nnznnl2zn5d2`, against `-rQ9010-` and a
+             percent-escaped suffix before. `bit-cli trackers` against
+             `loopback-tracker --announce-log` recorded `-CL0200-uk3i5zyavz6d`
+             on both of its announces, which is the second half of the table
+             the problem statement above names.
+
+             ```
+             cargo test -p bit-cli one_peer_id_prefix_for_every_command
+             ```
+
+             Five more in `bit_cli_core::peer_id`, and one of them is the
+             guard that matters: `the_client_code_is_not_one_a_registry_already_names`
+             carries all 93 of libtorrent's codes plus `rQ` and the corpus's
+             extras, copied rather than fetched so it does not need a network,
+             and fails if anybody moves `CLIENT_CODE` onto a taken one.
 
 ---
 

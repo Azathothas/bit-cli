@@ -36,7 +36,6 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use librqbit_core::Id20;
-use librqbit_core::peer_id::generate_peer_id;
 use librqbit_peer_protocol::Handshake;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -44,10 +43,12 @@ use tokio::net::TcpStream;
 
 use crate::webseed::bridge::Framer;
 
-/// Peer id prefix. `-BC` is this tool, then a version, in the BEP 20 style.
-/// Distinct from the bridge's `-BCws01-` and the swarm generator's `-BCsw01-`
-/// so a target's log says which of the three dialled it.
-const PEER_ID_PREFIX: &[u8; 8] = b"-BClc01-";
+/// Peer id prefix for the listener check, from the one place the client
+/// identity lives. Distinct from the bridge's and the swarm generator's, so a
+/// target's log says which of the three dialled it, and distinct from the
+/// session's own, which is what stops a self-connect. See `TODO/peers.md`,
+/// T-236.
+const PEER_ID_PREFIX: [u8; 8] = crate::peer_id::role(*b"lc", *b"01");
 
 /// The shortest deadline a probe is given, whatever the interval.
 pub const MIN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -117,7 +118,10 @@ pub async fn probe(target: SocketAddr, info_hash: [u8; 20], timeout: Duration) -
     let deadline = started + timeout;
 
     let (mut read, mut write) = stream.into_split();
-    let ours = Handshake::new(Id20::new(info_hash), generate_peer_id(PEER_ID_PREFIX));
+    let ours = Handshake::new(
+        Id20::new(info_hash),
+        Id20::new(crate::peer_id::generate(&PEER_ID_PREFIX)),
+    );
     let mut buf = [0u8; 68];
     let len = ours.serialize_unchecked_len(&mut buf);
     if write.write_all(&buf[..len]).await.is_err() {
@@ -182,7 +186,12 @@ mod tests {
                     if stream.read_exact(&mut incoming).await.is_err() {
                         return;
                     }
-                    let reply = Handshake::new(Id20::new(hash), generate_peer_id(b"-BCzz01-"));
+                    // A stand-in for whatever remote peer answers, so it is
+                    // deliberately **not** this client's identity: a fixture
+                    // that replied with our own prefix would hide a
+                    // self-connect rather than exercise one.
+                    let reply =
+                        Handshake::new(Id20::new(hash), Id20::new(*b"-ZZ0000-fixturepeer1"));
                     let mut buf = [0u8; 68];
                     let len = reply.serialize_unchecked_len(&mut buf);
                     let _ = stream.write_all(&buf[..len]).await;

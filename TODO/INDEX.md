@@ -226,7 +226,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-233](peers.md) | P1 | peers | open | MSE over uTP stalls after the handshake |
 | [T-234](peers.md) | P2 | peers | open | bit-cli cannot present itself as a client a restrictive peer will talk to |
 | [T-235](trackers.md) | P1 | trackers | **done** | Nothing compares the numbers a tracker sees against the run that made them |
-| [T-236](peers.md) | P1 | peers | open | bit-cli announces under two peer ids and neither one is bit-cli |
+| [T-236](peers.md) | P1 | peers | **done** | bit-cli announces under two peer ids and neither one is bit-cli *(six of them, and five said BitComet)* |
 | [T-237](trackers.md) | P2 | trackers | open | Three announce paths have no fidelity case |
 | [T-238](peers.md) | P2 | peers | open | NAT traversal beyond the BEPs, and what a relay would actually buy |
 | [T-239](peers.md) | P2 | peers | open | Nothing says what shape of network bit-cli is on, or whether a peer path is direct |
@@ -249,7 +249,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 203 items: 192 to work through, and 11 deferred to Phase C.
-40 open, 2 partial, 0 blocked, 150 done.
+39 open, 2 partial, 0 blocked, 151 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -257,11 +257,11 @@ when a number here disagrees with them.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 4 | 0 | 0 | 67 | 71 |
+| P1 | 3 | 0 | 0 | 68 | 71 |
 | P2 | 24 | 2 | 0 | 53 | 79 |
 | P3 | 12 | 0 | 0 | 18 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **40** | **2** | **0** | **150** | **203** |
+| **All** | **39** | **2** | **0** | **151** | **203** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

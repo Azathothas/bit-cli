@@ -1349,7 +1349,7 @@ own.
 
 **What holds it, and what does not.** This half is proved by reading and is
 deliberately the smaller half. `bit-cli` never reaches this function: the one
-`add_torrent` call in the workspace, `crates/bit-cli-core/src/engine.rs:832`,
+`add_torrent` call in the workspace, `crates/bit-cli-core/src/engine.rs:847`,
 installs `SafeStorageFactory` on every add, so every payload byte the tool
 writes goes through `crates/bit-cli-core/src/storage.rs` instead. That copy of
 the same loop carries the same guard and five tests, including one that drives

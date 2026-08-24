@@ -20,6 +20,7 @@ pub mod listener;
 pub mod metalink;
 pub mod mse;
 pub mod paths;
+pub mod peer_id;
 pub mod piece_order;
 pub mod resume;
 pub mod span;

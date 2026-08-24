@@ -563,24 +563,13 @@ fn tracker_tiers(
 
 /// The peer id this run announces with.
 ///
-/// Azureus style, so a tracker's client statistics attribute the announce
-/// correctly rather than filing it under "unknown".
+/// The same one `download` and `seed` announce with, because a tracker's
+/// client statistics are wrong when one binary answers to two identities. It
+/// used to be `-BC0100-`, which libtorrent's table maps to BitComet, and it
+/// used to be built here rather than read from anywhere. See `TODO/peers.md`,
+/// T-236.
 fn peer_id() -> [u8; 20] {
-    let mut id = [0u8; 20];
-    let prefix = b"-BC0100-";
-    id[..prefix.len()].copy_from_slice(prefix);
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    for (index, slot) in id[prefix.len()..].iter_mut().enumerate() {
-        let byte = (seed >> ((index % 16) * 4)) as u8;
-        *slot = b'0' + (byte % 36).min(35).min(9);
-        if byte % 36 > 9 {
-            *slot = b'a' + (byte % 36) - 10;
-        }
-    }
-    id
+    bit_cli_core::peer_id::generate(&bit_cli_core::peer_id::PREFIX)
 }
 
 fn lines(report: &TrackersReport) -> Vec<String> {
@@ -764,10 +753,29 @@ mod tests {
     #[test]
     fn the_peer_id_is_azureus_style_and_printable() {
         let id = peer_id();
-        assert_eq!(&id[..8], b"-BC0100-");
+        assert_eq!(&id[..8], b"-CL0200-");
         assert!(
             id.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-'),
             "{id:?}"
+        );
+    }
+
+    /// T-236: one binary, one identity. `trackers` and `bench probe` each
+    /// built their own twenty bytes and both said BitComet, while `download`
+    /// and `seed` said rqbit. This is the assertion that fails when a third
+    /// call site invents a fourth.
+    #[test]
+    fn one_peer_id_prefix_for_every_command() {
+        assert_eq!(&peer_id()[..8], &bit_cli_core::peer_id::PREFIX);
+        assert_eq!(
+            &crate::cmd::bench::peer_id_for_tests()[..8],
+            &bit_cli_core::peer_id::PREFIX
+        );
+        // And the session's, which is the one a tracker actually files the
+        // announce under.
+        assert_eq!(
+            &bit_cli_core::engine::session_peer_id()[..8],
+            &bit_cli_core::peer_id::PREFIX
         );
     }
 

@@ -8,6 +8,31 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### One peer id, and it is `bit-cli`'s own
+
+`bit-cli` announces and hand shakes as **`-CL0200-`** now: `-CL` is this
+client's BEP 20 Azureus-style code, `0200` is its own version, and twelve
+printable characters follow.
+
+It was six identities before, and five of them claimed `-BC`, which
+libtorrent's client table maps to BitComet. `download` and `seed` announced as
+`-rQ9010-`, the vendored engine's, so the version a tracker was told about
+`bit-cli` moved whenever the vendored tree was bumped. `trackers` and
+`bench probe` announced as `-BC0100-`. The web seed bridge, the swarm bench's
+synthetic peer and the listener health check each used a `-BC` variant on
+loopback. `bench probe`'s own client table also read `-BC` as `bit-cli`, so
+probing a real BitComet peer reported this client's name.
+
+`CL` was checked against six registries before it was used and appears in none
+of them, in either case. The version is built from `CARGO_PKG_VERSION_*` at
+compile time, so it follows this crate and not the vendored one, and two
+compile-time assertions stop it from being silently wrong: a version component
+past 61 has no single-character encoding, and a prerelease cannot ship while
+the build slot is still `0`.
+
+[`docs/peers.md`](docs/peers.md) is what the identity is. The suffix is
+printable now, so an announce log reads without percent-escaping.
+
 ### A `.torrent` URL and a metalink resolve under every command, not just `download`
 
 Nine commands offered "an HTTP(S) URL" and "a metalink" in their `SOURCE` help

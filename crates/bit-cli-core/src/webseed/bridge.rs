@@ -31,7 +31,6 @@ use std::time::Duration;
 
 use librqbit::ByteBuf;
 use librqbit_core::Id20;
-use librqbit_core::peer_id::generate_peer_id;
 use librqbit_peer_protocol::{Handshake, Message, Piece};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -41,11 +40,12 @@ use tokio::task::JoinSet;
 use crate::layout::Layout;
 use crate::webseed::fetch::{FetchError, Fetcher};
 
-/// Azureus-style client prefix for a bridge's peer id.
+/// Azureus-style client prefix for a bridge's peer id, from the one place the
+/// client identity lives.
 ///
 /// It has to differ from the session's own id, or the session drops the
-/// connection as a self-connect.
-pub(crate) const PEER_ID_PREFIX: &[u8; 8] = b"-BCws01-";
+/// connection as a self-connect. See `TODO/peers.md`, T-236.
+pub(crate) const PEER_ID_PREFIX: [u8; 8] = crate::peer_id::role(*b"ws", *b"01");
 
 /// Serialized keep-alive: a bare zero length prefix.
 const KEEP_ALIVE: [u8; 4] = [0, 0, 0, 0];
@@ -1051,9 +1051,9 @@ async fn handshake(
     write: &mut (impl tokio::io::AsyncWrite + Unpin),
     frames: &mut Framer,
 ) -> Result<bool, BridgeError> {
-    let mut peer_id = generate_peer_id(PEER_ID_PREFIX);
+    let mut peer_id = Id20::new(crate::peer_id::generate(&PEER_ID_PREFIX));
     while peer_id == params.session_peer_id {
-        peer_id = generate_peer_id(PEER_ID_PREFIX);
+        peer_id = Id20::new(crate::peer_id::generate(&PEER_ID_PREFIX));
     }
 
     // `Handshake::new` sets the BEP 10 extension bit, which is what carries

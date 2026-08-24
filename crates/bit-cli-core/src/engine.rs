@@ -224,6 +224,16 @@ impl From<Transport> for librqbit::ListenerMode {
     }
 }
 
+/// The peer id a session announces under.
+///
+/// Here rather than inline in the options, so the test that holds "one binary,
+/// one identity" can assert the same twenty bytes the session is given rather
+/// than a second construction that happens to agree today. See
+/// `TODO/peers.md`, T-236.
+pub fn session_peer_id() -> [u8; 20] {
+    crate::peer_id::generate(&crate::peer_id::PREFIX)
+}
+
 /// How one torrent is added.
 #[derive(Debug, Clone, Default)]
 pub struct AddOptions {
@@ -541,6 +551,11 @@ impl Engine {
             peer_limit: options.max_peers,
             ipv4_only: options.ipv4_only,
             client_name_and_version: options.client_name.clone(),
+            // The identity this session announces under. Left `None` it was
+            // `librqbit`'s own, `-rQ9010-`, so every tracker was told this
+            // client is rqbit and the version moved when the vendored tree
+            // did. See `TODO/peers.md`, T-236.
+            peer_id: Some(librqbit_core::hash_id::Id20::new(session_peer_id())),
             stream_transform: Some(encryption.clone() as Arc<dyn librqbit::StreamTransform>),
             ..Default::default()
         };
@@ -564,7 +579,7 @@ impl Engine {
         // would make the flag quietly wrong.
         session
             .ratelimits
-            .set_exempt_peer_prefixes(vec![*crate::webseed::bridge::PEER_ID_PREFIX]);
+            .set_exempt_peer_prefixes(vec![crate::webseed::bridge::PEER_ID_PREFIX]);
         session
             .ratelimits
             .set_peer_download_bps(rate_to_bps(options.peer_download_rate));

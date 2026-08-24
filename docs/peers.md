@@ -140,10 +140,22 @@ pwsh -NoProfile -File scripts/check-transport.ps1
 
 ## What bit-cli advertises about itself
 
-Two things a peer and a tracker see, and both are recorded as defects rather
-than as design: the peer id prefix is the vendored engine's rather than this
-one's, and `bit-cli trackers` uses a third-party client's registered prefix.
-T-236 in [`TODO/peers.md`](../TODO/peers.md) is the entry.
+**One identity, whatever the command.** The peer id is Azureus style, per BEP
+20: `-CL`, then three characters of `bit-cli`'s own version, then the build
+slot, then `-`, then twelve random printable characters. Version 0.2.0
+announces as `-CL0200-`.
+
+`CL` is this client's two character code. It is not in libtorrent's client
+table, nor in any of the five other implementations of that table that were
+checked, in either case: a tracker files the announce under an unknown client
+rather than under somebody else's. That is the correct answer until the table
+gains a row, and it is what the check below prints.
+
+Every path uses it. `download`, `seed`, `trackers` and `bench probe` all
+announce and hand shake under the same eight bytes, and the three loopback
+connections this process makes to itself, the web seed bridge, the swarm
+bench's synthetic peer and the listener health check, carry the same code with
+a role in the version slot so a log says which of the three dialled.
 
 ```bash
 pwsh -NoProfile -File scripts/check-announce.ps1

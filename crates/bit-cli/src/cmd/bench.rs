@@ -163,23 +163,19 @@ fn probe(
 
 /// A peer id for one probe.
 ///
-/// `-BC` then four version digits, per BEP 20, then twelve bytes that differ
-/// between runs. A probe that reused one id would look to a tracker-backed
-/// peer like the same client reconnecting.
+/// The client prefix per BEP 20, then twelve characters that differ between
+/// runs: a probe that reused one id would look to a tracker-backed peer like
+/// the same client reconnecting. It was `-BC0100-` and seeded from the clock
+/// until T-236. See `TODO/peers.md`.
 fn peer_id() -> [u8; 20] {
-    let mut out = *b"-BC0100-000000000000";
-    let mut state = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x2026_0820)
-        | 1;
-    for slot in out[8..].iter_mut() {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        *slot = b"0123456789abcdefghijklmnopqrstuvwxyz"[(state >> 24) as usize % 36];
-    }
-    out
+    bit_cli_core::peer_id::generate(&bit_cli_core::peer_id::PREFIX)
+}
+
+/// [`peer_id`] for `one_peer_id_prefix_for_every_command`, which lives in
+/// `trackers` because that is the other command that used to roll its own.
+#[cfg(test)]
+pub fn peer_id_for_tests() -> [u8; 20] {
+    peer_id()
 }
 
 /// A subcommand that is not built yet.

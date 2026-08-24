@@ -58,7 +58,7 @@ responded            0
 failed               1
 
 TIER  TRACKER                      FAMILY  STATUS  RTT     SEED  LEECH  INTERVAL  PEERS  REASON
-0     http://127.0.0.1:1/announce  v4      failed  2035ms  -     -      -         0      error sending request for url (http://127.0.0.1:1/announce?info_hash=%AE%3E%E9%93%BF...&peer_id=-BC0100-8um319nbelzj&port=6881&uploaded=0&downloaded=0&left=1543000&compact=1&no_peer_id=1&numwant=50&key=893be13d&event=started)
+0     http://127.0.0.1:1/announce  v4      failed  2035ms  -     -      -         0      error sending request for url (http://127.0.0.1:1/announce?info_hash=%AE%3E%E9%93%BF...&peer_id=-CL0200-8um319nbelzj&port=6881&uploaded=0&downloaded=0&left=1543000&compact=1&no_peer_id=1&numwant=50&key=893be13d&event=started)
 ```
 
 Exit **6**, no usable sources.
@@ -102,14 +102,15 @@ implementation in the thirty-nine tree corpus implements another one either.
 
 ## What the peer id says about this command
 
-The `REASON` line above carries `peer_id=-BC0100-...`, and `-BC` is BitComet's
-registered prefix in libtorrent's client table. `bit-cli trackers` is
-announcing under another client's identity, and `bit-cli download` announces
-under the vendored engine's. Neither is intentional and both are open as T-236
-in [`../../TODO/peers.md`](../../TODO/peers.md).
+The `REASON` line above carries `peer_id=-CL0200-...`. That is `bit-cli`'s own
+Azureus-style identity, per BEP 20: `-CL` is this client, `0200` is version
+0.2.0, and the twelve characters after it differ between runs.
 
-It is mentioned here because it is visible in this command's own output, and a
-reader who notices it should find it recorded rather than wonder.
+`bit-cli trackers` and `bit-cli download` announce under the same eight bytes,
+so a tracker's client statistics count both as one client. They did not until
+T-236: `trackers` announced as `-BC0100-`, which libtorrent's table maps to
+BitComet, and `download` announced as the vendored engine's `-rQ9010-`.
+[`../peers.md`](../peers.md) is what the identity is now.
 
 ## When the tracker is fine and the download still finds nothing
 

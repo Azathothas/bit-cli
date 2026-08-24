@@ -90,10 +90,10 @@ const BLOCK_LEN: u32 = 16 * 1024;
 /// past anything in circulation and still small.
 const MAX_SERVED_BLOCK: u32 = 8 * BLOCK_LEN;
 
-/// Peer id prefix. `-BC` is this tool, then a version, in the BEP 20 style.
-/// Distinct from the bridge's prefix so a target's logs can tell a synthetic
-/// peer from a web seed bridge.
-const PEER_ID_PREFIX: &[u8] = b"-BCsw01-";
+/// Peer id prefix for a synthetic swarm peer, from the one place the client
+/// identity lives. Distinct from the bridge's so a target's logs can tell a
+/// synthetic peer from a web seed bridge. See `TODO/peers.md`, T-236.
+const PEER_ID_PREFIX: [u8; 8] = crate::peer_id::role(*b"sw", *b"01");
 
 /// BEP 6's reserved bit: the third least significant bit of the last reserved
 /// byte. `librqbit_peer_protocol::Handshake::new` sets bit 20 for the
@@ -1484,7 +1484,7 @@ pub(crate) fn connect_class(error: &std::io::Error) -> &'static str {
 /// `librqbit_core`'s generator, so a synthetic peer's id is built the same way
 /// every other peer this repository creates is.
 fn generate_peer_id() -> [u8; 20] {
-    librqbit_core::peer_id::generate_peer_id(PEER_ID_PREFIX).0
+    crate::peer_id::generate(&PEER_ID_PREFIX)
 }
 
 #[cfg(test)]
@@ -1860,7 +1860,7 @@ mod tests {
     fn a_peer_id_carries_the_prefix_and_is_not_constant() {
         let a = generate_peer_id();
         let b = generate_peer_id();
-        assert_eq!(&a[..PEER_ID_PREFIX.len()], PEER_ID_PREFIX);
+        assert_eq!(&a[..PEER_ID_PREFIX.len()], &PEER_ID_PREFIX);
         assert_ne!(a, b, "two peers with one id is one peer to the target");
     }
 

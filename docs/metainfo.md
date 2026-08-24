@@ -22,8 +22,8 @@ Probe
   kind                 peer
   reachable            yes
   connect              1ms
-  peer id              -rQ9000-1%ba%01%06%ad0%b4xM%f5%d0%7f
-  client               rqbit 9000
+  peer id              -CL0200-ocmvt0sat7h4
+  client               CL 0200
   reserved             0000000000100000
   extensions           extension-protocol
   info hash            echoed
