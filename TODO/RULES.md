@@ -76,6 +76,30 @@ When the operator says the session is ending, in this order:
    counts table, which must be exact against the rows. **`patches/TASKS.md` is
    in this step too**, and so is `patches/UPSTREAM.md` when the session touched
    `vendor/`. Section 5 says why under "The record is part of the change".
+
+3a. **Update `docs/` in the same push**, when the session changed what the tool
+   does. A behaviour that only a `TODO/` entry describes is a behaviour nobody
+   using the tool can find.
+
+   - [`docs/AGENTS.md`](../docs/AGENTS.md) whenever the tree layout, a tool, a
+     gate or the reading order moved. It is the first thing an agent reads
+     after this file, so a stale one costs every later session.
+   - [`docs/examples/`](../docs/examples/) whenever a flag or a command an
+     example uses changed, or a new capability wants a worked case. **Every
+     command in an example is run before it is written down.** An example that
+     has not been executed is a guess.
+   - The topic page that owns the behaviour. `docs/` says what the tool does
+     and never what the project did: a fixed defect belongs in `docs/` only
+     when a reader needs it to use the tool correctly.
+
+```bash
+pwsh -NoProfile -File scripts/check-docs.ps1
+```
+
+   That resolves every relative link and anchor, every `scripts/` path, and
+   every flag and command an example names against `man/bit-cli.json`, and it
+   enforces the mechanical half of the prose rule. It is a gate and a CI job,
+   so a doc naming a flag that was renamed cannot reach a commit.
 4. **Two deep reviews, and the machine does the half it can.**
 
 ```bash

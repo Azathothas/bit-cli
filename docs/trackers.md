@@ -154,3 +154,90 @@ a well-formed empty swarm rather than an error.
 | One endpoint cannot stand for several trackers | `a_named_scrape_endpoint_is_refused_when_the_run_has_several_trackers` |
 | The torrent's own trackers come before the caller's | `a_tracker_added_at_runtime_is_a_tier_after_the_torrents_own` |
 | A repeated tracker is announced to once | `a_repeated_tracker_is_announced_to_once` |
+
+## Using the command
+
+```bash
+bit-cli trackers album.torrent --json
+```
+
+Announces to every tracker in the torrent and reports what each one said: its
+tier, its protocol, its interval, its seeder and leecher counts, the peers it
+returned, and its failure reason when it has one. `--scrape` asks for the
+counts without announcing.
+
+The announce is a real one, so the command binds the port it announces for as
+long as the announce lasts and then withdraws the record with a second
+announce carrying `event=stopped`. A diagnostic that registers a peer nobody
+can dial, and leaves it registered for the tracker's interval, is worse than
+no answer. `--port` chooses the port or the range, and `--no-withdraw` leaves
+the record in place.
+
+A tracker records the source address of the connection it was announced over,
+so **one announce registers one of this host's addresses**. `--family auto`,
+the default, announces once per address family the tracker resolves to and
+reports each separately under `families`, with the endpoint each one reached.
+`--family v4` and `--family v6` send one. The port is bound on both families,
+because an IPv6 announce naming a port listening only on IPv4 registers the
+same black hole the listener above exists to prevent.
+
+```bash
+bit-cli trackers album.torrent --family v6 --json
+```
+
+Whether a tracker **keeps** both addresses is the tracker's choice: one keyed
+by peer id alone holds the last announce and drops the other, which is what
+BEP 7's separate peer lists exist to fix. Announcing over both is what tells
+it; `families` in the report is what says what came back.
+
+A `download` run announces the same three events a client should:
+`started` when the torrent goes live, `completed` the moment it finishes, and
+`stopped` when the run ends. The last two come from `bit-cli` rather than from
+the session, carrying the session's own peer id and port so the tracker
+updates one record, and `--json` reports them under `announced`.
+
+**A magnet does not announce itself as a seed.** `left=0` means "I have all of
+it", and a source with no metadata yet has no length to report, so what goes
+out is `9223372036854775807` and the report says which it was under `left`,
+with `known: false`. A tracker whose scrape endpoint is not BEP 48's is named
+with `--scrape-url`. [`docs/trackers.md`](trackers.md) has both decisions,
+why every tracker is asked at once rather than tier by tier, and what a
+malformed answer costs.
+
+## What a UDP tracker that does not answer costs
+
+BEP 15 says to retry at `15 * 2^n` seconds for `n` from 0 to 8, which is nine
+attempts and up to 62 minutes before giving up. **`bit-cli` does not do that,
+on purpose.** A foreground diagnostic that can take an hour to say "this
+tracker is down" has not answered the question the caller asked. What it does
+instead is **three attempts inside `--tracker-timeout`**, one attempt being
+`max(--tracker-timeout / 3, 1s)`.
+
+The one second floor is why `--tracker-timeout 1s` and `--tracker-timeout 3s`
+cost the same three seconds. Below three seconds the flag buys nothing.
+
+The total is not one number, because a UDP announce is two exchanges, connect
+then announce, and either can be the one that dies. Measured:
+
+| what happens | attempts | at `--tracker-timeout 6s` |
+| --- | --- | --- |
+| nothing answers, so the announce is never sent | 3 | 6.06 s |
+| connect answered at once, announce dead | 3 | 6.06 s |
+| connect answered on its third attempt, announce dead | 5 | 10.10 s |
+
+**Five attempts is the worst case there is**, so the budget for one UDP tracker
+is `5 * max(--tracker-timeout / 3, 1s)`: **fifty seconds** at the default
+`--tracker-timeout` of 30 seconds, and never under five. Six attempts cannot
+happen, because a connect that is not answered by its third gives up and the
+announce that would spend three more is never sent.
+
+Every tracker is asked at once rather than tier by tier, so that budget is per
+tracker and not per torrent: a torrent with twelve dead UDP trackers still
+answers in fifty seconds.
+
+```bash
+pwsh scripts/check-udp-retry.ps1
+```
+
+[`examples/tracker-diagnostics.md`](examples/tracker-diagnostics.md) walks a
+tracker that answers and one that does not, with the real output of each.

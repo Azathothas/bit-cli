@@ -92,12 +92,12 @@ string rather than a module that has to exist. That is convenient and it is
 also the failure this whole surface had: a directive naming a target nothing
 writes to is accepted, matches nothing, and produces no error.
 
-Ten of the eleven names were in that state until 2026-08-23. `--trace` built
-`bit_cli::<name>` for each, and the only module that ever matched was
-`bit_cli::http`, which is an explicit target in
-`crates/bit-cli-core/src/webseed/fetch.rs`. A record from `cmd/peers.rs` has
-the target `bit_cli::cmd::peers`, which `bit_cli::peer` does not match, and
-there is no `bit_cli::disk` module at all. Measured on one `download` tracing
+That is why every name in the table above is a target something writes to,
+and why the mapping is a table rather than a rule. Deriving `bit_cli::<name>`
+from the flag value is the version that silently matches nothing: a record from
+`cmd/peers.rs` has the target `bit_cli::cmd::peers`, which `bit_cli::peer` does
+not match, and there is no `bit_cli::disk` module at all. Measured on one
+`download` tracing
 all ten: **0** lines of stderr, against 32 for `http` on the same run.
 `TODO/cli-surface.md` T-219 is the entry.
 

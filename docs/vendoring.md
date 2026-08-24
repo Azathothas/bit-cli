@@ -1,7 +1,7 @@
 # Why the librqbit crates are vendored
 
 `bit-cli` is built on `librqbit`, by decision 7.3, and that decision is not
-being relitigated. What changed on 2026-08-22 is where the source comes from:
+being relitigated. What this file is about is where the source comes from:
 `vendor/`, in this repository, rather than crates.io.
 
 This file says why, and what that costs. How to work with the vendored trees is
@@ -29,9 +29,8 @@ handshake check disabled, and no amount of configuration reached it.
 [T-040](../TODO/memory.md): nothing reclaimed a peer row and nothing bounded
 the sets that hold them.
 
-**Five of that table are done and one is partial**, on 2026-08-22, and the
-table is kept as the argument it was rather than rewritten into a status
-board: [`patches/TASKS.md`](../patches/TASKS.md) is the status board and
+**The table is kept as the argument it was** rather than rewritten into a
+status board: [`patches/TASKS.md`](../patches/TASKS.md) is the status board and
 `scripts/check-todo.ps1` holds it to the entries. Two of the five were not on
 this list at all. [T-210](../TODO/peers.md) came out of building
 [T-132](../TODO/multi-source.md), and [T-195](../TODO/peers.md) out of building

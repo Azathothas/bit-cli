@@ -1316,3 +1316,133 @@ From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`.
 | `ok` | bool |
 | `seq` | integer |
 | `type` | string |
+
+## Machine output, from the README
+
+Two rules, and neither bends.
+
+**stdout carries data only.** JSON, NDJSON, or the requested plain values.
+`bit-cli ... --json | jq` never sees a log line in the pipe.
+
+**stderr carries logs, progress, warnings, and errors.**
+
+```bash
+bit-cli info album.torrent --json | jq -r .info_hash
+```
+
+`--jsonl` emits one event per line as things happen, each with a monotonic
+`seq` and an ISO 8601 UTC millisecond timestamp. Every `--jsonl` run ends with
+a `session_end` event carrying the exit code, so a consumer can tell "finished"
+from "the pipe broke".
+
+`docs/schema.md` lists every document `kind` and every event `type` with the
+fields each one carries, and `bit-cli --schema-version` prints the version it
+describes. That file is generated from what the program actually writes: a test
+drives every command, flattens the JSON, and fails when a report carries a field
+the document does not.
+
+Nothing is TTY-gated. Terminal detection reaches exactly two decisions, colour
+and progress rendering, and never decides what the program does, computes, or
+reports. Anything you can read in the terminal is a field in `--json`.
+
+## Keeping a log
+
+```bash
+bit-cli download release.torrent \
+  --log-file /var/log/bit-cli.log --log-max-size 16MiB --log-max-files 5
+```
+
+The file rotates at `--log-max-size` into `.1`, `.2`, and so on.
+`--log-max-files` is the count in total, the live one included, so `5` leaves
+`bit-cli.log` plus four rotated. `--log-max-size 0` never rotates.
+
+It is a second destination, not a replacement: stderr still carries the logs,
+so `bit-cli ... --json | jq` behaves the same either way. Redirect stderr if
+you want only the file. The log file never carries colour escapes, whatever the
+terminal is.
+
+## On Windows
+
+PowerShell surfaces the exit code in `$LASTEXITCODE`, not `$?`.
+
+`bit-cli` writes UTF-8 with no BOM to stdout whatever the console code page is.
+Getting those bytes into a file or a parser is the caller's half, and on Windows
+that is two settings rather than one:
+
+| | |
+| --- | --- |
+| `[Console]::OutputEncoding` | how the host decodes what a program wrote |
+| `$OutputEncoding` | how the host encodes what it sends into one |
+
+**Neither defaults to UTF-8.** Measured on Windows 11: both hosts read at the
+console code page, `IBM437` here, and Windows PowerShell 5.1 writes `us-ascii`
+into a native command. A torrent whose name is `café-λ-日本.bin` comes back
+with a different name, and the JSON still parses, so nothing says so.
+
+Set both once per session, and every form below is exact:
+
+```powershell
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+$OutputEncoding = New-Object System.Text.UTF8Encoding $false
+bit-cli info album.torrent --json | ConvertFrom-Json
+```
+
+Or keep the bytes out of the pipeline altogether, which needs nothing set:
+
+```powershell
+cmd /c "bit-cli info album.torrent --json > info.json"
+```
+
+What each form does, measured against a name no code page holds:
+
+| form | 5.1 | 7.6.5 | |
+| --- | --- | --- | --- |
+| `cmd /c "... > file"` | exact | exact | copies bytes, decodes nothing |
+| `> file` | no | exact | 5.1 writes UTF-16LE, and `jq` reads none of it |
+| `\| ConvertFrom-Json` | no | no | exact once both encodings are set |
+| `\| Set-Content -Encoding utf8` | no | no | exact once both encodings are set. 5.1 adds a BOM |
+| `\| Out-File -Encoding utf8NoBOM` | no such value | no | `utf8NoBOM` arrived in PowerShell 6 |
+
+Every row of both columns comes from one command, and it takes two seconds:
+
+```powershell
+pwsh -NoProfile -File scripts/check-redirect.ps1
+```
+
+```powershell
+powershell -NoProfile -File scripts/check-redirect.ps1
+```
+
+It builds its own torrent, runs all seven forms, and prints which ones give the
+bytes back. It judges nothing: what it measures is a property of the host.
+
+## Reading a download as it arrives
+
+```bash
+bit-cli download film.torrent --piece-selector sequential --web-seed-connections 1
+```
+
+Pieces arrive front to back. Measured over ten runs on a 48 piece torrent, that
+is **zero out of ten runs with any piece arriving before one already reported**,
+against one such piece in every run of the default. It costs nothing at one
+connection.
+
+The default is not disordered. It asks for the first piece of each file, then
+the last, then the middle in ascending order, so it is almost front to back
+already and its one break is the tail arriving early. That is why the flag is
+worth having and why it is not the default: `sequential` removes that break,
+and above one connection it costs about seven percent of the throughput,
+because every connection is pointed at the same part of the file.
+
+Above one connection the order is not exact and cannot be. A selector decides
+which piece is asked for next; it cannot decide which of four transfers already
+in flight finishes first. Run the measurement yourself:
+
+```bash
+pwsh scripts/check-piece-order.ps1 -Runs 10 -Connections 1,2,4
+```
+
+`in-order` is the same thing spelled the way `aria2` spells it.
+
+[`examples/machine-output.md`](examples/machine-output.md) is the worked
+version, with the event types a real run emitted.

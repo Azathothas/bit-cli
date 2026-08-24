@@ -301,6 +301,35 @@ if (-not $treeOk) {
 Record "tree" $treeOk $treeDetail
 
 # ---------------------------------------------------------------------------
+# docs
+# ---------------------------------------------------------------------------
+#
+# `record` above holds `TODO/` and `patches/` to the tree. Nothing held
+# `README.md` and `docs/` to anything: a renamed script, a renamed flag or a
+# moved heading left a document that still read correctly and no longer
+# described this tool.
+#
+# `check-docs.ps1` resolves every relative link and anchor, every `scripts/`
+# path, and every flag and command an example names, against
+# `man/bit-cli.json`. It also enforces the mechanical half of the prose rule.
+#
+# It is separate from `check-todo.ps1` rather than folded into it because the
+# rules differ in two ways that matter: a `TODO/` entry is allowed to carry
+# project history and a `docs/` page is not, and a `TODO/` entry may name a
+# check script that does not exist yet while a `docs/` page may not.
+
+$docsArgs = @("-NoProfile", "-File", (Join-Path $PSScriptRoot "check-docs.ps1"))
+$docsOut = (& pwsh @docsArgs 2>&1 | Out-String)
+$docsOk = ($LASTEXITCODE -eq 0)
+$docsDetail = ""
+if (-not $docsOk) {
+    $lines = @($docsOut -split "`r?`n" | Where-Object { $_ -match '^\s+\[' })
+    $docsDetail = if ($lines.Count -gt 0) { $lines[0].Trim() } else { "see: pwsh -NoProfile -File scripts/check-docs.ps1" }
+    if ($lines.Count -gt 1) { $docsDetail += " and $($lines.Count - 1) more" }
+}
+Record "docs" $docsOk $docsDetail
+
+# ---------------------------------------------------------------------------
 # clippy
 # ---------------------------------------------------------------------------
 

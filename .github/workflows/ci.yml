@@ -97,6 +97,21 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - run: pwsh -NoProfile -File scripts/check-tree.ps1
 
+  # README.md and docs/ against man/bit-cli.json and against each other: every
+  # relative link and anchor, every scripts/ path, and every flag and command
+  # an example names. Plus the mechanical half of the prose rule.
+  #
+  # It needs no toolchain, because man/bit-cli.json is committed and the test
+  # suite is what holds that current. So it runs beside `record` and `tree`
+  # rather than inside `test`, and a documentation-only push gets an answer in
+  # seconds. See TODO/RULES.md section 5, "Output and prose".
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: pwsh -NoProfile -File scripts/check-docs.ps1
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

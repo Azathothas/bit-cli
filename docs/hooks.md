@@ -47,11 +47,12 @@ one value `download` never sets. On `--on-error` it is `error`.
   trigger rather than this one moved, and nothing has asked for it.
 - **Nothing on `--announce-only`.** That run announces and stops without ever
   serving, so the moment `--on-complete` names does not happen in it.
-- **No hook on `peers`, `bench leech` or `bench seed`.** They accepted all
-  three flags until 2026-08-23 and ran none of them, because the flags lived in
-  the struct five commands share. They are refused now, with exit 2, which is
-  the difference between a caller learning at once and a caller waiting for a
-  notification that was never coming. See `TODO/cli-surface.md`, T-214.
+- **No hook on `peers`, `bench leech` or `bench seed`.** All three **refuse**
+  the hook flags with exit 2 rather than accepting them and running nothing.
+  That is the difference between a caller learning at once and a caller waiting
+  for a notification that was never coming. The flags reach those commands
+  because five commands share one argument struct, which is why the refusal is
+  explicit rather than absent. See `../TODO/cli-surface.md`, T-214.
 
 ## Nothing is interpolated into a command line
 
@@ -170,3 +171,21 @@ T-115.
 | A seeder fires `--on-complete` once, when it is ready to serve | `on_complete_fires_once_when_the_seeder_is_ready_to_serve` |
 | A hook that fails does not fail the seeding | `a_failing_hook_does_not_fail_the_seeding` |
 | A hook that failed names the error and which hook it was | `a_failed_hook_names_the_error_and_says_which_hook_it_is` |
+
+## Telling something else what happened
+
+`--on-complete` and `--on-error` run a command of yours **once per torrent**, and
+`--on-piece-verified` runs one per verified piece. Every fact arrives as a
+`BIT_CLI_*` environment variable and nothing is interpolated into a command line,
+so a file named `; rm -rf /` is a file name.
+
+```bash
+bit-cli download a.torrent b.torrent -j 2 --on-complete 'echo "$BIT_CLI_NAME landed in $BIT_CLI_DIR"'
+```
+
+That runs twice, with `BIT_CLI_INFO_HASH` differing. A run where one torrent
+finished and the other did not runs `--on-complete` for the first and
+`--on-error` for the second.
+
+[`docs/hooks.md`](hooks.md) lists every variable, says what
+`--on-piece-verified` costs and how it is bounded, and what an exit code does.
