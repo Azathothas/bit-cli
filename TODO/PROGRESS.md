@@ -89,8 +89,8 @@ it, and it says so in its own first paragraph.
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-two** jobs. Green at run **32721082818**, against commit
-  `553b5ae`. No run was red this session.
+- **CI:** **twenty-two** jobs. Green at run **32722156167**, against commit
+  `31daa1d`. Two runs this session and neither was red.
 
 ```bash
 gh run list --limit 1
