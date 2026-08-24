@@ -75,13 +75,13 @@ it, and it says so in its own first paragraph.
 
 ## State
 
-- **Last session:** 2026-08-24T11:48:11Z, unattended, and it is working the
-  entries rather than filing them. The duration is not restated here:
+- **Last session:** 2026-08-24T11:48:11Z, unattended, and it worked the entries
+  rather than filing them. The duration is not restated here:
   `scripts/session-report.ps1` derives it from the instant above, and a
   duration written down twice is a number two documents disagree about.
-- **Tests:** 1,298 passing, 0 failing, unchanged. No `crates/` source changed
-  at all this session. Plus **149** in the vendored `rqbit` tree and **76** in
-  `librqbit-utp`, which the workspace gates do not run. `vendor/` is untouched.
+- **Tests:** 1,312 passing, 0 failing, up from 1,298. Plus **149** in the
+  vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
+  do not run. `vendor/` is untouched.
 - **Gates:** clean, on rustc 1.98.0. A default run prints **nine**: `text`,
   `man`, `fmt`, `record`, `tree`, `docs`, `clippy`, `test`, `deny`.
 
@@ -89,8 +89,8 @@ it, and it says so in its own first paragraph.
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-two** jobs. Green at run **32722156167**, against commit
-  `31daa1d`. Two runs this session and neither was red.
+- **CI:** **twenty-two** jobs. Green at run **32730292888**, against commit
+  `4acc095`. Three runs this session and none was red.
 
 ```bash
 gh run list --limit 1
@@ -107,13 +107,13 @@ pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.c
 
 - **Entries:** 203 items. 39 open, 2 partial, 0 blocked, 151 done, 11 deferred
   to Phase C. 151 of 192 workable done, 41 left.
-- **Tree:** 97 Rust files, 58,058 lines of code, 14,899 of comment,
+- **Tree:** 98 Rust files, 58,502 lines of code, 15,187 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
   `reference/HISTORY/`. [`reference-map.md`](reference-map.md) carries the
   licence per tree and where the determination came from. Nothing was mined
-  this session; two crates.io manifests were read and are cited in
-  [T-244](cli-surface.md) rather than in the corpus.
+  this session; five peer id tables already in the corpus were read, and one
+  file was fetched from libtorrent, which [T-236](peers.md) records.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **31 patches**
   across twenty-one sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
   Untouched.
@@ -121,242 +121,148 @@ pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.c
 
 ## What the last session did
 
-**This section is a plan until the session ends, by [RULES.md](RULES.md)
-section 1 step 4.** What is below the plan is the session before this one, kept
-until this one rewrites it.
+**Two entries closed, both P1, both taken from the work order in its own
+order.** No new entries were filed. The session before this one filed eleven and
+worked none; this one is the other half of that.
 
-### The plan, written before the work
+**Both entries undercounted their own defect, and both undercounts were found
+the same way: by measuring the whole surface before changing any of it rather
+than trusting the table in the entry.** That is the one transferable thing here.
 
-The work order below is followed in its own order. The soak is printed for the
-operator and not started, per the standing instruction.
+### [T-245](cli-surface.md), P1: four commands turned out to be nine
 
-1. [T-245](cli-surface.md), P1, effort M, `crates/bit-cli/src/source.rs` and
-   the six commands that call `load_local`. Four entries are blocked behind it.
-2. [T-236](peers.md), P1, effort S, `crates/bit-cli/src/cmd/trackers.rs`,
-   `crates/bit-cli/src/cmd/bench.rs` and wherever the one constant ends up.
-3. [T-246](cli-surface.md), [T-247](cli-surface.md) and
-   [T-249](metainfo.md), all effort S, which share one fixture.
+The entry said `info`, `files`, `magnet` and `verify` refuse the HTTP URL that
+`download` accepts. Running every command against one URL first said **nine**,
+and a tenth refuses it with a different message that is also wrong.
 
-Anything past that is taken from the work order in order.
+| command | before |
+| --- | --- |
+| `info`, `files`, `magnet`, `verify` | exit 4, "has to be fetched before it can be read" |
+| `webseed list`, `test`, `probe`, `fetch` | exit 4, the same message |
+| `bench webseed` | exit 4, the same message |
+| `trackers` | exit 4, "an info hash is needed to announce, and this source does not carry one" |
+| `download`, `seed`, `peers`, `bench leech` | works |
 
----
+`trackers` is left as it was and [T-251](trackers.md) owns it: the URL **does**
+carry an info hash once fetched, and the entry that owns what a tracker command
+knows about its source is the right place for it.
 
-Verification, then documentation. **Eleven entries filed, none of the open ones
-worked on**, and eight operator decisions settled. The assignment was to take
-eight ideas from the operator's brief, check each against the code by running
-it, document what already works and file what does not.
+**A metalink is the same defect in the same help string.** All nine offer "a
+metalink" in their `SOURCE` text and all nine refused both metalink shapes.
+Fixed together, because it is one code path and one sentence of help.
 
-### The eight ideas, and what each turned out to be
+`crates/bit-cli/src/source.rs` gained `resolve`, which fetches, and
+`resolve_blocking`, which is what a synchronous command calls. `load_local`
+stays as the local-only path and keeps the magnet and info hash refusal,
+because those need the swarm rather than one `GET`. The runtime is built only
+when the source needs one, and a caller already inside a runtime gets an error
+naming the mistake rather than tokio's panic.
 
-Every row was decided by running a command, not by reading. The command and its
-output are in the entry.
+Three bounds, each measured rather than reasoned about:
 
-| the idea | what is there today | filed |
-| --- | --- | --- |
-| scrape a `.torrent` or magnet out of a web page | nothing. `source.rs:68` maps every URL to "a URL pointing at a `.torrent`", and a page is handed to the bencode parser | [T-244](cli-surface.md) |
-| smart detection between input types | most of it. Seven forms, classified by shape, and a local torrent's extension is not consulted at all | [`docs/examples/inputs.md`](../docs/examples/inputs.md) |
-| a `diff` subcommand | half of it, filed under `files`. `--against` proves two torrents hold the same file by piece hashes | [T-248](metainfo.md), [`comparing-torrents.md`](../docs/examples/comparing-torrents.md) |
-| a `compare` subcommand | refused as a second command, folded into `diff --by files` on the operator's ruling | [T-248](metainfo.md) |
-| a `tree` subcommand | nothing. `files` is a flat list, and `bit-cli tree x.torrent` is read as a source named `tree` | [T-249](metainfo.md), [T-246](cli-surface.md) |
-| show how an input resolved | nothing. Eleven `--trace` subsystems and none covers resolution | [T-250](cli-surface.md) |
-| granular control per tracker, peer and web seed | a web seed has twelve knobs of its own. A tracker has one timeout for all of them | [T-251](trackers.md) |
-| a `--stats` flag | the numbers are all in `--json` already. The text rendering reduces the process half to one line | [T-252](cli-surface.md) |
+- The deadline is `--timeout` when set and 30s otherwise. Against a
+  `--stall-after 64` file server, `--timeout 2s` gave up at 2,081ms and
+  `--timeout 5s` at 5,090ms.
+- **A fetch that runs out of time exits 9 and names the deadline.** It exited 5
+  saying "error decoding response body" until that was fixed, which is
+  `reqwest` describing the transport rather than the flag the caller set.
+- A `.torrent` body is capped at 16 MiB and a metalink at 1 MiB, counted as the
+  bytes arrive. `fetch_metalink` read the whole body and measured it
+  afterwards, so its cap bounded what was returned rather than what was held.
 
-**Three defects fell out of checking rather than out of the ideas.**
+### [T-236](peers.md), P1: two peer ids turned out to be six
 
-[T-245](cli-surface.md), P1: `info`, `files`, `magnet` and `verify` all
-document their positional as accepting an HTTP URL and all four refuse one.
-`download` fetches the same URL and completes. It is the prerequisite for four
-of the rows above, because an input cannot be treated as an abstract object
-while it only resolves inside one command.
+The entry named the session's `-rQ9010-` and `bit-cli trackers`'s `-BC0100-`.
+Grepping for the prefix found **six**, and five of the six claimed BitComet's
+code: those two, `bench probe`, the web seed bridge, the swarm bench's
+synthetic peer, and the listener health check.
 
-[T-246](cli-surface.md): `bit-cli info <directory>` reports
-`Access is denied. (os error 5)` and `"io_kind": "PermissionDenied"`. Nothing
-is denied. Reading a directory as a file is `ERROR_ACCESS_DENIED` on Windows
-and `EISDIR` on Unix, so one input produces two different wrong explanations.
+There was a seventh at `listener.rs:194` and it is deliberately **not** ours: a
+fixture standing in for a remote peer. It says so in a comment now as well as
+in its bytes, because a fixture replying with this client's own prefix would
+hide a self-connect rather than exercise one.
 
-[T-247](cli-surface.md): `download --dry-run` over a URL prints `trackers 0`
-for a torrent with one tracker, because a dry run does not fetch and nothing
-counted. The `--json` form of the same run is correct and says `null`. The
-renderer already has the right pattern three lines above the defect.
+**An eighth was a decoder rather than a generator.** `bench probe`'s client
+table read `-BC` as `bit-cli`, so probing a real BitComet peer reported this
+client's name. It reads `CL` as `bit-cli` and `BC` as BitComet now.
 
-### Four pages, and the measurements behind them
+**The entry said `-bC` is taken. It is not.** Checked against libtorrent
+`v2.0.11` `src/identify_client.cpp:148-250`, which carries **92** Azureus-style
+codes, against `aquatic/crates/peer_id/src/lib.rs:100-120`, and against the
+four other tables in the corpus, in `seedchamp`, `torrust-actix`, `gosh-dl` and
+`superseedr`. `bC`, `bt`, `bl`, `bi`, `CL` and `cl` are free in all six.
 
-[`s3-webseed.md`](../docs/examples/s3-webseed.md) is new and every number in it
-came from a run against a real AWS S3 bucket, `noaa-goes16`, which is public
-and reproducible. One request says the shape:
+**The code is `CL`**, and the property that separated the candidates was case
+twins. The lookup is a byte comparison, so `lt` and `LT` are different clients
+and have been for two decades, which makes a twin legal but confusable. Every
+candidate containing `b` has one: `bC` twins `BC`, the client this was being
+mistaken for; `bt` twins `BT`; `bl` twins `BL`; `bi` twins `BI`. `CL` has no
+twin in any of the six in either case, and it reads as the command line.
+
+`crates/bit-cli-core/src/peer_id.rs` is the one place and all six read it. The
+version is built from `CARGO_PKG_VERSION_*` at compile time, so `-CL0200-`
+follows this crate rather than the vendored tree. Two **compile-time**
+assertions rather than runtime checks: a component past 61 has no
+single-character encoding, and a prerelease cannot ship while the build slot is
+still `0`, because Transmission puts `B` or `Z` there.
+
+The suffix is printable now. It was twelve raw bytes on the session path, which
+is why the check's own output used to be half percent escapes.
 
 ```
-status 206, ranges yes, length matches, server AmazonS3
-tls TLSv1_3 TLS13_AES_128_GCM_SHA256, alpn http/1.1
-handshake connect 269ms, tls 267ms, ttfb 876ms, total 1414ms
+peer id:     -CL0200-nnznnl2zn5d2
 ```
-
-Two concurrency sweeps behind it, at 4 MiB and at 256 KiB per request, which
-disagree about the best concurrency and are both right: the per-request floor
-is about 300ms whatever the chunk size, so the chunk size sets the ceiling one
-connection can reach and concurrency is what lifts it. A full download of the
-object over HTTP alone made **ten requests for ten pieces and fetched
-2,410,916 bytes**, which is the payload to the byte.
-
-[`cloudflare-webseed.md`](../docs/examples/cloudflare-webseed.md) gained the
-Cloudflare half it said it did not have. `cdnjs.cloudflare.com`, one of the
-most requested hosts on the internet, **cannot be a web seed**: it answers
-`200` to a ranged `GET`, which `bit-cli` refuses with exit 6 and
-"the server does not honour Range". Beside S3 the same page now carries a
-latency table: 6ms connect and 82ms to first byte against 269ms and 876ms, and
-`alpn h2` against `http/1.1`.
-
-[`inputs.md`](../docs/examples/inputs.md) and
-[`comparing-torrents.md`](../docs/examples/comparing-torrents.md) are the other
-two, and they document what already works rather than what is planned.
-
-**A redirect chain worth keeping.** `dl.min.io` is a MinIO server that
-redirects twice, to GitHub and then to Azure Blob, and the final URL carries a
-presigned signature that expires in an hour. One `webseed test` printed all of
-it, including that the TLS report describes the **last** host rather than the
-first, and refused the source on a length mismatch. It is the whole failure
-matrix in one command and it is in the S3 page.
-
-### The docs gate grew three checks, and each one found something
-
-`scripts/check-docs.ps1` compared prose, links, flags and typography. It now
-also compares **output fields against `docs/schema.md`**, which is generated
-from what real runs wrote, so a page naming a field is checked against the tool
-one step removed.
-
-- A backticked path carrying `[]` has to be a row in the schema or the parent
-  of one. That found `sources[].convictions` and `redials[]`, both real fields
-  with `skip_serializing_if` that no schema-generating run has ever produced.
-- Every key in a `json` fence has to be a field name the schema carries. That
-  found `reasons`, which is `torrents[].renamed[].reasons` and is emitted by
-  three commands.
-- Every page under `docs/` has to be linked from somewhere, and every `T-NNN` a
-  page names has to be an entry. 81 ids checked, all resolve.
-
-Both new rules were proved able to fail by planting a defect and watching the
-gate go red before it was removed.
-
-**`docs/schema.md` gained fifteen rows, each from output a run produced.** Seven
-under `sources[].tls`, three under `sources[].redirects[]`, plus
-`sources[].server` and `sources[].resolved_url`, all from the S3 and MinIO runs
-above; and four under `context.report.renamed[]`, from a torrent built by hand
-with three unwritable paths. `../../pwned.txt` becomes `__/__/pwned.txt` for
-two reasons at once, `escape` and `trailing-dot-or-space`.
-
-That is [T-253](cli-surface.md), which is **partial**: the rows are right and
-the mechanism that would have produced them is not built. Its acceptance is
-that regenerating the schema on a machine with no network puts all fifteen back.
-
-### The profile generator had the defect it exists to catch
-
-`scripts/make-client-profile.ps1` takes `-Latest stable` and `-Latest beta`
-now, sorting the tag list by parsed version rather than by the order GitHub
-returned it, and refusing a prerelease that is behind the newest stable
-release.
-
-Adding that is what found the defect. **The generator hardcoded the fourth
-character of both peer id prefixes as `0`, and both clients derive it:**
-
-| | where | stable | beta | dev |
-| --- | --- | --- | --- | --- |
-| Transmission | `CMakeLists.txt:144-163` | `0` | **`B`** | **`Z`** |
-| qBittorrent | `sessionimpl.cpp:1726`, from `QBT_VERSION_BUILD` | `0` | `0` | `0` |
-
-So a Transmission beta announces `-TR410B-` and the generator would have
-produced a `0`. qBittorrent is the other way round: the status never reaches
-its peer id and always reaches its User-Agent, so `release-5.1.0beta1` is
-`-qB5100-` with `qBittorrent/5.1.0beta1`. Both are derived from the tag now,
-each behind a guard that asserts the construction, and the profile carries
-`prerelease_visible` so a caller knows whether a peer can tell.
-
-A `Test-Profile` gate runs on the finished object before anything is written:
-eight byte Azureus prefix, the client's own two letter code, every version
-character inside the alphabet, a User-Agent carrying the version it claims, and
-a non-empty record of which files it came from. The self-test proves the gate
-refuses each of those three ways and accepts a correct profile.
-
-`scripts/check-client-profile.ps1` is the canary, and it is the same instrument
-as `scripts/upstream-scan.ps1`: it derives both clients at both kinds and fails
-when a guard fails, not when a version changes.
-
-```bash
-pwsh -NoProfile -File scripts/check-client-profile.ps1
-```
-
-It is deliberately **not** in `gates.ps1`. It needs the network, and a gate
-that fails when a network is down is a gate people learn to ignore. It was
-proved able to fail by mutating one guard pattern, which produced exit 1 and
-named the file, before the pattern was restored.
 
 ### What the two reviews found
 
-Both reviews found real things, which is the argument for doing them after the
-work rather than instead of it.
+**Review 1, every claim against the code it cites.** Three errors, all in work
+written this session. The libtorrent table carries **92** codes and three
+documents said 93; the cited range is `:148-250` and two said `:150-270`; and
+two line numbers in [T-236](peers.md) drifted by this session's own edits,
+`listener.rs:50` to `:51` and `:186` to `:194`. All corrected.
 
-**The first review checks every claim against the code or the path it cites.**
-Six citations were wrong and are corrected: `source.rs:66` is 68, `:33` is 32,
-`:172` is 189, `cmd/download.rs:3017` is 3018, qBittorrent's
-`version.h.in:39-43` is 40-44, and Transmission's `session.cc:194-207` is
-196-206. One claim was weaker than the truth: `rquest` and
-`reqwest-impersonate` are not "stalled at 0.0.0", they have 152 and 62
-published versions and **every one of them is yanked**, and `wreq`'s newest
-published version is a `6.0.0` release candidate rather than the 0.16.0 stable
-the dependency numbers come from.
+**The commit body of `4acc095` still says 93 and is not corrected**, because
+rewriting a pushed commit message is worse than leaving one wrong number in it.
+The entry is the record and the entry is right.
 
-**The second is a cold read for a document contradicting another document.**
-Four things:
+**Review 2, a cold read for a document contradicting another.** Two claims in
+[`docs/examples/inputs.md`](../docs/examples/inputs.md) were stated rather than
+run. "The four read-only commands were run against all five forms and compared
+field for field" was true of the URL row only, and now says so. The body cap
+was described from reading the constant; it is measured now, against a 2 MiB
+document, and the page carries the message it produced. The same page's table
+named neither `peers` nor `trackers`, which left the one command that still
+refuses a URL unmentioned; it is named.
 
-- The S3 page said `bit-cli` surfaces no response header while its own output
-  shows `server AmazonS3`. `Server` is the one header that is carried, and both
-  the page and [T-254](webseed.md) say so now.
-- The Cloudflare page's opening said every command in it was run against a
-  local origin, and its closing section now says otherwise. The opening was the
-  stale half.
-- `inputs.md` claimed exit 2 for an unrecognised source. **No input to a
-  `SOURCE` argument produces a usage error**: every one exits 4, because the
-  classifier's last rule is "treat it as a path". That was measured over four
-  shapes rather than reasoned about.
-- Which found the third case for [T-246](cli-surface.md):
-  `bit-cli info ftp://host/x.torrent` is read as a relative filename and
-  reports "The filename, directory name, or volume label syntax is incorrect".
-
-**And one thing the gates caught rather than a review.** Writing these files
-through a shell heredoc put a `0x08` and a `0x0C` into three of them, invisible
-in an editor. `check-tree.ps1` names the file and the byte offset, and was
-proved to still do so by planting one on purpose.
+**And one thing the gates caught rather than a review**, for the third time in
+three sessions. Two tests were first written through a heredoc and the `\r\n`
+in their HTTP response headers arrived as real CR and LF bytes. The fixture
+then served a malformed response, and the test hung for its full 30 second
+deadline before failing on the wrong exit code. [RULES.md](RULES.md) section 5
+already says to write text to a file rather than send it through two shells,
+and commit `3c29786`, from before this session, says what it costs.
 
 ## In progress
 
-Nothing is half-written. Every entry filed this session is filed complete, with
-a priority, an effort, a `Source:` line and an acceptance command.
+Nothing is half-written. Both entries closed complete, with the acceptance run
+and its output recorded in the entry.
 
-- **[T-253](cli-surface.md)** is `partial`: the fifteen schema rows are in and
-  the fixture that would generate them is not.
-- **[T-244](cli-surface.md)**, **[T-245](cli-surface.md)**,
-  **[T-246](cli-surface.md)**, **[T-247](cli-surface.md)**,
-  **[T-248](metainfo.md)**, **[T-249](metainfo.md)**,
-  **[T-250](cli-surface.md)**, **[T-251](trackers.md)**,
-  **[T-252](cli-surface.md)** and **[T-254](webseed.md)** are open and
-  unstarted.
-- **[T-033](performance.md)**, **[T-227](memory.md)**, **[T-234](peers.md)**,
-  **[T-238](peers.md)** and **[T-242](performance.md)** carry a `Ruled:` block
-  now and are no longer waiting on a decision. None of the five was worked on.
+- **[T-253](cli-surface.md)** is still `partial`, untouched: the fifteen schema
+  rows are in and the fixture that would generate them is not.
+- **[T-164](peers.md)** is still `partial`, untouched.
 - The entries the last sessions left open are untouched: [T-232](memory.md),
-  [T-224](memory.md), [T-233](peers.md), [T-236](peers.md),
-  [T-237](trackers.md), [T-239](peers.md), [T-240](dht.md),
-  [T-241](metainfo.md), [T-101](bep-coverage.md), [T-102](bep-coverage.md),
-  [T-168](bep-coverage.md), and [T-164](peers.md).
+  [T-224](memory.md), [T-233](peers.md), [T-237](trackers.md),
+  [T-239](peers.md), [T-240](dht.md), [T-241](metainfo.md),
+  [T-101](bep-coverage.md), [T-102](bep-coverage.md), [T-168](bep-coverage.md),
+  and the nine filed last session that are not [T-245](cli-surface.md).
 - **[T-243](phase-c.md)** is deferred and the operator has deliberately not
   ruled on it. Do not raise it.
 
 ## Start here next session
 
-**The shape of the work order is the operator's, from eight sessions ago.** Not
+**The shape of the work order is the operator's, from nine sessions ago.** Not
 priority first. Clear small entries so the open count comes down, then take the
-bigger ones a **category at a time**.
-
-The counts are derived from the rows rather than from memory:
+bigger ones a **category at a time**. The counts are derived from the rows:
 
 ```bash
 pwsh -NoProfile -File scripts/check-todo.ps1
@@ -374,8 +280,8 @@ gh run list --limit 1
    instruction.** No run is in flight and none was started this session. **One
    run closes two entries** and it is the operator's to start in a foreground
    terminal: `-Leechers 4` is the different leech rate [T-224](memory.md) has
-   left, and `-ListenerCheck 60s` is what [T-232](memory.md) needs to say
-   whether the seeder stopped answering or the leechers stopped calling.
+   left, and the listener check is what [T-232](memory.md) needs to say whether
+   the seeder stopped answering or the leechers stopped calling.
 
    Kill the strays first, or two runs share a tracker:
 
@@ -394,41 +300,28 @@ cargo build --release --bins --examples
 pwsh -NoProfile -File scripts/soak.ps1 -Minutes 360 -Leechers 4 -ListenerCheck 60s -RssCeilingMiBPerHour 4 -HandleCeilingPerHour 20 -CloseWaitCeilingPerHour 1
 ```
 
-3. **[T-245](cli-surface.md), P1, effort M**, and it is first among the new
-   ones because four other entries are blocked behind it. Four commands refuse
-   the URL `download` accepts. `source.rs:189` `load_local` is the refusal and
-   the split is named in the entry: a `resolve` that may fetch, and the
-   existing local-only path kept for a caller that must not touch the network.
-
-```bash
-cargo run -p bit-cli-core --example loopback-fileserver -- --root .
-```
-
-4. **[T-236](peers.md), P1, effort S**, still the cheapest real thing on this
-   list and untouched. `bit-cli` announces under two peer id prefixes and
-   neither is its own; one of them is BitComet's. The check that found it
-   prints the prefix beside its verdict, so the fix is verifiable in one run:
-
-```bash
-pwsh -NoProfile -File scripts/check-announce.ps1
-```
-
-   Pick the two character code against libtorrent's `src/identify_client.cpp`
-   and `aquatic/crates/peer_id/src/lib.rs:100-120` before using it. The
-   constant goes in one place and `SessionOptions::peer_id` is `pub`, so no
-   patch to `vendor/` is needed.
-
-5. **The three small correctness entries, all effort S**, and they share one
-   fixture: [T-246](cli-surface.md) and [T-247](cli-surface.md) are both a
+3. **The three small correctness entries, all effort S, and they share one
+   fixture.** [T-246](cli-surface.md) and [T-247](cli-surface.md) are both a
    rendering that says something untrue, and [T-249](metainfo.md) is a second
    rendering of a layout that is already computed. A torrent with a hostile
    path, an unwritable directory and a URL is the whole fixture set.
 
-6. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
+4. **[T-251](trackers.md), P2**, and it is more interesting than it was.
+   `trackers` is the one command left that refuses a URL its own help offers,
+   and its refusal names an info hash the URL carries. The source half of it is
+   a few lines now that `source::resolve_source` exists; the twelve-knobs half
+   is the rest of the entry.
+
+5. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
    so the two candidates left are on the read side and are named with their
    lines. Build the fixture first: a pair of real `librqbit_utp` streams in one
    process.
+
+6. **[T-244](cli-surface.md) is unblocked**, which it was not before this
+   session. Its prerequisite was [T-245](cli-surface.md), and a plain
+   `.torrent` URL resolves under `info` now. The ruling on it is static
+   extraction with a browser-shaped header set and a `--render` opt-in.
 
 7. **The five entries that were ruled on and are now work rather than
    questions.** [T-033](performance.md) is three aria2 aliases plus a warning
@@ -437,6 +330,10 @@ pwsh -NoProfile -File scripts/check-announce.ps1
    throughput curve then a flag. [T-242](performance.md) is two sweeps from
    `scripts/bench-leech.ps1`. [T-234](peers.md) and [T-238](peers.md) are the
    two large ones and both need [T-239](peers.md) first.
+
+   [T-234](peers.md) is cheaper than it was: `--as-client` is a second value
+   for `bit_cli_core::peer_id::CLIENT_CODE` and its version characters, and
+   that module is now the only place either is read from.
 
 8. **Then the category pass, and `bep-coverage.md` is still first.**
    [T-101](bep-coverage.md) is open on a latency measurement loopback cannot
@@ -450,37 +347,23 @@ to 29 for [T-234](peers.md); entries 30 to 37 for [T-238](peers.md) and
 [T-239](peers.md); and `reference/README.md`'s "The 2026-08-24 trees" section,
 which carries the actual code lines. **All of it is a read.**
 
+The five peer id tables this session read are worth knowing about before
+[T-234](peers.md): `aquatic/crates/peer_id/src/lib.rs:100-120`,
+`seedchamp/crates/engine/src/wire/peer_id.rs`,
+`torrust-actix/src/tracker/impls/peer_id.rs`, `gosh-dl/src/torrent/peer.rs`
+and `superseedr/src/peer_manager.rs`. The widest is `seedchamp`'s at 91 codes,
+and `torrust-actix`'s is the classic BEP 20 list.
+
 ## Open questions for the operator
 
-**None.** Every question the last session raised has been answered, and the
-answers are written into the entries as `Ruled:` blocks rather than left here.
+**None.** Nothing this session did needed a ruling, and nothing it found needs
+one.
 
-| question | ruling | where it lives |
-| --- | --- | --- |
-| NAT traversal | the ladder, **with relays**, several of them, ranked by how widely deployed the provider is | [T-238](peers.md) |
-| client masking | all three points accepted as designed: honest default, mask always in the machine output, `--as-client` | [T-234](peers.md) |
-| the three aria2 spellings | **take all three**, with a warning naming the per-server against per-source difference | [T-033](performance.md) |
-| the web seed cache budget | measure, then ship a flag that defaults to today's behaviour | [T-227](memory.md) |
-| how far a page scraper should go | static, with a browser-shaped header set and TLS fingerprint, and `--render` as a browser opt-in | [T-244](cli-surface.md) |
-| where the resolution chain lives | an `--explain` flag on every command | [T-250](cli-surface.md) |
-| `diff` against `compare` | one `diff` with `--by` modes; `compare` refused as a second command | [T-248](metainfo.md) |
-| the request depth | run the sweep first | [T-242](performance.md) |
-
-**The relay ruling went against the recommendation and is the one to read.**
-The recommendation was no relay yet, because it needs somebody to run it and a
-trust assumption to state. The ruling is relays, plural, ranked by provider.
-[T-238](peers.md) carries what that changes: the protocol choice comes before
-the vendor choice, and it is **TURN, RFC 8656**, because it is the only relay
-protocol with more than one provider. Speaking it does not mean taking the
-`iroh` crate, and that refusal is unchanged.
-
-The trust assumption is written down there rather than implied: a relay learns
-the pair of addresses it joins and how many bytes pass between them, and does
-not learn the info hash or the payload while MSE is on. That sentence has to
-appear beside the user-facing flag, not only in the entry.
-
-**[T-243](phase-c.md), the user interface, was deliberately not asked.** The
-operator deferred it. Do not raise it.
+The eight rulings the session before this one received are written into the
+entries as `Ruled:` blocks rather than restated here. Two were acted on this
+session without further input: [T-245](cli-surface.md) needed none, and
+[T-236](peers.md) is the honest-default half of [T-234](peers.md)'s ruling,
+which is the half that does not need `--as-client` built.
 
 **One thing to be aware of rather than to decide.** Twelve repositories in
 `TheDancingDeveloper-org` redistribute Apache-2.0 code under MIT with no licence
@@ -489,16 +372,18 @@ file and no attribution. Nothing was said to anybody about it, by
 `RESEARCH.md` entry 40 so that a later session reading `license = "MIT"` in one
 of those manifests does not act on it.
 
-**A second thing.** One dependabot pull request is open on this repository,
-`dependabot/github_actions/github-actions-b4f5548579`, and its own CI run is
-green. It was not taken, because a dependency bump is a change to the build
-rather than to the documentation.
+**A second thing, unchanged.** One dependabot pull request is open on this
+repository, `dependabot/github_actions/github-actions-b4f5548579`, and its own
+CI run is green. It was not taken, because a dependency bump is a change to the
+build rather than to the work this session was given.
 
 ## One behaviour change worth the operator's eye
 
-**`scripts/make-client-profile.ps1` produces a different peer id prefix than it
-did**, for prereleases only. A stable release is unchanged and every value it
-produced before is reproduced exactly. What changed is that a beta of either
-client is now derived rather than assumed, and the old answer was wrong for
-Transmission. Nothing a user runs is affected: the script is an instrument and
-`--as-client` is not built.
+**Every peer id `bit-cli` emits changed.** A tracker that was counting this
+client as BitComet or as rqbit will count it as an unknown client called `CL`
+until somebody's table gains a row, which is the correct answer and is what
+[T-236](peers.md) was for. A tracker that keys a peer record by peer id sees
+the change as a new peer on the first announce after upgrading, once.
+
+Nothing else about an announce changed: `scripts/check-announce.ps1`'s six
+judged cases all hold and the query parameter order is the same.

@@ -23,13 +23,13 @@
 
 /// The two character client code, BEP 20 Azureus style.
 ///
-/// **Not free to choose.** It was checked against five registries before it
-/// was used: libtorrent `v2.0.11` `src/identify_client.cpp:150-270`, which is
-/// the closest thing this ecosystem has to one, and the four independent
-/// implementations of the same table in the research corpus. `CL` appears in
-/// none of them, and neither does its lower case form, which matters because
-/// the lookup is a byte comparison: `lt` is rTorrent and `LT` is libtorrent,
-/// and they have coexisted for two decades.
+/// **Not free to choose.** It was checked against six registries before it was
+/// used: libtorrent `v2.0.11` `src/identify_client.cpp:148-250`, which is the
+/// closest thing this ecosystem has to one and carries 92 codes, and the five
+/// independent implementations of the same table in the research corpus. `CL`
+/// appears in none of them, and neither does its lower case form, which
+/// matters because the lookup is a byte comparison: `lt` is rTorrent and `LT`
+/// is libtorrent, and they have coexisted for two decades.
 ///
 /// It reads as the command line, which is the one thing that distinguishes
 /// this client from every entry in that table.
@@ -193,9 +193,10 @@ mod tests {
     /// which is the mistake T-236 exists to undo rather than repeat.
     #[test]
     fn the_client_code_is_not_one_a_registry_already_names() {
-        // libtorrent v2.0.11 `src/identify_client.cpp`, every Azureus-style
-        // code in its table. Copied rather than fetched, because a test that
-        // needs the network is a test that fails when the network is down.
+        // libtorrent v2.0.11 `src/identify_client.cpp:148-250`, all 92
+        // Azureus-style codes in its table. Copied rather than fetched,
+        // because a test that needs the network is a test that fails when the
+        // network is down.
         const TAKEN: &[&[u8; 2]] = &[
             b"7T", b"AB", b"AG", b"AR", b"AT", b"AV", b"AX", b"AZ", b"A~", b"BB", b"BC", b"BE",
             b"BF", b"BG", b"BI", b"BL", b"BP", b"BR", b"BS", b"BT", b"BU", b"BW", b"BX", b"CD",
@@ -208,7 +209,7 @@ mod tests {
             // Not in libtorrent's table and in the corpus's four: rQ is the
             // vendored tree's own, and this must not answer to it either.
             b"rQ", b"UE", b"WD", b"WW", b"UW", b"sc", b"SC", b"MK", b"PT", b"NB", b"JS", b"JT",
-            b"HM", b"GD", b"FD", b"BW", b"TE", b"SM", b"SP", b"PB", b"OT", b"IL",
+            b"HM", b"GD", b"FD", b"TE", b"SM", b"SP", b"PB",
         ];
         for taken in TAKEN {
             assert_ne!(

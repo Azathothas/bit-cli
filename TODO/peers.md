@@ -2463,25 +2463,26 @@ Correction:  **Two undercounts, both found by grepping for the prefix rather
              | `bit-cli bench probe` | `-BC0100-` |
              | the web seed bridge, `webseed/bridge.rs:48` | `-BCws01-` |
              | the swarm bench's synthetic peer, `bench/swarm.rs:96` | `-BCsw01-` |
-             | the listener health check, `listener.rs:50` | `-BClc01-` |
+             | the listener health check, `listener.rs:51` | `-BClc01-` |
 
              Only the first three reach a tracker or a remote peer. The other
              three are loopback inside one process, and they are fixed anyway:
              an identity that is wrong in a log is still wrong, and the point
              of one module is that a seventh cannot appear.
 
-             There was a seventh, at `listener.rs:186`, and it is **not** ours:
+             There was a seventh, at `listener.rs:194`, and it is **not** ours:
              a test fixture standing in for whatever remote peer answers. It
              said `-BCzz01-` and now says so in a comment as well as in its
              bytes, because a fixture replying with this client's own prefix
              would hide a self-connect rather than exercise one.
 
-             **And `-bC` is not taken.** The entry said it was. Checked against
-             libtorrent `v2.0.11` `src/identify_client.cpp:150-270`, which
-             carries 93 Azureus-style codes, against
+             **And `-bC` is not taken.** The entry said it was. Checked
+             against libtorrent `v2.0.11` `src/identify_client.cpp:148-250`,
+             which carries **92** Azureus-style codes, against
              `aquatic/crates/peer_id/src/lib.rs:100-120`, and against the four
-             independent implementations of the same table in the corpus:
-             `bC`, `bt`, `bl`, `bi`, `CL` and `cl` are all free in all six.
+             other implementations of the same table in the corpus, in
+             `seedchamp`, `torrust-actix`, `gosh-dl` and `superseedr`. `bC`,
+             `bt`, `bl`, `bi`, `CL` and `cl` are free in all six.
 
 Closed:      `crates/bit-cli-core/src/peer_id.rs` is the one place, and every
              one of the six reads it.
@@ -2530,7 +2531,7 @@ Prove:       ```
 
              Five more in `bit_cli_core::peer_id`, and one of them is the
              guard that matters: `the_client_code_is_not_one_a_registry_already_names`
-             carries all 93 of libtorrent's codes plus `rQ` and the corpus's
+             carries all 92 of libtorrent's codes plus `rQ` and the corpus's
              extras, copied rather than fetched so it does not need a network,
              and fails if anybody moves `CLIENT_CODE` onto a taken one.
 

@@ -76,10 +76,18 @@ answer, or does it name something only a swarm can.
 | Metalink, local or by URL | yes, after fetching the torrent it names | yes |
 | magnet or info hash | no | yes, after a swarm lookup |
 
-Every row was run. The four read-only commands were run against all five forms
-and their `--json` output compared field for field against the same torrent
-read off disk: everything matches but `generated_at`, which is two runs, and
-`source_kind`, which differs because the source genuinely was a URL.
+Every cell was run. For the URL row the four read-only commands had their
+`--json` output compared field for field against the same torrent read off
+disk: everything matches but `generated_at`, which is two runs, and
+`source_kind`, which differs because the source genuinely was a URL. That
+comparison is a test, `four_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports`,
+so it holds on every build rather than on the day it was written.
+
+Two commands are not in either column. `bit-cli peers` takes every form the
+right-hand column does, because it starts an engine. **`bit-cli trackers` is
+the one that still refuses a URL**, with a different message: "an info hash is
+needed to announce, and this source does not carry one". The URL does carry
+one, once fetched. That is [T-251](../../TODO/trackers.md).
 
 **A URL and a Metalink are fetched, not refused.** A `.torrent` at a URL is one
 request:
@@ -97,9 +105,10 @@ through `--timeout`:
 - The deadline is `--timeout` when you set one and 30 seconds when you do not.
   A fetch that runs out of time exits **9** and names the deadline in
   milliseconds, rather than reporting a decoding failure.
-- A `.torrent` body is capped at 16 MiB and a Metalink at 1 MiB, measured as
-  the bytes arrive rather than after the whole body is in memory. Over the cap
-  is exit 4.
+- A `.torrent` body is capped at 16 MiB and a Metalink at 1 MiB, counted as the
+  bytes arrive rather than after the whole body is in memory. Over the cap is
+  exit 4: `answered with more than 1048576 bytes, which is larger than any
+  document a source can be`.
 
 A URL that answers with something that is not a torrent fails and says what
 arrived, naming the declared content type when the server sent one:
