@@ -227,7 +227,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-227](memory.md) | P2 | memory | open | The window cache budget is per source, so the total is whatever the source count makes it |
 | [T-225](create-seed.md) | P1 | ci | **done** | The interop script hashes files the client it just killed still holds |
 | [T-226](cli-surface.md) | P1 | cli | **done** | `download --out` is parsed and never read |
-| [T-228](cli-surface.md) | P3 | ci | open | Two gate runs at once fail on a locked file rather than on being two |
+| [T-228](cli-surface.md) | P3 | ci | **done** | Two gate runs at once fail on a locked file rather than on being two |
 | [T-230](cli-surface.md) | P1 | ci | **done** | A run's output reached the remote because nothing said what belongs here |
 | [T-231](memory.md) | P1 | memory | **done** | A soak killed mid-write reads as a final sample of zeros |
 | [T-232](memory.md) | P1 | memory | open | A six hour soak reported a pass on a workload that stopped after 78 minutes |
@@ -260,7 +260,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 182 items: 172 to work through, and 10 deferred to Phase C.
-24 open, 1 partial, 0 blocked, 147 done.
+23 open, 1 partial, 0 blocked, 148 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -520,9 +520,9 @@ sessions earlier.
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 3 | 0 | 0 | 65 | 68 |
 | P2 | 11 | 1 | 0 | 53 | 65 |
-| P3 | 10 | 0 | 0 | 17 | 27 |
+| P3 | 9 | 0 | 0 | 18 | 27 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **24** | **1** | **0** | **147** | **182** |
+| **All** | **23** | **1** | **0** | **148** | **182** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what

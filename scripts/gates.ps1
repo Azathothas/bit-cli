@@ -304,7 +304,19 @@ Record "tree" $treeOk $treeDetail
 # clippy
 # ---------------------------------------------------------------------------
 
-$clippyLog = Join-Path ([System.IO.Path]::GetTempPath()) "bit-cli-gates-clippy.txt"
+# One log per run, not one per machine.
+#
+# Both of these were a fixed name, so two `gates.ps1` runs at once collided on
+# them and the second died with `out-file: The process cannot access the file
+# ... because it is being used by another process`. Nothing in that message
+# says "another gates run is going", so the next session debugs `Out-File`. A
+# session does start a second run: one in the background and one in the
+# foreground is the ordinary way an agent works. See TODO/cli-surface.md,
+# T-228.
+#
+# `$PID` rather than a random suffix, so a log left behind by a run that was
+# killed can still be tied to the process that wrote it.
+$clippyLog = Join-Path ([System.IO.Path]::GetTempPath()) "bit-cli-gates-clippy-$PID.txt"
 & cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 |
     Tee-Object -FilePath $clippyLog | Out-Null
 $clippyOk = $LASTEXITCODE -eq 0
@@ -315,7 +327,7 @@ Record "clippy" $clippyOk $(if ($clippyOk) { "" } else { "$clippyCount error lin
 # test
 # ---------------------------------------------------------------------------
 
-$testLog = Join-Path ([System.IO.Path]::GetTempPath()) "bit-cli-gates-tests.txt"
+$testLog = Join-Path ([System.IO.Path]::GetTempPath()) "bit-cli-gates-tests-$PID.txt"
 & cargo test --workspace 2>&1 | Tee-Object -FilePath $testLog | Out-Null
 $testExit = $LASTEXITCODE
 
@@ -362,6 +374,15 @@ if ($Build -and -not $Fast) {
 
 $started.Stop()
 $ok = $failures.Count -eq 0
+
+# A passing run leaves nothing behind. A failing one leaves both logs, because
+# the detail line above points a reader at them by path and a message naming a
+# file that is gone is worse than no message. See TODO/cli-surface.md, T-228.
+if ($ok) {
+    foreach ($log in @($clippyLog, $testLog)) {
+        if ($log) { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+    }
+}
 
 if ($Json) {
     [ordered]@{

@@ -386,7 +386,10 @@ function Invoke-Gates {
     if ($LASTEXITCODE -ne 0) { Exit-With 1 "clippy failed." }
 
     Write-Step "cargo test --workspace"
-    $testLog = Join-Path ([System.IO.Path]::GetTempPath()) "bit-cli-git-sync-tests.txt"
+    # Per-run, not per-machine. A fixed name means two pushes at once collide
+    # on it and the second dies naming a locked file rather than the other run.
+    # See TODO/cli-surface.md, T-228.
+    $testLog = Join-Path ([System.IO.Path]::GetTempPath()) "bit-cli-git-sync-tests-$PID.txt"
     & cargo test --workspace 2>&1 | Tee-Object -FilePath $testLog | Out-Null
     $testExit = $LASTEXITCODE
 

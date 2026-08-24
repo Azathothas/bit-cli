@@ -1776,24 +1776,52 @@ async fn a_sweep_pays_its_warmup_before_the_curve_rather_than_out_of_it() {
         assert!(step.bytes.0 > 0, "step {index} moved no bytes");
     }
 
-    // The steps account for the measured run, less the requests that were
-    // already in flight when the warmup closed. Those complete with no step
-    // open, because the warmup drive is not one, so they are in `measured`
-    // and in no step. The bound is exact rather than a tolerance: at most
-    // `concurrency` requests, of at most one chunk each, can be in flight at
-    // that instant. It is 4 by 16 KiB here and it is what this run leaves
-    // behind, which is the whole of the accounting cost of paying the warmup
-    // separately. Against a step reported at 0 B/s it is a good trade, and it
-    // is written down rather than rounded away.
+    // The steps claim no more than the run measured. That much is guaranteed
+    // by construction: a step's bytes are a subset of the window's.
     let total: u64 = outcome.concurrency_curve.iter().map(|s| s.bytes.0).sum();
-    let unattributed = outcome.summary.bytes.0.saturating_sub(total);
     assert!(
         total <= outcome.summary.bytes.0,
         "the steps claim more than the run measured"
     );
+
+    // What is deliberately **not** asserted here, and why it was.
+    //
+    // This bounded the bytes that fall outside every step at
+    // `concurrency * chunk_size`, on the reasoning that at most `concurrency`
+    // requests of one chunk each can be in flight when the warmup closes.
+    // That reasoning is wrong about the code it describes. The warmup is
+    // driven by `while recorder.in_warmup() { drive(..) }`, **every iteration
+    // spawns `concurrency` fresh workers**, and a worker that passes its
+    // deadline check starts one more request and finishes it after the
+    // deadline. So the tail is `concurrency` per iteration and the iteration
+    // count is whatever the clock and the machine make it.
+    //
+    // It went red on `macos-latest` at seven chunks against a bound of four,
+    // on a loaded shared runner and not on a defect. That is the fourth entry
+    // on `TODO/RULES.md` section 5's line about a test asserting that the
+    // machine cannot fail some other way, and the rule is to fix the file
+    // rather than the line. See `TODO/bench.md`, T-229.
+    //
+    // The claim the entry is actually about is asserted instead. Against the
+    // original defect it is `step.requests > 0` above that fires first, and
+    // the control below is what covers a partial version, where a step falls
+    // inside part of the warmup and is charged some of it rather than all.
+
+    // The control. Two steps at the same concurrency against the same server,
+    // so nothing about the run should tell them apart; with the warmup paid
+    // out of the first step they differed by a factor of 340. An order of
+    // magnitude is a wide bound on purpose: this runs on a shared runner and
+    // the claim is "neither step was crippled", not "the two are identical".
+    let first = outcome.concurrency_curve[0].bytes.0;
+    let second = outcome.concurrency_curve[1].bytes.0;
+    let (low, high) = if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
     assert!(
-        unattributed <= 4 * 16 * 1024,
-        "{unattributed} bytes fell outside every step, which is more than the          four in-flight requests the warmup handover can leave"
+        low > 0 && high <= low.saturating_mul(10),
+        "two steps at the same concurrency moved {first} and {second} bytes,          which is over an order of magnitude apart: the warmup is being charged to one of them"
     );
 
     // The warmup was still recorded rather than deleted, which is the rule the

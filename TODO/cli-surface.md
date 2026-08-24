@@ -3846,9 +3846,9 @@ Source:      hit while closing T-041, 2026-08-23
 Category:    ci
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done** 2026-08-24
 
-Problem:     `scripts/gates.ps1:287` tees `cargo test` into
+Problem:     `scripts/gates.ps1:330` tees `cargo test` into
              `$env:TEMP\bit-cli-gates-tests.txt`, one fixed path for every run
              on the machine. A second `gates.ps1` started while the first is
              still in its `test` gate dies on it:
@@ -3882,6 +3882,50 @@ Approach:    Put the process id in the name, which is one line, and delete the
              rather than fixing one.
 Acceptance:  Two `gates.ps1` runs started within a second of each other both
              reach a verdict, and neither leaves a file in `$env:TEMP` behind.
+
+#### Done 2026-08-24
+
+**Three fixed paths, and the third was not in the entry.** `$PID` goes in the
+name of `gates.ps1`'s clippy log and test log, and of `git-sync.ps1`'s test log
+at `scripts/git-sync.ps1:392`, which has the same defect for the same reason
+and which two pushes at once would hit. Every other `GetTempPath` in `scripts/`
+was checked in the same pass and none needed changing: `check-man.ps1` uses
+`Get-Random`, `vendor-sync.ps1` a GUID, `git-sync.ps1`'s other two already use
+`$PID`, and `setup-nasm.ps1`'s is a download cache that is meant to be shared.
+
+`$PID` rather than a random suffix, so a log left behind by a run that was
+killed can still be tied to the process that wrote it.
+
+**A passing run deletes both logs and a failing one keeps them**, because the
+detail line points a reader at them by path and a message naming a file that is
+gone is worse than no message.
+
+**Measured, and the acceptance is the positive case**: two `-Fast` runs started
+within a second of each other, `1298 tests` each, both `all gates pass`, and
+zero `bit-cli-gates-*` files left in `$env:TEMP` afterwards.
+
+**Run against the defect**, with the fixed names restored in a copy under
+`scripts/` so `$PSScriptRoot` still resolves:
+
+```
+A: The process cannot access the file
+   'C:\Users\...\Temp\bit-cli-gates-clippy.txt' because it is
+   being used by another process.
+A exit=1
+B: all gates pass: 1298 tests, 89.8s
+B exit=0
+```
+
+That is the entry's own symptom, one run dying on a locked file it does not
+name a reason for, and the other finishing normally beside it. The first
+attempt at this reproduction put the modified copy in `$env:TEMP` and every
+gate failed, because `gates.ps1` derives the repository from `$PSScriptRoot`
+and was therefore running `cargo` outside the tree. That result was discarded
+rather than written down.
+
+```bash
+pwsh -NoProfile -File scripts/gates.ps1 -Fast
+```
 
 ### T-230 A run's output reached the remote because nothing said what belongs here
 

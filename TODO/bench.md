@@ -1573,3 +1573,50 @@ are in the measured window and in no step. The bound is exact rather than a
 tolerance: at most `concurrency` requests of at most one chunk each, which is
 64 KiB in that test and is what it asserts. Against a step reported at 0 B/s
 it is a good trade.
+
+#### Correction, 2026-08-24: that bound is not exact and it went red
+
+**"The bound is exact rather than a tolerance: at most `concurrency` requests
+of at most one chunk each" is wrong about the code it describes**, and CI run
+**32687202487** is where it cost a job. `Test (macos-latest)` failed on
+
+```
+114688 bytes fell outside every step, which is more than the
+four in-flight requests the warmup handover can leave
+```
+
+which is seven chunks against a bound of four. Nothing was broken. The runner
+was slow.
+
+**Why the reasoning is wrong.** The warmup is not one drive. It is
+`while recorder.in_warmup() { drive(..) }` at
+`crates/bit-cli-core/src/bench/webseed.rs:222`, **every iteration spawns
+`concurrency` fresh workers**, and a worker that passes its
+`Instant::now() < deadline` check starts one more request and finishes it after
+the deadline. So the tail is `concurrency` per iteration, and how many
+iterations there are depends on how the clock lands, which depends on the
+machine. On this one it is usually one iteration; on a loaded shared runner it
+is more.
+
+**So the assertion asserted that the machine cannot be slow**, which is the
+line [RULES.md](RULES.md) section 5 already carries three worked examples of,
+and this is the fourth. The rule beside it is to fix the file rather than the
+line.
+
+**What replaced it.** The `total <= summary.bytes` half stays, because a step's
+bytes really are a subset of the window's. The invented bound is gone, with the
+reasoning above written where it was. In its place is the control the test's own
+doc comment already named and never asserted: **the two steps are the same
+concurrency against the same server, and with the warmup paid out of the first
+they differed by a factor of 340**, so they must now be within an order of
+magnitude of each other. That is a wide bound on purpose. The claim is that
+neither step was crippled, not that a shared runner is repeatable.
+
+**Run against the defect**, with the warmup pre-payment disabled: the test
+fails at `step.requests > 0`, which is the assertion that catches the original
+defect. The new control is what covers the partial case, where a step falls
+inside **part** of the warmup and is charged some of it rather than all.
+
+```bash
+cargo test -p bit-cli-core --test webseed_e2e -- a_sweep_pays_its_warmup
+```
