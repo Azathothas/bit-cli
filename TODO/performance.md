@@ -335,7 +335,7 @@ Source:      the operator's brief; premise disproved 2026-08-21, see the correct
 Category:    performance
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     `-s/--split`, `-x/--max-connection-per-server`, and
              `-k/--min-split-size` parse and do nothing. They are the aria2
@@ -387,7 +387,7 @@ connection cap and `--web-seed-connections` is a per-source one, which differ
 when two sources share a host, so an alias that is close but not identical is
 the failure this project's own short-flag rules exist to prevent.
 `docs/flags.md` states the rule: an `aria2` letter is never reassigned to a
-different concept, and `cli.rs:2494` `short_flags_never_contradict_aria2`
+different concept, and `cli.rs:2536` `short_flags_never_contradict_aria2`
 enforces it. Under that rule `-x` may only be taken if it means what aria2
 means.
 
@@ -470,11 +470,58 @@ warning on first use of `-x`, naming that it caps connections per source rather
 than per server, and that the two differ when two sources share a host. The
 same rule that would have refused the alias is what the warning satisfies: the
 difference is stated rather than hidden, which is what
-`cli.rs:2494` `short_flags_never_contradict_aria2` exists to prevent losing.
+`cli.rs:2536` `short_flags_never_contradict_aria2` exists to prevent losing.
 
 `-s` and `-x` meaning nearly the same thing here is the part to get right in
 the man page before the code, per [T-198](cli-surface.md). A script passing
 both must not get the product of the two.
+
+## Taken, 2026-08-24, with the man page written first
+
+All three ship. `-x/--max-connection-per-server` and `-s/--split` are two
+spellings of `--web-seed-concurrency`, and `-k/--min-split-size` is a floor
+under `--web-seed-chunk-size`.
+
+**The man page went first**, per [T-198](cli-surface.md): the three flags were
+declared with their help text, `scripts/check-man.ps1 -Fix` was run, and
+`man/bit-cli.json` was read back before a line of wiring existed. That is what
+caught the sentence worth catching, which is that `-s` needs to say it is the
+same knob as `-x` rather than a second one.
+
+**The largest given wins, and it is not the product.**
+`webseed_args::aria2_concurrency` takes the maximum of the three, so
+`-x 4 -s 16` is sixteen concurrent requests per source rather than sixty-four.
+That is the failure the ruling names and it is held by
+`passing_both_aria2_spellings_is_not_multiplied`.
+
+**`-k` is a floor and the test proves it is a floor rather than a value.** The
+first version of that test asserted `-k 2MiB` sets the chunk size to 2 MiB. It
+does not: the default is 4 MiB and a floor below it changes nothing. The test
+now raises the default with `-k 8MiB` and asserts `-k 1MiB` leaves it alone,
+which is the property the flag actually has.
+
+**The warning, which is what `docs/flags.md`'s rule asks for instead of a
+refusal:**
+
+```
+$ bit-cli download album.torrent --dry-run -x 4 -s 16 -k 2MiB
+warning: -x caps concurrent requests per source, not per server: -x 4 with two sources on one host is 8 requests to that host. --web-seed-max-total is the run-wide cap.
+warning: -x and -s are one setting here, so -x 4 -s 16 is 16 concurrent requests per source rather than 64.
+```
+
+The second fires only when the two differ, so the common migrating case,
+`-x 8 -s 8`, gets one line rather than two. `-s` alone gets none: there is no
+per-server reading of it to correct.
+
+Four tests in `crates/bit-cli/src/webseed_args.rs`, and the three short letters
+moved from the reserved table in `docs/flags.md` to the assigned one, with a
+section under it naming what each is close to and not exact about.
+
+The measurement half of the Acceptance was already done and committed at
+`bench/split-20260823T182709577Z.json`: 940 MiB/s at one concurrent request,
+3.44 GiB/s at eight, a knee at eight, and past it throughput stops while p99
+doubles. Nothing was re-measured here, because nothing about the numbers
+changed: the aliases point at the flag that curve was taken over.
 
 ### T-034 Endgame mode is not observable
 

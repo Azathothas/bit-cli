@@ -331,6 +331,12 @@ From `bit-cli download <TORRENT> --web-seed <URL> --json`.
 | --- | --- |
 | `bit_cli_version` | string |
 | `completed` | integer |
+| `disk.bytes_written.bytes` | integer |
+| `disk.bytes_written.human` | string |
+| `disk.write_calls` | integer |
+| `disk.write_ops` | integer |
+| `disk.write_time.human` | string |
+| `disk.write_time.ms` | integer |
 | `downloaded.bytes` | integer |
 | `downloaded.human` | string |
 | `elapsed_human` | string |

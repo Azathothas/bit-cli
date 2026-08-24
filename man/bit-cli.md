@@ -28,6 +28,7 @@ These are accepted by every command.
 | `--no-config` | boolean |  | `false` | Ignore all config files |
 | `--dir <DIR>`, `-d` | string |  |  | Output directory |
 | `--dry-run` | boolean |  | `false` | Resolve, validate, and report. Write nothing |
+| `--stats` | boolean |  | `false` | Print every field of the report, rather than the usual summary |
 | `--timeout <DUR>` | string |  |  | Overall operation deadline |
 | `--stop-after <DUR>` | string |  |  | Stop after this long regardless of state |
 
@@ -101,9 +102,12 @@ Effects: `idempotent`.
 | `--no-web-seed` | boolean |  | `false` | Ignore all web seeds, including the torrent's own url-list |
 | `--no-torrent-web-seed` | boolean |  | `false` | Ignore the torrent's url-list but keep CLI-supplied sources |
 | `--web-seed-concurrency <N>` | string |  |  | Concurrent ranged requests per source |
+| `--max-connection-per-server <N>`, `-x` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. Per source, not per server |
+| `--split <N>`, `-s` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. The same knob as `-x` |
 | `--web-seed-connections <N>` | string |  |  | Peer connections each source is presented over. Default: 1 |
 | `--web-seed-max-total <N>` | string |  |  | Concurrent ranged requests across all sources |
 | `--web-seed-chunk-size <SIZE>` | string |  |  | Bytes per ranged request. Independent of the torrent's piece length |
+| `--min-split-size <SIZE>`, `-k` | string |  |  | `aria2` spelling of a floor under `--web-seed-chunk-size` |
 | `--web-seed-timeout <DUR>` | string |  |  | Per-request timeout |
 | `--web-seed-connect-timeout <DUR>` | string |  |  | Connect timeout for web seed requests |
 | `--web-seed-max-errors <N>` | string |  |  | Consecutive failed requests before a source is retired |
@@ -305,9 +309,12 @@ Effects: `read_only`.
 | `--no-web-seed` | boolean |  | `false` | Ignore all web seeds, including the torrent's own url-list |
 | `--no-torrent-web-seed` | boolean |  | `false` | Ignore the torrent's url-list but keep CLI-supplied sources |
 | `--web-seed-concurrency <N>` | string |  |  | Concurrent ranged requests per source |
+| `--max-connection-per-server <N>`, `-x` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. Per source, not per server |
+| `--split <N>`, `-s` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. The same knob as `-x` |
 | `--web-seed-connections <N>` | string |  |  | Peer connections each source is presented over. Default: 1 |
 | `--web-seed-max-total <N>` | string |  |  | Concurrent ranged requests across all sources |
 | `--web-seed-chunk-size <SIZE>` | string |  |  | Bytes per ranged request. Independent of the torrent's piece length |
+| `--min-split-size <SIZE>`, `-k` | string |  |  | `aria2` spelling of a floor under `--web-seed-chunk-size` |
 | `--web-seed-timeout <DUR>` | string |  |  | Per-request timeout |
 | `--web-seed-connect-timeout <DUR>` | string |  |  | Connect timeout for web seed requests |
 | `--web-seed-max-errors <N>` | string |  |  | Consecutive failed requests before a source is retired |
@@ -348,9 +355,12 @@ Effects: `read_only`.
 | `--no-web-seed` | boolean |  | `false` | Ignore all web seeds, including the torrent's own url-list |
 | `--no-torrent-web-seed` | boolean |  | `false` | Ignore the torrent's url-list but keep CLI-supplied sources |
 | `--web-seed-concurrency <N>` | string |  |  | Concurrent ranged requests per source |
+| `--max-connection-per-server <N>`, `-x` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. Per source, not per server |
+| `--split <N>`, `-s` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. The same knob as `-x` |
 | `--web-seed-connections <N>` | string |  |  | Peer connections each source is presented over. Default: 1 |
 | `--web-seed-max-total <N>` | string |  |  | Concurrent ranged requests across all sources |
 | `--web-seed-chunk-size <SIZE>` | string |  |  | Bytes per ranged request. Independent of the torrent's piece length |
+| `--min-split-size <SIZE>`, `-k` | string |  |  | `aria2` spelling of a floor under `--web-seed-chunk-size` |
 | `--web-seed-timeout <DUR>` | string |  |  | Per-request timeout |
 | `--web-seed-connect-timeout <DUR>` | string |  |  | Connect timeout for web seed requests |
 | `--web-seed-max-errors <N>` | string |  |  | Consecutive failed requests before a source is retired |
@@ -394,9 +404,12 @@ Effects: `read_only`.
 | `--no-web-seed` | boolean |  | `false` | Ignore all web seeds, including the torrent's own url-list |
 | `--no-torrent-web-seed` | boolean |  | `false` | Ignore the torrent's url-list but keep CLI-supplied sources |
 | `--web-seed-concurrency <N>` | string |  |  | Concurrent ranged requests per source |
+| `--max-connection-per-server <N>`, `-x` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. Per source, not per server |
+| `--split <N>`, `-s` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. The same knob as `-x` |
 | `--web-seed-connections <N>` | string |  |  | Peer connections each source is presented over. Default: 1 |
 | `--web-seed-max-total <N>` | string |  |  | Concurrent ranged requests across all sources |
 | `--web-seed-chunk-size <SIZE>` | string |  |  | Bytes per ranged request. Independent of the torrent's piece length |
+| `--min-split-size <SIZE>`, `-k` | string |  |  | `aria2` spelling of a floor under `--web-seed-chunk-size` |
 | `--web-seed-timeout <DUR>` | string |  |  | Per-request timeout |
 | `--web-seed-connect-timeout <DUR>` | string |  |  | Connect timeout for web seed requests |
 | `--web-seed-max-errors <N>` | string |  |  | Consecutive failed requests before a source is retired |
@@ -439,9 +452,12 @@ Effects: `idempotent`.
 | `--no-web-seed` | boolean |  | `false` | Ignore all web seeds, including the torrent's own url-list |
 | `--no-torrent-web-seed` | boolean |  | `false` | Ignore the torrent's url-list but keep CLI-supplied sources |
 | `--web-seed-concurrency <N>` | string |  |  | Concurrent ranged requests per source |
+| `--max-connection-per-server <N>`, `-x` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. Per source, not per server |
+| `--split <N>`, `-s` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. The same knob as `-x` |
 | `--web-seed-connections <N>` | string |  |  | Peer connections each source is presented over. Default: 1 |
 | `--web-seed-max-total <N>` | string |  |  | Concurrent ranged requests across all sources |
 | `--web-seed-chunk-size <SIZE>` | string |  |  | Bytes per ranged request. Independent of the torrent's piece length |
+| `--min-split-size <SIZE>`, `-k` | string |  |  | `aria2` spelling of a floor under `--web-seed-chunk-size` |
 | `--web-seed-timeout <DUR>` | string |  |  | Per-request timeout |
 | `--web-seed-connect-timeout <DUR>` | string |  |  | Connect timeout for web seed requests |
 | `--web-seed-max-errors <N>` | string |  |  | Consecutive failed requests before a source is retired |
@@ -644,9 +660,12 @@ Effects: `non_idempotent`.
 | `--no-web-seed` | boolean |  | `false` | Ignore all web seeds, including the torrent's own url-list |
 | `--no-torrent-web-seed` | boolean |  | `false` | Ignore the torrent's url-list but keep CLI-supplied sources |
 | `--web-seed-concurrency <N>` | string |  |  | Concurrent ranged requests per source |
+| `--max-connection-per-server <N>`, `-x` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. Per source, not per server |
+| `--split <N>`, `-s` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. The same knob as `-x` |
 | `--web-seed-connections <N>` | string |  |  | Peer connections each source is presented over. Default: 1 |
 | `--web-seed-max-total <N>` | string |  |  | Concurrent ranged requests across all sources |
 | `--web-seed-chunk-size <SIZE>` | string |  |  | Bytes per ranged request. Independent of the torrent's piece length |
+| `--min-split-size <SIZE>`, `-k` | string |  |  | `aria2` spelling of a floor under `--web-seed-chunk-size` |
 | `--web-seed-timeout <DUR>` | string |  |  | Per-request timeout |
 | `--web-seed-connect-timeout <DUR>` | string |  |  | Connect timeout for web seed requests |
 | `--web-seed-max-errors <N>` | string |  |  | Consecutive failed requests before a source is retired |
@@ -783,9 +802,12 @@ Effects: `non_idempotent`.
 | `--no-web-seed` | boolean |  | `false` | Ignore all web seeds, including the torrent's own url-list |
 | `--no-torrent-web-seed` | boolean |  | `false` | Ignore the torrent's url-list but keep CLI-supplied sources |
 | `--web-seed-concurrency <N>` | string |  |  | Concurrent ranged requests per source |
+| `--max-connection-per-server <N>`, `-x` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. Per source, not per server |
+| `--split <N>`, `-s` | string |  |  | `aria2` spelling of `--web-seed-concurrency`. The same knob as `-x` |
 | `--web-seed-connections <N>` | string |  |  | Peer connections each source is presented over. Default: 1 |
 | `--web-seed-max-total <N>` | string |  |  | Concurrent ranged requests across all sources |
 | `--web-seed-chunk-size <SIZE>` | string |  |  | Bytes per ranged request. Independent of the torrent's piece length |
+| `--min-split-size <SIZE>`, `-k` | string |  |  | `aria2` spelling of a floor under `--web-seed-chunk-size` |
 | `--web-seed-timeout <DUR>` | string |  |  | Per-request timeout |
 | `--web-seed-connect-timeout <DUR>` | string |  |  | Connect timeout for web seed requests |
 | `--web-seed-max-errors <N>` | string |  |  | Consecutive failed requests before a source is retired |

@@ -98,6 +98,50 @@ The three `from_*` figures add up to `downloaded` and are what says where the
 bytes came from. A resumed download that charged its existing bytes to the
 swarm was a real defect here, and these three fields are what made it visible.
 
+## The same numbers without a JSON parser
+
+Every figure above is in the text rendering too, behind `--stats`:
+
+```bash
+bit-cli download album.torrent --dir out --stats
+```
+
+```
+completed            1
+disk.bytes_written.bytes 444700
+disk.bytes_written.human 434.28 KiB
+disk.write_calls     32
+disk.write_ops       20
+disk.write_time.human 0ms
+disk.write_time.ms   0
+downloaded.bytes     444700
+downloaded.human     434.28 KiB
+elapsed_human        3s
+elapsed_ms           3655
+from_peers.bytes     0
+from_web_seeds.bytes 444700
+process.cpu_ms       77
+process.open_handles 245
+process.peak_rss_bytes 30240768
+```
+
+One line per field, named the way [`../schema.md`](../schema.md) names it, so a
+line here and a row there are the same field. A field the run did not produce
+is absent rather than printed as `null`, and an empty array prints as `[]`
+because "this run had none" is an answer.
+
+**It is a rendering flag and nothing else.** It takes no measurement, changes
+no behaviour, and leaves `--json` byte for byte identical. Every number it
+prints was already computed and already in the document; the usual summary is a
+selection from it.
+
+`disk.write_ops` over `disk.write_calls` is the coalescing factor: in the run
+above, 20 writes reaching the device for the 32 the session asked for. The
+ratio moves from run to run, because what can be combined depends on the order
+blocks arrive in. `disk.write_time` is wall time inside those writes, summed
+across workers, so it can exceed the run's own elapsed time on a machine with
+several of them.
+
 ## Exit codes are the other half
 
 ```bash

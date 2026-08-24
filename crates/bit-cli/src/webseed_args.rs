@@ -146,16 +146,19 @@ impl Shared {
             template: args.web_seed_template.clone(),
             scope,
             limits: SourceLimits {
-                concurrency: args.web_seed_concurrency.unwrap_or(base.concurrency).max(1),
+                concurrency: aria2_concurrency(args).unwrap_or(base.concurrency).max(1),
                 connections: args
                     .web_seed_connections
                     .unwrap_or(base.connections)
                     .clamp(1, MAX_CONNECTIONS),
+                // `-k` is a floor rather than a value, so the larger of the
+                // two wins. See `TODO/performance.md`, T-033.
                 chunk_size: size(
                     &args.web_seed_chunk_size,
                     base.chunk_size,
                     "web-seed-chunk-size",
                 )?
+                .max(size(&args.min_split_size, 0, "min-split-size")?)
                 .max(1),
                 timeout_ms: duration(&args.web_seed_timeout, base.timeout_ms, "web-seed-timeout")?,
                 connect_timeout_ms: duration(
@@ -208,6 +211,57 @@ impl Shared {
             origin,
         }
     }
+}
+
+/// Concurrent ranged requests per source, from whichever of the three
+/// spellings were given.
+///
+/// `--web-seed-concurrency`, `-x/--max-connection-per-server` and
+/// `-s/--split` are one setting here and two in `aria2`, which splits a file
+/// into `-s` ranges and caps per-server connections at `-x` separately. There
+/// is one knob to point them at, so **the largest given wins** rather than the
+/// product: a script passing `-x 4 -s 16` asks for sixteen and gets sixteen,
+/// not sixty-four.
+///
+/// See `TODO/performance.md`, T-033, and `docs/flags.md` for why an `aria2`
+/// letter is never given a different meaning here.
+fn aria2_concurrency(args: &WebSeedArgs) -> Option<usize> {
+    [
+        args.web_seed_concurrency,
+        args.max_connection_per_server,
+        args.split,
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+/// What to say about the `aria2` aliases, if anything.
+///
+/// Two things, and both exist because the mapping is close and not exact.
+/// `-x` caps per source here and per server in `aria2`, which differ when two
+/// sources share a host; and `-x` and `-s` are one knob here and two there.
+/// `docs/flags.md` forbids giving an `aria2` letter a different meaning, and
+/// stating the difference is what satisfies that rule rather than refusing the
+/// alias. The operator ruled on 2026-08-24: take all three, and warn.
+pub fn aria2_notes(args: &WebSeedArgs) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(n) = args.max_connection_per_server {
+        out.push(format!(
+            "-x caps concurrent requests per source, not per server: -x {n} with two sources on one host is {} requests to that host. --web-seed-max-total is the run-wide cap.",
+            n * 2
+        ));
+    }
+    if let (Some(x), Some(s)) = (args.max_connection_per_server, args.split)
+        && x != s
+    {
+        out.push(format!(
+            "-x and -s are one setting here, so -x {x} -s {s} is {} concurrent requests per source rather than {}.",
+            x.max(s),
+            x * s
+        ));
+    }
+    out
 }
 
 /// Build every source for one torrent, in priority-tie order.
@@ -414,6 +468,95 @@ mod tests {
 
     fn collect_ok(extra: &[&str]) -> Vec<SourceSpec> {
         collect(&args(extra), None, None, &env(), no_network).unwrap()
+    }
+
+    /// T-033, ruled on 2026-08-24. Each of the three `aria2` spellings reaches
+    /// the knob it names.
+    #[test]
+    fn the_aria2_aliases_reach_the_flags_they_name() {
+        let source = ["--web-seed", "https://a.example.com/pub/"];
+        let with = |extra: &[&str]| {
+            let mut full = source.to_vec();
+            full.extend_from_slice(extra);
+            collect_ok(&full)[0].limits.clone()
+        };
+
+        assert_eq!(with(&["-x", "8"]).concurrency, 8);
+        assert_eq!(with(&["--max-connection-per-server", "8"]).concurrency, 8);
+        assert_eq!(with(&["-s", "8"]).concurrency, 8);
+        assert_eq!(with(&["--split", "8"]).concurrency, 8);
+        // `-k` is a floor, so it raises the default and never lowers it. The
+        // default is 4 MiB, which is what the second line holds.
+        let default = with(&[]).chunk_size;
+        assert_eq!(with(&["-k", "8MiB"]).chunk_size, 8 * 1024 * 1024);
+        assert_eq!(
+            with(&["--min-split-size", "8MiB"]).chunk_size,
+            8 * 1024 * 1024
+        );
+        assert_eq!(with(&["-k", "1MiB"]).chunk_size, default);
+    }
+
+    /// `-x` and `-s` are one knob here and two in `aria2`, so a script passing
+    /// both gets the larger rather than the product. Sixty-four concurrent
+    /// requests where sixteen were asked for is the failure this prevents.
+    #[test]
+    fn passing_both_aria2_spellings_is_not_multiplied() {
+        let limits = collect_ok(&[
+            "--web-seed",
+            "https://a.example.com/pub/",
+            "-x",
+            "4",
+            "-s",
+            "16",
+        ])[0]
+            .limits
+            .clone();
+        assert_eq!(limits.concurrency, 16);
+    }
+
+    /// `-k` is a floor, so the larger of it and `--web-seed-chunk-size` wins
+    /// whichever way round they are given.
+    #[test]
+    fn min_split_size_is_a_floor_under_the_chunk_size() {
+        let both = |chunk: &str, floor: &str| {
+            collect_ok(&[
+                "--web-seed",
+                "https://a.example.com/pub/",
+                "--web-seed-chunk-size",
+                chunk,
+                "-k",
+                floor,
+            ])[0]
+                .limits
+                .chunk_size
+        };
+        assert_eq!(both("1MiB", "4MiB"), 4 * 1024 * 1024);
+        assert_eq!(both("4MiB", "1MiB"), 4 * 1024 * 1024);
+    }
+
+    /// The warning is what `docs/flags.md`'s rule asks for in place of
+    /// refusing the alias: the difference is stated rather than hidden.
+    #[test]
+    fn the_aliases_warn_about_what_they_do_not_mean() {
+        assert!(aria2_notes(&args(&[])).is_empty());
+
+        let notes = aria2_notes(&args(&["-x", "4"]));
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("per source, not per server"), "{notes:?}");
+
+        // Both given and equal is the common migrating case and says nothing
+        // extra: the number a script asked for is the number it gets.
+        let notes = aria2_notes(&args(&["-x", "8", "-s", "8"]));
+        assert_eq!(notes.len(), 1, "{notes:?}");
+
+        let notes = aria2_notes(&args(&["-x", "4", "-s", "16"]));
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[1].contains("16 concurrent requests"), "{notes:?}");
+        assert!(notes[1].contains("rather than 64"), "{notes:?}");
+
+        // `-s` alone says nothing: it means here what it means there, up to
+        // the one knob, and there is no per-server reading of it to correct.
+        assert!(aria2_notes(&args(&["-s", "16"])).is_empty());
     }
 
     #[test]

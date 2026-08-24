@@ -150,6 +150,20 @@
           "value_name": "N"
         },
         {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. Per source, not per server",
+          "name": "--max-connection-per-server",
+          "short": "-x",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. The same knob as `-x`",
+          "name": "--split",
+          "short": "-s",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
           "description": "Peer connections each source is presented over. Default: 1",
           "name": "--web-seed-connections",
           "type": "string",
@@ -164,6 +178,13 @@
         {
           "description": "Bytes per ranged request. Independent of the torrent's piece length",
           "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "`aria2` spelling of a floor under `--web-seed-chunk-size`",
+          "name": "--min-split-size",
+          "short": "-k",
           "type": "string",
           "value_name": "SIZE"
         },
@@ -1153,6 +1174,20 @@
           "value_name": "N"
         },
         {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. Per source, not per server",
+          "name": "--max-connection-per-server",
+          "short": "-x",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. The same knob as `-x`",
+          "name": "--split",
+          "short": "-s",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
           "description": "Peer connections each source is presented over. Default: 1",
           "name": "--web-seed-connections",
           "type": "string",
@@ -1167,6 +1202,13 @@
         {
           "description": "Bytes per ranged request. Independent of the torrent's piece length",
           "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "`aria2` spelling of a floor under `--web-seed-chunk-size`",
+          "name": "--min-split-size",
+          "short": "-k",
           "type": "string",
           "value_name": "SIZE"
         },
@@ -1387,6 +1429,20 @@
           "value_name": "N"
         },
         {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. Per source, not per server",
+          "name": "--max-connection-per-server",
+          "short": "-x",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. The same knob as `-x`",
+          "name": "--split",
+          "short": "-s",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
           "description": "Peer connections each source is presented over. Default: 1",
           "name": "--web-seed-connections",
           "type": "string",
@@ -1401,6 +1457,13 @@
         {
           "description": "Bytes per ranged request. Independent of the torrent's piece length",
           "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "`aria2` spelling of a floor under `--web-seed-chunk-size`",
+          "name": "--min-split-size",
+          "short": "-k",
           "type": "string",
           "value_name": "SIZE"
         },
@@ -1640,6 +1703,20 @@
           "value_name": "N"
         },
         {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. Per source, not per server",
+          "name": "--max-connection-per-server",
+          "short": "-x",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. The same knob as `-x`",
+          "name": "--split",
+          "short": "-s",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
           "description": "Peer connections each source is presented over. Default: 1",
           "name": "--web-seed-connections",
           "type": "string",
@@ -1654,6 +1731,13 @@
         {
           "description": "Bytes per ranged request. Independent of the torrent's piece length",
           "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "`aria2` spelling of a floor under `--web-seed-chunk-size`",
+          "name": "--min-split-size",
+          "short": "-k",
           "type": "string",
           "value_name": "SIZE"
         },
@@ -1888,6 +1972,20 @@
           "value_name": "N"
         },
         {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. Per source, not per server",
+          "name": "--max-connection-per-server",
+          "short": "-x",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. The same knob as `-x`",
+          "name": "--split",
+          "short": "-s",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
           "description": "Peer connections each source is presented over. Default: 1",
           "name": "--web-seed-connections",
           "type": "string",
@@ -1902,6 +2000,13 @@
         {
           "description": "Bytes per ranged request. Independent of the torrent's piece length",
           "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "`aria2` spelling of a floor under `--web-seed-chunk-size`",
+          "name": "--min-split-size",
+          "short": "-k",
           "type": "string",
           "value_name": "SIZE"
         },
@@ -2881,6 +2986,20 @@
           "value_name": "N"
         },
         {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. Per source, not per server",
+          "name": "--max-connection-per-server",
+          "short": "-x",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. The same knob as `-x`",
+          "name": "--split",
+          "short": "-s",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
           "description": "Peer connections each source is presented over. Default: 1",
           "name": "--web-seed-connections",
           "type": "string",
@@ -2895,6 +3014,13 @@
         {
           "description": "Bytes per ranged request. Independent of the torrent's piece length",
           "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "`aria2` spelling of a floor under `--web-seed-chunk-size`",
+          "name": "--min-split-size",
+          "short": "-k",
           "type": "string",
           "value_name": "SIZE"
         },
@@ -3705,6 +3831,20 @@
           "value_name": "N"
         },
         {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. Per source, not per server",
+          "name": "--max-connection-per-server",
+          "short": "-x",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
+          "description": "`aria2` spelling of `--web-seed-concurrency`. The same knob as `-x`",
+          "name": "--split",
+          "short": "-s",
+          "type": "string",
+          "value_name": "N"
+        },
+        {
           "description": "Peer connections each source is presented over. Default: 1",
           "name": "--web-seed-connections",
           "type": "string",
@@ -3719,6 +3859,13 @@
         {
           "description": "Bytes per ranged request. Independent of the torrent's piece length",
           "name": "--web-seed-chunk-size",
+          "type": "string",
+          "value_name": "SIZE"
+        },
+        {
+          "description": "`aria2` spelling of a floor under `--web-seed-chunk-size`",
+          "name": "--min-split-size",
+          "short": "-k",
           "type": "string",
           "value_name": "SIZE"
         },
@@ -4587,6 +4734,12 @@
       "default": "false",
       "description": "Resolve, validate, and report. Write nothing",
       "name": "--dry-run",
+      "type": "boolean"
+    },
+    {
+      "default": "false",
+      "description": "Print every field of the report, rather than the usual summary",
+      "name": "--stats",
       "type": "boolean"
     },
     {

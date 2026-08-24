@@ -69,7 +69,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-030](performance.md) | P0 | performance | **done** | Throughput collapses with several torrents at once |
 | [T-031](performance.md) | P1 | performance | **done** | The rate limit did not apply to the session |
 | [T-032](performance.md) | P1 | performance | **done** | The piece selector strategy is not implemented |
-| [T-033](performance.md) | P3 | performance | open | --split, -x, and -k do not reach the fetch path *(title disproved: they do not exist)* |
+| [T-033](performance.md) | P3 | performance | **done** | --split, -x, and -k do not reach the fetch path *(title disproved: they did not exist, and now do)* |
 | [T-034](performance.md) | P3 | performance | open | Endgame mode is not observable |
 | [T-035](performance.md) | P1 | performance | **done** | The web seed rate limit was never applied |
 | [T-036](performance.md) | P0 | paths | **done** | A multi-file torrent with one file lands without its directory |
@@ -242,7 +242,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-249](metainfo.md) | P3 | metainfo | **done** | A torrent's shape is only ever printed as a flat list *(the span alone does not say a subtree stands alone, so `shared_pieces` sits beside it)* |
 | [T-250](cli-surface.md) | P2 | cli | open | Nothing reports how an input was resolved |
 | [T-251](trackers.md) | P2 | trackers | open | A web seed has twelve knobs of its own and a tracker has none |
-| [T-252](cli-surface.md) | P3 | cli | open | The run's numbers exist in JSON and cannot be asked for as text |
+| [T-252](cli-surface.md) | P3 | cli | **done** | The run's numbers exist in JSON and cannot be asked for as text *(the disk half was plumbing, not a measurement)* |
 | [T-253](cli-surface.md) | P2 | cli | partial | The schema sample takes one path, so thirteen real fields went undocumented |
 | [T-254](webseed.md) | P2 | webseed | **done** | No report carries a response header, so a CDN cache hit is invisible |
 | [T-255](cli-surface.md) | P2 | cli | **done** | Regenerating the schema deletes four hand-written sections and nothing fails |
@@ -250,7 +250,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 204 items: 193 to work through, and 11 deferred to Phase C.
-35 open, 2 partial, 0 blocked, 156 done.
+33 open, 2 partial, 0 blocked, 158 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -260,9 +260,9 @@ when a number here disagrees with them.
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 3 | 0 | 0 | 68 | 71 |
 | P2 | 21 | 2 | 0 | 57 | 80 |
-| P3 | 11 | 0 | 0 | 19 | 30 |
+| P3 | 9 | 0 | 0 | 21 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **35** | **2** | **0** | **156** | **204** |
+| **All** | **33** | **2** | **0** | **158** | **204** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

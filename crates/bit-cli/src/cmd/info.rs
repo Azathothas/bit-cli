@@ -183,6 +183,47 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
+    /// T-252's acceptance, both halves. `--stats` prints every field that has
+    /// a value, and `--json --stats` is the same document as `--json`.
+    #[test]
+    fn stats_prints_every_field_and_leaves_the_json_alone() {
+        use crate::test_support::{TorrentFixture, run_json, run_ok};
+
+        let fixture = TorrentFixture::multi_file();
+        let doc = run_json(&["info", fixture.path_str()], fixture.dir());
+        let text = run_ok(&["info", fixture.path_str(), "--stats"], fixture.dir());
+
+        // Every scalar the document carries is a line, named the same way.
+        for (key, value) in doc.as_object().expect("an object") {
+            if value.is_null() || value.is_object() || value.is_array() {
+                continue;
+            }
+            assert!(
+                text.lines()
+                    .any(|line| line.starts_with(&format!("{key} "))),
+                "`{key}` is in the document and not in --stats:\n{text}"
+            );
+        }
+        // A nested field is named by its path.
+        assert!(text.contains("total.bytes"), "{text}");
+        assert!(text.contains("piece_length.human"), "{text}");
+
+        // And the default rendering is not this one.
+        let plain = run_ok(&["info", fixture.path_str()], fixture.dir());
+        assert!(!plain.contains("total.bytes"), "{plain}");
+
+        // The JSON does not move. Two runs differ in when they ran and in
+        // nothing else, which is what `--stats` being a rendering flag means.
+        let with_stats = run_json(&["info", fixture.path_str(), "--stats"], fixture.dir());
+        let strip = |mut doc: serde_json::Value| {
+            if let Some(object) = doc.as_object_mut() {
+                object.remove("generated_at");
+            }
+            doc
+        };
+        assert_eq!(strip(doc), strip(with_stats));
+    }
+
     use super::*;
     use crate::test_support::{TorrentFixture, run_ok};
 

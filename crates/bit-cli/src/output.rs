@@ -50,6 +50,8 @@ pub struct Renderer {
     pub quiet: bool,
     pub color: bool,
     pub progress: ProgressMode,
+    /// `--stats`: render the document field by field rather than the summary.
+    pub stats: bool,
     next_seq: u64,
 }
 
@@ -73,6 +75,7 @@ impl Renderer {
             quiet: global.quiet,
             color: env.wants_color(global.color.into()),
             progress,
+            stats: global.stats,
             next_seq: 0,
         }
     }
@@ -116,7 +119,21 @@ impl Renderer {
                 if self.quiet {
                     return Ok(());
                 }
-                for line in text() {
+                // `--stats` renders the document rather than the command's own
+                // summary. The numbers are the same numbers: the summary is a
+                // selection from this, and the selection is what a caller
+                // reaching for `--stats` is asking to see past.
+                let lines = match self.stats {
+                    true => match serde_json::to_value(value) {
+                        Ok(payload) => stats_lines(&self.envelope(kind, payload)),
+                        // A document that will not serialize cannot be
+                        // rendered field by field, and refusing to print
+                        // anything would be worse than printing the summary.
+                        Err(_) => text(),
+                    },
+                    false => text(),
+                };
+                for line in lines {
                     env.say(line)
                         .map_err(|e| bit_cli_core::error::from_io(e, "cannot write to stdout"))?;
                 }
@@ -209,6 +226,44 @@ pub fn field(key: &str, value: impl std::fmt::Display) -> String {
     format!("{key:<20} {value}")
 }
 
+/// Every field of a document, one per line, for `--stats`.
+///
+/// Paths are the ones `docs/schema.md` names, so a line here and a row there
+/// are the same field: dotted for an object, `[n]` for an array element. A
+/// `null` is skipped, because the document omits an optional field rather than
+/// writing `null` and a reader should not have to tell "not applicable" from
+/// "none". An empty array or object prints as itself, because "this run had
+/// none" is an answer.
+pub fn stats_lines(value: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_stats("", value, &mut out);
+    out
+}
+
+fn walk_stats(prefix: &str, value: &Value, out: &mut Vec<String>) {
+    let join = |key: &str| match prefix.is_empty() {
+        true => key.to_string(),
+        false => format!("{prefix}.{key}"),
+    };
+    match value {
+        Value::Object(fields) if fields.is_empty() => out.push(field(prefix, "{}")),
+        Value::Object(fields) => {
+            for (key, child) in fields {
+                walk_stats(&join(key), child, out);
+            }
+        }
+        Value::Array(items) if items.is_empty() => out.push(field(prefix, "[]")),
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                walk_stats(&format!("{prefix}[{index}]"), item, out);
+            }
+        }
+        Value::Null => {}
+        Value::String(text) => out.push(field(prefix, text)),
+        other => out.push(field(prefix, other)),
+    }
+}
+
 /// Render a table with aligned columns.
 pub fn table(headers: &[&str], rows: &[Vec<String>]) -> Vec<String> {
     let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
@@ -248,6 +303,54 @@ pub type Report = ErrorReport;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--stats` names every field the way `docs/schema.md` names it, so a
+    /// line here and a row there are the same field.
+    #[test]
+    fn stats_lines_name_a_field_the_way_the_schema_does() {
+        let value = serde_json::json!({
+            "kind": "download",
+            "total": {"bytes": 1024, "human": "1.00 KiB"},
+            "torrents": [{"source": "a.torrent"}, {"source": "b.torrent"}],
+        });
+        let lines = stats_lines(&value);
+        assert!(lines.iter().any(|l| l.starts_with("kind ")), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l.starts_with("total.bytes ")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("torrents[1].source ")),
+            "{lines:?}"
+        );
+    }
+
+    /// A `null` is skipped and an empty collection is printed.
+    ///
+    /// The document omits an optional field rather than writing `null`, so a
+    /// `null` that does reach here carries no information. An empty array is
+    /// different: "this run had none" is an answer.
+    #[test]
+    fn a_null_is_skipped_and_an_empty_collection_is_not() {
+        let value = serde_json::json!({
+            "name": serde_json::Value::Null,
+            "nodes": [],
+            "context": {},
+            "count": 0,
+        });
+        let lines = stats_lines(&value);
+        assert!(!lines.iter().any(|l| l.starts_with("name ")), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l.trim() == "nodes                []"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.trim() == "context              {}"),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.starts_with("count ")), "{lines:?}");
+    }
+
     use crate::cli::{Cli, Command};
     use clap::Parser;
 

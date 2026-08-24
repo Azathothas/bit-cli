@@ -60,14 +60,43 @@ in `cli.rs` to stop it.
 | `-d` | `--dir` | global | `-d` dir | Same concept. |
 | `-h` | `--help` | global | `-h` help | Universal. |
 | `-j` | `--max-concurrent-downloads` | download | `-j` max concurrent downloads | Same letter, narrower meaning: `bit-cli` has no queue across invocations, so this is parallelism inside one run. |
+| `-k` | `--min-split-size` | download | `-k` min split size | Same concept, as a **floor** under `--web-seed-chunk-size` rather than a value. |
 | `-l` | `--log-file` | global | `-l` log | Same concept. |
 | `-O` | `--index-out` | download, verify, seed | `-O` index out | Same concept, zero-based like every other index flag here. The path is a request: it is sanitised and disambiguated like a torrent path, so it cannot escape the output directory. The three commands are one payload read three ways: `download` writes it there, `verify` reads it back from there, and `seed` serves it from there. |
 | `-o` | `--out` | download | `-o` out | Same concept. |
 | `-o` | `--output` | create, edit, man | unclaimed in this position | `-` means stdout, following `intermodal`. |
 | `-q` | `--quiet` | global | `-q` quiet | Same concept. |
+| `-s` | `--split` | download | `-s` split | Same concept, and the **same knob as `-x`** here. See below. |
 | `-u` | `--max-upload-rate` | download, seed | `-u` max upload limit | Same concept. |
 | `-V` | `--check-integrity` | download | `-V` check integrity | Same concept. See above. |
 | `-v` | `--verbose` | global | `-v` version | **Deliberate divergence.** See above. |
+| `-x` | `--max-connection-per-server` | download | `-x` max connection per server | Same letter, **per source rather than per server**. See below. |
+
+### The three that are close and not exact
+
+`-x`, `-s` and `-k` are the flags a script written from `aria2` muscle memory
+already passes, and all three are accepted. Two of them do not mean quite what
+they mean there, and `bit-cli` says so rather than hiding it, which is what
+rule 2 asks for when a letter cannot be refused outright.
+
+**`-x` caps per source, not per server.** In `aria2` it holds connections to
+one server; here it holds concurrent ranged requests to one source. They differ
+when two sources share a host: `-x 4` with two such sources is eight requests
+to that host. `--web-seed-max-total` is the run-wide cap when that matters. A
+warning says this on first use.
+
+**`-x` and `-s` are one knob.** `aria2` splits a file into `-s` ranges and caps
+per-server connections at `-x` separately. There is one setting here, so the
+two are spellings of it and the **larger given wins**: `-x 4 -s 16` is sixteen
+concurrent requests per source, not sixty-four. A warning says so when the two
+differ.
+
+**`-k` is a floor.** It raises `--web-seed-chunk-size` and never lowers it, so
+`-k 1MiB` against the 4 MiB default changes nothing.
+
+The number behind taking them at all is measured, not assumed: 940 MiB/s at one
+concurrent request, 3.44 GiB/s at eight, and past eight throughput stops while
+p99 doubles. `bench/split-20260823T182709577Z.json` is the curve.
 
 ## Reserved and not assigned
 
@@ -78,17 +107,14 @@ yet, and when it does they keep the meaning below.
 | --- | --- | --- |
 | `-D` | daemon | Never. Phase C, decision 7.4. |
 | `-i` | input file | Reserved. `TODO/cli-surface.md` T-114. |
-| `-k` | min split size | Reserved. `TODO/performance.md` T-033. |
 | `-M` | metalink file | Reserved. A Metalink is a positional source here, the way `.torrent` is: `bit-cli download release.meta4`. |
 | `-m` | max tries | Reserved. |
 | `-P` | parameterized uri | Reserved. |
 | `-R` | remote time | Reserved. |
 | `-S` | show files | Reserved. `bit-cli files` covers it as a verb. |
-| `-s` | split | Reserved. `TODO/performance.md` T-033. |
 | `-T` | torrent file | Reserved. `bit-cli` takes a positional source instead. |
 | `-t` | timeout | Reserved. `--timeout` is global and long-only for now. |
 | `-U` | user agent | Reserved. |
-| `-x` | max connection per server | Reserved. `TODO/performance.md` T-033. |
 | `-Z` | force sequential | Reserved. |
 
 ## Unclaimed by aria2

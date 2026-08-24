@@ -4,7 +4,7 @@
 .SH NAME
 bit\-cli \- Fetch, create, verify, and seed torrents, with first\-class web seed control.
 .SH SYNOPSIS
-\fBbit\-cli\fR [\fB\-\-version\fR] [\fB\-\-json\fR] [\fB\-\-jsonl\fR] [\fB\-\-schema\-version\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-\-log\-level\fR] [\fB\-\-log\-format\fR] [\fB\-l\fR|\fB\-\-log\-file\fR] [\fB\-\-log\-max\-size\fR] [\fB\-\-log\-max\-files\fR] [\fB\-\-trace\fR] [\fB\-\-no\-redact\fR] [\fB\-\-color\fR] [\fB\-\-progress\fR] [\fB\-\-config\fR] [\fB\-\-no\-config\fR] [\fB\-d\fR|\fB\-\-dir\fR] [\fB\-\-dry\-run\fR] [\fB\-\-timeout\fR] [\fB\-\-stop\-after\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fISOURCE\fR] [\fIsubcommands\fR]
+\fBbit\-cli\fR [\fB\-\-version\fR] [\fB\-\-json\fR] [\fB\-\-jsonl\fR] [\fB\-\-schema\-version\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-\-log\-level\fR] [\fB\-\-log\-format\fR] [\fB\-l\fR|\fB\-\-log\-file\fR] [\fB\-\-log\-max\-size\fR] [\fB\-\-log\-max\-files\fR] [\fB\-\-trace\fR] [\fB\-\-no\-redact\fR] [\fB\-\-color\fR] [\fB\-\-progress\fR] [\fB\-\-config\fR] [\fB\-\-no\-config\fR] [\fB\-d\fR|\fB\-\-dir\fR] [\fB\-\-dry\-run\fR] [\fB\-\-stats\fR] [\fB\-\-timeout\fR] [\fB\-\-stop\-after\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fISOURCE\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
 Fetch, create, verify, and seed torrents, with first\-class web seed control.
 .SH OPTIONS
@@ -141,6 +141,11 @@ Output directory
 \fB\-\-dry\-run\fR
 Resolve, validate, and report. Write nothing
 .TP
+\fB\-\-stats\fR
+Print every field of the report, rather than the usual summary.
+
+A rendering flag and nothing else: it changes no behaviour, takes no measurement, and leaves `\-\-json` byte for byte identical. Every number it prints was already computed and already in the JSON.
+.TP
 \fB\-\-timeout\fR \fI<DUR>\fR
 Overall operation deadline
 .TP
@@ -206,7 +211,7 @@ v0.2.0
 .SH NAME
 bit\-cli\-download \- Fetch to completion in the foreground, then exit
 .SH SYNOPSIS
-\fBbit\-cli\-download\fR [\fB\-\-web\-seed\fR] [\fB\-\-web\-seed\-exact\fR] [\fB\-\-web\-seed\-for\fR] [\fB\-\-web\-seed\-mode\fR] [\fB\-\-web\-seed\-template\fR] [\fB\-\-web\-seed\-pieces\fR] [\fB\-\-web\-seed\-bytes\fR] [\fB\-\-web\-seed\-file\fR] [\fB\-\-web\-seed\-list\-url\fR] [\fB\-\-web\-seed\-config\fR] [\fB\-\-web\-seed\-style\fR] [\fB\-\-web\-seed\-only\fR] [\fB\-\-no\-web\-seed\fR] [\fB\-\-no\-torrent\-web\-seed\fR] [\fB\-\-web\-seed\-concurrency\fR] [\fB\-\-web\-seed\-connections\fR] [\fB\-\-web\-seed\-max\-total\fR] [\fB\-\-web\-seed\-chunk\-size\fR] [\fB\-\-web\-seed\-timeout\fR] [\fB\-\-web\-seed\-connect\-timeout\fR] [\fB\-\-web\-seed\-max\-errors\fR] [\fB\-\-web\-seed\-cooldown\fR] [\fB\-\-web\-seed\-retries\fR] [\fB\-\-web\-seed\-retry\-status\fR] [\fB\-\-web\-seed\-fatal\-status\fR] [\fB\-\-web\-seed\-user\-agent\fR] [\fB\-\-web\-seed\-header\fR] [\fB\-\-web\-seed\-auth\fR] [\fB\-\-web\-seed\-speed\-limit\fR] [\fB\-\-web\-seed\-verify\fR] [\fB\-\-web\-seed\-priority\fR] [\fB\-\-prefer\-web\-seed\fR] [\fB\-\-web\-seed\-require\fR] [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-encryption\fR] [\fB\-\-transport\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-on\-complete\fR] [\fB\-\-on\-error\fR] [\fB\-\-on\-piece\-verified\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-o\fR|\fB\-\-out\fR] [\fB\-\-file\-allocation\fR] [\fB\-\-piece\-selector\fR] [\fB\-\-port\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-redial\-after\fR] [\fB\-\-max\-redials\fR] [\fB\-j\fR|\fB\-\-max\-concurrent\-downloads\fR] [\fB\-\-no\-share\-files\fR] [\fB\-V\fR|\fB\-\-check\-integrity\fR] [\fB\-\-hash\-check\-only\fR] [\fB\-\-verify\-on\-complete\fR] [\fB\-c\fR|\fB\-\-continue\fR] [\fB\-\-no\-continue\fR] [\fB\-\-allow\-overwrite\fR] [\fB\-\-report\-interval\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-download\fR [\fB\-\-web\-seed\fR] [\fB\-\-web\-seed\-exact\fR] [\fB\-\-web\-seed\-for\fR] [\fB\-\-web\-seed\-mode\fR] [\fB\-\-web\-seed\-template\fR] [\fB\-\-web\-seed\-pieces\fR] [\fB\-\-web\-seed\-bytes\fR] [\fB\-\-web\-seed\-file\fR] [\fB\-\-web\-seed\-list\-url\fR] [\fB\-\-web\-seed\-config\fR] [\fB\-\-web\-seed\-style\fR] [\fB\-\-web\-seed\-only\fR] [\fB\-\-no\-web\-seed\fR] [\fB\-\-no\-torrent\-web\-seed\fR] [\fB\-\-web\-seed\-concurrency\fR] [\fB\-x\fR|\fB\-\-max\-connection\-per\-server\fR] [\fB\-s\fR|\fB\-\-split\fR] [\fB\-\-web\-seed\-connections\fR] [\fB\-\-web\-seed\-max\-total\fR] [\fB\-\-web\-seed\-chunk\-size\fR] [\fB\-k\fR|\fB\-\-min\-split\-size\fR] [\fB\-\-web\-seed\-timeout\fR] [\fB\-\-web\-seed\-connect\-timeout\fR] [\fB\-\-web\-seed\-max\-errors\fR] [\fB\-\-web\-seed\-cooldown\fR] [\fB\-\-web\-seed\-retries\fR] [\fB\-\-web\-seed\-retry\-status\fR] [\fB\-\-web\-seed\-fatal\-status\fR] [\fB\-\-web\-seed\-user\-agent\fR] [\fB\-\-web\-seed\-header\fR] [\fB\-\-web\-seed\-auth\fR] [\fB\-\-web\-seed\-speed\-limit\fR] [\fB\-\-web\-seed\-verify\fR] [\fB\-\-web\-seed\-priority\fR] [\fB\-\-prefer\-web\-seed\fR] [\fB\-\-web\-seed\-require\fR] [\fB\-\-tracker\fR] [\fB\-\-tracker\-file\fR] [\fB\-\-tracker\-list\-url\fR] [\fB\-\-exclude\-tracker\fR] [\fB\-\-replace\-trackers\fR] [\fB\-\-tracker\-timeout\fR] [\fB\-\-tracker\-connect\-timeout\fR] [\fB\-\-tracker\-interval\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-max\-download\-rate\fR] [\fB\-u\fR|\fB\-\-max\-upload\-rate\fR] [\fB\-\-max\-overall\-download\-rate\fR] [\fB\-\-max\-overall\-upload\-rate\fR] [\fB\-\-max\-peer\-rate\fR] [\fB\-\-max\-peers\fR] [\fB\-\-max\-peers\-total\fR] [\fB\-\-encryption\fR] [\fB\-\-transport\fR] [\fB\-\-block\-peer\fR] [\fB\-\-max\-open\-files\fR] [\fB\-\-max\-handles\fR] [\fB\-\-max\-rss\fR] [\fB\-\-seed\-ratio\fR] [\fB\-\-seed\-time\fR] [\fB\-\-stop\-timeout\fR] [\fB\-\-init\-timeout\fR] [\fB\-\-lowest\-speed\-limit\fR] [\fB\-\-on\-complete\fR] [\fB\-\-on\-error\fR] [\fB\-\-on\-piece\-verified\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-o\fR|\fB\-\-out\fR] [\fB\-\-file\-allocation\fR] [\fB\-\-piece\-selector\fR] [\fB\-\-port\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-redial\-after\fR] [\fB\-\-max\-redials\fR] [\fB\-j\fR|\fB\-\-max\-concurrent\-downloads\fR] [\fB\-\-no\-share\-files\fR] [\fB\-V\fR|\fB\-\-check\-integrity\fR] [\fB\-\-hash\-check\-only\fR] [\fB\-\-verify\-on\-complete\fR] [\fB\-c\fR|\fB\-\-continue\fR] [\fB\-\-no\-continue\fR] [\fB\-\-allow\-overwrite\fR] [\fB\-\-report\-interval\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Fetch to completion in the foreground, then exit
 .SH OPTIONS
@@ -293,6 +298,18 @@ Ignore the torrent\*(Aqs url\-list but keep CLI\-supplied sources
 \fB\-\-web\-seed\-concurrency\fR \fI<N>\fR
 Concurrent ranged requests per source
 .TP
+\fB\-x\fR, \fB\-\-max\-connection\-per\-server\fR \fI<N>\fR
+`aria2` spelling of `\-\-web\-seed\-concurrency`. Per source, not per server.
+
+In `aria2` this caps connections to one **server**. Here it caps concurrent ranged requests to one **source**, and the two differ when two sources share a host: `\-x 4` with two sources on the same host is eight requests to that host, where `aria2` would hold it to four. A warning says so on first use.
+
+The number behind it is measured: 940 MiB/s at one, 3.44 GiB/s at eight, and past eight throughput stops while p99 doubles. `bench/split\-20260823T182709577Z.json` is the curve. See `TODO/performance.md`, T\-033.
+.TP
+\fB\-s\fR, \fB\-\-split\fR \fI<N>\fR
+`aria2` spelling of `\-\-web\-seed\-concurrency`. The same knob as `\-x`.
+
+`aria2` splits one file into N ranges and caps per\-server connections separately, so `\-s` and `\-x` are two settings there. Here one source is fetched by concurrent ranged requests and that is the only knob, so these are two spellings of it. Passing both is not multiplied: the larger wins, and a warning names it when they differ.
+.TP
 \fB\-\-web\-seed\-connections\fR \fI<N>\fR
 Peer connections each source is presented over. Default: 1.
 
@@ -303,6 +320,11 @@ Concurrent ranged requests across all sources
 .TP
 \fB\-\-web\-seed\-chunk\-size\fR \fI<SIZE>\fR
 Bytes per ranged request. Independent of the torrent\*(Aqs piece length
+.TP
+\fB\-k\fR, \fB\-\-min\-split\-size\fR \fI<SIZE>\fR
+`aria2` spelling of a floor under `\-\-web\-seed\-chunk\-size`.
+
+A floor rather than a value: `aria2` will not split a file into pieces smaller than this, so a request is at least this big. Where `\-\-web\-seed\-chunk\-size` is also given, the larger of the two is what a request asks for.
 .TP
 \fB\-\-web\-seed\-timeout\fR \fI<DUR>\fR
 Per\-request timeout

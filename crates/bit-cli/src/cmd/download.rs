@@ -367,6 +367,31 @@ pub struct DownloadReport {
     /// waited for. See `docs/hooks.md` and `TODO/cli-surface.md`, T-115.
     #[serde(skip_serializing_if = "crate::hooks::HookCounts::is_empty")]
     pub hooks: crate::hooks::HookCounts,
+    /// What this run's storage did.
+    pub disk: DiskTotals,
+}
+
+/// Bytes written to the payload and the time those writes took.
+///
+/// Both were already being counted and neither was reported: `--trace disk`
+/// carries the events and nothing totalled them, so the two numbers that say
+/// whether a slow run was slow at the disk existed only as a log. The counters
+/// are always on, at two `Instant::now()` calls per write, which is the price
+/// of a run being able to say where the time went rather than guessing. See
+/// `crate::storage::StorageMetrics` and `TODO/cli-surface.md`, T-252.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct DiskTotals {
+    /// Bytes that reached the device, which is more than `downloaded` when a
+    /// piece was written twice and less when the run resumed.
+    pub bytes_written: Size,
+    /// Wall time inside those writes, summed across every worker, so it can
+    /// exceed the run's own elapsed time.
+    pub write_time: bit_cli_core::units::Millis,
+    /// Positioned writes that reached the device.
+    pub write_ops: u64,
+    /// Writes the session asked for, before any were combined. `write_ops`
+    /// over this is the coalescing factor. See `TODO/disk-io.md`, T-018.
+    pub write_calls: u64,
 }
 
 /// A message from a worker to the one thread that owns the output streams.
@@ -384,6 +409,13 @@ pub fn run(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
+    // The `aria2` aliases are close to their originals and not identical, and
+    // saying so is what `docs/flags.md` asks for instead of refusing them.
+    // Emitted here, once per run, before anything is resolved. See
+    // `TODO/performance.md`, T-033.
+    for note in webseed_args::aria2_notes(&args.web_seeds) {
+        renderer.warn(env, note);
+    }
     let report_interval = swarm::duration_flag(&args.report_interval, "report-interval")?;
     let stop = StopConditions {
         timeout: swarm::optional_duration(&global.timeout, "timeout")?,
@@ -857,9 +889,12 @@ pub fn run(
         for note in engine.storage_notes() {
             renderer.warn(env, note);
         }
+        // Read before the engine is dropped, because the counters live on it
+        // and nothing else can reach them afterwards.
+        let disk = engine.storage_counts();
         Arc::try_unwrap(engine).ok().map(Engine::stop);
 
-        Ok::<_, Error>(reports)
+        Ok::<_, Error>((reports, disk))
     });
 
     // Before `outcome?`, so a run that failed still stops the worker and does
@@ -876,7 +911,7 @@ pub fn run(
         },
     };
 
-    let mut reports = outcome?;
+    let (mut reports, disk) = outcome?;
     reports.sort_by(|a, b| a.source.cmp(&b.source));
 
     let elapsed = started.elapsed();
@@ -893,6 +928,12 @@ pub fn run(
         torrents: reports,
         process: bit_cli_core::sysinfo::Process::sample(),
         hooks: piece_hook_counts,
+        disk: DiskTotals {
+            bytes_written: Size(disk.write_bytes),
+            write_time: bit_cli_core::units::Millis(disk.write_nanos / 1_000_000),
+            write_ops: disk.write_ops,
+            write_calls: disk.write_calls,
+        },
     };
 
     // The worst outcome decides the exit code, so a run with one failed

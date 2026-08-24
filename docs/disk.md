@@ -155,6 +155,34 @@ Two paths that are byte-for-byte the same are `duplicate-path` rather than
 `case-collision`, because a message telling somebody to look for a casing
 difference that is not there costs more than no message.
 
+## What one download cost the disk
+
+A finished `download` reports it, and `--stats` is how to read it without a
+JSON parser:
+
+```bash
+bit-cli download album.torrent --dir out --stats
+```
+
+```
+disk.bytes_written.bytes 444700
+disk.write_calls     32
+disk.write_ops       20
+disk.write_time.ms   0
+```
+
+`bytes_written` is what reached the device, which is more than `downloaded`
+when a piece was written twice and less when the run resumed. `write_ops` over
+`write_calls` is the coalescing factor: in the run above, twenty writes for the
+thirty-two the session asked for. It moves from run to run, because what can be
+combined depends on the order blocks arrive in, and the same command a minute
+later reported seventeen. `write_time` is wall time inside those writes, summed
+across every worker, so it can exceed the run's own elapsed time.
+
+The counters are always on. They cost two clock reads per write, about 50 ns
+against the 95 us a 16 KiB block takes end to end, and a counter that is only
+on when somebody is measuring measures a different program.
+
 ## Measuring the disk on its own
 
 `bench disk` writes a payload through the same storage a download writes

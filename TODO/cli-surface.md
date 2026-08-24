@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2680` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2458` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2494` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2189` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2722` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2500` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2536` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2231` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2680` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2722` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -4514,7 +4514,7 @@ Source:      the operator's brief of 2026-08-24, measured the same day
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     A finished `download` already carries `elapsed_ms`, `downloaded`,
              `uploaded`, `from_peers`, `from_web_seeds`, `from_resume`,
@@ -4554,6 +4554,68 @@ Acceptance:  `bit-cli download <TORRENT> --stats` prints every field of the
              `--json --stats` is byte-identical to the same run without
              `--stats`. The two disk fields appear in `docs/schema.md` because
              a run produced them.
+
+Closed:      `--stats` is **global and implemented in one place**, rather than
+             a flag per command. `Renderer::emit` at
+             `crates/bit-cli/src/output.rs:110` is where every document becomes
+             text, so putting it there means every report that exists and every
+             report added later carries it, and each command's own summary
+             stays the default. `stats_lines` at `:237` is the rendering.
+
+             ```
+             $ bit-cli download album.torrent --dir out --web-seed-only --stats
+             completed            1
+             disk.bytes_written.bytes 444700
+             disk.bytes_written.human 434.28 KiB
+             disk.write_calls     32
+             disk.write_ops       20
+             disk.write_time.ms   0
+             downloaded.bytes     444700
+             elapsed_ms           3655
+             from_peers.bytes     0
+             from_web_seeds.bytes 444700
+             process.cpu_ms       77
+             process.open_handles 245
+             process.peak_rss_bytes 30240768
+             ```
+
+             Paths are the ones `docs/schema.md` names, so a line here and a
+             row there are the same field. A `null` is skipped, because the
+             document omits an optional field rather than writing `null` and a
+             reader should not have to tell "not applicable" from "none"; an
+             empty array prints as `[]`, because "this run had none" is an
+             answer.
+
+             **The disk half turned out to be plumbing rather than
+             measurement.** The entry called it the one part that is a
+             measurement. It is not: `crate::storage::StorageMetrics` has
+             counted `write_bytes` and `write_nanos` on every run since T-018,
+             at two clock reads per write, and `Engine::storage_counts` already
+             exposed them for `bench leech`. Nothing needed measuring. What was
+             missing was a field on the `download` document, read before the
+             engine is dropped because nothing else can reach the counters
+             afterwards.
+
+             Four fields rather than two, and the two extra ones cost nothing:
+             `write_ops` and `write_calls` were beside the other two, and
+             `write_ops` over `write_calls` is the coalescing factor
+             [T-018](../TODO/disk-io.md) exists to move. Six rows in
+             `docs/schema.md`, from a run.
+
+             **The ratio moves from run to run**, which is worth saying because
+             a number in a doc reads as a property. The same command twice
+             reported 20 writes for 32 calls and then 17 for 32: what can be
+             combined depends on the order blocks arrive in.
+
+             Three tests. `stats_prints_every_field_and_leaves_the_json_alone`
+             is the acceptance and it holds both halves: every scalar the
+             `--json` document carries is a line, and the two documents are
+             equal once the timestamp is removed. Byte-identical is not
+             assertable across two runs, because `generated_at` is when the run
+             happened; equal in every other field is the same claim.
+
+             `docs/examples/machine-output.md` and `docs/disk.md` carry it, and
+             both output blocks are from runs.
 
 ### T-253 The schema sample takes one path, so thirteen real fields went undocumented
 
@@ -4714,7 +4776,7 @@ Acceptance:  `BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema` on a
              four in place, `git diff --stat` reports no deletion, and a test
              fails when the carry-across is removed.
 
-Closed:      `carry_across` at `crates/bit-cli/src/schema_gen.rs:1285`, called
+Closed:      `carry_across` at `crates/bit-cli/src/schema_gen.rs:1304`, called
              at the end of `merge_schema`. It appends every `##` section of the
              committed file whose heading line the render does not emit, in
              committed order, after the generated content.
@@ -4736,7 +4798,7 @@ Closed:      `carry_across` at `crates/bit-cli/src/schema_gen.rs:1285`, called
              `powershell` block is not a heading and a split that thought it
              was would carry half an example across on its own.
 
-             Three tests, at `:1325`, `:1370` and `:1387`. The last one is over
+             Three tests, at `:1344`, `:1389` and `:1406`. The last one is over
              the committed file rather than a fixture: it renders, merges, and
              asserts all four real headings survive.
 

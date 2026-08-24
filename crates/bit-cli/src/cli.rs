@@ -152,6 +152,14 @@ pub struct Global {
     #[arg(long, global = true)]
     pub dry_run: bool,
 
+    /// Print every field of the report, rather than the usual summary.
+    ///
+    /// A rendering flag and nothing else: it changes no behaviour, takes no
+    /// measurement, and leaves `--json` byte for byte identical. Every number
+    /// it prints was already computed and already in the JSON.
+    #[arg(long, global = true)]
+    pub stats: bool,
+
     /// Overall operation deadline.
     #[arg(long, global = true, value_name = "DUR")]
     pub timeout: Option<String>,
@@ -431,6 +439,31 @@ pub struct WebSeedArgs {
     #[arg(long = "web-seed-concurrency", value_name = "N")]
     pub web_seed_concurrency: Option<usize>,
 
+    /// `aria2` spelling of `--web-seed-concurrency`. Per source, not per server.
+    ///
+    /// In `aria2` this caps connections to one **server**. Here it caps
+    /// concurrent ranged requests to one **source**, and the two differ when
+    /// two sources share a host: `-x 4` with two sources on the same host is
+    /// eight requests to that host, where `aria2` would hold it to four. A
+    /// warning says so on first use.
+    ///
+    /// The number behind it is measured: 940 MiB/s at one, 3.44 GiB/s at
+    /// eight, and past eight throughput stops while p99 doubles.
+    /// `bench/split-20260823T182709577Z.json` is the curve. See
+    /// `TODO/performance.md`, T-033.
+    #[arg(short = 'x', long = "max-connection-per-server", value_name = "N")]
+    pub max_connection_per_server: Option<usize>,
+
+    /// `aria2` spelling of `--web-seed-concurrency`. The same knob as `-x`.
+    ///
+    /// `aria2` splits one file into N ranges and caps per-server connections
+    /// separately, so `-s` and `-x` are two settings there. Here one source is
+    /// fetched by concurrent ranged requests and that is the only knob, so
+    /// these are two spellings of it. Passing both is not multiplied: the
+    /// larger wins, and a warning names it when they differ.
+    #[arg(short = 's', long = "split", value_name = "N")]
+    pub split: Option<usize>,
+
     /// Peer connections each source is presented over. Default: 1.
     ///
     /// One source is one peer to the torrent session, and a peer's blocks are
@@ -449,6 +482,15 @@ pub struct WebSeedArgs {
     /// Bytes per ranged request. Independent of the torrent's piece length.
     #[arg(long = "web-seed-chunk-size", value_name = "SIZE")]
     pub web_seed_chunk_size: Option<String>,
+
+    /// `aria2` spelling of a floor under `--web-seed-chunk-size`.
+    ///
+    /// A floor rather than a value: `aria2` will not split a file into pieces
+    /// smaller than this, so a request is at least this big. Where
+    /// `--web-seed-chunk-size` is also given, the larger of the two is what a
+    /// request asks for.
+    #[arg(short = 'k', long = "min-split-size", value_name = "SIZE")]
+    pub min_split_size: Option<String>,
 
     /// Per-request timeout.
     #[arg(long = "web-seed-timeout", value_name = "DUR")]
