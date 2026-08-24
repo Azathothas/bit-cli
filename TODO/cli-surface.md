@@ -4826,3 +4826,164 @@ Closed:      `carry_across` at `crates/bit-cli/src/schema_gen.rs:1304`, called
              the Markdown, because the Markdown is generated: editing the file
              directly is undone by the next regeneration, which is how the
              first attempt at this correction was lost.
+
+### T-257 Two documents answer to type progress, and the guard against that only covers documents
+
+Source:      found reading a soak's `--jsonl` output, 2026-08-24
+Category:    cli
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `bit-cli seed --jsonl` and `bit-cli download --jsonl` both emit
+             `"type": "progress"`, and the two documents differ in nine of
+             their seventeen fields. Measured on 2026-08-24, one torrent, both
+             commands at `--report-interval 1s`:
+
+             | | fields |
+             | --- | --- |
+             | both | `at`, `download_rate`, `info_hash`, `peers`, `process`, `seq`, `type`, `upload_rate` |
+             | `seed` only | `peer_detail`, `ratio`, `uploaded_bytes` |
+             | `download` only | `eta_confidence`, `eta_ms`, `from_web_seeds`, `percent`, `progress_bytes`, `total_bytes` |
+
+             `docs/schema.md`'s `progress` section is the **union** of the two
+             and credits it to one command: it says
+             "From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`" and
+             lists `peer_detail[]` and the five `listener.*` rows, none of
+             which that command has ever emitted.
+Premise:     Measured, not read. Both commands were run against the same
+             torrent and the key sets compared. The schema section was then
+             read against both.
+Relevance:   [RULES.md](RULES.md) section 5 says anything consuming `--jsonl`
+             selects by `type`, never by position. For `progress` the `type`
+             does not decide which document is in hand, so a consumer that
+             reads `percent` off a `progress` event gets it from `download`
+             and nothing at all from `seed`.
+
+             It is the same defect [T-191](bench.md) closed for `kind`, one
+             layer down, and T-191's own Relevance predicted it in the
+             abstract: "the file claims a document that exists nowhere.
+             Nothing would fail."
+Approach:    **The guard is the cheap half and it is already written for the
+             other case.** `fold_document` at
+             `crates/bit-cli/src/schema_gen.rs:71` panics when two commands
+             claim one `kind`, naming both. `observe_events` at
+             `crates/bit-cli/src/schema_gen.rs:120` keys by `type` and merges
+             whatever arrives, with no such check. Giving events the same
+             guard is a few lines and it fails on `progress` immediately,
+             which is the point: the guard is what makes the second half
+             unavoidable rather than optional.
+
+             **The second half is a decision and it is not this entry's to
+             take alone.** Three ways out, and the recommendation is the
+             third:
+
+             1. Rename one. `seed_progress` and `download_progress` are honest
+                and break every consumer selecting `progress` today.
+             2. Union them for real: emit every field from both commands, with
+                the ones that do not apply as null. Honest to the schema, and
+                it makes a seeder carry six fields that mean nothing to it.
+             3. **Keep one `type` and record that it has two shapes**, which is
+                what the data actually is: a progress tick from a run that is
+                downloading and one from a run that is not. `docs/schema.md`
+                grows a per-command column or a second section, and the
+                generator stops crediting a union to one command.
+
+             Three is recommended because the wire format is what consumers
+             already read, and because T-191 took the same fork the same way:
+             it left `kind` alone and made the collision impossible to reach
+             by accident instead. Breaking the format is what `schema_version`
+             is for and this is not worth one.
+Prove:       ```
+             cargo test -p bit-cli --lib schema
+             ```
+
+             A test that two commands cannot claim one event `type`, in the
+             shape of `two_commands_cannot_claim_one_document_kind`, and
+             `docs/schema.md`'s `progress` section naming what each command
+             emits rather than a union credited to one of them.
+
+### T-258 A seeder re-sends every peer it has ever seen, every report interval
+
+Source:      the operator's six hour soak of 2026-08-24, read while it ran
+Category:    cli
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `peer_detail` in a `seed --jsonl` progress event carries every
+             peer row the engine holds, and the engine holds rows for peers
+             that disconnected hours ago. The whole array goes out again on
+             every tick.
+
+             Measured against the operator's run, at `.tmp/soak/seed.out`, 30
+             second interval, 5.2 hours in:
+
+             | | |
+             | --- | --- |
+             | records | 620 |
+             | stdout | 139,253,847 bytes |
+             | 10th record | 10,564 bytes |
+             | last record | 270,050 bytes |
+             | rows in the last record | 871, every one `state: "not needed"` and `direction: "incoming"` |
+             | peers seen | 2,008 |
+
+             The per-record size grows with the number of peers ever seen, so
+             the total grows with the square of the run length. 139 MB of
+             stdout for a 16 MiB payload.
+Premise:     Measured. The numbers above are from the operator's own run while
+             it was in flight, counted by reading the file rather than by
+             sampling it.
+
+             **This is not [T-040](memory.md) coming back.** That entry
+             bounded the rows in memory at 1,024 per torrent and the bound
+             holds: 871 rows is under it, and `rss_bytes` is flat across the
+             same window. What is unbounded is not the table, it is how many
+             times the table is written out.
+Relevance:   A consumer of `--jsonl` gets a 270 KB object every 30 seconds, of
+             which a handful of fields changed. Serialising it is real work on
+             the reporting path and real bytes on a pipe that may be a
+             terminal, a file or another process.
+
+             `scripts/soak.ps1` is the caller that shows the size, because it
+             redirects the stream to a file and keeps it for the length of the
+             run. Nothing in that run failed, which is why this is filed
+             rather than fixed in flight.
+
+             There is no flag for it. `man/bit-cli.json` has
+             `--report-interval` on `seed`, which changes how often the whole
+             array goes out and not what is in it.
+Approach:    The seam is one line: `crates/bit-cli/src/cmd/seed.rs:502`,
+             `"peer_detail": peers`, where `peers` is `view.rows` from
+             `swarm::without_probe_rows`. `download`'s progress event does not
+             carry the array at all, which is [T-257](cli-surface.md).
+
+             Two things to decide, and the second is the entry:
+
+             **What a progress tick owes.** A row for a peer that is gone is
+             history, and history belongs in the final document rather than in
+             every tick. The cheapest honest version is that a tick carries the
+             peers that are currently connected, and the run's last document
+             carries all of them, which is where a caller counting who ever
+             connected already looks.
+
+             **Whether that is a break.** It is a narrowing of an existing
+             field, so a consumer reading `peer_detail` off a tick to count
+             total peers would start getting a smaller number. `peers.seen` is
+             in the same event and is the count that field never was.
+
+             A flag is the wrong answer here and is worth saying so: a knob
+             with no caller is what
+             [`docs/task-authoring.md`](../docs/task-authoring.md) section 3
+             calls building machinery nothing asked for. If the tick carries
+             the wrong rows, the fix is the rows.
+Prove:       ```
+             pwsh -NoProfile -File scripts/soak.ps1 -Minutes 20 -Leechers 4
+             ```
+
+             Two runs of the same length, one before and one after, with the
+             seeder's stdout byte count and its last record's size beside each
+             other. What has to hold is that the per-record size stops growing
+             with the number of peers seen: flat across the run rather than
+             rising with `peers.seen`. The run's own numbers must not change,
+             which is what the existing soak ceilings already assert.

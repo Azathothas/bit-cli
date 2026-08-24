@@ -98,6 +98,16 @@ also takes `--announce-log <PATH>`, which appends one JSON object per announce
 carrying the raw query as received; `scripts/check-announce.ps1` is what reads
 it.
 
+`loopback-tracker` speaks BEP 15 as well as BEP 3, on the same port number, and
+prints a `udp://` URL after its two HTTP ones. Two more flags make it behave
+like the trackers a client actually meets: `--redirect-announce <N>` answers
+the first `N` announces with a `302`, and `--fail-announce <REASON>` answers
+every one with a `failure reason` key at HTTP 200, or BEP 15 action 3 over UDP.
+
+```bash
+cargo run -p bit-cli-core --example loopback-tracker -- --fail-announce "not tracked here"
+```
+
 A third fixture, `loopback-churn`, generates connection churn against a target
 and is what `scripts/soak.ps1` drives.
 

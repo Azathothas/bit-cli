@@ -206,7 +206,7 @@ Files:       vendor/rqbit/Cargo.toml, and the two lockfiles that follow it
              vendor/rqbit/package-lock.json
              patches/rqbit/0001-Cargo.lock.patch
              patches/rqbit/0002-Cargo.toml.patch
-             patches/rqbit/0029-package-lock.json.patch
+             patches/rqbit/0030-package-lock.json.patch
 Upstream:    ours by construction. It is a consequence of our exclusion list
              rather than a defect, so no release retires it
 Added:       2026-08-22T13:47Z
@@ -414,7 +414,7 @@ Unblocks:    T-022, TODO/peers.md, and it is the half that was left open
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
              vendor/rqbit/crates/librqbit/src/session.rs
              patches/rqbit/0013-crates-librqbit-src-session.rs.patch
-             patches/rqbit/0028-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0029-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    ours. It is rqbit#537 (https://github.com/ikatson/rqbit/issues/537),
              open, so a release may carry a fix of their own.
 Added:       2026-08-22T17:26Z
@@ -1213,7 +1213,7 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 Unblocks:    nothing on its own. It is nzbd's 0005 read and taken in part, and
              TODO/trackers.md is where the tracker entries live.
 Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
-             patches/rqbit/0028-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0029-crates-tracker_comms-src-tracker_comms.rs.patch
 Upstream:    ours. nzbd has a draft of the same bound, unsent, at
              contrib/rqbit/TRACKER_REQUEST_BUDGET_PR.md in that repository, so
              a release may carry a bound from that direction rather than ours.
@@ -1556,4 +1556,74 @@ Upstream's own tests were run, because the change is in their tree:
 
 ```bash
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+```
+
+---
+
+## librqbit-tracker-comms: a UDP announce sends its event on every request
+
+```
+Unblocks:    T-256, TODO/trackers.md, and it is a P1
+Files:       vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs
+             vendor/rqbit/crates/tracker_comms/src/tracker_comms_udp.rs
+             patches/rqbit/0029-crates-tracker_comms-src-tracker_comms.rs.patch
+             patches/rqbit/0028-crates-tracker_comms-src-tracker_comms_udp.rs.patch
+Upstream:    ours. No issue names it, and the HTTP path in the same file has
+             the discipline already, so a release could fix this by copying
+             its own neighbour.
+Added:       2026-08-24T21:50Z
+```
+
+`tracker_one_request_udp` read the BEP 3 event off the torrent's **current
+state** on every announce. An event is a transition and not a state, so a live
+incomplete torrent sent `started` at every interval and a live complete one
+sent `completed` at every interval, for as long as the process ran. The HTTP
+monitor a few hundred lines above already does it correctly:
+`task_single_tracker_monitor_http` sets `event = Some(Started)` once and
+`event = None` after the first answered announce.
+
+The event moves to the monitor loop as `UdpAnnounceEvents`, because only the
+loop knows what the announces before this one carried. Three properties of
+that placement are deliberate:
+
+- **Peek and commit are separate.** An announce nothing answered has not
+  delivered its event, so `started` is not spent on a datagram that went
+  nowhere.
+- **One event per round rather than per datagram.** A dual-stack tracker is
+  announced to over both families at once and both carry the same event, which
+  is what `tracker_one_request_http_each` does on the other side.
+- **`completed` is not sent from the loop at all.** The HTTP monitor has no
+  `Completed` arm, and `bit-cli` announces its own completion at the instant it
+  happens, over whichever protocol the tracker speaks. A `completed` here as
+  well made one run tell the tracker twice. `EVENT_COMPLETED` stays in
+  `tracker_comms_udp.rs` under an `allow(dead_code)`, because BEP 15's four
+  numbers are a table and a table with a hole in it reads as a mistake.
+
+**Why it cannot be done outside the vendored tree.** The announce loop is a
+private method on `TrackerComms`, the struct is built inside
+`Session::new_with_opts`, and the event is not a parameter of anything public.
+`bit-cli`'s own tracker client, `crates/bit-cli-core/src/tracker.rs`, is a
+different client: it is what `bit-cli trackers` uses and what sends the
+`completed` and `stopped` events for a download, and it never sees the
+session's periodic announces.
+
+**How it was measured.** One client, one 22 second run, the same payload over
+both protocols against `loopback-tracker --announce-log`, with no seeder so
+every announce is an ordinary one:
+
+| protocol | before | after |
+| --- | --- | --- |
+| udp | `started` x5, `stopped` | `started`, none x4, `stopped` |
+| http | `started`, none x4, `stopped` | unchanged |
+
+**What holds it.** Four tests in `bounds_tests`, and the `udp` case in
+`scripts/check-announce.ps1`, which fails on `4 completed events, and BEP 3
+asks for one` with this patch reverted.
+
+```bash
+cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit -p librqbit-tracker-comms
+```
+
+```bash
+pwsh -NoProfile -File scripts/check-announce.ps1
 ```

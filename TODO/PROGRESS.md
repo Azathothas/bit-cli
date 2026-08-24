@@ -75,10 +75,25 @@ it, and it says so in its own first paragraph.
 
 ## State
 
-- **Last session:** 2026-08-24T14:20:49Z, unattended, and it worked the
-  entries rather than filing them. The duration is not restated here:
-  `scripts/session-report.ps1` derives it from the instant above, and a
-  duration written down twice is a number two documents disagree about.
+- **Last session:** 2026-08-24T21:01:41Z, unattended, and the operator's six
+  hour soak is running in a foreground terminal while it works. The duration is
+  not restated here: `scripts/session-report.ps1` derives it from the instant
+  above, and a duration written down twice is a number two documents disagree
+  about.
+
+  **The plan, written before starting, per [RULES.md](RULES.md) section 1 step
+  4.** The soak is the work order's item 2 and it is already in flight, started
+  by the operator at 2026-08-24T16:46:05Z with `-Leechers 4` and
+  `-ListenerCheck 60s`; it lands at about 22:46Z into
+  `bench/soak-20260824T164609340Z.csv`. Nothing in this session may touch it,
+  and `gates.ps1` already spares it because both its processes run out of
+  `.tmp/soak/bin/`. So the order is: [T-237](trackers.md) while the soak runs,
+  because it is the work order's cheapest open entry and touches nothing the
+  soak uses; then read the soak and close what it answers,
+  [T-232](memory.md) and [T-224](memory.md); then the work order's item 3,
+  [T-241](metainfo.md), re-estimated before it is started as the item says.
+  The files are `crates/bit-cli-core/examples/loopback-tracker.rs`,
+  `scripts/check-announce.ps1`, and `TODO/trackers.md`.
 
   It wrote the plan down before starting, per [RULES.md](RULES.md) section 1
   step 4, and the plan was the work order's item 3 with the order inside it
@@ -114,8 +129,8 @@ gh run list --limit 1
 pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.csv
 ```
 
-- **Entries:** 204 items. 33 open, 2 partial, 0 blocked, 158 done, 11 deferred
-  to Phase C. 158 of 193 workable done, 35 left.
+- **Entries:** 207 items. 34 open, 2 partial, 0 blocked, 160 done, 11 deferred
+  to Phase C. 160 of 196 workable done, 36 left.
 - **Tree:** 99 Rust files, 60,182 lines of code, 15,720 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
@@ -123,9 +138,9 @@ pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.c
   licence per tree and where the determination came from. Nothing was mined
   this session and nothing was read from it: every entry was about this tree's
   own surface.
-- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **31 patches**
-  across twenty-one sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
-  Untouched.
+- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **32 patches**
+  across twenty-two sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
+  One section is this session's, [T-256](trackers.md).
 - **Version:** `bit-cli` 0.2.0, unchanged.
 
 ## What the last session did

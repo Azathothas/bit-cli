@@ -635,7 +635,7 @@ Source:      [T-235](trackers.md)'s own closing, 2026-08-24
 Category:    trackers
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     `scripts/check-announce.ps1` covers the ordinary HTTP announce and
              says so. Three paths it does not reach, each of which is one case
@@ -671,6 +671,169 @@ Prove:       ```
              was redirected; `failure-reason` shows a non-zero exit and the
              reason in `--json` rather than a reported success; and `udp` shows
              the same six assertions over a UDP announce.
+
+#### Closed 2026-08-24, and the third path was hiding a defect
+
+Nine judged cases where there were six, all holding.
+`bench/announce-20260824T214800Z.json` is the run.
+
+```
+case           judged   ok detail
+started-left     True True first event 'started', left 8388608, payload 8388608
+completed        True True one completed event, left 0
+stopped          True True events: started,completed,-,-,-,stopped
+left-monotonic   True True left: 8388608 -> 0 -> 0 -> 0 -> 0 -> 0
+totals-match     True True announced downloaded 8388608, uploaded 0; report downloaded 8388608, uploaded 0
+interval         True True smallest gap 5.01s against a min interval of 5s over 3 ordinary announces
+udp              True True 6 of six judged and all hold over 6 announce(s)
+redirect         True True followed, exit 0, same up=0 down=0 left=8388608 across the hop
+failure-reason   True True 2 of 2 row(s) carry the reason, responded 0, exit 6, 2 announce(s) reached the tracker
+```
+
+**Two flags on the fixture and a UDP socket, as the approach said.**
+`--redirect-announce <N>` answers the first `N` requests to `/announce` with
+`302 Found` and a `Location` of `/announce-r` carrying the same query, and
+`/announce-r` is served identically, so the log holds the request that was
+redirected and the one that followed it. `--fail-announce <REASON>` answers
+every announce with `REASON` in a `failure reason` key: HTTP 200 over TCP,
+BEP 15 action 3 over UDP. Both record the announce **before** refusing or
+redirecting it, which is what lets the check tell a rejection apart from a
+request that never arrived.
+
+The announce log gained `protocol` and `path`, and the UDP path fills every
+other field with the same spelling the HTTP path uses, including turning
+BEP 15's event number back into `started`, `completed` or `stopped`. That is
+why one function in the check reads both and the `udp` row is the same six
+assertions rather than a second set.
+
+**`bit-cli trackers` is the subject for `redirect` and `failure-reason`**
+rather than a download, because one announce is the whole question in both and
+a transfer would add nothing. The UDP round is a full seeder and leecher,
+because four of the six assertions are about a transfer.
+
+**The UDP round needed its own payload.** The announce URL is not in the info
+dictionary, so the same payload under the same name produces the same info
+hash for the HTTP and UDP torrents, and one tracker would have handed each
+round the other's peer records.
+
+**A Windows detail that cost a wrong explanation before it cost anything
+else.** The UDP socket asks for the TCP listener's port and does not require
+it: `netsh int ipv4 show excludedportrange udp` lists twelve reserved bands on
+this machine, and a bind inside one fails with `os error 10013` rather than
+"address in use". Both failures seen were inside a listed band, 53502 and
+53521 in 53495-53594 and 65389 and 65390 in 65356-65455. The first guess
+written down was that the running soak's leechers held the port, which twelve
+consecutive clean starts disproved. The fixture falls back to an OS-chosen
+port and prints whichever it got.
+
+Notes:       **The `udp` case failed the first time it was run, and it was
+             right to.** That is [T-256](trackers.md), and it is the reason
+             this entry is worth more than the three rows it added.
+
+### T-256 A UDP announce sends its event on every request, where an HTTP one sends it once
+
+Source:      [T-237](trackers.md)'s `udp` case, the first time it was run,
+             2026-08-24
+Category:    trackers
+Priority:    P1
+Effort:      S
+Status:      **done**, 2026-08-24
+
+Problem:     `vendor/rqbit/crates/tracker_comms/src/tracker_comms.rs` derived
+             the BEP 3 event from the torrent's **current state** on every UDP
+             announce:
+
+             ```rust
+             event: match stats.torrent_state {
+                 TrackerCommsStatsState::None => EVENT_NONE,
+                 TrackerCommsStatsState::Initializing => EVENT_STARTED,
+                 TrackerCommsStatsState::Paused => EVENT_STOPPED,
+                 TrackerCommsStatsState::Live => {
+                     if stats.is_completed() { EVENT_COMPLETED } else { EVENT_STARTED }
+                 }
+             },
+             ```
+
+             An event is a transition and not a state. The HTTP monitor in the
+             same file already knows that: `task_single_tracker_monitor_http`
+             sets `event = Some(Started)` once and `event = None` after the
+             first answered announce, and has no `Completed` arm at all.
+
+             One client, one 22 second run, the same payload over both
+             protocols against `loopback-tracker`, with nobody to talk to so
+             every announce is an ordinary one:
+
+             | protocol | events the tracker recorded |
+             | --- | --- |
+             | udp | `started`, `started`, `started`, `started`, `started`, `stopped` |
+             | http | `started`, none, none, none, none, `stopped` |
+
+             And with a seeder present, so the leecher finishes: over UDP the
+             leecher sent `completed` four times and the seeder, which had the
+             whole payload before it started, sent it on every announce.
+Relevance:   The cost is on the tracker and is invisible here, which is the
+             shape [INDEX.md](INDEX.md)'s first ordering question ranks above
+             everything else.
+
+             `completed` is how a tracker counts finished downloads: it is the
+             `downloaded` field of a BEP 48 scrape. A seeder announcing every
+             five minutes adds 288 a day to a number that should never have
+             moved, and BEP 3 says a client that already had the whole file
+             does not send `completed` at all.
+
+             `started` repeated is the same defect in the other direction. A
+             tracker is entitled to treat `started` as a new session, and a
+             client that sends one every interval is telling it so.
+
+             It is also a divergence between two paths of one client, which is
+             what [T-235](trackers.md) built the announce log to find and what
+             [T-237](trackers.md) reached the UDP path to look at.
+Approach:    Give the UDP monitor loop the same discipline the HTTP one has,
+             in the loop rather than in the request builder, because only the
+             loop knows what the announces before this one carried.
+             `UdpAnnounceEvents` is `started` on the first announce, `stopped`
+             while paused, and nothing otherwise.
+
+             Two details that are not obvious:
+
+             - **The event is peeked and committed separately.** An announce
+               nothing answered has not delivered anything, so `started` is
+               not spent on a datagram that went nowhere.
+             - **One event per round, not per datagram.** A dual-stack tracker
+               is announced to over both families at once, and both carry the
+               same event, which is what `tracker_one_request_http_each`
+               already does on the HTTP side.
+
+             **`completed` is not sent from the loop at all.** That is the
+             half worth arguing about, and it is settled by what the HTTP path
+             does: `bit-cli` announces its own completion at the instant it
+             happens ([T-062](trackers.md)), over whichever protocol the
+             tracker speaks, and the HTTP monitor sends no `completed` beside
+             it. A loop that sent one too made the same run tell the tracker
+             twice, which double counts a finished download as surely as
+             sending it every interval did. That was measured: with the loop's
+             own `completed` in place the run produced two, one at the
+             transition and one at the next interval.
+Prove:       ```
+             pwsh -NoProfile -File scripts/check-announce.ps1
+             ```
+
+             The `udp` case is the acceptance and it was run both ways on
+             2026-08-24, against the same tree, rebuilding in between:
+
+             | | `udp` row |
+             | --- | --- |
+             | with the fix reverted | `False`, "1 of 5 failed: completed (4 completed events, and BEP 3 asks for one)", exit 1 |
+             | with the fix | `True`, "6 of six judged and all hold over 6 announce(s)", exit 0 |
+
+             **Five judged rather than six is part of the evidence.** Against
+             the defect the `interval` case has nothing to measure, because
+             every announce carried an event and the case only looks at
+             ordinary ones. A defect that hides a case is worse than one that
+             fails it.
+Notes:       The patch is `patches/UPSTREAM.md`'s tracker-comms section. It is
+             for this repository and is never offered upstream,
+             [RULES.md](RULES.md) section 6.
 
 ### T-251 A web seed has twelve knobs of its own and a tracker has none
 

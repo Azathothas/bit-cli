@@ -20,6 +20,10 @@ const ACTION_ANNOUNCE: u32 = 1;
 const ACTION_ERROR: u32 = 3;
 
 pub const EVENT_NONE: u32 = 0;
+/// Nothing sends this: the caller announces its own completion at the instant
+/// it happens, and `UdpAnnounceEvents` says why. Kept because BEP 15's four
+/// numbers are a table, and a table with a hole in it is read as a mistake.
+#[allow(dead_code)]
 pub const EVENT_COMPLETED: u32 = 1;
 pub const EVENT_STARTED: u32 = 2;
 pub const EVENT_STOPPED: u32 = 3;

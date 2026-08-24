@@ -227,7 +227,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-234](peers.md) | P2 | peers | open | bit-cli cannot present itself as a client a restrictive peer will talk to |
 | [T-235](trackers.md) | P1 | trackers | **done** | Nothing compares the numbers a tracker sees against the run that made them |
 | [T-236](peers.md) | P1 | peers | **done** | bit-cli announces under two peer ids and neither one is bit-cli *(six of them, and five said BitComet)* |
-| [T-237](trackers.md) | P2 | trackers | open | Three announce paths have no fidelity case |
+| [T-237](trackers.md) | P2 | trackers | **done** | Three announce paths have no fidelity case *(the third one was hiding [T-256](trackers.md))* |
 | [T-238](peers.md) | P2 | peers | open | NAT traversal beyond the BEPs, and what a relay would actually buy |
 | [T-239](peers.md) | P2 | peers | open | Nothing says what shape of network bit-cli is on, or whether a peer path is direct |
 | [T-240](dht.md) | P3 | dht | open | A DHT node that answers slowly or emptily is queried again at the same rank |
@@ -246,11 +246,14 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-253](cli-surface.md) | P2 | cli | partial | The schema sample takes one path, so thirteen real fields went undocumented |
 | [T-254](webseed.md) | P2 | webseed | **done** | No report carries a response header, so a CDN cache hit is invisible |
 | [T-255](cli-surface.md) | P2 | cli | **done** | Regenerating the schema deletes four hand-written sections and nothing fails |
+| [T-256](trackers.md) | P1 | trackers | **done** | A UDP announce sends its event on every request, where an HTTP one sends it once |
+| [T-257](cli-surface.md) | P2 | cli | open | Two documents answer to type progress, and the guard against that only covers documents |
+| [T-258](cli-surface.md) | P2 | cli | open | A seeder re-sends every peer it has ever seen, every report interval |
 
 ## Counts
 
-204 items: 193 to work through, and 11 deferred to Phase C.
-33 open, 2 partial, 0 blocked, 158 done.
+207 items: 196 to work through, and 11 deferred to Phase C.
+34 open, 2 partial, 0 blocked, 160 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -258,11 +261,11 @@ when a number here disagrees with them.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 3 | 0 | 0 | 68 | 71 |
-| P2 | 21 | 2 | 0 | 57 | 80 |
+| P1 | 3 | 0 | 0 | 69 | 72 |
+| P2 | 22 | 2 | 0 | 58 | 82 |
 | P3 | 9 | 0 | 0 | 21 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **33** | **2** | **0** | **158** | **204** |
+| **All** | **34** | **2** | **0** | **160** | **207** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

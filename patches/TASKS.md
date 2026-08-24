@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**13 entries: 12 done, 0 partial, 0 blocked, 1 open.** Every one of them was
+**14 entries: 13 done, 0 partial, 0 blocked, 1 open.** Every one of them was
 held up by a seam `librqbit` does not expose. **No open P0 is left in the
 record, and nothing in the record is blocked.**
 
@@ -36,6 +36,7 @@ record, and nothing in the record is blocked.**
 | [T-210](../TODO/peers.md) | P1 | **done** | an incoming peer filed under our own peer id |
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 | [T-025](../TODO/peers.md) | P3 | **done** | one `pub use`, and the filter had no name |
+| [T-256](../TODO/trackers.md) | P1 | **done** | a private announce loop that recomputed its event |
 
 One is not done: [T-102](../TODO/bep-coverage.md), BEP 55, and it is no longer
 waiting on a seam. The seam that blocked it is the one

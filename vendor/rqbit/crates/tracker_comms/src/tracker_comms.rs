@@ -124,6 +124,64 @@ pub struct TrackerCommsStats {
     pub torrent_state: TrackerCommsStatsState,
 }
 
+/// Which BEP 3 event the next UDP announce carries.
+///
+/// An event is a **transition** and not a state, and reading it off the
+/// current state on every announce is what this exists to stop. The HTTP
+/// monitor a few hundred lines below already keeps the discipline: `started`
+/// on the first announce and nothing on the ones after it. The UDP monitor
+/// derived it from `torrent_state` every time, so a live incomplete torrent
+/// sent `started` at every interval and a live complete one sent `completed`
+/// at every interval, forever.
+///
+/// What that costs is on the tracker rather than here. `completed` is how a
+/// tracker counts finished downloads, which is the `downloaded` field of a
+/// BEP 48 scrape, so one seeder announcing every five minutes adds 288 a day
+/// to a number that should never have moved. And BEP 3 says `completed` is
+/// not sent at all when the client already had the whole file, which is
+/// exactly what a seeder is.
+///
+/// Measured on 2026-08-24 against `loopback-tracker`, one client, one 22
+/// second run, the same payload over both protocols: UDP sent `started` five
+/// times where HTTP sent it once.
+///
+/// **`completed` is not sent from here at all**, which is the other half of
+/// matching the HTTP monitor. That loop sends `Started` then `None` and has
+/// no `Completed` arm, so over HTTP the one `completed` a run produces is the
+/// caller's, sent at the instant the transition happens rather than at the
+/// next announce interval. Sending one here as well made the same run tell
+/// the tracker twice, which double counts a finished download exactly as
+/// surely as sending it every interval did.
+#[derive(Default)]
+struct UdpAnnounceEvents {
+    /// Whether the first announce has been answered.
+    started: bool,
+}
+
+impl UdpAnnounceEvents {
+    /// What the next announce should carry. Does not consume it: an announce
+    /// nothing answered has not delivered its event, and `started` would
+    /// otherwise be spent on a datagram that went nowhere.
+    fn peek(&self, stats: &TrackerCommsStats) -> u32 {
+        // A paused torrent is one the tracker should stop handing out, and
+        // that is true however many announces have gone before it.
+        if matches!(stats.torrent_state, TrackerCommsStatsState::Paused) {
+            return tracker_comms_udp::EVENT_STOPPED;
+        }
+        match self.started {
+            false => tracker_comms_udp::EVENT_STARTED,
+            true => tracker_comms_udp::EVENT_NONE,
+        }
+    }
+
+    /// Record that an announce carrying `event` was answered.
+    fn commit(&mut self, event: u32) {
+        if event == tracker_comms_udp::EVENT_STARTED {
+            self.started = true;
+        }
+    }
+}
+
 impl TrackerCommsStats {
     pub fn get_left_to_download_bytes(&self) -> u64 {
         let total = self.total_bytes;
@@ -566,6 +624,10 @@ impl TrackerComms {
 
         let mut sleep_interval: Option<Duration> = None;
         let mut prev_addrs: Option<TrackerResolveResult> = None;
+        // One event per round rather than one per datagram, so a dual-stack
+        // tracker is told the same thing over both families. That is what
+        // the HTTP monitor does with `tracker_one_request_http_each`.
+        let mut events = UdpAnnounceEvents::default();
         loop {
             if let Some(i) = sleep_interval {
                 trace!(interval=?sleep_interval, "sleeping");
@@ -591,33 +653,48 @@ impl TrackerComms {
 
             prev_addrs = Some(addrs);
 
-            match addrs {
+            let stats = self.stats.get();
+            let event = events.peek(&stats);
+            let answered = match addrs {
                 TrackerResolveResult::One(addr) => {
                     match self
-                        .tracker_one_request_udp(addr, &client)
+                        .tracker_one_request_udp(addr, &client, event)
                         .instrument(trace_span!("udp request", ?addr))
                         .await
                     {
-                        Ok(sleep) => sleep_interval = Some(sleep),
+                        Ok(sleep) => {
+                            sleep_interval = Some(sleep);
+                            true
+                        }
                         Err(_) => {
-                            sleep_interval = Some(sleep_interval.unwrap_or(Duration::from_secs(60)))
+                            sleep_interval = Some(sleep_interval.unwrap_or(Duration::from_secs(60)));
+                            false
                         }
                     }
                 }
                 TrackerResolveResult::Two(v4, v6) => {
                     let (r4, r6) = tokio::join!(
-                        self.tracker_one_request_udp(v4.into(), &client)
+                        self.tracker_one_request_udp(v4.into(), &client, event)
                             .instrument(trace_span!("udp request", addr=?v4)),
-                        self.tracker_one_request_udp(v6.into(), &client)
+                        self.tracker_one_request_udp(v6.into(), &client, event)
                             .instrument(trace_span!("udp request", addr=?v6))
                     );
+                    let answered = r4.is_ok() || r6.is_ok();
                     sleep_interval = Some(
                         r4.or(r6)
                             .ok()
                             .or(sleep_interval)
                             .unwrap_or(Duration::from_secs(60)),
-                    )
+                    );
+                    answered
                 }
+            };
+            // Only a round something answered advances the sequence. An
+            // announce nothing replied to may never have arrived, and
+            // spending `started` on it would leave the tracker with no first
+            // announce at all.
+            if answered {
+                events.commit(event);
             }
         }
     }
@@ -626,6 +703,7 @@ impl TrackerComms {
         &self,
         addr: SocketAddr,
         client: &UdpTrackerClient,
+        event: u32,
     ) -> anyhow::Result<Duration> {
         use tracker_comms_udp::*;
 
@@ -636,18 +714,9 @@ impl TrackerComms {
             downloaded: stats.downloaded_bytes,
             left: stats.get_left_to_download_bytes(),
             uploaded: stats.uploaded_bytes,
-            event: match stats.torrent_state {
-                TrackerCommsStatsState::None => EVENT_NONE,
-                TrackerCommsStatsState::Initializing => EVENT_STARTED,
-                TrackerCommsStatsState::Paused => EVENT_STOPPED,
-                TrackerCommsStatsState::Live => {
-                    if stats.is_completed() {
-                        EVENT_COMPLETED
-                    } else {
-                        EVENT_STARTED
-                    }
-                }
-            },
+            // Decided by the caller, which is the only place that knows what
+            // the announces before this one carried. See `UdpAnnounceEvents`.
+            event,
             key: self.key,
             port: self.announce_port,
         };
@@ -717,6 +786,88 @@ mod bounds_tests {
         assert_eq!(
             Duration::from_secs(clamped as u64),
             floor_announce_interval(Duration::from_secs(0))
+        );
+    }
+
+    fn stats(state: TrackerCommsStatsState, downloaded: u64, total: u64) -> TrackerCommsStats {
+        TrackerCommsStats {
+            uploaded_bytes: 0,
+            downloaded_bytes: downloaded,
+            total_bytes: total,
+            torrent_state: state,
+        }
+    }
+
+    /// Added by this fork, `TODO/trackers.md` T-256. The event used to be read
+    /// off the current state on every announce, so a live incomplete torrent
+    /// sent `started` at every interval forever.
+    #[test]
+    fn started_goes_out_once_and_the_announces_after_it_carry_nothing() {
+        let mut events = UdpAnnounceEvents::default();
+        let live = stats(TrackerCommsStatsState::Live, 0, 1024);
+
+        let first = events.peek(&live);
+        assert_eq!(first, tracker_comms_udp::EVENT_STARTED);
+        events.commit(first);
+
+        for _ in 0..5 {
+            let next = events.peek(&live);
+            assert_eq!(next, tracker_comms_udp::EVENT_NONE);
+            events.commit(next);
+        }
+    }
+
+    /// An announce nothing answered has not delivered its event. Spending
+    /// `started` on a datagram that went nowhere would leave the tracker with
+    /// no first announce at all.
+    #[test]
+    fn an_unanswered_announce_does_not_spend_started() {
+        let mut events = UdpAnnounceEvents::default();
+        let live = stats(TrackerCommsStatsState::Live, 0, 1024);
+
+        assert_eq!(events.peek(&live), tracker_comms_udp::EVENT_STARTED);
+        // No commit: the round failed.
+        assert_eq!(events.peek(&live), tracker_comms_udp::EVENT_STARTED);
+    }
+
+    /// Completion is the caller's announce, sent at the instant it happens.
+    /// The HTTP monitor in this file has no `Completed` arm either, and one
+    /// here made the same run tell the tracker twice.
+    #[test]
+    fn completion_is_never_announced_from_the_udp_loop() {
+        let mut events = UdpAnnounceEvents::default();
+        let incomplete = stats(TrackerCommsStatsState::Live, 0, 1024);
+        let complete = stats(TrackerCommsStatsState::Live, 1024, 1024);
+
+        let first = events.peek(&incomplete);
+        events.commit(first);
+        assert_eq!(events.peek(&complete), tracker_comms_udp::EVENT_NONE);
+
+        // And a torrent that was complete before it ever announced says the
+        // same thing, which is what BEP 3 asks of a seeder.
+        let mut seeding = UdpAnnounceEvents::default();
+        let first = seeding.peek(&complete);
+        assert_eq!(first, tracker_comms_udp::EVENT_STARTED);
+        seeding.commit(first);
+        assert_eq!(seeding.peek(&complete), tracker_comms_udp::EVENT_NONE);
+    }
+
+    /// A paused torrent is one the tracker should stop handing out, however
+    /// many announces have gone before it.
+    #[test]
+    fn a_paused_torrent_announces_stopped_whenever_it_is_paused() {
+        let mut events = UdpAnnounceEvents::default();
+        let live = stats(TrackerCommsStatsState::Live, 0, 1024);
+        let paused = stats(TrackerCommsStatsState::Paused, 0, 1024);
+
+        let first = events.peek(&live);
+        events.commit(first);
+        assert_eq!(events.peek(&paused), tracker_comms_udp::EVENT_STOPPED);
+        // Before the first announce too, because a torrent can be paused
+        // before it has ever reached a tracker.
+        assert_eq!(
+            UdpAnnounceEvents::default().peek(&paused),
+            tracker_comms_udp::EVENT_STOPPED
         );
     }
 }

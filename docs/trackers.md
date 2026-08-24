@@ -196,6 +196,25 @@ A `download` run announces the same three events a client should:
 the session, carrying the session's own peer id and port so the tracker
 updates one record, and `--json` reports them under `announced`.
 
+**Three events and no more, over HTTP and over UDP alike.** The periodic
+announces in between carry no event at all, which is what BEP 3 asks for: an
+event is a transition, and a client that repeats `started` is telling the
+tracker it restarted while a client that repeats `completed` is adding to the
+count of finished downloads a scrape reports. A run that already has the whole
+file, which is what `bit-cli seed` is, sends `started` and then nothing: BEP 3
+says `completed` is not sent when the file was complete to begin with.
+
+```bash
+pwsh scripts/check-announce.ps1
+```
+
+That runs the same six assertions over an HTTP announce and over a BEP 15 UDP
+one, plus a redirected announce and one a tracker rejects at HTTP 200 with a
+`failure reason` key. A rejection in the body rather than in the status is the
+one a caller reading the status alone would record as a success; `bit-cli`
+reports it as a failed tracker with the reason, and exits 6 when no tracker
+answered.
+
 **A magnet does not announce itself as a seed.** `left=0` means "I have all of
 it", and a source with no metadata yet has no length to report, so what goes
 out is `9223372036854775807` and the report says which it was under `left`,
