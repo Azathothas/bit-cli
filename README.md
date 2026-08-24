@@ -172,7 +172,10 @@ bit-cli version
 
 | page | the task it walks |
 | --- | --- |
+| [inputs.md](docs/examples/inputs.md) | what a `SOURCE` argument may be, and which commands take which |
 | [cloudflare-webseed.md](docs/examples/cloudflare-webseed.md) | serving a payload from R2 or a Worker, and proving the origin honours `Range` |
+| [s3-webseed.md](docs/examples/s3-webseed.md) | serving a payload from S3 or an S3-compatible bucket, with the latency and request cost measured |
+| [comparing-torrents.md](docs/examples/comparing-torrents.md) | proving two torrents hold the same file when the info hashes differ |
 | [multi-source.md](docs/examples/multi-source.md) | a swarm, a CDN, a signed URL and a local copy, at once |
 | [mirror-benchmark.md](docs/examples/mirror-benchmark.md) | measuring a mirror before trusting it |
 | [create-and-seed.md](docs/examples/create-and-seed.md) | making a torrent and seeding it, end to end |

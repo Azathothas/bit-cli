@@ -460,6 +460,22 @@ curve says is that concurrency moves *this* path by 3.7 times, which is the
 question the Acceptance asks; a real mirror's knee will be at a different
 place for a different reason.
 
+**Ruled on 2026-08-24: take all three, and warn.** The recommendation put to
+the operator was to refuse them, on the grounds that `docs/flags.md` forbids
+reassigning an `aria2` letter to a different concept and `-x` is a per-server
+cap here and a per-source cap there. That was not the answer.
+
+So all three ship as aliases, and the difference ships with them: a one-line
+warning on first use of `-x`, naming that it caps connections per source rather
+than per server, and that the two differ when two sources share a host. The
+same rule that would have refused the alias is what the warning satisfies: the
+difference is stated rather than hidden, which is what
+`cli.rs:2457` `short_flags_never_contradict_aria2` exists to prevent losing.
+
+`-s` and `-x` meaning nearly the same thing here is the part to get right in
+the man page before the code, per [T-198](cli-surface.md). A script passing
+both must not get the product of the two.
+
 ### T-034 Endgame mode is not observable
 
 Source:      corpus, performance category
@@ -821,6 +837,12 @@ Prove:       ```
              than the feature.
 
 Notes:       The second half of entry 13's staging model is **not** this entry.
+
+**Ruled on 2026-08-24: run the sweep first.** Which is this entry's own
+Approach, so nothing about it changes; what changed is that it is authorised
+rather than waiting. The alternative put to the operator was to adopt
+seedchamp's five-second EMA now and measure afterwards, and it was refused.
+
              `seedchamp/docs/design.md:199` caps a per-torrent buffer pool per
              peer, at `ceil(N/16)` of the freelist and at most two pieces when
              the piece length is 4 MiB or more. [T-041](memory.md) closed on

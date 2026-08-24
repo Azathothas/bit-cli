@@ -155,6 +155,27 @@ licence in the port's own header.**
 nothing was copied, and the header names the SHA and says what the port does
 differently.
 
+**A port has to be re-checked, because upstream moves and the port does not.**
+`scripts/check-client-profile.ps1` is that half: it runs the derivation against
+both clients at their newest stable release and their newest prerelease, and
+fails when the construction the port reproduces is no longer in the source it
+was read from.
+
+```bash
+pwsh -NoProfile -File scripts/check-client-profile.ps1
+```
+
+It is not a gate. It needs the network and reads two public repositories, so it
+runs on the same cadence as `scripts/upstream-scan.ps1` rather than on every
+push.
+
+**What it found on its first run is the reason to have it.** The port hardcoded
+one character of the peer id that both clients derive. For a prerelease neither
+derives what was hardcoded, so the port described a client that does not exist
+for exactly the builds a mask most wants to imitate. The port had reproduced a
+format faithfully and the client not at all, which is the defect it was written
+to catch.
+
 If a licence expressly blocks an independent implementation from observed
 behaviour, stop and file it as a question for the operator rather than deciding
 it. If anything is genuinely copied rather than reimplemented, it has to appear

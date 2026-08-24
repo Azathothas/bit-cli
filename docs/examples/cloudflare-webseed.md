@@ -5,9 +5,10 @@ serverless web seed on Cloudflare and needed tooling accurate enough to keep it
 honest: an origin that looks fine in a browser can serve wrong bytes to a
 BitTorrent client at every offset, and nothing says so.
 
-This page is the document that job needed. Every `bit-cli` command in it was
-run against a local origin while it was written; the Cloudflare half is a
-procedure, and the checks are what tell you whether your origin passes.
+This page is the document that job needed. Some of it was run against a live
+Cloudflare endpoint and the rest against a local origin, and the last section
+says which was which. R2 and Workers are a procedure rather than a measurement,
+and the checks are what tell you whether your origin passes.
 
 ## Which key the URLs go in, and it decides the request shape
 
@@ -118,6 +119,35 @@ const object = await env.BUCKET.get(key, { range: request.headers });
 
 An R2 custom domain, with no Worker in front, handles ranges itself.
 
+**Here is that failure on a live Cloudflare endpoint.** `cdnjs.cloudflare.com`
+is one of the most requested hosts on the internet and it cannot be a web seed:
+
+```bash
+bit-cli webseed test jq.torrent --web-seed-exact "https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"
+```
+
+```text
+  status             200
+  ranges             no
+  length             not reported
+  server             cloudflare
+  http               HTTP/1.1
+  tls                TLSv1_3 TLS13_AES_256_GCM_SHA384
+  handshake          connect 6ms, tls 7ms
+  alpn               h2
+  ttfb               82ms
+  total              96ms
+  error              the server does not honour Range
+```
+
+The exit code is 6, no usable sources, and the source is refused rather than
+read. `curl -H 'Range: bytes=0-99'` against the same URL returns all 87,533
+bytes with a `200`, which is the same answer seen from the other side.
+
+Nothing is wrong with that host. It serves a script tag perfectly. It is the
+demonstration that a URL working in a browser says nothing about whether it
+works as a web seed, and that the check costs one request.
+
 ### Keep `ETag` and `If-Range` stable across a deploy
 
 `Range` plus `If-Range` is how a client resumes a partial read. If the `ETag`
@@ -183,6 +213,41 @@ pass to `--web-seed-connections`.
 [`mirror-benchmark.md`](mirror-benchmark.md) is the longer version of this,
 with the four stages that attribute the cost.
 
+## What Cloudflare costs per request, against what S3 costs
+
+The same command against the two, one request each, from the same machine:
+
+| | Cloudflare edge | AWS S3 |
+| --- | --- | --- |
+| `connect` (DNS plus TCP) | 6ms | 269ms |
+| `tls` handshake | 7ms | 267ms |
+| `ttfb` | 82ms | 876ms |
+| `total` | 96ms | 1414ms |
+| `alpn` | `h2` | `http/1.1` |
+| cipher | `TLS13_AES_256_GCM_SHA384` | `TLS13_AES_128_GCM_SHA256` |
+
+Two of those rows change how a source should be tuned.
+
+**`alpn h2` against `http/1.1`.** Cloudflare accepts the HTTP/2 offer and S3
+does not, so requests to Cloudflare multiplex over one connection and requests
+to S3 need a connection each. `--web-seed-connections` is the flag that matters
+on S3 and matters much less here.
+
+**82ms against 876ms to the first byte.** The per-request floor is what sets
+the throughput a single stream can reach, so the concurrency that saturates a
+Cloudflare origin is lower than the concurrency that saturates a bucket in a
+distant region. Do not carry a number from one to the other. Run the sweep.
+
+The S3 side of that table, and both concurrency sweeps behind it, are in
+[`s3-webseed.md`](s3-webseed.md).
+
+**What the numbers do not say is whether the request was a cache hit.**
+`cf-cache-status` and `age` are in the response and no `bit-cli` report carries
+a response header, so a `MISS` that cost an origin fetch and a `HIT` that did
+not look identical here. That is
+[T-254 in the TODO](../../TODO/webseed.md), and it is the one measurement a
+Cloudflare origin most wants.
+
 ## What guarantees the bytes
 
 Every piece is checked against the torrent's own hashes before it counts,
@@ -194,13 +259,21 @@ That is why an origin misconfiguration here is a slow download rather than a
 corrupt file. [`../integrity.md`](../integrity.md) states the guarantee in
 full.
 
-## What was not run for this page
+## What was run for this page, and what was not
 
-The Cloudflare side. Every `bit-cli` command above was run against a local
-origin while this was written, and the R2 and Worker behaviour is stated from
-their documented semantics rather than from a deploy. The checks are the part
-that tells you whether your origin actually does what this page says it should,
-and `bit-cli webseed test` against your real URL is the one to run first.
+**Run against Cloudflare:** the `webseed test` above, against
+`cdnjs.cloudflare.com`, and the latency and TLS rows in the comparison table.
+Those are one request each from one machine on one network, so treat the
+milliseconds as the shape rather than as your number.
+
+**Run against a local origin:** every other `bit-cli` command here, including
+the `webseed list` output showing composed URLs.
+
+**Not run:** R2 and Workers. Their behaviour is stated from their documented
+semantics rather than from a deploy, because deploying to somebody's account is
+not something this page can do. The checks are the part that tells you whether
+your origin does what this page says it should, and `bit-cli webseed test`
+against your real URL is the one to run first.
 
 `scripts/check-metalink-real.ps1` and `scripts/bench-webseed.ps1` both run
 against real public mirrors and are the closest thing here to a live origin

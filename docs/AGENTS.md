@@ -117,7 +117,12 @@ running `check-todo.ps1`, so a count that disagrees with the rows cannot reach
 a commit.
 
 **`docs/` and `docs/examples/` are updated in the same push too**, when the
-session changed what the tool does. `scripts/check-docs.ps1` is the gate.
+session changed what the tool does. `scripts/check-docs.ps1` is the gate, and
+it compares four things a reader cannot check by looking: every link and
+`scripts/` path resolves, every flag and command an example names is in
+`man/bit-cli.json`, every output field a page names is in `docs/schema.md`, and
+every `T-NNN` a page names is an entry. It also fails a page nothing links to,
+because an unlinked page is not read and so is never corrected.
 
 **An entry whose premise a measurement disproves gets the correction written
 under it**, never a silent edit of the premise. The same applies to a belief

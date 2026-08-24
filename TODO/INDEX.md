@@ -234,11 +234,22 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-241](metainfo.md) | P2 | metainfo | open | A resolved magnet keeps the payload and loses the metainfo |
 | [T-242](performance.md) | P2 | performance | open | The request depth is a constant, and the run sits at 40 percent of it |
 | [T-243](phase-c.md) | n/a | phase-c | deferred | A user interface, and which of the two kinds decision 7.4 permits |
+| [T-244](cli-surface.md) | P2 | cli | open | A web page is not a source, and nothing extracts a link from one |
+| [T-245](cli-surface.md) | P1 | cli | open | Four commands refuse the URL download accepts |
+| [T-246](cli-surface.md) | P2 | cli | open | A directory and a mistyped subcommand both report a file error |
+| [T-247](cli-surface.md) | P2 | cli | open | A dry run over a URL prints zero for a count it never took |
+| [T-248](metainfo.md) | P2 | metainfo | open | There is no way to ask what two torrents disagree about |
+| [T-249](metainfo.md) | P3 | metainfo | open | A torrent's shape is only ever printed as a flat list |
+| [T-250](cli-surface.md) | P2 | cli | open | Nothing reports how an input was resolved |
+| [T-251](trackers.md) | P2 | trackers | open | A web seed has twelve knobs of its own and a tracker has none |
+| [T-252](cli-surface.md) | P3 | cli | open | The run's numbers exist in JSON and cannot be asked for as text |
+| [T-253](cli-surface.md) | P2 | cli | partial | The schema sample takes one path, so thirteen real fields went undocumented |
+| [T-254](webseed.md) | P2 | webseed | open | No report carries a response header, so a CDN cache hit is invisible |
 
 ## Counts
 
-192 items: 181 to work through, and 11 deferred to Phase C.
-31 open, 1 partial, 0 blocked, 149 done.
+203 items: 192 to work through, and 11 deferred to Phase C.
+41 open, 2 partial, 0 blocked, 149 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -246,11 +257,11 @@ when a number here disagrees with them.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 4 | 0 | 0 | 66 | 70 |
-| P2 | 17 | 1 | 0 | 53 | 71 |
-| P3 | 10 | 0 | 0 | 18 | 28 |
+| P1 | 5 | 0 | 0 | 66 | 71 |
+| P2 | 24 | 2 | 0 | 53 | 79 |
+| P3 | 12 | 0 | 0 | 18 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **31** | **1** | **0** | **149** | **192** |
+| **All** | **41** | **2** | **0** | **149** | **203** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

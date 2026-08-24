@@ -68,3 +68,13 @@ desktop.ini
 #   git add -f patches/scan/upstream-20260822T124645139Z.json
 #
 /patches/scan/*.json
+
+# Client profile scan records.
+#
+# `scripts/check-client-profile.ps1` writes one per run, for the same reason
+# and under the same rule: the run that records a construction change goes in
+# on purpose and the daily green ones do not.
+#
+#   git add -f patches/profiles/profiles-20260824T105731398Z.json
+#
+/patches/profiles/*.json

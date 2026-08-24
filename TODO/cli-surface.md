@@ -4036,3 +4036,401 @@ pwsh -NoProfile -File scripts/check-tree.ps1
 **And it failed the first time it was run, on a file nobody was looking for.**
 `bench/soak-20260821T012428252Z.csv`, committed evidence, ended in 176 NUL
 bytes. That is [T-231](memory.md), and it is the more interesting of the two.
+
+### T-244 A web page is not a source, and nothing extracts a link from one
+
+Source:      the operator's brief of 2026-08-24, measured the same day
+Category:    cli
+Priority:    P2
+Effort:      L
+Status:      open
+
+Problem:     `source.rs:68` maps every `http://` and `https://` string to
+             `Kind::Url`, documented at `source.rs:32` as "an HTTP(S) URL
+             pointing at a `.torrent`". A page that *links* to a torrent is
+             classified the same way, fetched, and handed to the bencode
+             parser, which fails on the first byte of the markup.
+
+             There is no HTML parser in the tree and no link extraction
+             anywhere.
+Relevance:   A URL naming a page is how a person meets a torrent almost every
+             time. Naming the `.torrent` itself is the exception, and it is the
+             only case that works.
+
+             It is also the input a script cannot pre-resolve: an indexer that
+             builds its links in script has no stable `.torrent` URL to write
+             into a config file.
+Approach:    Ruled on by the operator on 2026-08-24: **static extraction, with
+             a browser opt-in.**
+
+             Static first, and not naively. The page is fetched with a header
+             set and a TLS fingerprint that match a current browser, because an
+             origin that fingerprints the client sends a different page to a
+             client it does not recognise, and a scraper reading that page is
+             reading a page nobody else gets.
+
+             **`wreq` is the crate, Apache-2.0, and its two predecessors are
+             traps.** Read from crates.io on 2026-08-24: `wreq` has 36
+             published versions, 30 of them live, 1,814,353 downloads, a newest
+             stable of 0.16.0 and a newest published version of `6.0.0-rc.31`.
+             `rquest` has 152 versions and **every one of them is yanked**;
+             `reqwest-impersonate` has 62 and the same. Either name still comes
+             up first in a search, and neither is installable.
+
+             **The cost is the part to weigh, and it is not the crate count.**
+             `wreq` 0.16.0 has 21 required direct dependencies and 59 in total,
+             and two of them are `btls` and `btls-sys`: it brings BoringSSL.
+             This tree already carries `rustls`. Two TLS stacks in one binary is a
+             larger change than any crate count says, and the alternative,
+             ordering a `rustls` client hello by hand, does not reach the
+             HTTP/2 settings fingerprint that a modern origin also reads.
+
+             Then extraction: every `href` ending `.torrent`, every `magnet:`
+             URI, and the anchor text beside each so a chooser has something to
+             show. Several matches is the normal case, so a page that yields
+             more than one is reported and refused rather than guessed at,
+             unless a selector says which.
+
+             `--render` is the opt-in second half: drive a Chrome or Edge that
+             is **already installed** over the DevTools protocol, take the DOM
+             after script has run, and extract from that. Off by default, never
+             bundled, and absent gracefully when no browser is found.
+
+             A CAPTCHA or a bot check is a refusal with the status named, not a
+             thing to defeat.
+Acceptance:  A page served by `loopback-fileserver` carrying one `.torrent`
+             link and one magnet link resolves under `bit-cli info`, and a page
+             carrying two of each exits non-zero naming both. The header set
+             and the TLS fingerprint are asserted against a recorded capture
+             rather than eyeballed.
+Notes:       [T-245](#t-245-four-commands-refuse-the-url-download-accepts) is
+             the prerequisite: a page cannot resolve under `info` until a plain
+             `.torrent` URL does.
+
+### T-245 Four commands refuse the URL download accepts
+
+Source:      measured 2026-08-24 while checking the operator's brief
+Category:    cli
+Priority:    P1
+Effort:      M
+Status:      open
+
+Problem:     `info`, `files`, `magnet` and `verify` all document their
+             positional as "A .torrent path, an HTTP(S) URL, a magnet URI, an
+             info hash, a metalink, or `-` for stdin". All four refuse the URL:
+
+             ```
+             $ bit-cli info http://127.0.0.1:56954/one.torrent
+             error: http://127.0.0.1:56954/one.torrent has to be fetched before it can be read
+             $ echo $LASTEXITCODE
+             4
+             ```
+
+             `bit-cli download` fetches the same URL and completes.
+
+             The refusal is `source.rs:189`, in `load_local`, which is what
+             every command that does not start an engine calls.
+Relevance:   Rule 0.10. The help text of four commands names an input those
+             commands cannot take, and the error does not say "this command
+             cannot" - it says the URL "has to be fetched", which reads as a
+             missing step rather than a missing capability.
+
+             It is the same shape as [T-181](#t-181-four-flags-are-accepted-in-silence-and-reach-no-code),
+             and it is the one that blocks the most: every idea in the
+             operator's brief of 2026-08-24 that treats an input as an abstract
+             object needs a URL to resolve outside `download` first.
+Approach:    `load_local` is the wrong name for what four commands need. Split
+             it: a `resolve` that may fetch, used by every command, and the
+             existing local-only path kept for a caller that must not touch the
+             network.
+
+             A fetch here is one `GET` of a small document, not a swarm lookup,
+             so it does not carry `download`'s cost and does not need its
+             flags. A magnet and a bare info hash stay refused under `info`,
+             because those genuinely need the swarm, and that refusal is
+             already correctly worded.
+
+             Honour `--timeout` and refuse a body larger than a ceiling, so a
+             URL that serves a gigabyte does not become a gigabyte in memory.
+Acceptance:  `bit-cli info`, `files`, `magnet` and `verify` each resolve a
+             `.torrent` served by `loopback-fileserver` and report what the
+             local file reports, field for field under `--json`. A URL that
+             serves markup still fails, with a message naming what arrived.
+
+### T-246 A directory and a mistyped subcommand both report a file error
+
+Source:      measured 2026-08-24 while checking the operator's brief
+Category:    cli
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     Two inputs produce an error that names the wrong cause.
+
+             A directory:
+
+             ```
+             $ bit-cli info .tmp/ideas/payload
+             error: cannot read C:\...\payload: Access is denied. (os error 5)
+             $ echo $LASTEXITCODE
+             4
+             ```
+
+             The `--json` form carries `"io_kind": "PermissionDenied"`. Nothing
+             is denied. Reading a directory as a file is `ERROR_ACCESS_DENIED`
+             on Windows and `EISDIR` on Unix, so the same input produces two
+             different wrong explanations depending on the platform.
+
+             A subcommand that does not exist:
+
+             ```
+             $ bit-cli tree one.torrent
+             error: cannot read C:\...\tree: The system cannot find the file specified. (os error 2)
+             ```
+
+             The root command takes positional sources, so `tree` is read as a
+             source named `tree`. A typo becomes a missing file.
+Relevance:   Both are the first thing a new caller does. `bit-cli info <dir>`
+             is what somebody types when they mean `create`, and a wrong
+             subcommand is what somebody types when they are guessing at the
+             surface. Neither error says what to do, and one of them says
+             something untrue.
+Approach:    Test for a directory before the read and say so, naming `create`
+             as the command that takes one. Map `EISDIR` and
+             `ERROR_ACCESS_DENIED` on a path that is a directory to the same
+             message on both platforms.
+
+             For the subcommand: a bare positional that matches no known
+             subcommand, is not a path that exists, and is not any other
+             recognised shape, is a usage error naming the nearest subcommand
+             by edit distance. `clap` has the mechanism; the positional is what
+             takes precedence over it.
+Acceptance:  `bit-cli info <directory>` exits 2 naming `create`, on Windows and
+             on Linux, with the same message. `bit-cli tre one.torrent` exits 2
+             suggesting `tree`, and `bit-cli ./tre` still reports a missing
+             file.
+
+### T-247 A dry run over a URL prints zero for a count it never took
+
+Source:      measured 2026-08-24
+Category:    cli
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `download --dry-run` over a URL prints:
+
+             ```
+             source               http://127.0.0.1:56954/one.torrent
+             web seeds            0
+             trackers             0
+             ```
+
+             The torrent has one tracker. Nothing was fetched, because a dry
+             run does not fetch, so nothing was counted. The `--json` form of
+             the same run is correct: `"name": null`, `"info_hash": null`,
+             `"total_bytes": null`, `"needs_network": true`.
+Relevance:   The two renderings of one document disagree, and the one a person
+             reads is the wrong one. A caller checking a torrent's trackers
+             before committing to a download reads `trackers 0` and concludes
+             it has none.
+
+             It is [T-156](#t-156-a-dry-run-writes-a-different-shape-under-the-same-document-kind)'s
+             neighbourhood and the opposite failure: that one was two shapes
+             under one name, this is one shape rendered two ways that do not
+             agree.
+Approach:    `cmd/download.rs:3018` already has the pattern three lines above
+             the defect. `name` is emitted through `if let Some(name)`, so it
+             is absent when unknown; `web seeds` and `trackers` take
+             `as_array().map_or(0, Vec::len)` on a field that is an empty array
+             precisely because nothing looked.
+
+             Emit the counts only when the source was actually read, and print
+             one line saying the document was not fetched when it was not.
+Acceptance:  `download --dry-run <URL>` prints no count it did not take and
+             says why, and `download --dry-run <LOCAL>` still prints
+             `trackers 1` for a torrent with one tracker. The `--json` shape
+             does not change.
+
+### T-250 Nothing reports how an input was resolved
+
+Source:      the operator's brief of 2026-08-24
+Category:    cli
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     A resolution can go URL to redirect to page to `.torrent` link to
+             metadata, or magnet to swarm to metadata, or metalink to torrent
+             URL to metadata. What a caller sees is the result or an error.
+             Nothing prints the path taken.
+
+             The eleven `--trace` subsystems in `logging.rs:233` cover the
+             wire, the disk and the config. None covers resolution.
+Relevance:   Every step this repository is adding to resolution makes the chain
+             longer and the failure less legible.
+             [T-244](#t-244-a-web-page-is-not-a-source-and-nothing-extracts-a-link-from-one)
+             adds a page hop, [T-245](#t-245-four-commands-refuse-the-url-download-accepts)
+             adds a fetch to four more commands, and Metalink already adds two.
+             A chain nobody can print is a chain nobody can debug.
+Approach:    Ruled on by the operator on 2026-08-24: **an `--explain` flag,
+             available on every command.**
+
+             `--explain` prints the chain the real run took and then does the
+             work, so it cannot describe a path other than the one taken. That
+             is the property that decided it over a standalone subcommand,
+             which would be a second entry point into resolution and free to
+             drift from the first.
+
+             One line per hop: what was tried, what answered, what it was
+             classified as, and how long it took. Redirects are hops. A
+             `Content-Type` that disagreed with the extension is a hop worth
+             printing, because it is where a wrong classification shows.
+
+             Under `--json` it is an array on the document rather than a second
+             document, so a caller keeps one parse.
+
+             `--dry-run` is the neighbour and stays what it is: resolve,
+             validate, report, write nothing. `--explain` says how it resolved;
+             `--dry-run` says what would happen next. They compose.
+Acceptance:  `bit-cli info --explain <URL>` prints every hop of a two-redirect
+             chain served by `loopback-fileserver`, in order, with a timing
+             each, and the same run under `--json` carries the same hops in an
+             array. A resolution with one hop prints one hop rather than a
+             heading with nothing under it.
+
+### T-252 The run's numbers exist in JSON and cannot be asked for as text
+
+Source:      the operator's brief of 2026-08-24, measured the same day
+Category:    cli
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     A finished `download` already carries `elapsed_ms`, `downloaded`,
+             `uploaded`, `from_peers`, `from_web_seeds`, `from_resume`,
+             `mean_rate`, `process.cpu_ms`, `process.cpu_user_ms`,
+             `process.cpu_system_ms`, `process.rss_bytes`,
+             `process.peak_rss_bytes`, `process.open_handles`, and per source
+             `http_requests`, `http_bytes`, `blocks`, `whole_pieces`,
+             `connections` and `retries`.
+
+             The text rendering shows some of it and reduces the process half
+             to one line:
+
+             ```
+             cost                 peak RSS 17.73 MiB, CPU 46ms, 204 handles
+             ```
+
+             There is no flag that asks for more, and `--verbose` does not
+             change what the report prints.
+
+             Two numbers are absent from both renderings: bytes written to
+             disk, and time spent in disk writes. `--trace disk` carries the
+             events and nothing totals them.
+Relevance:   Small, and the reason it is worth an entry is that the numbers are
+             already there. Somebody reading a terminal has to pipe through a
+             JSON parser to see a figure the run computed and then discarded.
+Approach:    `--stats` on any command that produces a report: render every
+             field the document already carries, grouped, in the same text
+             style as the rest. It is a rendering flag, so it changes no
+             behaviour and adds no measurement.
+
+             The disk totals are the one part that is a measurement rather than
+             a rendering. Total them where `--trace disk` already emits, and
+             add the two fields to the document, which is what makes them
+             renderable at all.
+Acceptance:  `bit-cli download <TORRENT> --stats` prints every field of the
+             `download` document that has a value, and the same run under
+             `--json --stats` is byte-identical to the same run without
+             `--stats`. The two disk fields appear in `docs/schema.md` because
+             a run produced them.
+
+### T-253 The schema sample takes one path, so thirteen real fields went undocumented
+
+Source:      measured 2026-08-24 while writing `docs/examples/s3-webseed.md`
+Category:    cli
+Priority:    P2
+Effort:      S
+Status:      **partial**
+
+Problem:     `docs/schema.md` is generated from what a real run produced, and
+             the runs that generate it take one path through the code. A field
+             that only appears on another path has never once been produced, so
+             it has never been written down.
+
+             Two paths, thirteen fields.
+
+             **The sample serves plain HTTP.** `loopback-fileserver` has no TLS
+             and issues no redirect, so `webseed_test` documented neither.
+             Against a real S3 endpoint the same command returns nine more
+             fields: `sources[].server`, `sources[].resolved_url`, six under
+             `sources[].tls`, and `sources[].redirects[]` with `from`, `status`
+             and `to`.
+
+             **The sample downloads a torrent whose paths are all writable.** So
+             `context.report.renamed[]` has never appeared, though
+             `docs/disk.md` documents it and three commands emit it:
+             `cmd/download.rs:72`, `cmd/seed.rs:65` and `cmd/verify.rs:86`, all
+             carrying `bit_cli_core::paths::Rename` from `paths.rs:127`.
+Relevance:   `docs/schema.md` is what a caller writes a parser against. A field
+             missing from it reads as a field that does not exist.
+
+             [T-158](#t-158-regenerating-the-schema-deletes-fields-the-sample-did-not-produce)
+             fixed the generator so a field the sample misses is no longer
+             deleted. It did not add the fields the sample has never once
+             produced, and this is that half.
+Approach:    The thirteen rows are added, from output a real run produced, so
+             the document is true now. The union generator keeps them.
+
+             What is left is the mechanism, which is why this is partial rather
+             than done. Two fixtures, both small:
+
+             - `loopback-fileserver` with a self-signed certificate and a
+               redirect route. What is being recorded is which fields exist,
+               not which cipher a real CDN picks, so a self-signed certificate
+               is enough.
+             A third thing is smaller and belongs here: `webseed_test`'s own
+             one-line description in `crates/bit-cli/src/schema.rs` says
+             "status, ranges, redirects, and timing", and the document now also
+             carries the TLS report and the server. It is incomplete rather
+             than wrong, and `docs/schema.md` is generated from that string, so
+             it moves when the fixture does.
+
+             - one torrent in the sample set whose paths need sanitising. The
+               three used to produce the rows here were `../../pwned.txt`,
+               `CON.txt` and a path with a tab in it, which between them raise
+               `escape`, `trailing-dot-or-space`, `reserved-name` and
+               `illegal-character`.
+Acceptance:  `BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema` on a
+             machine with no network produces every row this entry added,
+             rather than inheriting it from the committed file. Deleting the
+             thirteen rows and regenerating puts all thirteen back.
+
+**Done in the session that filed it:** the thirteen rows, each from output that
+was produced rather than read off a struct. `cargo test -p bit-cli --lib schema`
+passes with them, because the committed check is containment: it asserts that
+everything the program writes is documented, not that everything documented was
+written on this run.
+
+```
+| `context.report.renamed[].disk_path` | string |
+| `context.report.renamed[].index` | integer |
+| `context.report.renamed[].reasons[]` | string |
+| `context.report.renamed[].torrent_path` | string |
+| `sources[].redirects[].from` | string |
+| `sources[].redirects[].status` | integer |
+| `sources[].redirects[].to` | string |
+| `sources[].resolved_url` | string |
+| `sources[].server` | string |
+| `sources[].tls.alpn` | string |
+| `sources[].tls.cipher_suite` | string |
+| `sources[].tls.connect_ms` | integer |
+| `sources[].tls.handshake_ms` | integer |
+| `sources[].tls.server_name` | string |
+| `sources[].tls.version` | string |
+```
+
+That is fifteen rows for thirteen fields: `redirects[]` and `tls` are objects
+whose members each get a row, which is how every other nested field in the
+document is written.

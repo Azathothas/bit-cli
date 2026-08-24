@@ -1180,6 +1180,12 @@ Acceptance:  `bench/cache-windows-<timestamp>.json` shows throughput against
              with the curve recorded here, or the cap is refused on that curve
              and a flag gives the caller the bound instead.
 
+**Ruled on 2026-08-24: measure, then flag.** Both halves confirmed. The curve
+is run before any default moves, and `--web-seed-cache-budget` ships defaulting
+to today's behaviour whatever the curve says, so a caller who wants sixteen
+mirrors inside a bound can ask for one. Capping the total without the
+measurement was put and refused.
+
 ### T-231 A soak killed mid-write reads as a final sample of zeros
 
 Source:      found by `scripts/check-tree.ps1` on the day it was written,

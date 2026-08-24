@@ -826,3 +826,104 @@ Prove:       ```
              `aria2c` opens it. A torrent this tree wrote from a magnet that
              another client will not open is the failure worth catching, and
              it is the same discipline [T-084](create-seed.md) closed on.
+
+### T-248 There is no way to ask what two torrents disagree about
+
+Source:      the operator's brief of 2026-08-24, measured the same day
+Category:    metainfo
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     Half of this exists and it is filed under `files`.
+
+             ```
+             $ bit-cli files one.torrent --against three.torrent
+             INDEX  EVIDENCE      PROVEN      OTHER       OTHER PATH
+             0      piece-hashes  1.00 MiB    e54a6a73:0  a.bin
+             1      piece-hashes  512.00 KiB  e54a6a73:1  sub/b.bin
+             2      length        -           e54a6a73:2  sub/c.txt
+             ```
+
+             Two torrents, two info hashes, and the per-file verdict with the
+             evidence behind it: `piece-hashes` where the pieces line up and
+             agree, `length` where the piece length or the alignment made a
+             hash comparison impossible. That is `equivalence.rs`, and it is
+             the hard part of the problem, already built and already correct.
+
+             What has no command at all: the structure, the trackers, the web
+             seeds, the flags in the info dict, the piece geometry, or a
+             torrent against a directory on disk.
+Relevance:   Cross-seeding, mirror validation and "is this the release I
+             already have" are all one question asked of two torrents, and the
+             answer today is two `bit-cli info` runs and a person reading both.
+Approach:    Ruled on by the operator on 2026-08-24: **one `diff`, several
+             modes.**
+
+             `bit-cli diff A B --by structure|files|sources|trackers|webseeds`,
+             over any two inputs the resolver accepts, so a magnet against a
+             `.torrent` and a `.torrent` against a directory are the same call.
+             `--by files` is what `files --against` computes, and that flag
+             stays as the way to ask the question about one torrent.
+
+             A second `compare` command was considered and refused: it would
+             answer almost the same question through a second resolver and a
+             second output shape.
+
+             Text output is a diff, `-` and `+` by line, so it reads under
+             `less`. `--json` carries `added`, `removed`, `changed` and
+             `same`, because a script wants the sets rather than the rendering.
+
+             It needs [T-245](cli-surface.md) first: diffing a magnet against a
+             page URL is the case the operator asked for, and neither side
+             resolves outside `download` today.
+Acceptance:  `bit-cli diff a.torrent b.torrent` over two torrents differing in
+             one tracker, one web seed and one file prints exactly those three
+             differences and nothing else. `--by files` produces the same
+             verdicts as `files --against` for the same pair, asserted field by
+             field under `--json`.
+
+### T-249 A torrent's shape is only ever printed as a flat list
+
+Source:      the operator's brief of 2026-08-24, measured the same day
+Category:    metainfo
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `bit-cli files` prints one row per file, sorted by index, path,
+             or size:
+
+             ```
+             INDEX  SIZE        SHARE   PIECES  PATH
+             0      1.00 MiB    59.73%  0-3     a.bin
+             1      683.59 KiB  39.87%  4-6     sub/b.bin
+             2      6.84 KiB    0.40%   6-6     sub/c.txt
+             ```
+
+             A torrent with four hundred files across thirty directories prints
+             four hundred rows, and the directory structure the torrent
+             actually carries is in the path column for a reader to reassemble.
+Relevance:   Small and constantly wanted. Deciding what `--select-file` should
+             take is the common case, and choosing indices from a flat list of
+             four hundred is where the mistake happens.
+Approach:    `bit-cli tree <SOURCE>`, over anything the resolver accepts, with
+             a directory rolled up to its total size and file count. Depth
+             limit, and a flag to show sizes or not.
+
+             It is the same layout `Layout` already computes, rendered as a
+             tree instead of a table, so nothing new is measured.
+
+             Two things it should carry that a plain tree does not: the piece
+             range a directory spans, because that is what says whether a
+             subtree can be fetched without touching the rest, and the BEP 47
+             padding files, marked rather than hidden.
+
+             ASCII by default. The box-drawing characters go behind the same
+             decision `--color` already makes, because this repository has cost
+             itself a red CI job over what a Windows console does with a code
+             point outside its page.
+Acceptance:  `bit-cli tree` over a torrent with three levels and a padding file
+             prints the three levels, the padding file marked, and directory
+             totals that sum to the value `bit-cli info` reports. The output is
+             ASCII on a console whose code page is IBM437.

@@ -12,6 +12,17 @@
         is worse than a dead link because the example still looks runnable
       - project history in a document about what the tool does, which is how a
         reference page turns into a diary
+      - a document naming an output field the program does not produce, which
+        is the one a reader cannot tell from a real field by looking
+
+    The last of those is checked against `docs/schema.md`, which is generated
+    from what real runs wrote rather than hand-maintained. So a page citing
+    `sources[].ttfb_ms` is checked against the tool, one step removed, and a
+    field that is renamed makes every page naming it fail here.
+
+    It also fails a page under `docs/` that nothing links to. An unlinked page
+    is not read, so it is not corrected, and it is the state every stale
+    document passes through on the way to being wrong.
 
     It also enforces the prose rule mechanically: no emoji, no em dash, no C0
     control byte, and none of the banned vocabulary. The banned list is a data
@@ -101,6 +112,25 @@ $DatePattern = '\b20\d{2}-\d{2}-\d{2}\b'
 # This is a scope decision rather than an exemption: the rule exists to keep a
 # diary out of a reference page, and these three are not reference pages.
 $ProcessDocs = @('docs/AGENTS.md', 'docs/reference-mining.md', 'docs/task-authoring.md')
+
+# Output field paths that are real and are not in docs/schema.md, because the
+# runs that generate that document have never taken the path that produces
+# them. Each one is a struct field with `skip_serializing_if`, and each is
+# tracked by T-253 in TODO/cli-surface.md, whose Acceptance is that this list
+# empties.
+#
+#   sources[].convictions   crates/bit-cli/src/swarm.rs:666. Needs a source
+#                           proved to have served a wrong block, which needs
+#                           two sources contributing to one piece.
+#   redials[]               crates/bit-cli/src/cmd/download.rs:66. Needs
+#                           --redial-after to fire, which needs a stalled swarm.
+#
+# Adding a name here is a decision to leave a documented field undocumented.
+# Prefer producing the field in a run and letting the generator record it.
+$UndocumentedFields = @(
+    'sources[].convictions',
+    'redials[]'
+)
 
 $Problems = New-Object System.Collections.ArrayList
 function Problem([string]$kind, [string]$message) {
@@ -320,6 +350,125 @@ foreach ($file in $files) {
 }
 
 # ---------------------------------------------------------------------------
+# Output fields, against the schema the program generates
+# ---------------------------------------------------------------------------
+#
+# docs/schema.md is written by a test from what real runs produced, so it is
+# the closest thing to the tool that a text check can compare against.
+
+$schemaPath = Join-Path $repo 'docs/schema.md'
+$schemaRows = New-Object System.Collections.Generic.HashSet[string]
+$schemaSegments = New-Object System.Collections.Generic.HashSet[string]
+if (Test-Path $schemaPath) {
+    foreach ($line in (Get-Content -LiteralPath $schemaPath)) {
+        if ($line -match '^\|\s*`([^`]+)`\s*\|\s*\S') {
+            $field = $Matches[1]
+            [void]$schemaRows.Add($field)
+            foreach ($segment in ($field -replace '\[\]', '') -split '\.') {
+                if ($segment) { [void]$schemaSegments.Add($segment) }
+            }
+        }
+    }
+}
+if ($schemaRows.Count -eq 0) {
+    [Console]::Error.WriteLine("check-docs: docs/schema.md has no field rows, so no output field can be checked")
+    exit 2
+}
+
+$checkedFields = 0
+foreach ($file in $files) {
+    $relative = $file.FullName.Substring($repo.Length + 1).Replace('\', '/')
+    if ($relative -eq 'docs/schema.md') { continue }
+    $text = Get-Content -LiteralPath $file.FullName -Raw
+
+    # A backticked token carrying `[]` is a field path and nothing else. It
+    # passes when it is a row, or the parent of one: docs cite a container.
+    foreach ($m in [regex]::Matches($text, '`([A-Za-z_][A-Za-z0-9_.]*\[\][A-Za-z0-9_.\[\]]*)`')) {
+        $path = $m.Groups[1].Value
+        $checkedFields++
+        if ($schemaRows.Contains($path)) { continue }
+        if ($UndocumentedFields -contains $path) { continue }
+        $isParent = $false
+        foreach ($row in $schemaRows) {
+            if ($row.StartsWith("$path.") -or $row.StartsWith("$path[]")) { $isParent = $true; break }
+        }
+        if (-not $isParent) {
+            Problem 'unknown-field' "$relative names '$path', and docs/schema.md has no such field"
+        }
+    }
+
+    # A key in a json fence is output being shown. Its name has to be a name
+    # the schema carries somewhere, which catches a renamed field without
+    # requiring the fence to say where in the document it sits.
+    foreach ($fence in [regex]::Matches($text, '(?s)```json\r?\n(.*?)```')) {
+        foreach ($k in [regex]::Matches($fence.Groups[1].Value, '"([A-Za-z_][A-Za-z0-9_]*)"\s*:')) {
+            $key = $k.Groups[1].Value
+            $checkedFields++
+            if (-not $schemaSegments.Contains($key)) {
+                Problem 'unknown-field' "$relative shows '$key' in a json block, and no field in docs/schema.md is called that"
+            }
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# An entry id a page names has to be an entry
+# ---------------------------------------------------------------------------
+#
+# check-todo.ps1 resolves the ids TODO/ names. Nothing resolved the ids docs/
+# names, and a page pointing at a renumbered entry sends a reader to whatever
+# now holds that number.
+
+$knownEntries = New-Object System.Collections.Generic.HashSet[string]
+$todoDir = Join-Path $repo 'TODO'
+if (Test-Path $todoDir) {
+    foreach ($entryFile in (Get-ChildItem -Path $todoDir -Filter *.md -File)) {
+        foreach ($line in (Get-Content -LiteralPath $entryFile.FullName)) {
+            if ($line -match '^###\s+(T-\d{3})\b') { [void]$knownEntries.Add($Matches[1]) }
+        }
+    }
+}
+if ($knownEntries.Count -eq 0) {
+    [Console]::Error.WriteLine("check-docs: no entries found under TODO/, so no id can be checked")
+    exit 2
+}
+$checkedEntries = 0
+foreach ($file in $files) {
+    $relative = $file.FullName.Substring($repo.Length + 1).Replace('\', '/')
+    foreach ($m in [regex]::Matches((Get-Content -LiteralPath $file.FullName -Raw), '\bT-(\d{3})\b')) {
+        $id = "T-$($m.Groups[1].Value)"
+        $checkedEntries++
+        if (-not $knownEntries.Contains($id)) {
+            Problem 'unknown-entry' "$relative names $id, and no entry under TODO/ has that id"
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Every page under docs/ is linked from somewhere
+# ---------------------------------------------------------------------------
+
+$linkedPages = New-Object System.Collections.Generic.HashSet[string]
+foreach ($file in $files) {
+    $text = Get-Content -LiteralPath $file.FullName -Raw
+    foreach ($m in [regex]::Matches($text, '\]\(([^)\s#]+)')) {
+        $target = $m.Groups[1].Value
+        if ($target -match '^(https?|mailto):') { continue }
+        $resolved = [System.IO.Path]::GetFullPath((Join-Path $file.DirectoryName $target))
+        if ($resolved.StartsWith($repo)) {
+            [void]$linkedPages.Add($resolved.Substring($repo.Length + 1).Replace('\', '/'))
+        }
+    }
+}
+foreach ($file in $files) {
+    $relative = $file.FullName.Substring($repo.Length + 1).Replace('\', '/')
+    if ($relative -eq 'README.md') { continue }
+    if (-not $linkedPages.Contains($relative)) {
+        Problem 'orphan-page' "$relative is not linked from README.md or from any other page under docs/"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # README's tables must link to a doc that exists
 # ---------------------------------------------------------------------------
 
@@ -351,9 +500,11 @@ if ($ListUrls) {
 $result = [ordered]@{
     kind          = 'docs'
     generated_at  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-    files         = $files.Count
-    links_checked = $checkedLinks
-    flags_checked = $checkedFlags
+    files          = $files.Count
+    links_checked  = $checkedLinks
+    flags_checked  = $checkedFlags
+    fields_checked = $checkedFields
+    entries_checked = $checkedEntries
     external_urls = $urls
     problems      = @($Problems)
 }
@@ -365,7 +516,7 @@ if ($Json) {
     Write-Host "check-docs: wrote $Json"
 }
 
-Write-Host "check-docs: $($files.Count) file(s), $checkedLinks link(s), $checkedFlags flag(s), $($urls.Count) external URL(s)"
+Write-Host "check-docs: $($files.Count) file(s), $checkedLinks link(s), $checkedFlags flag(s), $checkedFields output field(s), $checkedEntries entry id(s), $($urls.Count) external URL(s)"
 
 if ($Problems.Count -gt 0) {
     Write-Host ""

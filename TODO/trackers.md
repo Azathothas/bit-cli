@@ -671,3 +671,65 @@ Prove:       ```
              was redirected; `failure-reason` shows a non-zero exit and the
              reason in `--json` rather than a reported success; and `udp` shows
              the same six assertions over a UDP announce.
+
+### T-251 A web seed has twelve knobs of its own and a tracker has none
+
+Source:      the operator's brief of 2026-08-24, measured the same day
+Category:    trackers
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     The asymmetry is the whole entry.
+
+             A web seed source is a `SourceSpec` at
+             `crates/bit-cli-core/src/webseed/binding.rs:469`, and every field
+             on it is per source: `scope`, `mode`, `template`, `style`,
+             `priority`, `headers`, `user_agent`, `auth`, and a `SourceLimits`
+             carrying `concurrency`, `connections`, `chunk_size`, `timeout_ms`,
+             `connect_timeout_ms`, `retries`, `max_errors`, `cooldown_ms`,
+             `rate_limit`, `retry_status` and `fatal_status`. A binding table
+             sets any of them for any one source.
+
+             A tracker is a URL in a list. `tracker::Client` at
+             `crates/bit-cli-core/src/tracker.rs:314` holds one `timeout` and
+             one `connect_timeout` for the whole run, fixed at construction.
+             `--tracker-timeout`, `--tracker-connect-timeout` and
+             `--tracker-interval` are all run-wide. There is no per-tracker
+             anything.
+
+             A peer is thinner still: `--peer` adds one, `--block-peer` refuses
+             one, `--max-peers` caps the count. Nothing else is addressable.
+Relevance:   One dead tracker in a tier of five costs every announce the full
+             run-wide timeout, and the only way to give that one a shorter
+             deadline is to give it to all five.
+
+             The same shape appears in the other direction: a private tracker
+             that wants a longer interval and a public one that wants a shorter
+             one cannot both be honoured, because the override is one number.
+
+             It is worth stating plainly that the web seed side is the
+             differentiator and it is done. This entry is about the two axes
+             that were left flat next to it.
+Approach:    The binding table is the model and it already works, so the
+             cheapest honest version is the same shape: a `[[tracker]]` table
+             in the same file `--web-seed-config` reads, with `url`, `tier`,
+             `timeout`, `connect_timeout`, `interval`, `enabled`, `key`, and
+             the headers.
+
+             The flags stay as the defaults every entry inherits, which is what
+             `--web-seed-*` already does for sources, so nothing existing
+             changes meaning.
+
+             Peers are the smaller half and the one to do second: a
+             `[[peer]]` table with `addr`, `priority` and `rate_limit`, plus
+             what [T-234](peers.md) is already adding for identity.
+
+             [T-114](cli-surface.md) is the neighbour, not a duplicate: it is
+             per-source options in an aria2 input file, one entry per download.
+             This is per-tracker options within one download.
+Acceptance:  A config naming five trackers where one has a 1s timeout and the
+             rest have 30s produces, in one announce round against
+             `loopback-tracker`, one request that gave up at 1s and four that
+             did not, read from `--announce-log` rather than from the report.
+             `scripts/check-announce.ps1` grows the case.

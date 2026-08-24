@@ -1930,3 +1930,73 @@ runner cannot lose a connection.
 $ cargo test -p bit-cli-core --test webseed_e2e bench_webseed
 test result: ok. 8 passed; 0 failed; 0 ignored; 44 filtered out
 ```
+
+### T-254 No report carries a response header, so a CDN cache hit is invisible
+
+Source:      measured 2026-08-24 while writing `docs/examples/s3-webseed.md`
+Category:    webseed
+Priority:    P2
+Effort:      S
+Status:      open
+
+Problem:     `webseed test` reports the status, the range support, the entity
+             length, the redirect chain, the negotiated TLS and the timings.
+             The only response **header** it carries is `Server`, as
+             `sources[].server`. Every other header is received and dropped.
+
+             So four facts a mirror operator needs are not obtainable from any
+             `bit-cli` output:
+
+             - whether a request was served from a CDN cache. `cf-cache-status`
+               on Cloudflare, `x-cache` on CloudFront and Fastly, `age`
+               everywhere.
+             - `x-amz-request-id` and `x-amz-id-2`, which are the two values an
+               AWS support ticket asks for first and which cannot be recovered
+               after the request.
+             - `etag`, which decides whether `If-Range` resumption survives a
+               deploy.
+             - `content-encoding`, which is how a transcoding proxy announces
+               that it changed what a byte range means.
+
+             The `curl` line `webseed fetch` prints is the workaround, and it
+             is a second request against a different connection, so it answers
+             a different question than the one that was asked.
+Relevance:   The cache question is the one that decides cost. A payload served
+             from cache costs the CDN's rate and a payload that misses costs an
+             origin request per range, and the difference between those two is
+             the whole reason to put a CDN in front of a bucket.
+
+             It is also the field that makes a slow source diagnosable.
+             `ttfb 876ms` says the request was slow; `cf-cache-status: MISS`
+             says why.
+Approach:    Keep the response headers that were already received rather than
+             making a new request, which is the whole cost of this: they are
+             dropped at the point the status and the length are read.
+
+             An allowlist rather than everything, because a header set can
+             carry a signed URL or a session cookie and a report is a thing
+             people paste. `age`, `cache-control`, `content-encoding`,
+             `content-type`, `etag`, `last-modified`, `via`, `x-cache`,
+             `x-amz-request-id`, `x-amz-id-2`, `cf-cache-status`, `cf-ray` and
+             `x-served-by`. Anything else on request, through a flag that names
+             the header.
+
+             `server` is already carried, as `sources[].server`, and keeps its
+             own field rather than moving into the new map, so nothing reading
+             it today breaks.
+
+             Redaction already exists for credentials, at `--no-redact`, and
+             the same rule applies to anything that arrives here.
+
+             `docs/examples/s3-webseed.md` names this entry as the reason its
+             cache section is absent, and
+             `docs/examples/cloudflare-webseed.md` has the same gap for
+             `cf-cache-status`. **Both pages are updated in the same change as
+             this entry**, which is what the doc drift check in
+             `scripts/check-docs.ps1` is there to enforce: a doc that names a
+             field must be able to point at it in `docs/schema.md`.
+Acceptance:  `bit-cli webseed test <TORRENT> --web-seed <URL> --json` against a
+             Cloudflare-fronted origin carries `cf-cache-status` and `age`, the
+             same run against a plain origin carries neither and says nothing
+             about them, and no header outside the allowlist appears in either.
+             The rows are in `docs/schema.md` because a run produced them.
