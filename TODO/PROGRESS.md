@@ -132,7 +132,7 @@ pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260824T164609340Z.c
 
 - **Entries:** 207 items. 32 open, 3 partial, 0 blocked, 161 done, 11 deferred
   to Phase C. 161 of 196 workable done, 35 left.
-- **Tree:** 99 Rust files, 60,561 lines of code, 15,820 of comment,
+- **Tree:** 99 Rust files, 60,566 lines of code, 15,826 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
   `reference/HISTORY/`. [`reference-map.md`](reference-map.md) carries the
