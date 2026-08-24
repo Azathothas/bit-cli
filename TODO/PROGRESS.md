@@ -129,7 +129,7 @@ gh run list --limit 1
 pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.csv
 ```
 
-- **Entries:** 207 items. 34 open, 2 partial, 0 blocked, 160 done, 11 deferred
+- **Entries:** 207 items. 33 open, 3 partial, 0 blocked, 160 done, 11 deferred
   to Phase C. 160 of 196 workable done, 36 left.
 - **Tree:** 99 Rust files, 60,182 lines of code, 15,720 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.

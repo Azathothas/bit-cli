@@ -757,7 +757,7 @@ the decision: a torrent in the wild that carries one.
 Source:      `RESEARCH.md` entry 38's gap table, and a run, 2026-08-24
 Category:    metainfo
 Priority:    P2
-Effort:      S
+Effort:      M, re-estimated from S on 2026-08-24
 Status:      open
 
 Problem:     `bit-cli` resolves a magnet to metainfo and never writes it out.
@@ -826,6 +826,67 @@ Prove:       ```
              `aria2c` opens it. A torrent this tree wrote from a magnet that
              another client will not open is the failure worth catching, and
              it is the same discipline [T-084](create-seed.md) closed on.
+
+#### Re-estimated 2026-08-24, and it is M rather than S
+
+The work order asked for this before the entry was started, and the
+re-estimate changed both the size and the shape.
+
+**`S` was measured against the wrong thing.** Writing a `.torrent` out of a
+resolved magnet is a few lines. Getting a resolved magnet in `bit-cli magnet`
+is the entry: `run` at `crates/bit-cli/src/cmd/magnet.rs:79` takes the
+`Kind::Magnet` arm and reports what the URI itself carries, with no swarm, no
+tracker and no DHT anywhere in the command. `resolve_blocking` at
+`crates/bit-cli/src/source.rs:304` sends a magnet straight to `load_local`,
+which refuses it by design, so nothing under `source.rs` resolves one either.
+
+**One premise this entry wrote down is false, and it was measured rather than
+argued about.** The Approach's last paragraph says
+"`bit-cli info <magnet> --json` already prints what was resolved". It does
+not. Measured on 2026-08-24 against a magnet made by this tree from a local
+torrent:
+
+| command | exit | output |
+| --- | --- | --- |
+| `bit-cli magnet <magnet>` | 0 | info hash, name, size, and the URI |
+| `bit-cli info <magnet>` | 4 | the refusal |
+| `bit-cli files <magnet>` | 4 | the refusal |
+| `bit-cli tree <magnet>` | 4 | the refusal |
+
+The refusal is one sentence in one place, `load_local` at
+`crates/bit-cli/src/source.rs:252`: "a magnet URI and a bare info hash carry
+no piece hashes, so the metadata has to be resolved from the swarm first".
+
+**So there is a fork here that the entry as written does not name**, and it is
+worth an operator ruling because the smaller answer is not obviously the right
+one.
+
+1. **`--output` on `magnet` only.** The command grows the swarm arguments it
+   has none of today, and `info`, `files` and `tree` go on exiting 4 on a
+   magnet. Smallest change, and it leaves four commands disagreeing about what
+   a magnet is.
+2. **A swarm-backed path under `source::resolve_source`**, so every command
+   that reads a source can take a magnet, and `magnet --output` is then the
+   few lines the entry thought the whole job was. This is the same shape
+   [T-245](cli-surface.md) already took for URLs, which is why nine commands
+   accept one now.
+
+**Two is recommended**, on T-245's own argument: a source kind that one
+command accepts and four refuse is the defect T-245 closed, and this is that
+defect with `Kind::Magnet` in place of `Kind::Url`. It is also the reason the
+effort is `M`: the deadline, the peer and tracker arguments, and what a
+command with no `--dir` does while it waits are all decisions that belong to
+the shared path rather than to one flag.
+
+**What does not change.** The Premise stands and was not re-measured: BEP 9
+metadata exchange works, and the run recorded there is the evidence. This
+entry is still "keep what the exchange produced" rather than "implement
+metadata exchange". The `Prove` section stands too, including the `aria2c`
+case, and it gets larger under option two rather than smaller.
+
+**Not started.** The session that re-estimated it had a six hour soak landing
+inside its own window and did not open an `M` before reading it.
+
 
 ### T-248 There is no way to ask what two torrents disagree about
 

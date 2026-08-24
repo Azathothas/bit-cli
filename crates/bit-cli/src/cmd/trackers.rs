@@ -91,10 +91,19 @@ pub fn run(
     env: &mut Env,
 ) -> Result<ExitCode> {
     let kind = Kind::classify(&args.source.source, env)?;
+    // A magnet and a bare info hash carry the one thing an announce needs and
+    // no metainfo at all, so they announce from the hash and there is nothing
+    // to fetch. Every other source is a document, and `resolve_source` is the
+    // one door to it wherever it lives: a path, stdin, a URL, or a metalink.
+    //
+    // This used to read the first two and refuse the rest, which made
+    // `trackers` the one command that turned down a URL its own `SOURCE` help
+    // offers. [T-245](../TODO/cli-surface.md) found it and left it here
+    // deliberately: the URL **does** carry an info hash once fetched, and the
+    // refusal said it did not. See `TODO/trackers.md`, T-251.
     let meta = match &kind {
-        Kind::File(path) => Some(crate::source::read_torrent_file(path)?),
-        Kind::Stdin => Some(crate::source::load_local(&kind, env)?),
-        _ => None,
+        Kind::Magnet(_) | Kind::InfoHash(_) => None,
+        _ => Some(crate::source::resolve_source(&kind, env, global, None)?),
     };
     let info_hash = match (&meta, kind.info_hash()) {
         (Some(meta), _) => meta.info_hash(),
@@ -1213,5 +1222,73 @@ mod tests {
         assert!(report["announced_port"].is_null(), "{report}");
         assert!(report["withdrawn"].is_null(), "{report}");
         assert!(tracker.param("event").is_empty(), "{:?}", tracker.seen());
+    }
+
+    /// A `.torrent` named by URL announces exactly as the same file on disk
+    /// does.
+    ///
+    /// This was the one command that refused the URL its own `SOURCE` help
+    /// offers, and the refusal said the source carried no info hash when the
+    /// document behind the URL carries one. `left` is the assertion that
+    /// matters: it is the torrent's total length, so it can only be right if
+    /// the fetch happened and the metainfo was read. See `TODO/trackers.md`,
+    /// T-251, and `TODO/cli-surface.md`, T-245, which found it and left it.
+    #[test]
+    fn a_torrent_named_by_url_announces_the_same_as_one_on_disk() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let files = crate::test_support::FileServer::start(fixture.dir());
+        let tracker = crate::test_support::Tracker::start(&[]);
+        let url = format!("{}/album.torrent", files.base);
+
+        let mut reports = Vec::new();
+        for source in [url.as_str(), fixture.path_str()] {
+            let (mut env, captured) = Env::test(
+                &[
+                    "--json",
+                    "trackers",
+                    source,
+                    "--replace-trackers",
+                    "--tracker",
+                    &tracker.announce,
+                ],
+                fixture.dir(),
+            );
+            let _ = crate::run(&mut env);
+            reports.push(captured.json().expect("a report"));
+        }
+
+        let (over_http, on_disk) = (&reports[0], &reports[1]);
+        assert_eq!(over_http["info_hash"], fixture.info_hash, "{over_http}");
+        assert_eq!(over_http["name"], "album", "{over_http}");
+        // 1500 + 500, which nothing but the metainfo could say.
+        assert_eq!(over_http["left"]["bytes"], 2000, "{over_http}");
+        assert_eq!(over_http["left"]["known"], true, "{over_http}");
+        assert_eq!(over_http["info_hash"], on_disk["info_hash"]);
+        assert_eq!(over_http["left"], on_disk["left"]);
+    }
+
+    /// And a magnet still announces without one, because it carries the hash
+    /// an announce needs and there is nothing to fetch.
+    #[test]
+    fn a_magnet_announces_from_its_hash_with_no_metainfo() {
+        let fixture = crate::test_support::TorrentFixture::multi_file();
+        let tracker = crate::test_support::Tracker::start(&[]);
+        let magnet = format!("magnet:?xt=urn:btih:{}", fixture.info_hash);
+        let (mut env, captured) = Env::test(
+            &[
+                "--json",
+                "trackers",
+                &magnet,
+                "--tracker",
+                &tracker.announce,
+            ],
+            fixture.dir(),
+        );
+        let _ = crate::run(&mut env);
+        let report = captured.json().expect("a report");
+        assert_eq!(report["info_hash"], fixture.info_hash, "{report}");
+        // No metainfo means no length, and the placeholder says so rather
+        // than claiming zero. See T-180.
+        assert_eq!(report["left"]["known"], false, "{report}");
     }
 }

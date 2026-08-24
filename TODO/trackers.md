@@ -841,7 +841,7 @@ Source:      the operator's brief of 2026-08-24, measured the same day
 Category:    trackers
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      partial
 
 Problem:     The asymmetry is the whole entry.
 
@@ -896,3 +896,51 @@ Acceptance:  A config naming five trackers where one has a 1s timeout and the
              `loopback-tracker`, one request that gave up at 1s and four that
              did not, read from `--announce-log` rather than from the report.
              `scripts/check-announce.ps1` grows the case.
+
+#### The source half is done, 2026-08-24, and the twelve knobs are not
+
+[T-245](cli-surface.md) left one command behind and named this entry as the
+one that owns it: `bit-cli trackers` refused a `.torrent` named by URL, with
+"an info hash is needed to announce, and this source does not carry one",
+while the URL's document carries one and five other commands fetch it happily.
+Measured over loopback before the change, one torrent served by
+`loopback-fileserver`:
+
+| command | before |
+| --- | --- |
+| `info`, `files`, `tree`, `magnet`, `peers` | exit 0 |
+| `trackers` | exit 4, the refusal above |
+
+`run` at `crates/bit-cli/src/cmd/trackers.rs:95` read the metainfo for
+`Kind::File` and `Kind::Stdin` and nothing else, so every other kind fell to
+`None` and then to a refusal that only a magnet or a bare info hash should
+ever have reached. It calls `crate::source::resolve_source` now, which is the
+same one line `info`, `files` and `tree` use, and the two kinds that genuinely
+carry a hash and no metainfo keep the old path.
+
+Against the same fixture afterwards, a URL and the file on disk produce the
+same report:
+
+```
+TIER  TRACKER                          FAMILY  STATUS  RTT   SEED  LEECH  INTERVAL  PEERS
+0     http://127.0.0.1:57416/announce  v4      ok      14ms  0     1      5s        0
+```
+
+`left` is the field that says the fetch really happened: 131,072 bytes over
+the URL, the same as on disk, and a number nothing but the metainfo could
+supply. `--scrape` over a URL works for the same reason.
+
+**Two tests, and the second is the half that must not change.**
+`a_torrent_named_by_url_announces_the_same_as_one_on_disk` runs both sources
+through one fixture tracker and compares the info hash and `left`;
+`a_magnet_announces_from_its_hash_with_no_metainfo` holds the case the refusal
+was written for, where `left` is a placeholder and says so.
+
+```bash
+cargo test -p bit-cli --lib cmd::trackers
+```
+
+**What is still open is the entry's own subject**: the `[[tracker]]` table,
+the per-tracker `timeout`, `connect_timeout`, `interval`, `enabled` and `key`,
+and the `[[peer]]` table after it. Nothing above touches any of that, and the
+Acceptance is unchanged.

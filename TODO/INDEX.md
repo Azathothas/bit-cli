@@ -241,7 +241,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-248](metainfo.md) | P2 | metainfo | open | There is no way to ask what two torrents disagree about |
 | [T-249](metainfo.md) | P3 | metainfo | **done** | A torrent's shape is only ever printed as a flat list *(the span alone does not say a subtree stands alone, so `shared_pieces` sits beside it)* |
 | [T-250](cli-surface.md) | P2 | cli | open | Nothing reports how an input was resolved |
-| [T-251](trackers.md) | P2 | trackers | open | A web seed has twelve knobs of its own and a tracker has none |
+| [T-251](trackers.md) | P2 | trackers | partial | A web seed has twelve knobs of its own and a tracker has none *(the source half [T-245](cli-surface.md) left here is done)* |
 | [T-252](cli-surface.md) | P3 | cli | **done** | The run's numbers exist in JSON and cannot be asked for as text *(the disk half was plumbing, not a measurement)* |
 | [T-253](cli-surface.md) | P2 | cli | partial | The schema sample takes one path, so thirteen real fields went undocumented |
 | [T-254](webseed.md) | P2 | webseed | **done** | No report carries a response header, so a CDN cache hit is invisible |
@@ -253,7 +253,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 207 items: 196 to work through, and 11 deferred to Phase C.
-34 open, 2 partial, 0 blocked, 160 done.
+33 open, 3 partial, 0 blocked, 160 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -262,10 +262,10 @@ when a number here disagrees with them.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 3 | 0 | 0 | 69 | 72 |
-| P2 | 22 | 2 | 0 | 58 | 82 |
+| P2 | 21 | 3 | 0 | 58 | 82 |
 | P3 | 9 | 0 | 0 | 21 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **34** | **2** | **0** | **160** | **207** |
+| **All** | **33** | **3** | **0** | **160** | **207** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

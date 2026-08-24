@@ -76,6 +76,16 @@ answer, or does it name something only a swarm can.
 | Metalink, local or by URL | yes, after fetching the torrent it names | yes |
 | magnet or info hash | no | yes, after a swarm lookup |
 
+`bit-cli trackers` sits across both columns and is worth its own line. It takes
+every form in the left column, because an announce needs the info hash and the
+length that a document carries, and it takes a magnet or a bare info hash too,
+because those carry the hash already. What it does not have is a length to
+announce for the last two, and it says so rather than claiming zero:
+
+```bash
+bit-cli trackers https://host/album.torrent --json
+```
+
 Every cell was run. For the URL row `info`, `files`, `tree`, `magnet` and
 `verify` had their `--json` output compared field for field against the same
 torrent read off disk: everything matches but `generated_at`, which is two runs, and
@@ -83,11 +93,8 @@ torrent read off disk: everything matches but `generated_at`, which is two runs,
 comparison is a test, `read_only_commands_resolve_a_torrent_over_http_and_report_what_the_file_reports`,
 so it holds on every build rather than on the day it was written.
 
-Two commands are not in either column. `bit-cli peers` takes every form the
-right-hand column does, because it starts an engine. **`bit-cli trackers` is
-the one that still refuses a URL**, with a different message: "an info hash is
-needed to announce, and this source does not carry one". The URL does carry
-one, once fetched. That is [T-251](../../TODO/trackers.md).
+`bit-cli peers` is not in either column either: it takes every form the
+right-hand column does, because it starts an engine.
 
 **A URL and a Metalink are fetched, not refused.** A `.torrent` at a URL is one
 request:
