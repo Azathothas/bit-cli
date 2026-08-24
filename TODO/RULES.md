@@ -472,6 +472,15 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   vendor session reads, described a state two sessions old. Nothing was wrong
   with any single file. What was missing was anything that compared two of them.
 
+- **A `Source:` line records where an entry came from, not a path a reader must
+  be able to open.** Several say "the operator's brief", which was a working
+  document that was never tracked and is superseded by `TODO/`; everything in
+  it that still binds is written down here and in the entries. The upstream
+  `rqbit` issue JSON that produced the first hundred entries is the same shape:
+  it is not on disk and the entry carries what it needed. That is why
+  `check-todo.ps1` resolves cited **paths** and does not try to resolve a
+  `Source:` line.
+
 - **A file that quotes a number another file measures has to be checkable.**
   `PROGRESS.md` quotes the entry counts, the patch count and a CI run id;
   `TASKS.md` quotes its own table back as a total. Write those as a fixed line
