@@ -76,13 +76,26 @@ jobs:
   # A soak report has to say when its slope is fitted across a step. Both
   # fixtures are a committed CSV and a generated one, so this needs no
   # toolchain and no clock, and it runs beside `record` rather than in `test`
-  # for that reason. See TODO/memory.md, T-224.
+  # for that reason. See TODO/memory.md, T-224 and T-231.
   soak-fit:
     name: Soak fit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
       - run: pwsh -NoProfile -File scripts/check-soak-fit.ps1
+
+  # Nothing enters this repository that is not a kind it keeps.
+  #
+  # `under/inner.bin` did, on 2026-08-23: a payload a T-226 acceptance run left
+  # in the working tree, taken by `git add -A` and pushed. `gates.ps1` runs this
+  # too, and this is the copy `git-sync.ps1 -SkipGates` cannot skip. It reads
+  # the index and needs no toolchain. See TODO/cli-surface.md, T-230.
+  tree:
+    name: Tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: pwsh -NoProfile -File scripts/check-tree.ps1
 
   clippy:
     name: Clippy

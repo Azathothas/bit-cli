@@ -221,15 +221,47 @@ function Get-Slope($rows, $column) {
 # live run prints, from the same function, so a number read here and a number
 # read there cannot differ.
 
+# Is this line a sample, or is it what a killed run left behind?
+#
+# A soak that is killed leaves the file it was appending to extended and not
+# written: NTFS flushes the size before the bytes, so the tail is zero fill.
+# `bench/soak-20260821T012428252Z.csv` carried 176 such bytes for three days.
+# `Import-Csv` turns them into one more record whose every field is the empty
+# string, `[double]""` is 0 in PowerShell, and `Get-Slope` then fits a line
+# through a final sample of zeros: that file read as `last 0.00 MiB` for every
+# series, "532 samples over 0 hours", and a largest fall of -20.75 MiB that
+# nothing measured. Nothing said anything was wrong.
+#
+# So a row has to look like a row. `sample`, `elapsed_s` and `rss_bytes` are
+# counters the sampler writes as integers, and `iso` is an instant. A record
+# missing any of those is not a sample, whatever produced it.
+#
+# It is dropped and counted rather than dropped quietly, because a truncated
+# file is itself worth knowing about: the 531 samples before the tail are real
+# and the run they came from ended in a way its report never mentioned.
+function Test-SoakRow($row) {
+    if (-not $row) { return $false }
+    foreach ($field in @("sample", "elapsed_s", "rss_bytes")) {
+        if ("$($row.$field)" -notmatch '^\d+$') { return $false }
+    }
+    return ("$($row.iso)" -match '^\d{4}-\d{2}-\d{2}T')
+}
+
 if ($ReadCsv) {
     if (-not (Test-Path $ReadCsv)) { Exit-With 2 "no such CSV: $ReadCsv" }
-    $read = @(Import-Csv $ReadCsv)
+    $parsed = @(Import-Csv $ReadCsv)
+    $read = @($parsed | Where-Object { Test-SoakRow $_ })
+    $dropped = $parsed.Count - $read.Count
     if ($read.Count -lt 2) { Exit-With 2 "$ReadCsv has $($read.Count) sample(s), which fits nothing" }
     $readHours = [double]$read[-1].elapsed_s / 3600.0
 
     Write-Host ""
     Write-Host "csv:       $ReadCsv"
     Write-Host "samples:   $($read.Count) over $([math]::Round($readHours, 3)) hours"
+    if ($dropped -gt 0) {
+        Write-Host "truncated: $dropped line(s) are not samples and are excluded from every fit below."
+        Write-Host "           A soak killed mid-write leaves the file extended and zero filled."
+    }
     Write-Host ""
     $readRows = [System.Collections.ArrayList]::new()
     $readFits = [ordered]@{}
@@ -260,6 +292,7 @@ if ($ReadCsv) {
             generated_at = Get-Timestamp
             csv          = $ReadCsv
             samples      = $read.Count
+            dropped_rows = $dropped
             hours        = [math]::Round($readHours, 4)
             slopes       = $readFits
         }

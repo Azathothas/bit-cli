@@ -269,6 +269,38 @@ if (-not $todoOk) {
 Record "record" $todoOk $todoDetail
 
 # ---------------------------------------------------------------------------
+# tree
+# ---------------------------------------------------------------------------
+#
+# The `text` gate above reads six extensions. It cannot see a file that is not
+# one of them, and on 2026-08-23 that is exactly what reached the remote: a
+# 1,000 byte payload at `under/inner.bin`, left in the working tree by a T-226
+# acceptance run and taken by `git add -A`. Eight commits later nobody had
+# looked at it.
+#
+# `check-tree.ps1` says what belongs in this repository: a fixed top level, and
+# outside `vendor/` a fixed set of file kinds, both measured from what the
+# index already holds. It reads the index rather than the working tree, which
+# is why `git-sync.ps1` can run the same script after staging and get an
+# answer about the commit it is about to make.
+#
+# It found a second thing the day it was written. `bench/soak-20260821T012428252Z.csv`
+# ended in 176 NUL bytes from a soak killed mid-append, and `soak.ps1 -ReadCsv`
+# was reading them as a final sample of zeros. See `TODO/cli-surface.md` T-230
+# and `TODO/memory.md` T-231.
+
+$treeArgs = @("-NoProfile", "-File", (Join-Path $PSScriptRoot "check-tree.ps1"))
+$treeOut = (& pwsh @treeArgs 2>&1 | Out-String)
+$treeOk = ($LASTEXITCODE -eq 0)
+$treeDetail = ""
+if (-not $treeOk) {
+    $lines = @($treeOut -split "`r?`n" | Where-Object { $_ -match '^check-tree: \[' })
+    $treeDetail = if ($lines.Count -gt 0) { ($lines[0] -replace '^check-tree: ', '').Trim() } else { "see: pwsh -NoProfile -File scripts/check-tree.ps1" }
+    if ($lines.Count -gt 1) { $treeDetail += " and $($lines.Count - 1) more" }
+}
+Record "tree" $treeOk $treeDetail
+
+# ---------------------------------------------------------------------------
 # clippy
 # ---------------------------------------------------------------------------
 

@@ -1115,3 +1115,114 @@ Acceptance:  `bench/cache-windows-<timestamp>.json` shows throughput against
              window count at two source counts, and either the total is capped
              with the curve recorded here, or the cap is refused on that curve
              and a flag gives the caller the bound instead.
+
+### T-231 A soak killed mid-write reads as a final sample of zeros
+
+Source:      found by `scripts/check-tree.ps1` on the day it was written,
+             2026-08-24, see [T-230](cli-surface.md)
+Category:    memory
+Priority:    P1
+Effort:      S
+Status:      **done** 2026-08-24
+
+Problem:     `bench/soak-20260821T012428252Z.csv` is committed evidence and it
+             ended in 176 NUL bytes. NTFS flushes a file's size before its
+             bytes, so a soak killed while appending leaves the tail zero
+             filled. `Import-Csv` reads that tail as one more record whose
+             every field is the empty string, `[double]""` is 0 in PowerShell,
+             and `Get-Slope` then fits its line through a final sample of
+             zeros.
+
+             What `soak.ps1 -ReadCsv` said about that file, against what the
+             531 rows in it actually hold:
+
+             | | reported | true |
+             | --- | --- | --- |
+             | samples, hours | 532 over **0** | 531 over 4.605 |
+             | `rss_bytes` last | **0.00 MiB** | 19.27 MiB |
+             | `handles` last | **0.00** | 241 |
+             | `peak_rss_bytes` largest fall | **-42.19 MiB** | 0.00 |
+             | `rss_bytes` slope | 0.77 MiB/h | 0.73 MiB/h |
+
+             The fourth row is the one that gives it away without knowing
+             anything else. `peak_rss_bytes` is a high-water mark. It cannot
+             fall, and the report said it fell by its whole value.
+Relevance:   Three things, and the second is why this is P1.
+
+             **Nothing said anything was wrong.** The run printed a table and
+             exited 0. Every number in it is wrong in the same direction and
+             none of them is absurd enough to notice except the one nobody
+             reads.
+
+             **`Get-Slope` is what `scripts/check-soak-fit.ps1` asserts on and
+             what [T-224](#t-224-the-six-hour-soaks-rss-slope-is-one-step-and-a-sawtooth-not-a-leak)
+             is written from.** A reader that invents a terminal zero
+             manufactures exactly the shape T-224 exists to detect: a large
+             single-interval fall, and a `last` that has nothing to do with
+             the run.
+
+             **Somebody had already met it and worked around it in prose.**
+             This file's own line in the entry above reads it with
+             `Where-Object { $_.iso -match '^\d{4}-' }`. That filter is in the
+             record because the rows are not all rows, and the fix went into
+             the sentence rather than into the reader.
+
+             It is the same family as [T-229](bench.md) and
+             [T-103](bep-coverage.md): the defect is in the instrument, so
+             everything the instrument said has to be re-read rather than
+             trusted.
+
+             **And this exact failure was already found and fixed once, on the
+             other file of the same run.**
+             [T-157](#t-157-a-killed-soak-destroys-the-summary-it-was-rewriting)
+             is `bench/soak-20260821T012428252Z.json` left as NUL bytes by a
+             kill during `Set-Content`, closed by writing to a temporary path
+             and renaming. Its source line names the same timestamp this entry
+             does. The `.json` is rewritten and could be made atomic; the
+             `.csv` is appended and cannot, so nothing there was to fix and
+             nothing was looked at. The fix for an append is on the reading
+             side, and no reader had one.
+Approach:    A row has to look like a row, and the file has to stop carrying
+             bytes that are not data.
+Acceptance:  A CSV with a zero-filled tail reports the samples it has and the
+             last value it actually holds, says the file was truncated, and
+             the committed file carries no NUL. Run against the defect.
+
+#### Done 2026-08-24
+
+**`Test-SoakRow` in `scripts/soak.ps1`.** `sample`, `elapsed_s` and
+`rss_bytes` are counters the sampler writes as integers and `iso` is an
+instant; a record missing any of the four is not a sample, whatever produced
+it. Dropped rows are **counted and printed**, not dropped quietly, because a
+truncated file is itself worth knowing: those 531 samples are real and the run
+they came from ended in a way its own report never mentioned. `-ReadJson`
+carries `dropped_rows` beside `samples`.
+
+**The committed file was repaired rather than exempted.** The 176 NUL bytes
+are a crash artefact, not a measurement, and removing them changes no sample:
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260821T012428252Z.csv
+```
+
+The working-tree bytes are identical to the old blob with the fill stripped.
+The committed blob differs by more than that, and the reason is worth
+recording: `.gitattributes` sets `* text=auto`, git classified the file as
+binary **because of the NULs**, and so never normalised its line endings. With
+the fill gone it is text, and the new blob is LF where the old one was CRLF.
+A file that was quietly stored as a binary blob is the same fact as the one
+this entry is about.
+
+**A fourth case in `scripts/check-soak-fit.ps1`**, so the CI job holds it.
+The fixture is the generated ramp with 176 NUL bytes appended, which makes the
+expected numbers exact: the last real sample is the last one written. It
+asserts `dropped_rows` is at least one, `last` is the last real value, the
+sample count matches the same file without the fill, and the output says the
+file was truncated.
+
+**Run against the defect**: with `Test-SoakRow` returning true for everything,
+the new case fails on all four assertions and the other three pass.
+
+```bash
+pwsh -NoProfile -File scripts/check-soak-fit.ps1
+```

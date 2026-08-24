@@ -555,6 +555,30 @@ if (-not $PushOnly) {
     }
     Write-Step "$($staged.Count) file(s) staged"
 
+    # What is staged is what the commit will contain, so this is the moment to
+    # ask whether all of it belongs here.
+    #
+    # `under/inner.bin` reached the remote on 2026-08-23 through this exact
+    # path: an acceptance run left a 1,000 byte payload in the working tree,
+    # `git add -A` above took it, and no rule anywhere compared the result
+    # against what this repository holds. `check-tree.ps1` reads the index,
+    # which right now is the staged tree, so the answer is about this commit
+    # rather than about the last one.
+    #
+    # Not behind -SkipGates. That switch is for a documentation change on a
+    # tree known green, and a stray payload is likelier in exactly that push
+    # than in one that ran the gates. It costs about a second.
+    $treeCheck = Join-Path $PSScriptRoot "check-tree.ps1"
+    $treeOut = (& pwsh -NoProfile -File $treeCheck 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        Invoke-Git -gitArgs @("reset") -AllowFail | Out-Null
+        [Console]::Error.WriteLine($treeOut.TrimEnd())
+        Exit-With 1 ("refusing to commit: the staged tree holds a path this repository does not account for. " +
+            "Nothing has been committed and the index is reset. Move a run's output under .tmp/, or add the " +
+            "kind to scripts/check-tree.ps1 on purpose. See TODO/cli-surface.md, T-230.")
+    }
+    Write-Step "tree ok, every staged path is a kind this repository keeps"
+
     if ($NoCi) {
         $risky = Test-NeedsCi $staged
         if ($risky.Count -gt 0 -and -not $Force) {

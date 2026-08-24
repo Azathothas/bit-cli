@@ -178,6 +178,53 @@ if ($rampRss.slope_per_hour / 1MB -le $slopeMiB) {
     })
 
 # ---------------------------------------------------------------------------
+# A file a killed run left behind
+# ---------------------------------------------------------------------------
+#
+# NTFS flushes a file's size before its bytes, so a soak killed while
+# appending leaves the tail zero filled. `Import-Csv` reads that as one more
+# record of empty strings, `[double]""` is 0, and the fit then runs through a
+# final sample of zeros. `bench/soak-20260821T012428252Z.csv` carried 176 such
+# bytes and read as `last 0.00 MiB` for every series over "0 hours", with a
+# largest fall of -20.75 MiB that nothing measured and a fall in
+# `peak_rss_bytes`, which is a high-water mark and cannot fall at all.
+#
+# The fixture is the ramp above with a zero fill on the end, so the expected
+# numbers are known exactly: the last real sample is the last one written.
+
+$truncatedRelative = "$Root/truncated.csv"
+$rampBytes = [System.IO.File]::ReadAllBytes((Join-Path $repo $rampRelative))
+$fill = [byte[]]::new(176)
+[System.IO.File]::WriteAllBytes((Join-Path $repo $truncatedRelative), $rampBytes + $fill)
+
+$truncatedRun = Invoke-Read $truncatedRelative "truncated"
+if (-not $truncatedRun.fits) { Exit-With 1 "soak.ps1 -ReadJson wrote nothing for the truncated fixture" }
+$truncatedRss = $truncatedRun.fits.slopes.rss_bytes
+$lastReal = 14000000 + (399 * $increment)
+
+if ($truncatedRun.fits.dropped_rows -lt 1) {
+    [void]$failures.Add("a truncated CSV reported $($truncatedRun.fits.dropped_rows) dropped row(s), expected at least 1")
+}
+if ($truncatedRss.last -ne $lastReal) {
+    [void]$failures.Add("a truncated CSV reported last $($truncatedRss.last), expected $lastReal, which is the last row that is a row")
+}
+if ($truncatedRss.samples -ne $rampRss.samples) {
+    [void]$failures.Add("a truncated CSV fitted $($truncatedRss.samples) samples against the same file's $($rampRss.samples) without the fill")
+}
+if ($truncatedRun.printed -notmatch 'truncated:') {
+    [void]$failures.Add("the -ReadCsv output does not say the file was truncated")
+}
+[void]$cases.Add([ordered]@{
+        case         = "a_truncated_csv_is_not_read_as_a_sample_of_zeros"
+        samples      = $truncatedRss.samples
+        dropped_rows = $truncatedRun.fits.dropped_rows
+        last         = $truncatedRss.last
+        expected     = $lastReal
+        judged       = $true
+        ok           = ($truncatedRss.last -eq $lastReal) -and ($truncatedRun.fits.dropped_rows -ge 1)
+    })
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 

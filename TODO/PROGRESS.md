@@ -57,12 +57,27 @@ bump, reconcile with `scripts/vendor-sync.ps1`, keep `UPSTREAM.md` true.
 
 ## State
 
-- **Last session:** 2026-08-23T16:18:55Z, unattended. It stopped at a clean
-  point rather than on a word from the operator: the work order's effort S list
-  was cleared and the next item is a category pass. The duration is not
+- **Last session:** 2026-08-24T02:09:05Z, unattended. The duration is not
   restated here:
   `scripts/session-report.ps1` derives it from the instant above, and a
   duration written down twice is a number two documents disagree about.
+
+### What this session set out to do, written before doing it
+
+The operator's three items first, then the work order below.
+
+1. **Two rulings, both given.** `--out` may leave the output directory: it
+   stays as it is, and the open question closes. And the vendored tree **is**
+   to be patched so a dropped path component is reported,
+   [T-173](metainfo.md), on the standing instruction that upstream must never
+   be able to change this tree's behaviour silently.
+2. **`under/inner.bin` reached the remote.** Find out how, take it out of the
+   history, ignore it, and change the scripts so the class cannot recur.
+3. **The second six hour soak finished.** Read it, write the final numbers
+   into [T-224](memory.md), and answer whether another run is needed.
+
+Then PROGRESS's own order: [T-224](memory.md), then the `bep-coverage.md`
+category pass, then the three entries open on a decision.
 - **Tests:** 1,290 passing, 0 failing. 1,271 at the start. Plus **149** in the
   vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
   do not run. The vendored count is unchanged by this session's patch, which
@@ -106,8 +121,8 @@ pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.c
 gh run list --limit 1
 ```
 
-- **Entries:** 178 items. 23 open, 1 partial, 0 blocked, 144 done, 10 deferred
-  to Phase C. 144 of 168 workable done, 24 left.
+- **Entries:** 180 items. 23 open, 1 partial, 0 blocked, 146 done, 10 deferred
+  to Phase C. 146 of 170 workable done, 24 left.
 - **Tree:** 96 Rust files, 57,539 lines of code, 14,705 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **31 patches**

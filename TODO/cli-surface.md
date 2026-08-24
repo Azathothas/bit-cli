@@ -3860,3 +3860,113 @@ Approach:    Put the process id in the name, which is one line, and delete the
              rather than fixing one.
 Acceptance:  Two `gates.ps1` runs started within a second of each other both
              reach a verdict, and neither leaves a file in `$env:TEMP` behind.
+
+### T-230 A run's output reached the remote because nothing said what belongs here
+
+Source:      the operator, 2026-08-24, on finding `under/inner.bin` on the
+             remote
+Category:    ci
+Priority:    P1
+Effort:      S
+Status:      **done** 2026-08-24
+
+Problem:     `under/inner.bin`, 1,000 bytes of `0x41`, was tracked on `main`
+             from commit `2d369db` and pushed. Nothing in this repository
+             wanted it and no session mentioned it.
+
+             It came from [T-226](#t-226-download---out-is-parsed-and-never-read)'s
+             own acceptance table, third row,
+             `--dir .tmp/t226b --out under`. That row exists to demonstrate
+             the resolution T-226 fixed: `directory.join(env.resolve(path))`
+             made a relative `--out` absolute against the working directory
+             first, so joining returned the absolute path and the payload
+             landed at `<repo>/under/inner.bin` rather than under `.tmp/`. The
+             fix is in the same commit that carries the file, which is why
+             nothing looked wrong afterwards.
+
+             **The defect that wrote it is not the reason it reached the
+             remote.** Three things had to be true at once and all three were
+             general:
+
+             - `scripts/git-sync.ps1` stages with `git add -A`, which is
+               right: a session that stages by hand forgets the record file.
+             - `.gitignore` covered `*.iso`, `*.img`, `*.qcow2` and `*.part`
+               and not `*.bin`, so nothing held it back.
+             - **Nothing anywhere compared the result against what this
+               repository is supposed to contain.** `gates.ps1`'s `text` gate
+               reads six extensions and cannot see a seventh. `check-todo.ps1`
+               reads the record. No check had an opinion about a new top level
+               directory full of payload.
+Relevance:   Any run that writes into the working tree gets the same ride, and
+             a session runs dozens. The `--out` escape is now allowed on the
+             operator's ruling, which makes it likelier rather than less.
+Approach:    Say what belongs here, mechanically, and check it where a commit
+             is made.
+Acceptance:  The path is gone from the history on the remote, a payload of
+             that shape cannot be staged, and a check refuses a tracked path
+             this repository does not account for. Run against the defect on
+             both of its rules.
+
+#### Done 2026-08-24, and the check found a second defect on the day it was written
+
+**The history was rewritten.** Eight commits carried the blob, `2d369db`
+through `bd99f35`. `git filter-branch --index-filter` over `2d369db~1..HEAD`
+removed the path from each, author and committer identity and dates
+unchanged, 198 commits before and 198 after, and the only difference between
+the old tip and the new one is that one file:
+
+```bash
+git diff --stat backup/pre-under-removal-20260824 main
+```
+
+The rewritten branch was force pushed with `--force-with-lease` pinned to the
+old tip. `git-sync.ps1` was not used and could not be: it commits and pushes
+work, and this is neither. Every push after it is `git-sync`'s again.
+`gh api repos/Azathothas/bit-cli/contents/under` answers 404.
+
+**`scripts/check-tree.ps1` is the check**, and it has two rules because either
+one alone would have stopped this file:
+
+| rule | what it says | what it catches |
+| --- | --- | --- |
+| `top-level` | the first path component is one of a fixed set | `under/`, a new top level directory |
+| `kind` | outside `vendor/`, the name is a known extension or a known exact name | `inner.bin`, wherever it lands |
+
+Both lists are measured rather than imagined: they are what `git ls-files`
+holds today. `vendor/` is exempt from the second rule and only the second,
+because upstream's fixtures legitimately include `.bin`, `.torrent`, `.png`
+and `.svg`, and a reconciliation that had to declare each one here is a
+reconciliation nobody runs.
+
+**It reads the index rather than the working tree**, which is what lets one
+script answer two questions. In `gates.ps1` and in CI the index is HEAD, so it
+answers "what is in this tree". In `git-sync.ps1` it runs after `git add -A`
+and before the commit, when the index is exactly what the commit will contain,
+so it answers "what is about to go in". There is no second mode to keep
+honest.
+
+Three places, because the file got in through the gap between them:
+
+- `gates.ps1`, as the `tree` gate, beside `record`.
+- `.github/workflows/ci.yml`, as the `Tree` job. This is the copy
+  `git-sync.ps1 -SkipGates` cannot skip.
+- `git-sync.ps1`, after staging. Not behind `-SkipGates`: that switch is for a
+  documentation push on a tree known green, which is likelier to carry a stray
+  payload than one that ran the gates. It resets the index and commits nothing.
+
+`.gitignore` gained `*.bin` and `*.torrent`, with `!/vendor/**/*.bin` and
+`!/vendor/**/*.torrent` beside them so a reconciliation is not silently
+swallowed, which `scripts/vendor-sync.ps1` refuses to finish over anyway.
+
+**Run against the defect, on both rules.** `under/inner.bin` recreated and
+force-added is refused by `top-level`; `crates/payload.dat` is refused by
+`kind`; and with `.gitignore` in place `git add -A` does not stage the payload
+at all, so the guard is reached only when somebody insists.
+
+```bash
+pwsh -NoProfile -File scripts/check-tree.ps1
+```
+
+**And it failed the first time it was run, on a file nobody was looking for.**
+`bench/soak-20260821T012428252Z.csv`, committed evidence, ended in 176 NUL
+bytes. That is [T-231](memory.md), and it is the more interesting of the two.

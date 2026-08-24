@@ -10,12 +10,22 @@
 # Scratch: downloads, fixtures, payloads, intermediate state
 /.tmp/
 
-# Downloaded payloads and metainfo produced by tests and manual runs
+# Downloaded payloads and metainfo produced by tests and manual runs.
+#
+# `.bin` and `.torrent` are here because a payload reached the remote without
+# them: `under/inner.bin`, 1,000 bytes, left in the working tree by a T-226
+# acceptance run and taken by `git add -A`. The vendored trees legitimately
+# hold both kinds as upstream fixtures, so they are excepted by path rather
+# than by extension. See TODO/cli-surface.md, T-230.
 *.iso
 *.img
 *.qcow2
 *.part
 *.bit-cli-part
+*.bin
+*.torrent
+!/vendor/**/*.bin
+!/vendor/**/*.torrent
 
 # Benchmark and acceptance output.
 #

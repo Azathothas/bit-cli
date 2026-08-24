@@ -228,6 +228,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-225](create-seed.md) | P1 | ci | **done** | The interop script hashes files the client it just killed still holds |
 | [T-226](cli-surface.md) | P1 | cli | **done** | `download --out` is parsed and never read |
 | [T-228](cli-surface.md) | P3 | ci | open | Two gate runs at once fail on a locked file rather than on being two |
+| [T-230](cli-surface.md) | P1 | ci | **done** | A run's output reached the remote because nothing said what belongs here |
+| [T-231](memory.md) | P1 | memory | **done** | A soak killed mid-write reads as a final sample of zeros |
 | [T-120](licensing.md) | P1 | licensing | **done** | THIRD_PARTY.md is not generated |
 | [T-121](licensing.md) | P1 | licensing | **done** | No cargo-deny configuration |
 | [T-122](reference-map.md) | P2 | licensing | **done** | The copyleft and unlicensed reference trees are deleted |
@@ -255,8 +257,8 @@ S is under a day, M is a few days, L is a week, XL is longer.
 
 ## Counts
 
-178 items: 168 to work through, and 10 deferred to Phase C.
-23 open, 1 partial, 0 blocked, 144 done.
+180 items: 170 to work through, and 10 deferred to Phase C.
+23 open, 1 partial, 0 blocked, 146 done.
 
 **A fourth was added on 2026-08-22 the same way.** [T-188](disk-io.md) came out
 of [T-185](cli-surface.md)'s third acceptance run, and it corrects
@@ -514,11 +516,11 @@ sessions earlier.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 1 | 0 | 0 | 63 | 64 |
+| P1 | 1 | 0 | 0 | 65 | 66 |
 | P2 | 11 | 1 | 0 | 53 | 65 |
 | P3 | 11 | 0 | 0 | 16 | 27 |
 | Phase C | | | | 10 deferred | 10 |
-| **All** | **23** | **1** | **0** | **144** | **178** |
+| **All** | **23** | **1** | **0** | **146** | **180** |
 
 `blocked` is empty, for the first time. It was two entries until 2026-08-22
 and both were blocked on `librqbit` rather than on anything here, which is what
