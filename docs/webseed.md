@@ -394,8 +394,63 @@ bit-cli webseed test album.torrent --web-seed https://mirror.example.com/pub/
 ```
 
 This reports range support, the entity length against what the torrent says,
-the redirect chain hop by hop, the negotiated TLS version and cipher suite, and
-the latency. One request per source, one byte of payload at most.
+the redirect chain hop by hop, the negotiated TLS version and cipher suite, the
+latency, and the response headers that say where the bytes came from. One
+request per source, one byte of payload at most.
+
+```
+source               https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/
+  requested          https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/latest-releases.yaml
+  scope              *
+  status             206
+  ranges             yes
+  length             3.24 KiB (matches the torrent)
+  server             nginx/1.29.0
+  age                8
+  etag               "6a2d8918-cf8"
+  last-modified      Sat, 13 Jun 2026 16:45:12 GMT
+  via                1.1 varnish, 1.1 varnish
+  x-cache            HIT, HIT
+  x-served-by        cache-ams-eham8680082-AMS, cache-bom-vanm7210091-BOM
+  http               HTTP/1.1
+  tls                TLSv1_3 TLS13_AES_128_GCM_SHA256
+  handshake          connect 49ms, tls 52ms
+  alpn               h2
+  ttfb               269ms
+  total              371ms
+```
+
+**`x-cache HIT, HIT` is the line that decides what a mirror costs.** A payload
+served from cache costs the CDN's rate; one that misses costs an origin request
+per range, and the difference between those two is the whole reason to put a
+CDN in front of a bucket. It is also what makes a slow source diagnosable:
+`ttfb 269ms` says the request was slow and `x-cache MISS` says why.
+
+These are the headers of the exchange the rest of the report describes,
+received rather than requested again. Asking a second time would answer a
+different question, over a different connection, possibly from a different
+cache node.
+
+The reported set is fixed, because a report is a thing people paste and a
+header set can carry a signed URL or a session cookie:
+
+| header | what it answers |
+| --- | --- |
+| `age`, `x-cache`, `cf-cache-status`, `x-served-by`, `via` | was this served from cache, in four CDNs' spellings |
+| `x-amz-request-id`, `x-amz-id-2` | the two values an S3 support ticket asks for, neither recoverable afterwards |
+| `etag`, `last-modified` | whether `If-Range` resumption survives a deploy |
+| `content-encoding` | whether a proxy changed what a byte range means |
+| `cache-control`, `cf-ray` | the context for the rest |
+
+Anything else is one flag away, and it is matched without case:
+
+```bash
+bit-cli webseed test album.torrent --web-seed https://mirror.example.com/pub/ --web-seed-report-header X-Cache-Hits
+```
+
+A header named that way whose value is a credential is still printed as
+`<redacted>` unless `--no-redact` is given. `server` keeps its own field and is
+not in the map.
 
 ## Fetching one piece from one mirror
 

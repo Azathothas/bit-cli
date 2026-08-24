@@ -315,12 +315,14 @@ it is a stable public object of a convenient size. One ranged `GET` is what
 each check costs and no payload was downloaded except the 2.3 MiB object itself
 and one verification run over it.
 
-Not measured: whether a CDN in front of a bucket served a request from cache.
-`Server` is the only response header any report carries, which is the
-`server AmazonS3` line above. `x-cache`, `age`, `etag` and `x-amz-request-id`
-are received and dropped, so none of them is in any report. That is
-[T-254 in the TODO](../../TODO/webseed.md), and `x-amz-request-id` is the value
-an S3 support ticket asks for first.
+Whether a CDN in front of the bucket served the request from cache **is**
+answerable, and `webseed test` is where it is answered: the report carries
+`x-cache`, `age`, `etag`, `cache-control`, `x-amz-request-id` and `x-amz-id-2`
+from the exchange it already made. `x-amz-request-id` is the value an S3
+support ticket asks for first, and it cannot be recovered after the request, so
+capturing it on the request that failed is the only chance there is.
+[`../webseed.md`](../webseed.md) has the whole reported set and the flag that
+adds to it.
 
 Not measured: a bucket with request-payer enabled, a bucket in a region far
 from the client, and the same object through CloudFront. The commands are the

@@ -14,6 +14,7 @@
 //! Both are read-only. Neither writes a payload and neither touches the
 //! `.torrent`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -124,6 +125,16 @@ pub struct SourceTest {
     pub length_matches: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
+    /// Response headers worth keeping, lower-cased, from [`REPORTED_HEADERS`]
+    /// and from whatever the caller named. Empty when the response carried
+    /// none of them, which is what a plain origin looks like.
+    ///
+    /// Received rather than re-requested: these are the headers of the exact
+    /// exchange the rest of this report describes. Asking again would answer a
+    /// different question, over a different connection, possibly from a
+    /// different cache node. See `TODO/webseed.md`, T-254.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
     /// `HTTP/1.1`, `HTTP/2.0`, and so on.
     pub http_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -135,6 +146,99 @@ pub struct SourceTest {
     pub at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Response headers a report keeps, lower-cased.
+///
+/// An allowlist rather than everything, and the reason is that a report is a
+/// thing people paste: a header set can carry a signed URL, a session cookie
+/// or a bearer token, and a diagnostic that leaks one is worse than a
+/// diagnostic that is missing a field. Anything outside this list is asked for
+/// by name, with `--web-seed-report-header`.
+///
+/// What is on it and why:
+///
+/// - `age`, `x-cache`, `cf-cache-status` and `x-served-by` answer "was this
+///   served from cache", which is the question that decides what a mirror
+///   costs. Four spellings because the CDNs spell it four ways.
+/// - `x-amz-request-id` and `x-amz-id-2` are the two values an AWS support
+///   ticket asks for first, and neither can be recovered after the request.
+/// - `etag` and `last-modified` decide whether `If-Range` resumption survives
+///   a deploy.
+/// - `content-encoding` is how a transcoding proxy announces that it changed
+///   what a byte range means, which is the one header here that can make a
+///   range request return the wrong bytes.
+/// - `cache-control`, `via` and `cf-ray` are the context for the rest.
+///
+/// `server` is not on it: it has its own field already and moving it would
+/// break a reader. See `TODO/webseed.md`, T-254.
+pub const REPORTED_HEADERS: &[&str] = &[
+    "age",
+    "cache-control",
+    "cf-cache-status",
+    "cf-ray",
+    "content-encoding",
+    "etag",
+    "last-modified",
+    "via",
+    "x-amz-id-2",
+    "x-amz-request-id",
+    "x-cache",
+    "x-served-by",
+];
+
+/// Header names whose value is never printed, whichever direction it travelled.
+///
+/// None of [`REPORTED_HEADERS`] is one of these, so this only bites on a header
+/// the caller asked for by name. That is exactly the case worth guarding: a
+/// caller debugging an auth problem asks for the header the auth is in.
+const SENSITIVE_HEADERS: &[&str] = &[
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "set-cookie",
+    "www-authenticate",
+    "x-api-key",
+];
+
+/// Pick the headers worth reporting out of a response.
+///
+/// `extra` is what the caller asked for by name, matched case-insensitively,
+/// so a header the allowlist does not carry is one flag away rather than a
+/// code change. `redact` is `--no-redact` inverted, and it applies to a header
+/// arriving from a mirror for the same reason it applies to one going to it.
+pub fn reported_headers(
+    headers: &reqwest::header::HeaderMap,
+    extra: &[String],
+    redact: bool,
+) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (name, value) in headers {
+        let lower = name.as_str().to_ascii_lowercase();
+        let wanted = REPORTED_HEADERS.contains(&lower.as_str())
+            || extra.iter().any(|asked| asked.eq_ignore_ascii_case(&lower));
+        if !wanted {
+            continue;
+        }
+        let Ok(text) = value.to_str() else {
+            continue;
+        };
+        let sensitive = redact && SENSITIVE_HEADERS.contains(&lower.as_str());
+        let text = match sensitive {
+            true => "<redacted>".to_string(),
+            false => text.to_string(),
+        };
+        // A header sent twice is one row carrying both values, the way a
+        // reader sees it on the wire. `x-cache: MISS, MISS` from a two hop
+        // Fastly chain is one header; two `via` lines are two.
+        out.entry(lower)
+            .and_modify(|existing: &mut String| {
+                existing.push_str(", ");
+                existing.push_str(&text);
+            })
+            .or_insert(text);
+    }
+    out
 }
 
 impl SourceTest {
@@ -179,6 +283,7 @@ impl SourceTest {
             expected_length: 0,
             length_matches: None,
             server: None,
+            headers: BTreeMap::new(),
             http_version: String::new(),
             tls: None,
             ttfb_ms: 0,
@@ -199,6 +304,8 @@ pub async fn test_source(
     layout: &Layout,
     info_hash: &str,
     use_head: bool,
+    report_headers: &[String],
+    redact: bool,
 ) -> SourceTest {
     let started = Instant::now();
     let at = Timestamp::now();
@@ -356,6 +463,7 @@ pub async fn test_source(
         .get(SERVER)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
+    let reported = reported_headers(&headers, report_headers, redact);
 
     // A `Content-Range` gives the true entity size; a `Content-Length` on a
     // 206 is the size of the one byte that came back, not of the file.
@@ -454,12 +562,102 @@ pub async fn test_source(
         expected_length: entry.length,
         length_matches,
         server,
+        headers: reported,
         http_version,
         tls,
         ttfb_ms: ttfb.as_millis().min(u128::from(u64::MAX)) as u64,
         total_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
         at: at.iso(),
         error,
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+    fn map(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut out = HeaderMap::new();
+        for (name, value) in pairs {
+            out.append(
+                HeaderName::from_bytes(name.as_bytes()).expect("a header name"),
+                HeaderValue::from_str(value).expect("a header value"),
+            );
+        }
+        out
+    }
+
+    /// The allowlist keeps what answers "was this cached" and drops the rest.
+    #[test]
+    fn only_the_allowlisted_headers_are_kept() {
+        let headers = map(&[
+            ("age", "41"),
+            ("x-cache", "HIT"),
+            ("etag", "\"abc\""),
+            ("x-cache-hits", "12"),
+            ("x-frame-options", "DENY"),
+            ("set-cookie", "session=secret"),
+        ]);
+        let out = reported_headers(&headers, &[], true);
+        assert_eq!(out.get("age").map(String::as_str), Some("41"));
+        assert_eq!(out.get("x-cache").map(String::as_str), Some("HIT"));
+        assert!(out.contains_key("etag"));
+        assert!(!out.contains_key("x-cache-hits"), "{out:?}");
+        assert!(!out.contains_key("x-frame-options"), "{out:?}");
+        assert!(!out.contains_key("set-cookie"), "{out:?}");
+    }
+
+    /// A header named by the caller is kept whatever the allowlist says, and
+    /// the name is matched without case.
+    #[test]
+    fn a_header_named_by_the_caller_is_kept() {
+        let headers = map(&[("x-cache-hits", "12"), ("x-frame-options", "DENY")]);
+        let out = reported_headers(&headers, &["X-Cache-HITS".to_string()], true);
+        assert_eq!(out.get("x-cache-hits").map(String::as_str), Some("12"));
+        assert!(!out.contains_key("x-frame-options"), "{out:?}");
+    }
+
+    /// Naming a credential header does not print the credential. A caller
+    /// debugging an auth problem asks for exactly this header, which is why
+    /// the rule is worth having on a response and not only on a request.
+    #[test]
+    fn a_credential_named_by_the_caller_is_still_redacted() {
+        let headers = map(&[("set-cookie", "session=secret")]);
+        let asked = ["set-cookie".to_string()];
+
+        let out = reported_headers(&headers, &asked, true);
+        assert_eq!(
+            out.get("set-cookie").map(String::as_str),
+            Some("<redacted>")
+        );
+        assert!(!out["set-cookie"].contains("secret"));
+
+        // `--no-redact` is the caller saying they meant it.
+        let out = reported_headers(&headers, &asked, false);
+        assert_eq!(
+            out.get("set-cookie").map(String::as_str),
+            Some("session=secret")
+        );
+    }
+
+    /// A header sent twice is one row carrying both values, in order.
+    #[test]
+    fn a_header_sent_twice_is_one_row() {
+        let headers = map(&[("via", "1.1 varnish"), ("via", "1.1 nginx")]);
+        let out = reported_headers(&headers, &[], true);
+        assert_eq!(
+            out.get("via").map(String::as_str),
+            Some("1.1 varnish, 1.1 nginx")
+        );
+    }
+
+    /// A response carrying none of them reports none, rather than a row per
+    /// header with an empty value.
+    #[test]
+    fn a_plain_origin_reports_no_headers_at_all() {
+        let headers = map(&[("content-length", "3320"), ("server", "nginx")]);
+        assert!(reported_headers(&headers, &[], true).is_empty());
     }
 }
 
@@ -633,6 +831,10 @@ fn test_local(
         expected_length,
         length_matches: Some(length == expected_length),
         server: Some("local file".to_string()),
+        // A `file:` source has no response and so no headers. Empty rather
+        // than absent-because-nobody-looked, which is what an HTTP source that
+        // carried none of them also reports.
+        headers: BTreeMap::new(),
         http_version: "file".to_string(),
         tls: None,
         ttfb_ms: elapsed,

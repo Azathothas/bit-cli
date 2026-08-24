@@ -503,7 +503,7 @@ pub struct FileServer {
 impl FileServer {
     /// Serve `root` on loopback, speaking BEP 19: ranged GETs against a path.
     pub fn start(root: impl Into<PathBuf>) -> Self {
-        Self::start_with(root, false)
+        Self::start_with(root, false, false)
     }
 
     /// Serve `root` on loopback speaking BEP 17 instead.
@@ -513,10 +513,22 @@ impl FileServer {
     /// them. The piece length is the fixtures' 1024. See `TODO/webseed.md`,
     /// T-004.
     pub fn start_hoffman(root: impl Into<PathBuf>) -> Self {
-        Self::start_with(root, true)
+        Self::start_with(root, true, false)
     }
 
-    fn start_with(root: impl Into<PathBuf>, hoffman: bool) -> Self {
+    /// Serve `root` the way a CDN in front of a bucket does.
+    ///
+    /// Four headers a report keeps and two it must drop, in one fixture, so
+    /// the allowlist is proved in both directions by one run. `x-cache-hits`
+    /// and `x-frame-options` are the two that must not appear: the first
+    /// because it is not on the list and looks like one that is, the second
+    /// because it is the kind of header every origin sends and none of it is
+    /// diagnostic. See `TODO/webseed.md`, T-254.
+    pub fn start_cdn(root: impl Into<PathBuf>) -> Self {
+        Self::start_with(root, false, true)
+    }
+
+    fn start_with(root: impl Into<PathBuf>, hoffman: bool, cdn: bool) -> Self {
         use std::io::{Read, Write};
 
         let root = root.into();
@@ -646,9 +658,19 @@ Connection: close
                     }
 
                     let total = body.len();
+                    // Written as escapes rather than as real line breaks in a
+                    // string: a heredoc turns `\r\n` into a CR and an LF byte
+                    // on the way here and the fixture then serves a malformed
+                    // response that hangs the client. `TODO/RULES.md` section 5.
+                    let extra = match cdn {
+                        true => {
+                            "Cache-Control: public, max-age=3600\r\nETag: \"d41d8cd9\"\r\nAge: 41\r\nX-Cache: HIT\r\nX-Cache-Hits: 12\r\nX-Frame-Options: DENY\r\n"
+                        }
+                        false => "",
+                    };
                     let response = match range {
                         None => format!(
-                            "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+                            "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\n{extra}Connection: close\r\n\r\n"
                         ),
                         Some((from, to)) => {
                             let from: usize = from.parse().unwrap_or(0);
@@ -656,7 +678,7 @@ Connection: close
                             let to = to.min(total.saturating_sub(1));
                             let slice = body.get(from..=to).unwrap_or(&[]).to_vec();
                             let head = format!(
-                                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {from}-{to}/{total}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+                                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {from}-{to}/{total}\r\nAccept-Ranges: bytes\r\n{extra}Connection: close\r\n\r\n",
                                 slice.len()
                             );
                             let _ = stream.write_all(head.as_bytes());

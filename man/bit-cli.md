@@ -368,6 +368,7 @@ Effects: `read_only`.
 | `--web-seed-require` | boolean |  | `false` | Fail the run if a declared source turns out to be unusable |
 | `--head` | boolean |  | `false` | Use HEAD rather than a one-byte ranged GET |
 | `--concurrency <N>` | string |  | `16` | Sources probed at once |
+| `--web-seed-report-header <NAME>` | array |  |  | Report this response header as well. Repeatable, case insensitive |
 
 ### `bit-cli webseed probe`
 

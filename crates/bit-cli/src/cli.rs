@@ -1251,6 +1251,21 @@ pub struct WebseedTestArgs {
     /// is one request to a different host, so they do not contend.
     #[arg(long, value_name = "N", default_value_t = 16)]
     pub concurrency: usize,
+
+    /// Report this response header as well. Repeatable, case insensitive.
+    ///
+    /// The report already keeps the headers that answer "was this served from
+    /// cache" and "what does support need": `age`, `x-cache`,
+    /// `cf-cache-status`, `x-served-by`, `via`, `cache-control`, `etag`,
+    /// `last-modified`, `content-encoding`, `cf-ray`, `x-amz-request-id` and
+    /// `x-amz-id-2`. This is for anything else.
+    ///
+    /// It is an allowlist rather than everything because a report is a thing
+    /// people paste, and a header set can carry a signed URL or a session
+    /// cookie. A header named here whose value is a credential is still
+    /// redacted unless `--no-redact` is given.
+    #[arg(long = "web-seed-report-header", value_name = "NAME")]
+    pub report_headers: Vec<String>,
 }
 
 /// `bit-cli webseed probe`.

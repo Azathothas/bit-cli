@@ -1937,7 +1937,7 @@ Source:      measured 2026-08-24 while writing `docs/examples/s3-webseed.md`
 Category:    webseed
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     `webseed test` reports the status, the range support, the entity
              length, the redirect chain, the negotiated TLS and the timings.
@@ -2000,3 +2000,74 @@ Acceptance:  `bit-cli webseed test <TORRENT> --web-seed <URL> --json` against a
              same run against a plain origin carries neither and says nothing
              about them, and no header outside the allowlist appears in either.
              The rows are in `docs/schema.md` because a run produced them.
+
+Closed:      `sources[].headers`, a map of lower-cased names, filled by
+             `reported_headers` at
+             `crates/bit-cli-core/src/webseed/probe.rs:210` from the
+             `HeaderMap` the probe already had. Nothing new is requested: the
+             allowlist is applied where `server` was already being read out of
+             the same response.
+
+             **The acceptance names Cloudflare and this was run against
+             Fastly**, and the substitution is deliberate rather than a
+             shortcut. RULES.md section 5 lists three real mirrors a test may
+             use and `dl-cdn.alpinelinux.org` is the CDN-fronted one; none of
+             the three is behind Cloudflare. `x-cache` is Fastly's spelling of
+             `cf-cache-status` and both are on the allowlist, so the fact under
+             test is the same fact.
+
+             ```
+             source               https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/
+               status             206
+               length             3.24 KiB (matches the torrent)
+               server             nginx/1.29.0
+               age                8
+               etag               "6a2d8918-cf8"
+               last-modified      Sat, 13 Jun 2026 16:45:12 GMT
+               via                1.1 varnish, 1.1 varnish
+               x-cache            HIT, HIT
+               x-served-by        cache-ams-eham8680082-AMS, cache-bom-vanm7210091-BOM
+               ttfb               269ms
+             ```
+
+             The torrent is a local one whose single file is named and sized
+             for a real object on that mirror, so the probe is one ranged `GET`
+             for one byte and the length matches.
+
+             **The other half of the acceptance is in-process**, because a
+             claim about what is *not* reported cannot rest on what one origin
+             happened to send. `FileServer::start_cdn` answers with four
+             headers the report keeps and two it must drop, `x-cache-hits` and
+             `x-frame-options`, so one fixture proves the allowlist in both
+             directions. `FileServer::start` is unchanged and is the plain
+             origin: its report carries no `headers` field at all rather than
+             an empty object.
+
+             Eight tests. Five on `reported_headers` in core, three end to end.
+             The one worth naming is
+             `a_credential_named_by_the_caller_is_still_redacted`: the flag
+             exists so somebody debugging an auth failure can ask for the
+             header the auth is in, which is exactly when a report must not
+             print it. `--no-redact` is how they say they meant it.
+
+             **`--web-seed-report-header` rather than a wider default**, and
+             the reason is in the entry: a report is a thing people paste. The
+             twelve on the list carry no credential by construction. Verified
+             against the real mirror by asking for `X-Cache-Hits` and
+             `strict-transport-security` by name and getting both, and by not
+             getting either without the flag.
+
+             Four rows reach `docs/schema.md` from a run, not by hand:
+             `sources[].headers.age`, `.cache-control`, `.etag` and `.x-cache`.
+             The flattener names each header as its own row, so the sample can
+             only ever document what the fixture sends. `webseed_test`'s
+             description now carries the whole reported set, which also closes
+             the third thing [T-253](../TODO/cli-surface.md) noted about that
+             description being incomplete.
+
+             `docs/webseed.md` carries the output above and the table of what
+             each header answers. Both worked examples said the cache question
+             could not be answered and now say where it is answered:
+             `docs/examples/s3-webseed.md` under "What was measured here and
+             what was not", and `docs/examples/cloudflare-webseed.md` beside
+             its two `ttfb` figures.

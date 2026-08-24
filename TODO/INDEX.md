@@ -244,13 +244,13 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-251](trackers.md) | P2 | trackers | open | A web seed has twelve knobs of its own and a tracker has none |
 | [T-252](cli-surface.md) | P3 | cli | open | The run's numbers exist in JSON and cannot be asked for as text |
 | [T-253](cli-surface.md) | P2 | cli | partial | The schema sample takes one path, so thirteen real fields went undocumented |
-| [T-254](webseed.md) | P2 | webseed | open | No report carries a response header, so a CDN cache hit is invisible |
-| [T-255](cli-surface.md) | P2 | cli | open | Regenerating the schema deletes four hand-written sections and nothing fails |
+| [T-254](webseed.md) | P2 | webseed | **done** | No report carries a response header, so a CDN cache hit is invisible |
+| [T-255](cli-surface.md) | P2 | cli | **done** | Regenerating the schema deletes four hand-written sections and nothing fails |
 
 ## Counts
 
 204 items: 193 to work through, and 11 deferred to Phase C.
-37 open, 2 partial, 0 blocked, 154 done.
+35 open, 2 partial, 0 blocked, 156 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -259,10 +259,10 @@ when a number here disagrees with them.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 3 | 0 | 0 | 68 | 71 |
-| P2 | 23 | 2 | 0 | 55 | 80 |
+| P2 | 21 | 2 | 0 | 57 | 80 |
 | P3 | 11 | 0 | 0 | 19 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **37** | **2** | **0** | **154** | **204** |
+| **All** | **35** | **2** | **0** | **156** | **204** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

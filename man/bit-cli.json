@@ -1512,6 +1512,12 @@
           "name": "--concurrency",
           "type": "string",
           "value_name": "N"
+        },
+        {
+          "description": "Report this response header as well. Repeatable, case insensitive",
+          "name": "--web-seed-report-header",
+          "type": "array",
+          "value_name": "NAME"
         }
       ],
       "description": "Probe each source: range support, size, redirects, TLS, latency",

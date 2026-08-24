@@ -279,6 +279,11 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
     let server = FileServer::start(dir.clone());
     let out_dir = dir.join("out");
     let source = format!("{}payload/", server.base);
+    // A second server, answering the way a CDN in front of a bucket does, so
+    // `sources[].headers` is documented from a run rather than written down.
+    // See `TODO/webseed.md`, T-254.
+    let cdn = FileServer::start_cdn(dir.clone());
+    let cdn_source = format!("{}payload/", cdn.base);
     for format in ["--json", "--jsonl"] {
         let (_, out) = capture(
             &[
@@ -550,6 +555,20 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
                 "--no-torrent-web-seed",
                 "--web-seed",
                 &source,
+                "--web-seed-mode",
+                "prefix",
+            ],
+        ),
+        (
+            "bit-cli webseed test <TORRENT> --web-seed <URL> --json, against a CDN",
+            vec![
+                "--json",
+                "webseed",
+                "test",
+                &torrent,
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &cdn_source,
                 "--web-seed-mode",
                 "prefix",
             ],
@@ -1260,7 +1279,152 @@ mod tests {
             }
         }
         flush_section(&mut out, &previous, &part, &section, &mut pending);
+        carry_across(&mut out, committed, rendered);
         out
+    }
+
+    /// Append every `##` section of the committed file the generator does not
+    /// produce.
+    ///
+    /// `merge_schema` unions **rows**, which is T-158's half of this. The
+    /// other half is prose: `docs/schema.md` ends with four sections nothing
+    /// produces, and one of them carries the only committed measurement of
+    /// what seven PowerShell redirection forms do to non-ASCII output.
+    /// Regenerating deleted all four, 130 lines, and neither the schema test
+    /// nor `check-docs.ps1` failed, because the first compares fields and the
+    /// second resolves links.
+    ///
+    /// Sections are matched by their heading line, so a hand-written one is
+    /// kept and a generated one is never duplicated. They are appended in
+    /// committed order after the generated content, which makes this
+    /// idempotent: a second run finds them at the end, does not recognise
+    /// them, and puts them back in the same place.
+    ///
+    /// See `TODO/cli-surface.md`, T-255.
+    fn carry_across(out: &mut String, committed: &str, rendered: &str) {
+        let generated: std::collections::BTreeSet<&str> = rendered
+            .lines()
+            .filter(|line| line.starts_with("## "))
+            .collect();
+
+        let mut keep = String::new();
+        let mut keeping = false;
+        // A fence has to be tracked: a `##` inside a code block is not a
+        // heading, and a section split that thought it was would cut a
+        // committed example in half.
+        let mut fenced = false;
+        for line in committed.lines() {
+            if line.starts_with("```") {
+                fenced = !fenced;
+            } else if !fenced && line.starts_with("## ") {
+                keeping = !generated.contains(line);
+            }
+            if keeping {
+                keep.push_str(line);
+                keep.push('\n');
+            }
+        }
+        if keep.trim().is_empty() {
+            return;
+        }
+        while out.ends_with('\n') {
+            out.pop();
+        }
+        out.push_str("\n\n");
+        out.push_str(keep.trim_end());
+        out.push('\n');
+    }
+
+    /// A section the generator does not produce survives regeneration.
+    ///
+    /// This is T-255's acceptance. `docs/schema.md` ends with four hand-written
+    /// sections and regenerating deleted all four, 130 lines, in silence: the
+    /// schema check compares fields, so prose is invisible to it.
+    #[test]
+    fn regenerating_the_schema_keeps_a_section_the_generator_does_not_produce() {
+        let committed = concat!(
+            "# The JSON contract\n\n",
+            "## Documents\n\n### `download`\n\n",
+            "| field | type |\n| --- | --- |\n| `kept` | string |\n\n",
+            "## On Windows\n\nNeither defaults to UTF-8.\n\n",
+            "```powershell\n$OutputEncoding = 'utf8'\n```\n",
+        );
+        let rendered = concat!(
+            "# The JSON contract\n\n",
+            "## Documents\n\n### `download`\n\n",
+            "| field | type |\n| --- | --- |\n| `added` | integer |\n",
+        );
+
+        let merged = merge_schema(committed, rendered);
+        assert!(
+            merged.contains("## On Windows"),
+            "a hand-written section has to survive:\n{merged}"
+        );
+        assert!(
+            merged.contains("Neither defaults to UTF-8."),
+            "its prose has to survive with it:\n{merged}"
+        );
+        assert!(
+            merged.contains("$OutputEncoding = 'utf8'"),
+            "so does a fenced example inside it:\n{merged}"
+        );
+        assert!(merged.contains("| `kept` | string |"), "{merged}");
+        assert!(merged.contains("| `added` | integer |"), "{merged}");
+        assert_eq!(
+            merged.matches("## Documents").count(),
+            1,
+            "a generated section must not be duplicated:\n{merged}"
+        );
+
+        // Idempotent: the second run finds the section at the end, does not
+        // recognise it either, and puts it back in the same place.
+        assert_eq!(merge_schema(&merged, rendered), merged);
+    }
+
+    /// A `##` inside a fenced block is not a heading.
+    ///
+    /// A split that thought it was would cut a committed example in half and
+    /// carry the second half across on its own.
+    #[test]
+    fn a_hash_inside_a_code_fence_does_not_start_a_section() {
+        let committed = concat!(
+            "## Documents\n\n### `download`\n\n",
+            "| field | type |\n| --- | --- |\n| `kept` | string |\n\n",
+            "```bash\n## not a heading\n```\n",
+        );
+        let rendered = "## Documents\n\n### `download`\n\n| field | type |\n| --- | --- |\n| `kept` | string |\n";
+        let merged = merge_schema(committed, rendered);
+        assert!(
+            !merged.contains("## not a heading"),
+            "a fenced line was read as a heading:\n{merged}"
+        );
+    }
+
+    /// The committed file's four hand-written sections are still there after a
+    /// render, which is the whole file rather than a fixture.
+    #[test]
+    fn the_committed_schema_keeps_its_hand_written_tail() {
+        let (documents, events) = collect();
+        let rendered = render(&documents, &events);
+        let committed = std::fs::read_to_string(schema_path())
+            .expect("the committed schema")
+            .replace("\r\n", "\n");
+        let merged = merge_schema(&committed, &rendered);
+        for heading in [
+            "## Machine output, from the README",
+            "## Keeping a log",
+            "## On Windows",
+            "## Reading a download as it arrives",
+        ] {
+            assert!(
+                committed.contains(heading),
+                "{heading} is not in the committed file any more, so this test needs updating"
+            );
+            assert!(
+                merged.contains(heading),
+                "regenerating dropped {heading}:\n{merged}"
+            );
+        }
     }
 
     /// Merging keeps a row this run did not produce, and adds the ones it did.
@@ -1271,7 +1435,11 @@ mod tests {
     #[test]
     fn regenerating_the_schema_keeps_rows_this_run_did_not_produce() {
         let committed = "## Documents\n\n### `download`\n\n| field | type |\n| --- | --- |\n| `kept` | string |\n| `shared` | integer |\n\n## Events\n\n### `download`\n\n| field | type |\n| --- | --- |\n| `other_section` | string |\n";
-        let rendered = "## Documents\n\n### `download`\n\n| field | type |\n| --- | --- |\n| `added` | integer |\n| `shared` | string |\n";
+        // The rendered side carries `## Events` as well, because `render`
+        // always emits both parts. Without it that section is one the
+        // generator did not produce, and regeneration carries such a
+        // section across verbatim rather than dropping it. See T-255.
+        let rendered = "## Documents\n\n### `download`\n\n| field | type |\n| --- | --- |\n| `added` | integer |\n| `shared` | string |\n\n## Events\n";
         let merged = merge_schema(committed, rendered);
 
         assert!(

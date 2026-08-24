@@ -241,12 +241,12 @@ distant region. Do not carry a number from one to the other. Run the sweep.
 The S3 side of that table, and both concurrency sweeps behind it, are in
 [`s3-webseed.md`](s3-webseed.md).
 
-**What the numbers do not say is whether the request was a cache hit.**
-`cf-cache-status` and `age` are in the response and no `bit-cli` report carries
-a response header, so a `MISS` that cost an origin fetch and a `HIT` that did
-not look identical here. That is
-[T-254 in the TODO](../../TODO/webseed.md), and it is the one measurement a
-Cloudflare origin most wants.
+**Whether a request was a cache hit is the number behind those numbers**, and
+`webseed test` reports it: `cf-cache-status`, `age`, `cf-ray` and `via` come
+back on the exchange the report already describes. A `MISS` that cost an origin
+fetch and a `HIT` that did not are the difference between the two `ttfb` figures
+above, so read them together. [`../webseed.md`](../webseed.md) has the whole
+reported set.
 
 ## What guarantees the bytes
 

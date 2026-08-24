@@ -664,6 +664,10 @@ pub fn test(
 
     let head = args.head;
     let concurrency = args.concurrency.max(1);
+    // Cloned per worker below, so they are owned here rather than borrowed
+    // from `args` across a spawn.
+    let report_headers = std::sync::Arc::new(args.report_headers.clone());
+    let redact = !global.no_redact;
     let deadline = crate::swarm::optional_duration(&global.timeout, "timeout")?;
     let runtime = runtime()?;
     let info_hash = meta.info_hash().hex();
@@ -693,11 +697,17 @@ pub fn test(
                     let binding = set.bindings[index].clone();
                     let layout = layout.clone();
                     let info_hash = info_hash.clone();
+                    let report_headers = report_headers.clone();
                     workers.spawn(async move {
                         (
                             index,
                             bit_cli_core::webseed::probe::test_source(
-                                &binding, &layout, &info_hash, head,
+                                &binding,
+                                &layout,
+                                &info_hash,
+                                head,
+                                &report_headers,
+                                redact,
                             )
                             .await,
                         )
@@ -811,6 +821,12 @@ fn test_lines(report: &TestReport) -> Vec<String> {
         }
         if let Some(server) = &source.server {
             out.push(field("  server", server));
+        }
+        // One line per header rather than a joined list: a value can carry a
+        // comma of its own, and `x-cache: MISS, MISS` from a two hop chain is
+        // one header with a comma in it. See `TODO/webseed.md`, T-254.
+        for (name, value) in &source.headers {
+            out.push(field(&format!("  {name}"), value));
         }
         out.push(field("  http", &source.http_version));
         if let Some(tls) = &source.tls {
@@ -1165,6 +1181,102 @@ mod tests {
 
     /// `--web-seed-style` overrides what the key says, for both keys.
     ///
+    /// T-254. The headers that say whether a request was served from cache are
+    /// received on every probe and were dropped on every probe.
+    #[test]
+    fn a_cdn_response_reports_the_headers_that_say_it_was_cached() {
+        let fixture = crate::test_support::TorrentFixture::single_file();
+        fixture.place(&fixture.payload_dir(), &[]);
+        let server = crate::test_support::FileServer::start_cdn(fixture.payload_dir());
+        let doc = crate::test_support::run_json(
+            &[
+                "webseed",
+                "test",
+                fixture.path_str(),
+                "--web-seed",
+                &server.base,
+                "--no-torrent-web-seed",
+            ],
+            fixture.dir(),
+        );
+        let headers = &doc["sources"][0]["headers"];
+        assert_eq!(headers["age"], "41", "{doc}");
+        assert_eq!(headers["x-cache"], "HIT", "{doc}");
+        assert_eq!(headers["cache-control"], "public, max-age=3600", "{doc}");
+        assert!(headers["etag"].is_string(), "{doc}");
+
+        // The two the fixture also sends and the allowlist does not carry.
+        assert!(headers["x-cache-hits"].is_null(), "{doc}");
+        assert!(headers["x-frame-options"].is_null(), "{doc}");
+
+        // `server` is not in the map: it has its own field, and moving it
+        // would break a reader. The loopback fixture sends no `Server` header
+        // at all, so that field is absent here rather than a string, which is
+        // exactly what makes the absence from the map worth asserting.
+        assert!(headers["server"].is_null(), "{doc}");
+
+        let text = crate::test_support::run_ok(
+            &[
+                "webseed",
+                "test",
+                fixture.path_str(),
+                "--web-seed",
+                &server.base,
+                "--no-torrent-web-seed",
+            ],
+            fixture.dir(),
+        );
+        assert!(text.contains("x-cache"), "{text}");
+        assert!(text.contains("HIT"), "{text}");
+    }
+
+    /// A plain origin carries none of them and says nothing about them: the
+    /// field is absent rather than an empty object.
+    #[test]
+    fn a_plain_origin_reports_no_headers_and_no_empty_field() {
+        let fixture = crate::test_support::TorrentFixture::single_file();
+        fixture.place(&fixture.payload_dir(), &[]);
+        let server = crate::test_support::FileServer::start(fixture.payload_dir());
+        let doc = crate::test_support::run_json(
+            &[
+                "webseed",
+                "test",
+                fixture.path_str(),
+                "--web-seed",
+                &server.base,
+                "--no-torrent-web-seed",
+            ],
+            fixture.dir(),
+        );
+        assert!(doc["sources"][0]["headers"].is_null(), "{doc}");
+        assert!(doc["sources"][0]["server"].is_null(), "{doc}");
+    }
+
+    /// `--web-seed-report-header` reaches the report, and reaches only what it
+    /// names.
+    #[test]
+    fn a_header_asked_for_by_name_reaches_the_report() {
+        let fixture = crate::test_support::TorrentFixture::single_file();
+        fixture.place(&fixture.payload_dir(), &[]);
+        let server = crate::test_support::FileServer::start_cdn(fixture.payload_dir());
+        let doc = crate::test_support::run_json(
+            &[
+                "webseed",
+                "test",
+                fixture.path_str(),
+                "--web-seed",
+                &server.base,
+                "--no-torrent-web-seed",
+                "--web-seed-report-header",
+                "X-Cache-Hits",
+            ],
+            fixture.dir(),
+        );
+        let headers = &doc["sources"][0]["headers"];
+        assert_eq!(headers["x-cache-hits"], "12", "{doc}");
+        assert!(headers["x-frame-options"].is_null(), "{doc}");
+    }
+
     /// A caller who names a style has said something about the server that the
     /// metainfo cannot, and before this the `httpseeds` keying overwrote it.
     /// See `TODO/webseed.md`, T-004.

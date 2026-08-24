@@ -83,7 +83,7 @@ pub const DOCUMENT_KINDS: &[(&str, &str)] = &[
     ),
     (
         "webseed_test",
-        "One request per source: status, ranges, redirects, and timing.",
+        "One request per source: status, ranges, redirects, timing, the negotiated TLS, and the response headers worth keeping. `sources[].headers` is a map whose keys are whichever of the reported set the response carried, so the rows below are the ones the sample produced rather than the whole set: `age`, `cache-control`, `cf-cache-status`, `cf-ray`, `content-encoding`, `etag`, `last-modified`, `via`, `x-amz-id-2`, `x-amz-request-id`, `x-cache` and `x-served-by`, plus anything `--web-seed-report-header` names. See `TODO/webseed.md`, T-254.",
     ),
     (
         "webseed_probe",
@@ -354,10 +354,17 @@ together here to cover as many of them as possible.
 
 The check is containment, not equality: a row this file has and a run did not
 produce passes, because these runs are timed and a failure-only field like
-`sources[].error` appears only when a source fails. **So regenerating is
-lossy.** After running the command above, read the diff and put back any row it
-removed that is still a real field. There is no automatic way to tell a stale
-row from a rare one.
+`sources[].error` appears only when a source fails.
+
+**Regenerating adds and never removes.** It unions this file's rows with the
+run's, and it carries across every `##` section the generator does not produce,
+which is what keeps the four hand-written sections at the end of this file. A
+second run in a row changes nothing.
+
+Removing something is therefore deliberate, and it is a one-way door: a row
+taken out of this file that no run produces does not come back, because there
+is no automatic way to tell a stale row from a rare one. The way to check a
+rare row is still real is to produce it.
 "##;
 
 #[cfg(test)]

@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2665` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2443` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2479` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2174` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2680` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2458` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2494` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2189` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -1547,7 +1547,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1334` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1502` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2665` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2680` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -4413,8 +4413,9 @@ Acceptance:  `download --dry-run <URL>` prints no count it did not take and
              does not change.
 
 Closed:      The text form says what it did not do, and counts only what it
-             took. Against a `loopback-fileserver` serving the same torrent
-             that is also on disk:
+             took. Against a plain HTTP server on loopback holding the same
+             torrent that is also on disk, so the two runs differ in the source
+             form and in nothing else:
 
              ```
              $ bit-cli download --dry-run http://127.0.0.1:8099/tracked.torrent
@@ -4650,7 +4651,7 @@ Source:      measured 2026-08-24 while adding the `tree` document to
 Category:    cli
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-24
 
 Problem:     `docs/schema.md` is generated, and the generator renders the
              generated half only. The file ends with four sections nothing
@@ -4712,3 +4713,54 @@ Acceptance:  `BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema` on a
              tree whose `docs/schema.md` carries the four sections leaves all
              four in place, `git diff --stat` reports no deletion, and a test
              fails when the carry-across is removed.
+
+Closed:      `carry_across` at `crates/bit-cli/src/schema_gen.rs:1285`, called
+             at the end of `merge_schema`. It appends every `##` section of the
+             committed file whose heading line the render does not emit, in
+             committed order, after the generated content.
+
+             ```bash
+             BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema
+             ```
+
+             Run twice in a row, `git diff --stat docs/schema.md` prints
+             **nothing** both times. Before this it printed
+             `40 insertions(+), 130 deletions(-)` on the run that added the
+             `tree` document.
+
+             **Matching by heading line rather than by position** is what makes
+             it idempotent and what stops a generated section being duplicated:
+             a second run finds the hand-written sections at the end, does not
+             recognise them either, and puts them back in the same place. A
+             fence is tracked while splitting, because a `##` inside a
+             `powershell` block is not a heading and a split that thought it
+             was would carry half an example across on its own.
+
+             Three tests, at `:1325`, `:1370` and `:1387`. The last one is over
+             the committed file rather than a fixture: it renders, merges, and
+             asserts all four real headings survive.
+
+             **T-158's fixture had to change, and the reason is worth
+             recording.** Its `rendered` string carried `## Documents` and not
+             `## Events`, where `render` always emits both. Once regeneration
+             started carrying across what the generator does not produce, that
+             fixture's `## Events` was read as hand-written and its deliberately
+             stray row came with it. The fixture now looks like a real render
+             and the test's subject, which is row leakage between sections, is
+             untouched.
+
+             **`docs/schema.md`'s own note was describing a writer that stopped
+             existing at T-158**, and this session's first reading of it is
+             what sent this entry looking. It said "regenerating is lossy" and
+             told a reader to put back any row it removed. Regeneration has
+             unioned rows since T-158 and removes none.
+
+             What is true is narrower and was measured rather than reasoned
+             about: a row **taken out by hand** that no run produces does not
+             come back. Removing `sources[].tls.cipher_suite` and regenerating
+             left it removed. So the note now says regenerating adds and never
+             removes, and that deleting is a one-way door. It lives in the
+             `HEADER` constant at `crates/bit-cli/src/schema.rs:359`, not in
+             the Markdown, because the Markdown is generated: editing the file
+             directly is undone by the next regeneration, which is how the
+             first attempt at this correction was lost.

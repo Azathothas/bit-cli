@@ -1440,6 +1440,8 @@ async fn webseed_test_reports_range_support_size_and_the_redirect_chain() {
         &layout,
         &meta.info_hash().hex(),
         false,
+        &[],
+        true,
     )
     .await;
 
@@ -1474,6 +1476,8 @@ async fn webseed_test_follows_and_reports_every_redirect_hop() {
         &layout,
         &meta.info_hash().hex(),
         false,
+        &[],
+        true,
     )
     .await;
 
@@ -1514,6 +1518,8 @@ async fn webseed_test_says_no_when_the_server_ignores_range() {
         &layout,
         &meta.info_hash().hex(),
         false,
+        &[],
+        true,
     )
     .await;
 
@@ -2126,8 +2132,15 @@ async fn many_sources_are_probed_in_parallel_and_every_one_is_reported() {
         workers.spawn(async move {
             (
                 index,
-                bit_cli_core::webseed::probe::test_source(&binding, &layout, &info_hash, false)
-                    .await,
+                bit_cli_core::webseed::probe::test_source(
+                    &binding,
+                    &layout,
+                    &info_hash,
+                    false,
+                    &[],
+                    true,
+                )
+                .await,
             )
         });
     }
