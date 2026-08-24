@@ -1,0 +1,86 @@
+//! # aria2-rpc
+//!
+//! RPC (Remote Procedure Call) library for aria2-rust, providing JSON-RPC 2.0,
+//! XML-RPC, and WebSocket interfaces compatible with the original aria2 RPC API.
+//!
+//! ## Modules
+//!
+//! - **[`json_rpc`]** — JSON-RPC 2.0 protocol implementation: request/response/error
+//!   models, batch support, standard error codes (-32700 to -32603), parameter extractors.
+//!
+//! - **[`xml_rpc`]** — XML-RPC protocol: methodCall/methodResponse/fault encoding,
+//!   8 value types (Int/String/Boolean/Double/Array/Struct/Base64/Nil), quick-xml codec.
+//!
+//! - **[`websocket`]** — Real-time event notifications via WebSocket:
+//!   5 core event types plus the BitTorrent completion event when enabled,
+//!   `EventPublisher` pub/sub using tokio::broadcast.
+//!
+//! - **[`server`]** — HTTP server framework: `AuthConfig` (Token + Basic dual auth),
+//!   `CorsConfig`, status models (`StatusInfo`, `GlobalStat`, `DownloadStatus`),
+//!   GID generation utility.
+//!
+//! - **[`engine`]** — `RpcEngine` bridge implementing the feature-specific
+//!   aria2 RPC catalog (33 core methods, plus BitTorrent/Metalink extensions):
+//!   addUri/addTorrent/remove/pause/unpause/tellStatus/tellActive/tellWaiting/
+//!   tellStopped/getGlobalStat/purgeDownloadResult/getGlobalOption/changeGlobalOption/
+//!   getOption/changeOption/getVersion/getSessionInfo/saveSession/shutdown/forceShutdown/
+//!   system.multicall/system.listMethods/system.listNotifications.
+//!
+//! ## Quick Start
+//!
+//! ```rust,no_run
+//! use aria2_rpc::engine::RpcEngine;
+//! use aria2_rpc::json_rpc::JsonRpcRequest;
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let engine = RpcEngine::new();
+//!
+//!     let req = JsonRpcRequest {
+//!         version: Some("2.0".into()),
+//!         method: "aria2.addUri".into(),
+//!         params: serde_json::json!([["http://example.com/file.zip"]]),
+//!         id: Some(serde_json::Value::String("req-1".into())),
+//!     };
+//!
+//!     let resp = engine.handle_request(&req).await;
+//!     if resp.is_success() {
+//!         println!("GID: {:?}", resp.result);
+//!     }
+//! }
+//! ```
+//!
+//! ## Compatibility
+//!
+//! The implemented catalog follows the original aria2 RPC specification at
+//! <https://aria2.github.io/manual/en/html/aria2c.html#rpc-interface>.
+
+pub mod backend;
+pub mod constants;
+pub mod engine;
+pub mod handlers;
+pub mod json_rpc;
+pub mod rpc_helpers;
+pub mod server;
+pub mod types;
+pub mod websocket;
+mod wire;
+pub mod xml_rpc;
+
+pub use backend::{
+    BackendError, BackendEvent, BackendMetadata, BackendReadSnapshot, BackendRequest,
+    BackendResponse, BackendResult, PositionMode, RpcBackend,
+};
+pub use engine::RpcEngine;
+pub use json_rpc::{JSONRPC_VERSION, JsonRpcError, JsonRpcRequest, JsonRpcResponse, parse_request};
+pub use server::{
+    AuthConfig, CorsConfig, RpcAuthMiddleware, RpcServer, ServerConfig, TlsConfig, TlsError,
+};
+pub use types::{
+    DownloadStatus, FileInfo, GlobalStat, PeerInfo, ServerInfo, ServerInfoIndex, SessionInfo,
+    StatusInfo, UriEntry, UriInfo, UriStatus, VersionInfo, create_gid,
+};
+pub use websocket::{
+    DownloadEvent, EventPublisher, EventType, NotificationBatcher, WsConfig, WsSession,
+};
+pub use xml_rpc::{XmlRpcMember, XmlRpcRequest, XmlRpcResponse, XmlRpcValue};

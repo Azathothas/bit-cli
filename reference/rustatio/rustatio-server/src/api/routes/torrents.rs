@@ -1,0 +1,82 @@
+//! Torrent file upload endpoint.
+
+use axum::{
+    extract::{DefaultBodyLimit, Multipart, State},
+    http::StatusCode,
+    response::Response,
+    routing::post,
+    Router,
+};
+use rustatio_core::TorrentSummary;
+use serde::Serialize;
+use utoipa::ToSchema;
+
+use crate::api::{
+    common::{ApiError, ApiSuccess},
+    ServerState,
+};
+
+#[derive(Serialize, ToSchema)]
+pub struct LoadTorrentResponse {
+    #[schema(value_type = Object)]
+    pub torrent: TorrentSummary,
+}
+
+#[utoipa::path(
+    post,
+    path = "/torrent/load",
+    tag = "torrents",
+    summary = "Load a torrent file",
+    description = "Uploads and parses a .torrent file. Returns the parsed torrent summary.",
+    security(("bearer_auth" = [])),
+    request_body(content_type = "multipart/form-data", description = "Torrent file upload (field name: file)"),
+    responses(
+        (status = 200, description = "Torrent loaded successfully", body = ApiSuccess<LoadTorrentResponse>),
+        (status = 400, description = "Invalid torrent file", body = ApiError),
+        (status = 401, description = "Unauthorized", body = ApiError)
+    )
+)]
+pub async fn load_torrent(State(_state): State<ServerState>, mut multipart: Multipart) -> Response {
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                if field.name() == Some("file") {
+                    match field.bytes().await {
+                        Ok(bytes) => match TorrentSummary::from_bytes(&bytes) {
+                            Ok(torrent) => {
+                                return ApiSuccess::response(LoadTorrentResponse { torrent });
+                            }
+                            Err(e) => {
+                                return ApiError::response(
+                                    StatusCode::BAD_REQUEST,
+                                    format!("Failed to parse torrent: {e}"),
+                                );
+                            }
+                        },
+                        Err(e) => {
+                            return ApiError::response(
+                                StatusCode::BAD_REQUEST,
+                                format!("Failed to read file: {e}"),
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                return ApiError::response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Failed to parse upload: {e}"),
+                );
+            }
+        }
+    }
+
+    ApiError::response(StatusCode::BAD_REQUEST, "No torrent file provided")
+}
+
+pub fn router() -> Router<ServerState> {
+    Router::new()
+        .route("/torrent/load", post(load_torrent))
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
+}

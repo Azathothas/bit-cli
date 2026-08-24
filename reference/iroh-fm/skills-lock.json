@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "svelte": {
+      "source": "usagi-coffee/ai",
+      "sourceType": "github",
+      "skillPath": ".agents/svelte/SKILL.md",
+      "computedHash": "2f3cbb06f46317c0c9f5c3c2aecb15ec6ae0894908a7f6b2c476b63ebab5e322"
+    }
+  }
+}

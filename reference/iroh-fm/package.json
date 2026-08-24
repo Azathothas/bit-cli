@@ -1,0 +1,26 @@
+{
+  "name": "iroh-fm",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --cwd packages/web dev",
+    "build": "bun run --cwd packages/web build",
+    "check": "bun run --cwd packages/web check",
+    "test:e2e": "bun run --cwd packages/web test:e2e",
+    "format": "oxfmt .;cargo fmt",
+    "lint": "oxlint .; cargo clippy"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/bun": "latest",
+    "oxfmt": "latest",
+    "oxlint": "latest",
+    "prettier-plugin-svelte": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^6"
+  }
+}

@@ -1,0 +1,22 @@
+listen_addr = "0.0.0.0:8080"
+sync_interval_secs = 2
+data_dir = "/var/lib/torrentng"
+storage_roots = ["/data"]
+
+[backend]
+type = "rtorrent"
+
+[rtorrent]
+scgi_socket = "/run/rtorrent/rpc.sock"
+timeout_secs = 10
+user_agent = "rtorrent/0.16.11/0.16.11"
+
+[auth]
+secret_key = "certification-only-change-me"
+api_tokens = ["cert-token"]
+trust_proxy_header = false
+
+[workflows]
+allow_scripts = false
+script_timeout_secs = 30
+allowed_script_dirs = []

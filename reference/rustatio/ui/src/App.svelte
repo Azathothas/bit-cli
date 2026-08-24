@@ -1,0 +1,1854 @@
+<script>
+  import { onMount, onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
+  import { ChevronDown, Check } from '@lucide/svelte';
+  import { FolderOpen } from '@lucide/svelte';
+  import {
+    initWasm,
+    api,
+    listenToLogs,
+    listenToInstanceEvents,
+    getRunMode,
+    checkAuthStatus,
+    verifyAuthToken,
+    getAuthToken,
+  } from './lib/api.js';
+
+  // Import instance stores
+  import {
+    instances,
+    activeInstance,
+    activeInstanceId,
+    instanceActions,
+    saveSession,
+    computeEffectiveRatio,
+  } from './lib/instanceStore.js';
+  import { getPausedStatus, getRunningStatus, getStatusFromStats } from './lib/status.js';
+
+  // Import components
+  import Header from './components/layout/Header.svelte';
+  import Sidebar from './components/layout/Sidebar.svelte';
+  import TorrentSelector from './components/common/TorrentSelector.svelte';
+  import ConfigurationForm from './components/config/ConfigurationForm.svelte';
+  import StopConditions from './components/config/StopConditions.svelte';
+  import ProgressBars from './components/stats/ProgressBars.svelte';
+  import SessionStats from './components/stats/SessionStats.svelte';
+  import TotalStats from './components/stats/TotalStats.svelte';
+  import RateGraph from './components/stats/RateGraph.svelte';
+  import Logs from './components/common/Logs.svelte';
+  import ProxySettings from './components/common/ProxySettings.svelte';
+  import UpdateChecker from './components/common/UpdateChecker.svelte';
+  import ThemeIcon from './components/common/ThemeIcon.svelte';
+  import DownloadButton from './components/common/DownloadButton.svelte';
+  import AuthPage from './components/common/AuthPage.svelte';
+  import BaseModal from './components/common/BaseModal.svelte';
+  import Button from './lib/components/ui/button.svelte';
+  import ConfirmDialog from './components/common/ConfirmDialog.svelte';
+  import GridView from './components/grid/GridView.svelte';
+  import WatchView from './components/watch/WatchView.svelte';
+  import { buildFakerConfig, getCalculatedInitialDownloaded } from './lib/fakerConfig.js';
+
+  // Import grid store
+  import { viewMode } from './lib/gridStore.js';
+  import { focusWatchQuery } from './lib/watchViewState.js';
+
+  // Import theme store
+  import {
+    THEMES,
+    THEME_CATEGORIES,
+    getTheme,
+    getShowThemeDropdown,
+    toggleThemeDropdown,
+    selectTheme,
+    initializeTheme,
+    handleClickOutside,
+    getThemeName,
+  } from './lib/themeStore.svelte.js';
+
+  // Check if running in Tauri
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  let isServerMode = $derived(getRunMode() === 'server');
+
+  // Loading state to prevent UI flash during initialization
+  let isInitialized = $state(false);
+
+  // Authentication state
+  let showAuthDialog = $state(false);
+  let closePromptVisible = $state(false);
+  let rememberCloseChoice = $state(false);
+  let errorDialogOpen = $state(false);
+  let errorDialogTitle = $state('Error');
+  let errorDialogMessage = $state('');
+
+  // Flag to prevent store subscriptions from firing during initialization
+  let isInitializing = true;
+
+  // Client information (populated from API during initialization)
+  let clientInfos = $state([]);
+
+  // Derived lookup objects for client data
+  let clientVersions = $derived(Object.fromEntries(clientInfos.map(c => [c.id, c.versions])));
+  let clientDefaultPorts = $derived(
+    Object.fromEntries(clientInfos.map(c => [c.id, c.default_port]))
+  );
+  let clients = $derived(clientInfos.map(c => ({ id: c.id, name: c.name })));
+
+  // Logs
+  let logs = $state([]);
+  let showLogs = $state(false);
+
+  // RAF batching for log events — accumulate in plain array, flush once per frame
+  let logBuffer = [];
+  let logRafId = null;
+
+  // Sidebar state
+  let sidebarOpen = $state(false);
+  let sidebarCollapsed = $state(false);
+
+  // Development logging helper - only logs in development mode
+  function devLog(level, ...args) {
+    if (import.meta.env.DEV) {
+      console[level](...args);
+    }
+  }
+
+  function getForwardedPort(status) {
+    return status?.forwarded_port ?? status?.forwardedPort ?? null;
+  }
+
+  function isNetworkConfigured(status) {
+    return status?.configured !== false;
+  }
+
+  function getVpnPortSyncEnabled(status) {
+    return isNetworkConfigured(status) && (status?.vpn_port_sync_enabled ?? true);
+  }
+
+  // Store cleanup functions
+  let unsubActiveInstance = null;
+  let unsubSessionSave = null;
+  let unsubViewMode = null;
+  let unsubActiveInstanceId = null;
+  let instanceEventsCleanup = null;
+  let closeRequestedCleanup = null;
+  let desktopReconcileIntervalId = null;
+  let trackerRetryIntervalId = null;
+  let networkStatusIntervalId = null;
+  let networkStatus = $state(null);
+  let networkStatusLoading = $state(false);
+  let networkStatusError = $state(null);
+  // Debounce timer for syncing config to server
+  let configSyncTimeout = null;
+
+  // Beforeunload handler reference for cleanup
+  let beforeUnloadHandler = null;
+
+  // Track previous client to detect changes
+  let previousClient = null;
+  let previousClientInstanceId = null;
+
+  // Global error handler
+  if (typeof window !== 'undefined') {
+    window.addEventListener('error', event => {
+      console.error('Global error caught:', event.error);
+      console.error('Error message:', event.message);
+      console.error('Error stack:', event.error?.stack);
+    });
+
+    window.addEventListener('unhandledrejection', event => {
+      console.error('Unhandled promise rejection:', event.reason);
+    });
+  }
+
+  async function refreshNetworkStatus() {
+    networkStatusLoading = true;
+    networkStatusError = null;
+
+    try {
+      const result = await api.getNetworkStatus();
+      if (result) {
+        networkStatus = result;
+        if (isNetworkConfigured(result) === false) {
+          stopNetworkStatusPolling();
+        }
+      } else {
+        networkStatus = null;
+        networkStatusError = 'unavailable';
+      }
+    } catch (error) {
+      networkStatusError = error.message || 'Failed to fetch';
+    } finally {
+      networkStatusLoading = false;
+    }
+  }
+
+  function startNetworkStatusPolling() {
+    if (networkStatusIntervalId) return;
+    networkStatusIntervalId = setInterval(refreshNetworkStatus, 15000);
+    refreshNetworkStatus();
+  }
+
+  function stopNetworkStatusPolling() {
+    if (!networkStatusIntervalId) return;
+    clearInterval(networkStatusIntervalId);
+    networkStatusIntervalId = null;
+  }
+
+  function showErrorDialog(title, message) {
+    errorDialogTitle = title;
+    errorDialogMessage = message;
+    errorDialogOpen = true;
+  }
+
+  // Load configuration on mount
+  onMount(async () => {
+    try {
+      // Initialize WASM/detect server mode
+      await initWasm();
+
+      // Check if authentication is required (server mode only)
+      const { authEnabled } = await checkAuthStatus();
+
+      if (authEnabled) {
+        // Check if we have a valid token stored
+        const storedToken = getAuthToken();
+        if (storedToken) {
+          const { valid } = await verifyAuthToken();
+          if (!valid) {
+            // Token is invalid, show auth dialog
+            showAuthDialog = true;
+            isInitialized = true;
+            return; // Don't continue initialization until authenticated
+          }
+        } else {
+          // No token stored, show auth dialog
+          showAuthDialog = true;
+          isInitialized = true;
+          return; // Don't continue initialization until authenticated
+        }
+      } else {
+        // Auth not enabled
+      }
+
+      // Continue with normal initialization
+      await continueInitialization();
+    } catch (error) {
+      console.error('Failed to initialize app:', error);
+      devLog('error', 'Failed to initialize:', error);
+      // Still show UI even if there's an error
+      isInitialized = true;
+    }
+
+    // Initialize theme
+    initializeTheme();
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', handleClickOutside);
+
+    // Set up reactive subscriptions using store.subscribe instead of $effect
+    // This avoids the orphan effect error in Svelte 5
+    unsubActiveInstance = activeInstance.subscribe(inst => {
+      if (!inst || isInitializing) return;
+
+      // Update client version when client changes
+      if (inst.selectedClient && clientVersions[inst.selectedClient]) {
+        if (
+          !inst.selectedClientVersion ||
+          !clientVersions[inst.selectedClient].includes(inst.selectedClientVersion)
+        ) {
+          instanceActions.updateInstance(inst.id, {
+            selectedClientVersion: clientVersions[inst.selectedClient][0],
+          });
+        }
+      }
+
+      // Update port when client changes (only if not running and client actually changed)
+      if (
+        inst.selectedClient &&
+        !inst.isRunning &&
+        !inst.vpnPortSync &&
+        clientDefaultPorts[inst.selectedClient] &&
+        previousClientInstanceId === inst.id &&
+        previousClient !== null &&
+        previousClient !== inst.selectedClient
+      ) {
+        instanceActions.updateInstance(inst.id, {
+          port: clientDefaultPorts[inst.selectedClient],
+        });
+      }
+
+      // Track current client for next comparison
+      previousClient = inst.selectedClient;
+      previousClientInstanceId = inst.id;
+    });
+
+    // Config save is handled by saveSession below, so we don't need a separate subscription
+
+    // Auto-save session when instances change (throttled to prevent infinite loops)
+    // Don't save session if any instance is currently running to avoid saves during faking
+    let saveSessionTimeout = null;
+    let hasCompletedFirstSave = false;
+
+    unsubSessionSave = instances.subscribe(insts => {
+      if (isInitializing) return;
+
+      // Skip if any instance is running (faking)
+      const hasRunningInstance = insts.some(inst => inst.isRunning);
+      if (hasRunningInstance) return;
+
+      const activeInst = get(activeInstance);
+      if (insts.length > 0 && activeInst) {
+        // Throttle session saves to prevent infinite loops
+        clearTimeout(saveSessionTimeout);
+        saveSessionTimeout = setTimeout(() => {
+          // Skip the first save after initialization - this is just the initial load
+          if (!hasCompletedFirstSave) {
+            hasCompletedFirstSave = true;
+            return;
+          }
+
+          saveSession(insts, activeInst.id);
+        }, 500);
+      }
+    });
+
+    // Re-sync standard store when switching away from grid mode
+    unsubViewMode = viewMode.subscribe(mode => {
+      if (isInitializing) return;
+
+      if (mode === 'grid') {
+        // Entering grid mode: stop live stats (grid has its own polling)
+        stopLiveStats();
+        return;
+      }
+
+      if (mode === 'watch') {
+        stopLiveStats();
+        return;
+      }
+
+      // Leaving grid mode: reconcile instances and restart polling
+      instanceActions.reconcileWithBackend().then(() => {
+        const currentInstances = get(instances);
+        for (const inst of currentInstances) {
+          if (inst.isRunning && !inst.updateInterval) {
+            startPollingForInstance(inst.id, inst.updateIntervalSeconds ?? 5);
+          }
+        }
+        // Start live stats for the active instance
+        const currentActiveId = get(activeInstanceId);
+        if (currentActiveId) {
+          startLiveStatsForInstance(currentActiveId);
+        }
+      });
+    });
+
+    // Transfer live stats polling when the active instance changes
+    unsubActiveInstanceId = activeInstanceId.subscribe(newActiveId => {
+      if (isInitializing || !newActiveId) return;
+      // Only manage live stats in standard view
+      if (get(viewMode) !== 'standard') return;
+
+      const instance = get(instances).find(i => i.id === newActiveId);
+      if (instance && instance.isRunning && !instance.isPaused) {
+        startLiveStatsForInstance(newActiveId);
+      } else {
+        stopLiveStats();
+      }
+    });
+
+    // Set up beforeunload warning for WASM mode only
+    // In WASM mode, refreshing the page stops all running torrents
+    // Server mode persists state, so no warning needed there
+    const runMode = getRunMode();
+    if (runMode === 'wasm') {
+      beforeUnloadHandler = event => {
+        const currentInstances = get(instances);
+        const hasRunning = currentInstances.some(inst => inst.isRunning);
+
+        if (hasRunning) {
+          // Standard way to show beforeunload dialog
+          event.preventDefault();
+          // Chrome requires returnValue to be set
+          event.returnValue = '';
+          return '';
+        }
+      };
+      window.addEventListener('beforeunload', beforeUnloadHandler);
+    }
+
+    if (runMode === 'desktop') {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        closeRequestedCleanup = await listen('app-close-requested', () => {
+          const behavior = localStorage.getItem('rustatio-close-behavior');
+          if (behavior === 'tray') {
+            handleCloseToTray();
+          } else if (behavior === 'quit') {
+            handleQuitFromPrompt();
+          } else {
+            closePromptVisible = true;
+          }
+        });
+      } catch (error) {
+        console.error('Failed to subscribe to close prompt events:', error);
+      }
+
+      desktopReconcileIntervalId = setInterval(() => {
+        instanceActions.reconcileWithBackend();
+      }, 3000);
+    }
+
+    // Wait for stores to settle before allowing saves
+    // This prevents initial subscription fires from triggering saves during app load
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Mark initialization as complete
+    isInitializing = false;
+  });
+
+  // Continue initialization after authentication (called after auth is verified)
+  async function continueInitialization() {
+    // Fetch client information from backend
+    try {
+      clientInfos = await api.getClientInfos();
+    } catch (error) {
+      console.error('Failed to load client infos:', error);
+      // Fallback to empty - UI will be limited but won't crash
+      clientInfos = [];
+    }
+
+    // Load config from localStorage
+    const storedShowLogs = localStorage.getItem('rustatio-show-logs');
+    showLogs = storedShowLogs ? JSON.parse(storedShowLogs) : false;
+
+    // Log level priority for filtering
+    const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3, trace: 4 };
+
+    // Sync initial log level to backend (gates IPC emission on the Rust side)
+    const initialLogLevel = localStorage.getItem('rustatio-log-level') || 'info';
+    api.setLogLevel(initialLogLevel);
+
+    // Set up log listener with RAF batching
+    await listenToLogs(logEvent => {
+      // Filter logs based on configured log level
+      const configuredLevel = localStorage.getItem('rustatio-log-level') || 'info';
+      const eventPriority = LOG_LEVELS[logEvent.level] ?? 2;
+      const configuredPriority = LOG_LEVELS[configuredLevel] ?? 2;
+
+      if (eventPriority > configuredPriority) {
+        return;
+      }
+
+      logBuffer.push(logEvent);
+
+      // Schedule a single RAF flush if not already pending
+      if (logRafId === null) {
+        logRafId = requestAnimationFrame(() => {
+          logRafId = null;
+          if (logBuffer.length === 0) return;
+
+          const newLogs = logs.concat(logBuffer);
+          logBuffer = [];
+          logs = newLogs.length > 500 ? newLogs.slice(-500) : newLogs;
+        });
+      }
+    });
+
+    // Initialize instance store (will restore session from localStorage)
+    await instanceActions.initialize();
+    startNetworkStatusPolling();
+    startTrackerRetryPolling();
+
+    // Start polling for any instances that were restored in a running state (server mode)
+    // This ensures UI updates after page refresh when instances are still running on server
+    const restoredInstances = get(instances);
+    for (const inst of restoredInstances) {
+      if (inst.isRunning && !inst.isPaused) {
+        devLog('log', `Starting polling for restored running instance ${inst.id}`);
+        startPollingForInstance(inst.id, inst.updateIntervalSeconds ?? 5);
+      }
+    }
+
+    // Set up instance events subscription for real-time sync (server mode only)
+    // This allows watch folder instances to appear without page refresh
+    if (getRunMode() === 'server') {
+      instanceEventsCleanup = listenToInstanceEvents(async event => {
+        devLog('log', 'Received instance event:', event);
+
+        if (event.type === 'created') {
+          // Fetch full instance info from server
+          try {
+            const serverInstances = await api.listInstances();
+            const newInstance = serverInstances.find(inst => inst.id === event.id);
+
+            if (newInstance) {
+              const wasAdded = instanceActions.mergeServerInstance(newInstance);
+              if (
+                wasAdded &&
+                (newInstance.stats.state === 'Running' || newInstance.stats.state === 'Starting')
+              ) {
+                // Start polling for the new running instance
+                startPollingForInstance(event.id, newInstance.config.update_interval || 5);
+              }
+            }
+          } catch (error) {
+            console.error('Failed to fetch new instance:', error);
+          }
+        } else if (event.type === 'deleted') {
+          // Remove instance from frontend store
+          instanceActions.removeInstanceFromStore(event.id);
+        }
+      });
+    }
+
+    // Wait a tick for stores to update before showing UI
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Mark as initialized to show UI
+    isInitialized = true;
+  }
+
+  // Handle successful authentication
+  async function handleAuthenticated() {
+    showAuthDialog = false;
+
+    // Continue initialization after successful auth
+    await continueInitialization();
+
+    // Initialize theme (needs to happen after isInitialized is set)
+    initializeTheme();
+  }
+
+  // Config is saved via saveSession in instanceStore.js
+
+  // Cleanup on unmount
+  onDestroy(() => {
+    // Clean up tracker announce interval for active instance
+    if ($activeInstance) {
+      if ($activeInstance.updateInterval) {
+        clearInterval($activeInstance.updateInterval);
+      }
+    }
+
+    // Clean up active live stats interval
+    stopLiveStats();
+
+    // Clean up store subscriptions
+    if (unsubActiveInstance) {
+      unsubActiveInstance();
+    }
+    if (unsubSessionSave) {
+      unsubSessionSave();
+    }
+    if (unsubViewMode) {
+      unsubViewMode();
+    }
+    if (unsubActiveInstanceId) {
+      unsubActiveInstanceId();
+    }
+
+    // Clean up instance events subscription
+    if (instanceEventsCleanup) {
+      instanceEventsCleanup();
+    }
+
+    if (closeRequestedCleanup) {
+      closeRequestedCleanup();
+      closeRequestedCleanup = null;
+    }
+
+    if (desktopReconcileIntervalId) {
+      clearInterval(desktopReconcileIntervalId);
+      desktopReconcileIntervalId = null;
+    }
+
+    // Clean up event listeners
+    document.removeEventListener('click', handleClickOutside);
+
+    // Clean up beforeunload handler
+    if (beforeUnloadHandler) {
+      window.removeEventListener('beforeunload', beforeUnloadHandler);
+    }
+
+    stopNetworkStatusPolling();
+    stopTrackerRetryPolling();
+
+    // Clean up config sync timeout
+    if (configSyncTimeout) {
+      clearTimeout(configSyncTimeout);
+    }
+
+    // Clean up log RAF batching
+    if (logRafId !== null) {
+      cancelAnimationFrame(logRafId);
+    }
+  });
+
+  // Select torrent file (called from TorrentSelector with File object)
+  async function selectTorrent(file) {
+    if (!$activeInstance) {
+      alert('No active instance');
+      return;
+    }
+
+    if (!file) {
+      // User cancelled - only update status if no torrent is loaded
+      if (!$activeInstance.torrent) {
+        instanceActions.updateInstance($activeInstance.id, {
+          statusMessage: 'Select a torrent file to begin',
+          statusType: 'warning',
+        });
+      } else {
+        // Keep existing status (torrent still loaded)
+        instanceActions.updateInstance($activeInstance.id, {
+          statusMessage: 'Ready to start faking',
+          statusType: 'idle',
+        });
+      }
+      return;
+    }
+
+    try {
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: 'Loading torrent...',
+        statusType: 'running',
+      });
+
+      // Register the torrent with the backend instance
+      // This ensures the instance appears in grid view's listSummaries
+      const torrent = await api.loadInstanceTorrent($activeInstance.id, file);
+      devLog('log', 'Loaded torrent:', torrent);
+
+      // For desktop (Tauri): save the full file path
+      // For web: save the torrent name (we'll serialize the torrent object itself)
+      const torrentPath = isTauri ? file : file.name;
+
+      // Update instance with torrent info
+      const summary = await api.getInstanceSummary($activeInstance.id).catch(() => null);
+
+      instanceActions.updateInstance($activeInstance.id, {
+        torrent: summary || torrent,
+        torrentPath,
+        statusMessage: 'Torrent loaded successfully',
+        statusType: 'success',
+      });
+
+      const instanceId = $activeInstance.id;
+      setTimeout(() => {
+        // Only update status if the instance is not running
+        const instance = $instances.find(i => i.id === instanceId);
+        if (instance && !instance.isRunning) {
+          instanceActions.updateInstance(instanceId, {
+            statusMessage: 'Ready to start faking',
+            statusType: 'idle',
+            statusIcon: null,
+          });
+        }
+      }, 2000);
+    } catch (error) {
+      const message = 'Failed to load torrent: ' + error;
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: message,
+        statusType: 'error',
+      });
+      showErrorDialog('Torrent Load Failed', message);
+    }
+  }
+
+  // =============================================================================
+  // Polling Helper Functions
+  // =============================================================================
+
+  // Get instance by ID from the store
+  function getInstance(instanceId) {
+    return $instances.find(i => i.id === instanceId);
+  }
+
+  // Clear all polling intervals for an instance
+  function clearInstanceIntervals(instanceId) {
+    const instance = getInstance(instanceId);
+    if (instance) {
+      if (instance.updateInterval) clearInterval(instance.updateInterval);
+    }
+    // Clear active live stats if this instance owns it
+    if (activeLiveStatsInstanceId === instanceId) {
+      stopLiveStats();
+    }
+  }
+
+  // Handle auto-stop when a stop condition is met
+  async function handleAutoStop(instanceId, stats) {
+    if (stats?.tracker_error) {
+      clearInstanceIntervals(instanceId);
+      instanceActions.updateInstance(instanceId, {
+        isRunning: false,
+        isPaused: false,
+        updateInterval: null,
+        stats,
+        ...getStatusFromStats(stats),
+      });
+      return;
+    }
+
+    // In server mode, the scheduler already called stop() when the condition was met.
+    // Calling stopFaker again would redundantly re-enter Stopping state (sending
+    // another tracker announce), causing the grid to briefly show "Stopping".
+    if (getRunMode() !== 'server') {
+      try {
+        await api.stopFaker(instanceId);
+      } catch (error) {
+        console.warn('Failed to stop faker on backend:', error);
+      }
+    }
+
+    clearInstanceIntervals(instanceId);
+
+    // Save cumulative stats (convert bytes to MB)
+    const cumulativeUploaded = Math.round(stats.uploaded / (1024 * 1024));
+    const cumulativeDownloaded = Math.round(stats.downloaded / (1024 * 1024));
+
+    instanceActions.updateInstance(instanceId, {
+      isRunning: false,
+      updateInterval: null,
+      statusMessage: 'Stopped automatically - condition met',
+      statusType: 'success',
+      statusIcon: null,
+      cumulativeUploaded,
+      cumulativeDownloaded,
+    });
+  }
+
+  // Handle post-stop delete action (delete_instance)
+  // Backend stopped the faker; this removes the instance from the frontend store.
+  async function handlePostStopDelete(instanceId, stats) {
+    if (!stats.stop_condition_met || stats.post_stop_action !== 'delete_instance') {
+      return false;
+    }
+
+    clearInstanceIntervals(instanceId);
+
+    // Use removeInstance which creates a replacement empty instance when deleting the last one
+    try {
+      await instanceActions.removeInstance(instanceId, true);
+    } catch (error) {
+      console.warn('Post-stop delete cleanup error:', error);
+    }
+    return true;
+  }
+
+  // Handle polling error
+  function handlePollingError(instanceId, error) {
+    devLog('error', 'Polling error:', error);
+    clearInstanceIntervals(instanceId);
+
+    instanceActions.updateInstance(instanceId, {
+      isRunning: false,
+      updateInterval: null,
+      statusMessage: 'Error: ' + error,
+      statusType: 'error',
+      statusIcon: null,
+    });
+  }
+
+  // Check if stats indicate the faker should auto-stop
+  function shouldAutoStop(stats) {
+    return stats.state === 'Stopped';
+  }
+
+  function shouldRetryTracker(stats) {
+    return stats?.state === 'Stopped' && stats?.tracker_error === 'Tracker unavailable';
+  }
+
+  async function refreshTrackerRetryStatuses() {
+    const currentInstances = get(instances);
+    const retryable = currentInstances.filter(inst => shouldRetryTracker(inst.stats));
+
+    for (const instance of retryable) {
+      try {
+        const stats = await api.getStats(instance.id);
+        instanceActions.updateInstance(instance.id, {
+          isRunning: stats.state !== 'Stopped',
+          isPaused: false,
+          stats,
+          ...getStatusFromStats(stats),
+        });
+
+        if (!shouldRetryTracker(stats)) {
+          if (stats.state !== 'Stopped') {
+            startPollingForInstance(instance.id, instance.updateIntervalSeconds ?? 5);
+          }
+          continue;
+        }
+
+        if (getRunMode() !== 'server' && stats.tracker_retry_at_ms != null) {
+          if (stats.tracker_retry_at_ms <= Date.now()) {
+            const nextStats = await api.recoverTrackerFaker(instance.id);
+            instanceActions.updateInstance(instance.id, {
+              isRunning: nextStats.state !== 'Stopped',
+              isPaused: false,
+              stats: nextStats,
+              ...getStatusFromStats(nextStats),
+            });
+
+            if (nextStats.state !== 'Stopped') {
+              startPollingForInstance(instance.id, instance.updateIntervalSeconds ?? 5);
+            }
+          }
+        }
+      } catch (error) {
+        console.debug('Tracker retry refresh error:', error);
+      }
+    }
+  }
+
+  function startTrackerRetryPolling() {
+    if (trackerRetryIntervalId) return;
+    trackerRetryIntervalId = setInterval(() => {
+      refreshTrackerRetryStatuses();
+    }, 1000);
+    refreshTrackerRetryStatuses();
+  }
+
+  function stopTrackerRetryPolling() {
+    if (!trackerRetryIntervalId) return;
+    clearInterval(trackerRetryIntervalId);
+    trackerRetryIntervalId = null;
+  }
+
+  // =============================================================================
+  // Polling Intervals
+  // =============================================================================
+
+  // Create tracker announce interval
+  // In server mode, the backend scheduler already calls update() every 5s,
+  // so we only need to read stats. In desktop/WASM, the frontend drives updates.
+  function createTrackerAnnounceInterval(instanceId, intervalMs) {
+    const isServer = getRunMode() === 'server';
+
+    return setInterval(async () => {
+      const instance = getInstance(instanceId);
+
+      if (!instance || !instance.isRunning) {
+        devLog('log', 'Update skipped - not running');
+        return;
+      }
+
+      if (instance.isPaused) {
+        devLog('log', 'Update skipped - paused');
+        return;
+      }
+
+      try {
+        if (!isServer) {
+          await api.updateFaker(instanceId);
+        }
+        const stats = await api.getStats(instanceId);
+
+        const updates = {
+          stats,
+          ...getStatusFromStats(stats),
+        };
+
+        if (stats.torrent_completion !== undefined) {
+          updates.completionPercent = stats.torrent_completion;
+        }
+
+        // Sync backend's effective ratio to frontend
+        if (stats.effective_stop_at_ratio != null) {
+          updates.effectiveStopAtRatio = stats.effective_stop_at_ratio;
+        }
+
+        instanceActions.updateInstance(instanceId, updates);
+
+        if (await handlePostStopDelete(instanceId, stats)) {
+          return;
+        }
+        if (shouldAutoStop(stats)) {
+          await handleAutoStop(instanceId, stats);
+        }
+      } catch (error) {
+        handlePollingError(instanceId, error);
+      }
+    }, intervalMs);
+  }
+
+  // Create live stats interval (updates UI every second for the active instance)
+  // In server mode, just reads stats (scheduler advances them).
+  // In desktop/WASM, calls updateStatsOnly to advance stats locally.
+  function createLiveStatsInterval(instanceId) {
+    const isServer = getRunMode() === 'server';
+
+    return setInterval(async () => {
+      const instance = getInstance(instanceId);
+
+      if (!instance || !instance.isRunning || instance.isPaused) {
+        return;
+      }
+
+      try {
+        const stats = isServer
+          ? await api.getStats(instanceId)
+          : await api.updateStatsOnly(instanceId);
+
+        if (stats && instance.isRunning) {
+          const updates = {
+            stats,
+            ...getStatusFromStats(stats),
+          };
+
+          if (stats.torrent_completion !== undefined) {
+            updates.completionPercent = stats.torrent_completion;
+          }
+
+          // Sync backend's effective ratio to frontend
+          if (stats.effective_stop_at_ratio != null) {
+            updates.effectiveStopAtRatio = stats.effective_stop_at_ratio;
+          }
+
+          instanceActions.updateInstance(instanceId, updates);
+
+          if (await handlePostStopDelete(instanceId, stats)) {
+            return;
+          }
+          if (shouldAutoStop(stats)) {
+            await handleAutoStop(instanceId, stats);
+          }
+        }
+      } catch (error) {
+        console.debug('Live stats fetch error:', error);
+      }
+    }, 1000);
+  }
+
+  // =============================================================================
+  // Main Polling Entry Point
+  // =============================================================================
+
+  // Track the current live stats interval (only one at a time — the active instance)
+  let activeLiveStatsInstanceId = null;
+  let activeLiveStatsIntervalId = null;
+
+  // Function to save the "remember my choice" application setting
+  function saveCloseBehaviorSetting(behavior) {
+    if (rememberCloseChoice) {
+      localStorage.setItem('rustatio-close-behavior', behavior);
+    }
+  }
+
+  // Start live stats polling for a specific instance (only call for the active/visible instance)
+  function startLiveStatsForInstance(instanceId) {
+    // Already polling this instance
+    if (activeLiveStatsInstanceId === instanceId && activeLiveStatsIntervalId) return;
+
+    // Clear any existing live stats polling
+    stopLiveStats();
+
+    const instance = getInstance(instanceId);
+    if (!instance || !instance.isRunning || instance.isPaused) return;
+
+    activeLiveStatsInstanceId = instanceId;
+    activeLiveStatsIntervalId = createLiveStatsInterval(instanceId);
+  }
+
+  // Stop live stats polling (when switching instances or entering grid mode)
+  function stopLiveStats() {
+    if (activeLiveStatsIntervalId) {
+      clearInterval(activeLiveStatsIntervalId);
+      activeLiveStatsIntervalId = null;
+    }
+    activeLiveStatsInstanceId = null;
+  }
+
+  // Start tracker announce polling for an instance (created for ALL running instances)
+  // Live stats polling is managed separately — only for the active instance
+  function startPollingForInstance(instanceId, intervalSeconds = 5) {
+    const intervalMs = intervalSeconds * 1000;
+
+    const updateIntervalId = createTrackerAnnounceInterval(instanceId, intervalMs);
+
+    // Store interval ID in instance for cleanup
+    instanceActions.updateInstance(instanceId, {
+      updateInterval: updateIntervalId,
+    });
+
+    // Start live stats only if this is the currently active instance
+    const currentActiveId = get(activeInstanceId);
+    if (instanceId === currentActiveId && get(viewMode) !== 'grid') {
+      startLiveStatsForInstance(instanceId);
+    }
+
+    return { updateIntervalId };
+  }
+
+  // Start faking
+  async function startFaking() {
+    if (!$activeInstance) {
+      alert('No active instance');
+      return;
+    }
+
+    if (!$activeInstance.torrent) {
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: 'Please select a torrent file first',
+        statusType: 'error',
+      });
+      alert('Please select a torrent file first');
+      return;
+    }
+
+    try {
+      // Calculate downloaded from completion percentage and torrent size
+      const torrentSize = $activeInstance.torrent?.total_size || 0;
+      const calculatedDownloaded = getCalculatedInitialDownloaded($activeInstance);
+
+      // For display purposes (placeholder stats), use cumulative values if available
+      // This ensures the UI shows the correct totals immediately while starting
+      const hasCumulativeStats =
+        $activeInstance.cumulativeUploaded > 0 || $activeInstance.cumulativeDownloaded > 0;
+      const displayUploaded = hasCumulativeStats
+        ? parseInt($activeInstance.cumulativeUploaded ?? 0) * 1024 * 1024
+        : parseInt($activeInstance.initialUploaded ?? 0) * 1024 * 1024;
+      const displayDownloaded = hasCumulativeStats
+        ? parseInt($activeInstance.cumulativeDownloaded ?? 0) * 1024 * 1024
+        : calculatedDownloaded;
+
+      // Preserve cumulative stats display while starting
+      // Create initial stats object to show cumulative values immediately
+      const calculatedLeft = torrentSize - calculatedDownloaded;
+
+      // Ratio progress is based on session ratio (starts at 0), not cumulative ratio
+      // So initial ratio progress should always be 0 when starting a new session
+
+      const placeholderStats = hasCumulativeStats
+        ? {
+            // Cumulative (from previous sessions)
+            uploaded: displayUploaded,
+            downloaded: displayDownloaded,
+            ratio: 0,
+
+            // Torrent state
+            left: calculatedLeft,
+            seeders: 0,
+            leechers: 0,
+            state: 'Starting',
+
+            // Session (starts fresh)
+            session_uploaded: 0,
+            session_downloaded: 0,
+            session_ratio: 0.0,
+            elapsed_time: { secs: 0, nanos: 0 },
+
+            // Rates
+            current_upload_rate: 0,
+            current_download_rate: 0,
+            average_upload_rate: 0,
+            average_download_rate: 0,
+
+            // Progress (session-based)
+            upload_progress: 0,
+            download_progress: 0,
+            ratio_progress: 0,
+            seed_time_progress: 0,
+
+            // ETA
+            eta_ratio: null,
+            eta_uploaded: null,
+            eta_seed_time: null,
+
+            // History
+            upload_rate_history: [],
+            download_rate_history: [],
+            ratio_history: [],
+          }
+        : null;
+
+      instanceActions.updateInstance($activeInstance.id, {
+        stats: placeholderStats,
+        statusMessage: 'Starting ratio faker...',
+        statusType: 'running',
+      });
+
+      const fakerConfig = buildFakerConfig($activeInstance, clientVersions, {
+        isServerMode,
+        useCalculatedInitialDownloaded: true,
+      });
+
+      await api.startFaker($activeInstance.id, $activeInstance.torrent, fakerConfig);
+
+      // Update instance status
+      instanceActions.updateInstance($activeInstance.id, {
+        isRunning: true,
+        isPaused: false,
+        statusMessage: 'Actively faking ratio...',
+        statusType: 'running',
+        statusIcon: 'rocket',
+      });
+
+      // Start polling intervals for UI updates
+      const intervalSeconds = $activeInstance.updateIntervalSeconds ?? 5;
+      startPollingForInstance($activeInstance.id, intervalSeconds);
+
+      // Get initial stats
+      const initialStats = await api.getStats($activeInstance.id);
+      const initialUpdates = { stats: initialStats };
+      // Sync backend's effective ratio to frontend on start
+      if (initialStats.effective_stop_at_ratio != null) {
+        initialUpdates.effectiveStopAtRatio = initialStats.effective_stop_at_ratio;
+      }
+      instanceActions.updateInstance($activeInstance.id, initialUpdates);
+    } catch (error) {
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: 'Failed to start: ' + error,
+        statusType: 'error',
+      });
+      alert('Failed to start faker: ' + error);
+    }
+  }
+
+  // Stop faking
+  async function stopFaking() {
+    if (!$activeInstance) {
+      alert('No active instance');
+      return;
+    }
+
+    try {
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: 'Stopping faker...',
+        statusType: 'running',
+      });
+
+      // Get final stats from backend before stopping to save cumulative totals
+      let finalStats = null;
+      try {
+        finalStats = await api.getStats($activeInstance.id);
+      } catch (error) {
+        console.warn('Failed to get final stats before stopping:', error);
+        finalStats = $activeInstance.stats; // Fallback to current stats
+      }
+
+      await api.stopFaker($activeInstance.id);
+
+      // Clear intervals
+      if ($activeInstance.updateInterval) {
+        clearInterval($activeInstance.updateInterval);
+      }
+      // Clear live stats if this instance owns it
+      if (activeLiveStatsInstanceId === $activeInstance.id) {
+        stopLiveStats();
+      }
+
+      // Save cumulative stats for next session
+      const updates = {
+        isRunning: false,
+        updateInterval: null,
+        statusMessage: 'Stopped successfully - Stats available for review',
+        statusType: 'success',
+        statusIcon: null,
+      };
+
+      // Update cumulative stats with final totals (convert bytes to MB)
+      if (finalStats) {
+        updates.cumulativeUploaded = Math.round(finalStats.uploaded / (1024 * 1024));
+        updates.cumulativeDownloaded = Math.round(finalStats.downloaded / (1024 * 1024));
+      }
+
+      // Update instance - keep stats visible for review
+      instanceActions.updateInstance($activeInstance.id, updates);
+
+      const instanceId = $activeInstance.id;
+      setTimeout(() => {
+        // Only update status if the instance is not running
+        const instance = $instances.find(i => i.id === instanceId);
+        if (instance && !instance.isRunning) {
+          instanceActions.updateInstance(instanceId, {
+            statusMessage: 'Ready to start a new session',
+            statusType: 'idle',
+            statusIcon: null,
+          });
+        }
+      }, 2000);
+    } catch (error) {
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: 'Failed to stop: ' + error,
+        statusType: 'error',
+        statusIcon: null,
+      });
+      alert('Failed to stop faker: ' + error);
+    }
+  }
+
+  // Pause faking
+  async function pauseFaking() {
+    if (!$activeInstance) {
+      alert('No active instance');
+      return;
+    }
+
+    try {
+      await api.pauseFaker($activeInstance.id);
+      instanceActions.updateInstance($activeInstance.id, {
+        isPaused: true,
+        ...getPausedStatus(),
+      });
+    } catch (error) {
+      devLog('error', 'Pause error:', error);
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: 'Failed to pause: ' + error,
+        statusType: 'error',
+      });
+    }
+  }
+
+  // Resume faking
+  async function resumeFaking() {
+    if (!$activeInstance) {
+      alert('No active instance');
+      return;
+    }
+
+    try {
+      await api.resumeFaker($activeInstance.id);
+      const stats = await api.getStats($activeInstance.id);
+      instanceActions.updateInstance($activeInstance.id, {
+        isRunning: true,
+        isPaused: false,
+        stats,
+        ...getStatusFromStats(stats),
+      });
+    } catch (error) {
+      devLog('error', 'Resume error:', error);
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: 'Failed to resume: ' + error,
+        statusType: 'error',
+      });
+    }
+  }
+
+  // Start all instances with torrents loaded (bulk)
+  async function startAllInstances() {
+    const currentInstances = get(instances);
+    const instancesToStart = currentInstances.filter(inst => inst.torrent && !inst.isRunning);
+
+    if (instancesToStart.length === 0) return;
+
+    // Build per-instance configs and sync to backend
+    const configEntries = instancesToStart.map(instance => ({
+      id: instance.id,
+      config: buildFakerConfig(instance, clientVersions, { isServerMode }),
+    }));
+
+    try {
+      await api.bulkUpdateConfigs(configEntries);
+    } catch (error) {
+      console.error('Failed to sync configs before bulk start:', error);
+      return;
+    }
+
+    // Start all instances via single bulk command
+    const ids = instancesToStart.map(inst => inst.id);
+    try {
+      await api.gridStart(ids);
+    } catch (error) {
+      console.error('Failed to bulk start instances:', error);
+      return;
+    }
+
+    // Update UI state and start polling for each
+    for (const instance of instancesToStart) {
+      instanceActions.updateInstance(instance.id, {
+        isRunning: true,
+        isPaused: false,
+        statusMessage: 'Actively faking ratio...',
+        statusType: 'running',
+        statusIcon: 'rocket',
+      });
+
+      const intervalSeconds = instance.updateIntervalSeconds ?? 5;
+      startPollingForInstance(instance.id, intervalSeconds);
+    }
+  }
+
+  // Stop all running instances (bulk)
+  async function stopAllInstances() {
+    const currentInstances = get(instances);
+    const instancesToStop = currentInstances.filter(inst => inst.isRunning);
+
+    if (instancesToStop.length === 0) return;
+
+    const ids = instancesToStop.map(inst => inst.id);
+    try {
+      await api.gridStop(ids);
+    } catch (error) {
+      console.error('Failed to bulk stop instances:', error);
+      return;
+    }
+
+    // Update UI state and stop polling for each
+    for (const instance of instancesToStop) {
+      if (instance.updateInterval) clearInterval(instance.updateInterval);
+      if (activeLiveStatsInstanceId === instance.id) {
+        stopLiveStats();
+      }
+
+      instanceActions.updateInstance(instance.id, {
+        isRunning: false,
+        updateInterval: null,
+        statusMessage: 'Stopped successfully',
+        statusType: 'success',
+        statusIcon: null,
+      });
+    }
+  }
+
+  // Pause all running instances (parallel)
+  async function pauseAllInstances() {
+    const currentInstances = get(instances);
+    const instancesToPause = currentInstances.filter(inst => inst.isRunning && !inst.isPaused);
+
+    if (instancesToPause.length === 0) return;
+
+    const results = await Promise.allSettled(
+      instancesToPause.map(async instance => {
+        await api.pauseFaker(instance.id);
+        instanceActions.updateInstance(instance.id, {
+          isPaused: true,
+          ...getPausedStatus(),
+        });
+      })
+    );
+
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`Failed to pause instance ${instancesToPause[index].id}:`, result.reason);
+      }
+    });
+  }
+
+  // Resume all paused instances (parallel)
+  async function resumeAllInstances() {
+    const currentInstances = get(instances);
+    const instancesToResume = currentInstances.filter(inst => inst.isRunning && inst.isPaused);
+
+    if (instancesToResume.length === 0) return;
+
+    const results = await Promise.allSettled(
+      instancesToResume.map(async instance => {
+        await api.resumeFaker(instance.id);
+        const stats = await api.getStats(instance.id);
+        instanceActions.updateInstance(instance.id, {
+          isPaused: false,
+          stats,
+          ...getStatusFromStats(stats),
+        });
+      })
+    );
+
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`Failed to resume instance ${instancesToResume[index].id}:`, result.reason);
+      }
+    });
+  }
+
+  // Manual update
+  async function manualUpdate() {
+    if (!$activeInstance || !$activeInstance.isRunning) {
+      return;
+    }
+
+    try {
+      const isPausedBeforeUpdate = $activeInstance.isPaused;
+
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: 'Manually updating stats...',
+        statusType: 'running',
+      });
+
+      await api.updateFaker($activeInstance.id);
+      const stats = await api.getStats($activeInstance.id);
+
+      // Restore the correct status message based on paused state or idling
+      let statusMessage, statusType, statusIcon;
+      if (isPausedBeforeUpdate) {
+        ({ statusMessage, statusType, statusIcon } = getPausedStatus());
+      } else {
+        const statusFromStats = getStatusFromStats(stats);
+        statusMessage = statusFromStats.statusMessage;
+        statusType = statusFromStats.statusType;
+        statusIcon = statusFromStats.statusIcon;
+      }
+
+      instanceActions.updateInstance($activeInstance.id, {
+        stats,
+        statusMessage,
+        statusType,
+        statusIcon,
+      });
+    } catch (error) {
+      devLog('error', 'Manual update error:', error);
+      instanceActions.updateInstance($activeInstance.id, {
+        statusMessage: 'Update failed: ' + error,
+        statusType: 'error',
+      });
+
+      const instanceId = $activeInstance.id;
+      setTimeout(() => {
+        // Only update status if the instance is still running
+        const instance = $instances.find(i => i.id === instanceId);
+        if (instance && instance.isRunning) {
+          let statusMessage, statusType, statusIcon;
+          if (instance.isPaused) {
+            ({ statusMessage, statusType, statusIcon } = getPausedStatus());
+          } else if (instance.stats?.is_idling) {
+            const statusFromStats = getStatusFromStats(instance.stats);
+            statusMessage = statusFromStats.statusMessage;
+            statusType = statusFromStats.statusType;
+            statusIcon = statusFromStats.statusIcon;
+          } else {
+            ({ statusMessage, statusType, statusIcon } = getRunningStatus());
+          }
+          instanceActions.updateInstance(instanceId, {
+            statusMessage,
+            statusType,
+            statusIcon,
+          });
+        }
+      }, 2000);
+    }
+  }
+
+  // Format bytes
+  function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  // Format duration
+  function formatDuration(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h}h ${m}m ${s}s`;
+  }
+
+  // Sync instance config to server (debounced)
+  // This ensures form changes persist across page refreshes in server mode
+  function syncConfigToServer(instanceId) {
+    const instance = $instances.find(i => i.id === instanceId);
+    if (!instance) return;
+
+    // Only sync if instance has a torrent loaded (exists on backend) and is not running
+    if (!instance.torrent || instance.isRunning) return;
+
+    // Clear existing timeout
+    if (configSyncTimeout) {
+      clearTimeout(configSyncTimeout);
+    }
+
+    // Debounce: wait 500ms after last change before syncing
+    configSyncTimeout = setTimeout(async () => {
+      try {
+        // Build FakerConfig from instance state
+        const config = buildFakerConfig(instance, clientVersions, {
+          isServerMode,
+          useCalculatedInitialDownloaded: true,
+        });
+
+        await api.updateInstanceConfig(instanceId, config);
+        devLog('log', `Synced config for instance ${instanceId} to server`);
+      } catch (error) {
+        console.warn('Failed to sync config to server:', error);
+      }
+    }, 500);
+  }
+
+  async function handleCloseToTray() {
+    closePromptVisible = false;
+    saveCloseBehaviorSetting('tray');
+    try {
+      await api.closeToTray();
+    } catch (error) {
+      console.error('Failed to close to tray:', error);
+    }
+  }
+
+  async function handleQuitFromPrompt() {
+    closePromptVisible = false;
+    saveCloseBehaviorSetting('quit');
+    try {
+      await api.quitApp();
+    } catch (error) {
+      console.error('Failed to quit app:', error);
+    }
+  }
+
+  async function handleCancelClosePrompt() {
+    closePromptVisible = false;
+    rememberCloseChoice = false;
+    try {
+      await api.cancelClosePrompt();
+    } catch (error) {
+      console.error('Failed to cancel close prompt:', error);
+    }
+  }
+</script>
+
+{#if !isInitialized}
+  <div class="flex flex-col items-center justify-center min-h-screen gap-6 bg-background">
+    <div class="w-15 h-15 border-4 border-muted border-t-primary rounded-full animate-spin"></div>
+    <p class="text-xl text-muted-foreground">Loading Rustatio...</p>
+  </div>
+{:else if showAuthDialog}
+  <!-- Authentication Page (shown when auth is required but not authenticated) -->
+  <AuthPage onAuthenticated={handleAuthenticated} />
+{:else}
+  <div class="flex h-screen bg-background text-foreground">
+    <!-- Sidebar -->
+    <Sidebar
+      bind:isOpen={sidebarOpen}
+      bind:isCollapsed={sidebarCollapsed}
+      onStartAll={startAllInstances}
+      onStopAll={stopAllInstances}
+      onPauseAll={pauseAllInstances}
+      onResumeAll={resumeAllInstances}
+      {networkStatus}
+      {networkStatusLoading}
+      {networkStatusError}
+      onRefreshNetworkStatus={refreshNetworkStatus}
+    />
+
+    <!-- Main Content -->
+    <div class="flex-1 flex flex-col overflow-hidden">
+      <!-- Theme Toggle (Absolute Top-Right) -->
+      <div class="fixed top-4 right-4 z-30 flex items-center gap-3">
+        {#if !isTauri}
+          <div class="hidden sm:block">
+            <DownloadButton />
+          </div>
+        {/if}
+        <div class="relative theme-selector">
+          <button
+            onclick={toggleThemeDropdown}
+            class="group bg-secondary text-secondary-foreground border-2 border-border rounded-lg p-2 flex items-center gap-2 cursor-pointer transition-all hover:bg-primary hover:border-primary hover:text-primary-foreground hover:[&_svg]:!text-current active:scale-[0.98] shadow-lg"
+            title="Theme: {getThemeName(getTheme())}"
+            aria-label="Toggle theme menu"
+          >
+            <ThemeIcon theme={getTheme()} />
+            <ChevronDown
+              size={14}
+              class="transition-transform {getShowThemeDropdown() ? 'rotate-180' : ''}"
+            />
+          </button>
+          {#if getShowThemeDropdown()}
+            <div
+              class="absolute top-[calc(100%+0.5rem)] right-0 bg-card text-card-foreground border border-border/50 rounded-xl shadow-2xl p-1.5 min-w-[200px] max-h-[400px] overflow-y-auto z-50 backdrop-blur-xl animate-in fade-in slide-in-from-top-2 duration-200"
+            >
+              {#each Object.entries(THEME_CATEGORIES) as [categoryId, category] (categoryId)}
+                <!-- Category Header -->
+                <div
+                  class="px-3 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider {categoryId !==
+                  'default'
+                    ? 'mt-2 border-t border-border pt-2'
+                    : ''}"
+                >
+                  {category.name}
+                </div>
+
+                {#each category.themes as themeId (themeId)}
+                  {@const themeOption = THEMES[themeId]}
+                  <button
+                    class="w-full flex items-center gap-3 px-3 py-2 border-none cursor-pointer rounded-lg transition-all {getTheme() ===
+                    themeOption.id
+                      ? 'bg-primary text-primary-foreground shadow-sm [&_svg]:!text-current'
+                      : 'bg-transparent text-card-foreground hover:bg-secondary/80'}"
+                    onclick={() => selectTheme(themeOption.id)}
+                  >
+                    <ThemeIcon theme={themeOption.id} />
+                    <div class="flex-1 text-left">
+                      <span class="text-sm font-medium">{themeOption.name}</span>
+                      {#if themeOption.description}
+                        <span class="block text-xs opacity-70">{themeOption.description}</span>
+                      {/if}
+                    </div>
+                    {#if getTheme() === themeOption.id}
+                      <Check size={16} strokeWidth={2.5} />
+                    {/if}
+                  </button>
+                {/each}
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <!-- Header -->
+      <Header
+        onToggleSidebar={() => (sidebarOpen = !sidebarOpen)}
+        showStatus={$viewMode === 'standard'}
+        statusMessage={$activeInstance?.statusMessage || 'Select a torrent file to begin'}
+        statusType={$activeInstance?.statusType || 'warning'}
+        statusIcon={$activeInstance?.statusIcon || null}
+        isRunning={$activeInstance?.isRunning || false}
+        isPaused={$activeInstance?.isPaused || false}
+        {startFaking}
+        {stopFaking}
+        {pauseFaking}
+        {resumeFaking}
+        {manualUpdate}
+      />
+
+      <!-- Scrollable Content Area -->
+      {#if $viewMode === 'grid'}
+        <div class="flex-1 overflow-y-auto p-3">
+          <GridView />
+        </div>
+      {:else if $viewMode === 'watch'}
+        <div class="flex-1 overflow-y-auto p-3">
+          <WatchView />
+        </div>
+      {:else}
+        <div class="flex-1 overflow-y-auto p-3">
+          <div class="max-w-7xl mx-auto">
+            <!-- CORS Proxy Settings -->
+            <ProxySettings />
+
+            {#if $activeInstance?.source === 'watch_folder'}
+              <div class="mb-3 flex items-center gap-2 flex-wrap">
+                <span
+                  class="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-primary"
+                  title="This instance is managed by watch folder"
+                >
+                  <FolderOpen size={12} />
+                  Watch folder instance
+                </span>
+                <button
+                  class="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20 transition-colors"
+                  onclick={() => {
+                    const name =
+                      $activeInstance?.torrent?.name || $activeInstance?.torrentPath || '';
+                    focusWatchQuery(name);
+                    viewMode.set('watch');
+                  }}
+                  title="Open this torrent in watch explorer"
+                >
+                  <FolderOpen size={12} />
+                  Open in Watch
+                </button>
+              </div>
+            {/if}
+            <!-- Torrent Selection & Configuration -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+              <TorrentSelector torrent={$activeInstance?.torrent} {selectTorrent} {formatBytes} />
+
+              {#if $activeInstance}
+                <ConfigurationForm
+                  {clients}
+                  {clientVersions}
+                  selectedClient={$activeInstance.selectedClient}
+                  selectedClientVersion={$activeInstance.selectedClientVersion}
+                  port={$activeInstance.port}
+                  currentForwardedPort={getForwardedPort(networkStatus)}
+                  vpnPortSyncVisible={isServerMode}
+                  networkStatusConfigured={isServerMode ? isNetworkConfigured(networkStatus) : true}
+                  vpnPortSyncEnabled={isServerMode ? getVpnPortSyncEnabled(networkStatus) : false}
+                  {networkStatusError}
+                  vpnPortSync={$activeInstance.vpnPortSync}
+                  uploadRate={$activeInstance.uploadRate}
+                  downloadRate={$activeInstance.downloadRate}
+                  completionPercent={$activeInstance.completionPercent}
+                  initialUploaded={$activeInstance.initialUploaded}
+                  updateIntervalSeconds={$activeInstance.updateIntervalSeconds}
+                  scrapeInterval={$activeInstance.scrapeInterval}
+                  randomizeRates={$activeInstance.randomizeRates}
+                  randomRangePercent={$activeInstance.randomRangePercent}
+                  progressiveRatesEnabled={$activeInstance.progressiveRatesEnabled}
+                  targetUploadRate={$activeInstance.targetUploadRate}
+                  targetDownloadRate={$activeInstance.targetDownloadRate}
+                  progressiveDurationHours={$activeInstance.progressiveDurationHours}
+                  isRunning={$activeInstance.isRunning || false}
+                  onUpdate={updates => {
+                    // Reset cumulative stats if user changes initial values
+                    if (
+                      updates.initialUploaded !== undefined ||
+                      updates.completionPercent !== undefined
+                    ) {
+                      updates.cumulativeUploaded = 0;
+                      updates.cumulativeDownloaded = 0;
+                    }
+                    instanceActions.updateInstance($activeInstance.id, updates);
+                    // Sync config to server (debounced) so it persists across page refreshes
+                    syncConfigToServer($activeInstance.id);
+                  }}
+                />
+              {/if}
+            </div>
+
+            <!-- Stop Conditions & Progress Bars -->
+            {#if $activeInstance}
+              {@const hasActiveStopCondition =
+                $activeInstance.stopAtRatioEnabled ||
+                $activeInstance.stopAtUploadedEnabled ||
+                $activeInstance.stopAtDownloadedEnabled ||
+                $activeInstance.stopAtSeedTimeEnabled}
+              {@const isLeeching = ($activeInstance.completionPercent ?? 100) < 100}
+              {@const showProgressBars =
+                (hasActiveStopCondition || isLeeching) && $activeInstance?.stats}
+
+              <div class="grid grid-cols-1 {showProgressBars ? 'md:grid-cols-2' : ''} gap-3 mb-3">
+                <StopConditions
+                  stopAtRatioEnabled={$activeInstance.stopAtRatioEnabled}
+                  stopAtRatio={$activeInstance.stopAtRatio}
+                  randomizeRatio={$activeInstance.randomizeRatio}
+                  randomRatioRangePercent={$activeInstance.randomRatioRangePercent}
+                  effectiveStopAtRatio={$activeInstance.effectiveStopAtRatio}
+                  stopAtUploadedEnabled={$activeInstance.stopAtUploadedEnabled}
+                  stopAtUploadedGB={$activeInstance.stopAtUploadedGB}
+                  stopAtDownloadedEnabled={$activeInstance.stopAtDownloadedEnabled}
+                  stopAtDownloadedGB={$activeInstance.stopAtDownloadedGB}
+                  stopAtSeedTimeEnabled={$activeInstance.stopAtSeedTimeEnabled}
+                  stopAtSeedTimeHours={$activeInstance.stopAtSeedTimeHours}
+                  idleWhenNoLeechers={$activeInstance.idleWhenNoLeechers}
+                  idleWhenNoSeeders={$activeInstance.idleWhenNoSeeders}
+                  postStopAction={$activeInstance.postStopAction}
+                  completionPercent={$activeInstance.completionPercent}
+                  isRunning={$activeInstance.isRunning || false}
+                  onUpdate={updates => {
+                    // Recompute effective ratio preview when ratio-related settings change
+                    // Only recompute on frontend if the instance is NOT running
+                    // (when running, the backend's effective ratio is authoritative)
+                    if (
+                      !($activeInstance.isRunning || false) &&
+                      ('stopAtRatio' in updates ||
+                        'randomizeRatio' in updates ||
+                        'randomRatioRangePercent' in updates ||
+                        'stopAtRatioEnabled' in updates)
+                    ) {
+                      const inst = $activeInstance;
+                      const merged = { ...inst, ...updates };
+                      updates.effectiveStopAtRatio = merged.stopAtRatioEnabled
+                        ? computeEffectiveRatio(
+                            merged.stopAtRatio,
+                            merged.randomizeRatio,
+                            merged.randomRatioRangePercent
+                          )
+                        : null;
+                    }
+                    instanceActions.updateInstance($activeInstance.id, updates);
+                    // Sync config to server (debounced) so it persists across page refreshes
+                    syncConfigToServer($activeInstance.id);
+                  }}
+                />
+
+                {#if showProgressBars}
+                  <ProgressBars
+                    stats={$activeInstance.stats}
+                    completionPercent={$activeInstance.completionPercent ?? 100}
+                    torrentSize={$activeInstance.torrent?.total_size ?? 0}
+                    stopAtRatioEnabled={$activeInstance.stopAtRatioEnabled}
+                    stopAtRatio={$activeInstance.effectiveStopAtRatio ??
+                      $activeInstance.stopAtRatio}
+                    stopAtUploadedEnabled={$activeInstance.stopAtUploadedEnabled}
+                    stopAtUploadedGB={$activeInstance.stopAtUploadedGB}
+                    stopAtDownloadedEnabled={$activeInstance.stopAtDownloadedEnabled}
+                    stopAtDownloadedGB={$activeInstance.stopAtDownloadedGB}
+                    stopAtSeedTimeEnabled={$activeInstance.stopAtSeedTimeEnabled}
+                    stopAtSeedTimeHours={$activeInstance.stopAtSeedTimeHours}
+                    {formatBytes}
+                    {formatDuration}
+                  />
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Stats -->
+            {#if $activeInstance?.stats}
+              <!-- Session & Total Stats -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                <SessionStats stats={$activeInstance.stats} {formatBytes} {formatDuration} />
+                <TotalStats
+                  stats={$activeInstance.stats}
+                  torrent={$activeInstance.torrent}
+                  {formatBytes}
+                />
+              </div>
+
+              <!-- Performance & Peer Analytics (merged) -->
+              <div class="mb-3">
+                <RateGraph stats={$activeInstance.stats} {formatDuration} />
+              </div>
+            {/if}
+
+            <!-- Logs Section -->
+            <Logs
+              bind:logs
+              bind:showLogs
+              onUpdate={async updates => {
+                if (updates.showLogs !== undefined) {
+                  showLogs = updates.showLogs;
+                  localStorage.setItem('rustatio-show-logs', JSON.stringify(updates.showLogs));
+                }
+              }}
+            />
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}
+
+<BaseModal
+  open={errorDialogOpen}
+  onClose={() => {
+    errorDialogOpen = false;
+  }}
+  titleId="app-error-dialog-title"
+  maxWidthClass="max-w-md"
+  panelClass="animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
+>
+  <div class="p-6 border-b border-border/70">
+    <h2 id="app-error-dialog-title" class="text-lg font-semibold text-foreground">
+      {errorDialogTitle}
+    </h2>
+  </div>
+  <div class="p-6 space-y-6">
+    <p class="text-sm leading-6 text-muted-foreground whitespace-pre-line">
+      {errorDialogMessage}
+    </p>
+    <div class="flex justify-end">
+      <Button
+        onclick={() => {
+          errorDialogOpen = false;
+        }}
+        size="sm"
+      >
+        {#snippet children()}
+          OK
+        {/snippet}
+      </Button>
+    </div>
+  </div>
+</BaseModal>
+
+<ConfirmDialog
+  bind:open={closePromptVisible}
+  title="Close Rustatio?"
+  message="Do you want to quit Rustatio or close it to the tray?"
+  cancelLabel="Cancel"
+  secondaryLabel="Close to Tray"
+  confirmLabel="Quit"
+  kind="danger"
+  titleId="app-close-prompt-title"
+  showRememberChoice={true}
+  bind:rememberChoiceChecked={rememberCloseChoice}
+  onCancel={handleCancelClosePrompt}
+  onSecondary={handleCloseToTray}
+  onConfirm={handleQuitFromPrompt}
+/>
+
+<!-- Update Checker (only shown in Tauri) -->
+<UpdateChecker />

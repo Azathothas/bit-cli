@@ -1,0 +1,48 @@
+{
+  "name": "rustatio-ui",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "format": "prettier --write .",
+    "format:check": "prettier --check . || true",
+    "lint": "eslint .",
+    "lint:fix": "eslint --fix ."
+  },
+  "dependencies": {
+    "@lucide/svelte": "^0.562.0",
+    "@tanstack/table-core": "^8.21.3",
+    "@tauri-apps/api": "^2.9.1",
+    "@tauri-apps/plugin-dialog": "^2.4.2",
+    "@tauri-apps/plugin-os": "^2.3.2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-shell": "^2.3.3",
+    "@tauri-apps/plugin-updater": "^2.9.0",
+    "echarts": "^6.0.0",
+    "simple-icons": "^16.5.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@tailwindcss/postcss": "^4.1.18",
+    "@typescript-eslint/eslint-plugin": "^8.50.1",
+    "@typescript-eslint/parser": "^8.50.1",
+    "autoprefixer": "^10.4.23",
+    "clsx": "^2.1.1",
+    "eslint": "^9.39.2",
+    "eslint-plugin-svelte": "^3.15.0",
+    "globals": "^16.5.0",
+    "postcss": "^8.5.6",
+    "prettier": "^3.2.5",
+    "prettier-plugin-svelte": "^3.2.0",
+    "svelte": "^5.17.0",
+    "svelte-eslint-parser": "^1.4.1",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss": "^4.1.18",
+    "tailwindcss-animate": "^1.0.7",
+    "vite": "^7.3.2"
+  }
+}

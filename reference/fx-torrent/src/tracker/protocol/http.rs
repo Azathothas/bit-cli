@@ -1,0 +1,901 @@
+use crate::tracker::{
+    AnnounceEvent, Announcement, AnnouncementResponse, ConnectionMetrics, Result, ScrapeResult,
+    TrackerError, TrackerHandle,
+};
+use crate::{bencode, CompactIp, CompactIpv4Addrs, CompactIpv6Addrs, InfoHash};
+use async_trait::async_trait;
+use derive_more::Display;
+use itertools::Itertools;
+use log::{debug, trace};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
+use reqwest::redirect::Policy;
+use reqwest::{Client, Error, Response, StatusCode};
+use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::io;
+use std::net::IpAddr;
+use std::pin::Pin;
+use std::str::FromStr;
+use std::time::Duration;
+use tokio::select;
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+use url::Url;
+
+#[cfg(feature = "tracker-server")]
+pub use server::*;
+
+const URL_ENCODE_RESERVED: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'~')
+    .remove(b'.');
+
+/// The HTTP/HTTPS tracker connection protocol implementation.
+#[derive(Debug, Display)]
+#[display("{} ({})", handle, url)]
+pub struct HttpClient {
+    /// The handle of the tracker
+    handle: TrackerHandle,
+    /// The base url of the http tracker
+    url: Url,
+    client: Client,
+    supports_pause_event: Mutex<bool>,
+    metrics: ConnectionMetrics,
+    cancellation_token: CancellationToken,
+}
+
+impl HttpClient {
+    /// Create a new HTTP tracker client connection.
+    /// It returns an error if the connection to the HTTP tracker server failed.
+    pub async fn new(handle: TrackerHandle, url: Url, timeout: Duration) -> Result<Self> {
+        let client = Client::builder()
+            .redirect(Policy::limited(3))
+            .timeout(timeout)
+            .build()
+            .map_err(|e| TrackerError::Connection(e.to_string()))?;
+
+        trace!(
+            "Http tracker client {} is trying to connect to {}",
+            handle,
+            url
+        );
+        client.head(url.clone()).send().await?;
+
+        Ok(Self {
+            handle,
+            url,
+            client,
+            supports_pause_event: Mutex::new(true),
+            metrics: Default::default(),
+            cancellation_token: Default::default(),
+        })
+    }
+
+    /// Announce the given torrent hash to the tracker.
+    /// This will send the known peer info to the tracker with the type of announcement.
+    pub async fn announce(&self, announce: Announcement) -> Result<AnnouncementResponse> {
+        self.make_announcement(announce).await
+    }
+
+    /// Scrape the tracker for metrics for one or more info hashes.
+    pub async fn scrape(&self, hashes: &[InfoHash]) -> Result<ScrapeResult> {
+        let url = self.create_scrape_url(hashes)?;
+
+        trace!("Http tracker {} is sending request to {}", self, url);
+        select! {
+            _ = self.cancellation_token.cancelled() => {
+                self.metrics.timeouts.inc();
+                Err(TrackerError::Io(io::Error::new(io::ErrorKind::TimedOut, "request timed out")))
+            },
+            response = self.client.get(url.clone()).send() => self.process_scrape_response(response).await,
+        }
+    }
+
+    /// Returns the http client metrics.
+    pub fn metrics(&self) -> &ConnectionMetrics {
+        &self.metrics
+    }
+
+    /// Close the http client connection.
+    pub fn close(&self) {
+        self.cancellation_token.cancel()
+    }
+
+    async fn create_announce_url(&self, announce: Announcement) -> Result<Url> {
+        let mut url = self.url.clone();
+        let info_hash = announce.info_hash.short_info_hash_bytes();
+        let supports_pause = *self.supports_pause_event.lock().await;
+        let event = match announce.event {
+            AnnounceEvent::None => "",
+            AnnounceEvent::Paused if !supports_pause => "",
+            _ => announce.event.as_str(),
+        };
+        let url_encoded_hash =
+            percent_encoding::percent_encode(info_hash.as_slice(), URL_ENCODE_RESERVED).to_string();
+
+        let base_url = url
+            .query_pairs_mut()
+            .append_pair("peer_id", &announce.peer_id.to_string())
+            .append_pair("port", &announce.peer_port.to_string())
+            .append_pair("uploaded", "0")
+            .append_pair("downloaded", announce.bytes_completed.to_string().as_str())
+            .append_pair("left", announce.bytes_remaining.to_string().as_str())
+            .append_pair("event", event)
+            .append_pair("key", "0")
+            .append_pair("compact", "1")
+            .append_pair("numwant", "200")
+            .finish()
+            .to_string();
+        let url = format!("{}&info_hash={}", base_url, url_encoded_hash);
+
+        Ok(Url::parse(&url)?)
+    }
+
+    fn create_scrape_url(&self, hashes: &[InfoHash]) -> Result<Url> {
+        // replace the announce path segment with the scrape
+        let url = self.url.clone().as_str().replace("announce", "scrape");
+        let hashes = hashes
+            .into_iter()
+            .map(|e| e.short_info_hash_bytes())
+            .map(|e| {
+                percent_encoding::percent_encode(e.as_slice(), URL_ENCODE_RESERVED).to_string()
+            })
+            .map(|e| format!("info_hash={}", e))
+            .join("&");
+
+        let url_value = format!("{}?{}", url, hashes);
+        Ok(Url::parse(url_value.as_str())?)
+    }
+
+    async fn process_scrape_response(
+        &self,
+        response: std::result::Result<Response, Error>,
+    ) -> Result<ScrapeResult> {
+        let bytes = response?.bytes().await?;
+        trace!(
+            "Http tracker {} received {} bytes, {}",
+            self,
+            bytes.len(),
+            String::from_utf8_lossy(&bytes)
+        );
+        let message = bencode::from_bytes::<ScrapeResult>(bytes.as_ref())?;
+        debug!(
+            "Http tracker {} received scrape response, {:?}",
+            self, message
+        );
+
+        Ok(message)
+    }
+
+    fn make_announcement<'a>(
+        &'a self,
+        announce: Announcement,
+    ) -> Pin<Box<dyn Future<Output = Result<AnnouncementResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let url = self.create_announce_url(announce.clone()).await?;
+
+            trace!("Http tracker {} is sending request {}", self, url);
+            let response = select! {
+                _ = self.cancellation_token.cancelled() => {
+                    self.metrics.timeouts.inc();
+                    return Err(TrackerError::Io(io::Error::new(io::ErrorKind::TimedOut, "request timed out")));
+                },
+                response = self.client.get(url.clone()).send() => response,
+            }?;
+
+            let status_code = response.status();
+            let bytes = response.bytes().await?;
+            self.metrics.bytes_in.inc_by(bytes.len() as u64);
+
+            // check the response status code from the http tracker
+            // if it's unsuccessful, we don't try to parse the response body
+            if !status_code.is_success() {
+                debug!(
+                    "Http tracker {} received invalid status code {}",
+                    self, status_code
+                );
+                trace!(
+                    "Http tracker {} response: {}",
+                    self,
+                    String::from_utf8_lossy(bytes.as_ref())
+                );
+                return self.on_announce_error(announce, status_code).await;
+            }
+
+            trace!(
+                "Http tracker {} received {} bytes, {}",
+                self,
+                bytes.len(),
+                String::from_utf8_lossy(&bytes)
+            );
+            let message = bencode::from_bytes::<HttpResponse>(bytes.as_ref())?;
+            debug!(
+                "Http tracker {} received announce response, {:?}",
+                self, message
+            );
+
+            // check if the response message contains an error
+            if let Some(failure) = message.failure_reason {
+                return Err(TrackerError::AnnounceError(failure));
+            }
+
+            Ok(message.into())
+        })
+    }
+
+    async fn on_announce_error(
+        &self,
+        announce: Announcement,
+        status_code: StatusCode,
+    ) -> Result<AnnouncementResponse> {
+        // not all trackers support the `paused` event value
+        // if this is the case, we disable the support for it (it will be sent as empty value instead)
+        {
+            let mut supports_pause_event = self.supports_pause_event.lock().await;
+            if announce.event == AnnounceEvent::Paused
+                && status_code == StatusCode::BAD_REQUEST
+                && *supports_pause_event
+            {
+                *supports_pause_event = false;
+                drop(supports_pause_event);
+                return self.make_announcement(announce).await;
+            }
+        }
+
+        Err(TrackerError::AnnounceError(format!(
+            "received invalid status code {}",
+            status_code
+        )))
+    }
+}
+
+#[cfg(feature = "tracker-server")]
+mod server {
+    use super::*;
+
+    use crate::peer::PeerId;
+    use crate::tracker::{BaseServer, ServerRequest, TrackerListener};
+    use crate::CompactIpv4Addr;
+    use axum::extract::{ConnectInfo, RawQuery, State};
+    use axum::http::StatusCode;
+    use axum::routing::get;
+    use axum::Router;
+    use log::{error, warn};
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::Arc;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    #[derive(Debug)]
+    pub struct HttpServer {
+        inner: Arc<InnerServer>,
+    }
+
+    impl HttpServer {
+        /// Create a new HTTP tracker server instance with a specific port.
+        pub async fn with_port(port: u16) -> Result<Self> {
+            let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
+            let addr = listener.local_addr()?;
+            let ip = if addr.ip().is_unspecified() {
+                Ipv4Addr::LOCALHOST.into()
+            } else {
+                addr.ip()
+            };
+            let url = Url::parse(&format!("http://{}:{}/announce", ip, addr.port()))?;
+            let inner = Arc::new(InnerServer {
+                base: BaseServer::new(TrackerHandle::new(), Duration::from_secs(15)),
+                addr,
+                url,
+            });
+
+            let state = inner.clone();
+            tokio::spawn(async move {
+                let cancellation_token = state.base.cancellation_token.clone();
+                let router = Router::new()
+                    .route("/announce", get(Self::do_announce))
+                    .route("/scrape", get(Self::do_scrape))
+                    .with_state(state);
+
+                if let Err(e) = axum::serve(
+                    listener,
+                    router.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(cancellation_token.cancelled_owned())
+                .await
+                {
+                    error!("Http server tracker failed to start, {}", e)
+                }
+            });
+
+            Ok(Self { inner })
+        }
+
+        async fn do_announce(
+            State(state): State<Arc<InnerServer>>,
+            ConnectInfo(addr): ConnectInfo<SocketAddr>,
+            query: RawQuery,
+        ) -> (StatusCode, Vec<u8>) {
+            let status_code: StatusCode;
+            let response: HttpResponse;
+            let query = match query.0 {
+                Some(query) => query,
+                None => {
+                    return Self::parse_response(
+                        &*state,
+                        StatusCode::BAD_REQUEST,
+                        HttpResponse {
+                            failure_reason: Some("missing announcement information".to_string()),
+                            interval: None,
+                            tracker_id: None,
+                            complete: None,
+                            incomplete: None,
+                            external_ip: Some(addr.ip().into()),
+                            peers: Default::default(),
+                            peers6: Default::default(),
+                        },
+                    );
+                }
+            };
+
+            match AnnounceParams::from_str(query.as_str()) {
+                Ok(params) => match state.announce(addr, params).await {
+                    Ok(e) => {
+                        status_code = StatusCode::OK;
+                        response = HttpResponse {
+                            failure_reason: None,
+                            tracker_id: None,
+                            interval: Some(e.interval_seconds as u32),
+                            complete: Some(e.seeders),
+                            incomplete: Some(e.leechers),
+                            external_ip: Some(addr.ip().into()),
+                            peers: e
+                                .peers
+                                .into_iter()
+                                .filter_map(|e| CompactIpv4Addr::try_from(e).ok())
+                                .collect::<Vec<_>>()
+                                .into(),
+                            peers6: Default::default(),
+                        };
+                    }
+                    Err(e) => {
+                        status_code = StatusCode::BAD_REQUEST;
+                        response = HttpResponse {
+                            failure_reason: Some(e.to_string()),
+                            interval: None,
+                            tracker_id: None,
+                            complete: None,
+                            incomplete: None,
+                            external_ip: Some(addr.ip().into()),
+                            peers: Vec::with_capacity(0).into(),
+                            peers6: Default::default(),
+                        }
+                    }
+                },
+                Err(e) => {
+                    debug!(
+                        "Http tracker {} failed to parse announce request, {}",
+                        state, e
+                    );
+                    status_code = StatusCode::BAD_REQUEST;
+                    response = HttpResponse {
+                        failure_reason: Some(e.to_string()),
+                        interval: None,
+                        tracker_id: None,
+                        complete: None,
+                        incomplete: None,
+                        external_ip: Some(addr.ip().into()),
+                        peers: Vec::with_capacity(0).into(),
+                        peers6: Default::default(),
+                    }
+                }
+            }
+
+            Self::parse_response(&*state, status_code, response)
+        }
+
+        async fn do_scrape(
+            State(state): State<Arc<InnerServer>>,
+            query: RawQuery,
+        ) -> (StatusCode, Vec<u8>) {
+            let status_code: StatusCode;
+            let response: ScrapeResult;
+
+            if let Some(query) = query.0 {
+                let mut info_hashes = vec![];
+                for keypair in query.split("&") {
+                    let mut key_value = keypair.splitn(2, "=");
+                    let key = key_value.next().unwrap_or_default();
+                    let value = key_value.next().unwrap_or_default();
+
+                    if key.to_lowercase().trim() == "info_hash" {
+                        let bytes =
+                            percent_encoding::percent_decode(value.as_bytes()).collect::<Vec<_>>();
+                        match InfoHash::try_from_bytes(bytes.as_slice()) {
+                            Ok(e) => info_hashes.push(e),
+                            Err(e) => {
+                                debug!("Http tracker {} failed to parse info hash, {}", state, e);
+                                continue;
+                            }
+                        }
+                    } // otherwise, ignore the query parameter
+                }
+
+                match state.scrape(info_hashes).await {
+                    Ok(e) => {
+                        status_code = StatusCode::OK;
+                        response = e;
+                    }
+                    Err(e) => {
+                        warn!("Http tracker {} failed process request, {}", state, e);
+                        status_code = StatusCode::INTERNAL_SERVER_ERROR;
+                        response = ScrapeResult::default();
+                    }
+                }
+            } else {
+                status_code = StatusCode::BAD_REQUEST;
+                response = ScrapeResult::default();
+            }
+
+            Self::parse_response(&*state, status_code, response)
+        }
+
+        fn parse_response<T>(
+            server: &InnerServer,
+            status_code: StatusCode,
+            response: T,
+        ) -> (StatusCode, Vec<u8>)
+        where
+            T: Serialize,
+        {
+            match bencode::to_bytes(&response) {
+                Ok(bytes) => (status_code, bytes),
+                Err(e) => {
+                    error!(
+                        "Http tracker {} failed to serialize response, {}",
+                        server, e
+                    );
+                    (StatusCode::INTERNAL_SERVER_ERROR, Vec::with_capacity(0))
+                }
+            }
+        }
+    }
+
+    #[async_trait]
+    impl TrackerListener for HttpServer {
+        async fn accept(&self) -> Option<ServerRequest> {
+            self.inner.base.accept().await
+        }
+
+        fn addr(&self) -> &SocketAddr {
+            &self.inner.addr
+        }
+
+        fn url(&self) -> &Url {
+            &self.inner.url
+        }
+
+        fn metrics(&self) -> &ConnectionMetrics {
+            &self.inner.base.metrics
+        }
+
+        fn close(&self) {
+            self.inner.base.close();
+        }
+    }
+
+    #[derive(Debug, Display)]
+    #[display("{}", base.handle)]
+    struct InnerServer {
+        base: BaseServer,
+        addr: SocketAddr,
+        url: Url,
+    }
+
+    impl InnerServer {
+        async fn announce(
+            &self,
+            addr: SocketAddr,
+            params: AnnounceParams,
+        ) -> Result<AnnouncementResponse> {
+            let info_hash = InfoHash::try_from_bytes(params.info_hash.as_slice())
+                .map_err(|e| TrackerError::Parse(e.to_string()))?;
+            let peer_id = PeerId::try_from(params.peer_id.as_bytes())
+                .map_err(|e| TrackerError::Parse(format!("failed to parse peer id, {}", e)))?;
+            let (tx, rx) = oneshot::channel();
+            let announcement = Announcement {
+                info_hash,
+                peer_id,
+                peer_port: params.port,
+                event: params.event,
+                bytes_completed: params.downloaded,
+                bytes_remaining: params.left,
+            };
+
+            self.base
+                .request(ServerRequest::Announcement {
+                    addr,
+                    request: announcement,
+                    response: tx,
+                })
+                .await;
+            self.base.await_response(rx).await
+        }
+
+        async fn scrape(&self, info_hashes: Vec<InfoHash>) -> Result<ScrapeResult> {
+            let (tx, rx) = oneshot::channel();
+
+            self.base
+                .request(ServerRequest::Scrape {
+                    request: info_hashes,
+                    response: tx,
+                })
+                .await;
+            self.base.await_response(rx).await
+        }
+    }
+}
+
+struct AnnounceParams {
+    info_hash: Vec<u8>,
+    peer_id: String,
+    port: u16,
+    uploaded: u64,
+    downloaded: u64,
+    left: u64,
+    event: AnnounceEvent,
+    key: u32,
+    compact: bool,
+    numwant: u32,
+}
+
+impl Default for AnnounceParams {
+    fn default() -> Self {
+        Self {
+            info_hash: vec![],
+            peer_id: String::new(),
+            port: 0,
+            uploaded: 0,
+            downloaded: 0,
+            left: 0,
+            event: AnnounceEvent::None,
+            key: 0,
+            compact: false,
+            numwant: 0,
+        }
+    }
+}
+
+impl FromStr for AnnounceParams {
+    type Err = TrackerError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let mut params = Self::default();
+        let query_pairs = value.split("&").map(|pair| {
+            let mut split = pair.splitn(2, "=");
+            (
+                split.next().unwrap_or_default(),
+                split.next().unwrap_or_default(),
+            )
+        });
+
+        for (key, value) in query_pairs {
+            match key.to_lowercase().trim() {
+                "info_hash" => {
+                    params.info_hash = percent_encoding::percent_decode(value.as_bytes()).collect();
+                }
+                "peer_id" => {
+                    params.peer_id = value.to_string();
+                }
+                "port" => {
+                    params.port = value.parse::<u16>().unwrap_or(0);
+                }
+                "uploaded" => {
+                    params.uploaded = value.parse::<u64>().unwrap_or(0);
+                }
+                "downloaded" => {
+                    params.downloaded = value.parse::<u64>().unwrap_or(0);
+                }
+                "left" => {
+                    params.left = value.parse::<u64>().unwrap_or(0);
+                }
+                "event" => {
+                    params.event = AnnounceEvent::from_str(value)?;
+                }
+                "key" => {
+                    params.key = value.parse::<u32>().unwrap_or(0);
+                }
+                "compact" => match value.parse::<u8>() {
+                    Ok(value) => params.compact = value == 1,
+                    Err(_) => {
+                        return Err(TrackerError::Parse(format!(
+                            "invalid compact value {}",
+                            value
+                        )))
+                    }
+                },
+                "numwant" => match value.parse::<u32>() {
+                    Ok(value) => params.numwant = value,
+                    Err(_) => {
+                        return Err(TrackerError::Parse(format!(
+                            "invalid numwant value {}",
+                            value
+                        )))
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        Ok(params)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HttpResponse {
+    #[serde(rename = "failure reason", default)]
+    pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub interval: Option<u32>,
+    /// The tracker id
+    #[allow(dead_code)]
+    #[serde(rename = "tracker id", default)]
+    pub tracker_id: Option<String>,
+    /// The total number of peers which have completed the torrent
+    #[serde(default)]
+    pub complete: Option<u64>,
+    /// The total number of peers which have not yet completed the torrent
+    #[serde(default)]
+    pub incomplete: Option<u64>,
+    /// The external ip address of the torrent detected by the tracker (see BEP24).
+    #[serde(default, rename = "external ip")]
+    pub external_ip: Option<CompactIp>,
+    #[serde(default)]
+    pub peers: CompactIpv4Addrs,
+    /// The IPv6 peers of the torrent (BEP7).
+    #[serde(default, skip_serializing_if = "CompactIpv6Addrs::is_empty")]
+    pub peers6: CompactIpv6Addrs,
+}
+
+impl From<HttpResponse> for AnnouncementResponse {
+    fn from(value: HttpResponse) -> Self {
+        Self {
+            interval_seconds: value.interval.unwrap_or(0) as u64,
+            external_ip: value.external_ip.map(IpAddr::from),
+            leechers: value.incomplete.unwrap_or(0),
+            seeders: value.complete.unwrap_or(0),
+            peers: value
+                .peers
+                .into_iter()
+                .map(|e| e.into())
+                .chain(value.peers6.into_iter().map(|e| e.into()))
+                .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::peer::PeerId;
+    use crate::tracker::{AnnounceEvent, TrackerListener, TrackerServer};
+    use log::info;
+    use std::net::Ipv4Addr;
+
+    #[tokio::test]
+    async fn test_new() {
+        init_logger!();
+        let http_server = HttpServer::with_port(0).await.unwrap();
+        let server = TrackerServer::with_listeners(vec![Box::new(http_server)]).unwrap();
+
+        let result = HttpClient::new(
+            TrackerHandle::new(),
+            server.url().clone(),
+            Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(result.is_ok(), "expected Ok(), but got {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_create_announce_url() {
+        init_logger!();
+        let info_hash = InfoHash::from_str("a1dfefec1a9dd7fa8a041ebeeea271db55126d2f").unwrap();
+        let http_server = HttpServer::with_port(0).await.unwrap();
+        let expected_hash_value =
+            "info_hash=%A1%DF%EF%EC%1A%9D%D7%FA%8A%04%1E%BE%EE%A2q%DBU%12m%2F";
+        let tracker_handle = TrackerHandle::new();
+        let peer_id = PeerId::new();
+        let announce = Announcement {
+            info_hash,
+            peer_id,
+            peer_port: 0,
+            event: AnnounceEvent::Started,
+            bytes_completed: 0,
+            bytes_remaining: u64::MAX,
+        };
+        let connection = HttpClient::new(
+            tracker_handle,
+            http_server.url().clone(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        let url = connection.create_announce_url(announce).await.unwrap();
+        let result = url.query().unwrap();
+
+        info!("Got url parameters {}", result);
+        assert!(
+            result.contains(expected_hash_value),
+            "expected query parameter \"{}\"",
+            expected_hash_value
+        );
+    }
+
+    #[tokio::test]
+    async fn test_http_tracker_announce() {
+        init_logger!();
+        let info_hash = InfoHash::from_str("a1dfefec1a9dd7fa8a041ebeeea271db55126d2f").unwrap();
+        let http_server = HttpServer::with_port(0).await.unwrap();
+        let server = TrackerServer::with_listeners(vec![Box::new(http_server)]).unwrap();
+        let tracker_handle = TrackerHandle::new();
+        let peer_id = PeerId::new();
+        let announce = Announcement {
+            info_hash: info_hash.clone(),
+            peer_id,
+            peer_port: 6881,
+            event: AnnounceEvent::Started,
+            bytes_completed: 0,
+            bytes_remaining: u64::MAX,
+        };
+        let connection =
+            HttpClient::new(tracker_handle, server.url().clone(), Duration::from_secs(2))
+                .await
+                .unwrap();
+
+        // add dummies to the tracker server
+        server
+            .add_peer(
+                info_hash.clone(),
+                (Ipv4Addr::LOCALHOST, 9000).into(),
+                PeerId::new(),
+                6881,
+                false,
+            )
+            .await;
+        server
+            .add_peer(
+                info_hash,
+                (Ipv4Addr::LOCALHOST, 9000).into(),
+                PeerId::new(),
+                6882,
+                true,
+            )
+            .await;
+
+        // make a new announcement
+        let result = connection
+            .announce(announce)
+            .await
+            .expect("expected an announcement response");
+        assert_ne!(
+            0, result.interval_seconds,
+            "expected the interval to be greater than 0"
+        );
+        assert_ne!(None, result.external_ip, "expected an external ip");
+        assert_eq!(
+            2,
+            result.peers.len(),
+            "expected 2 peers to have been returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_http_tracker_scrape() {
+        init_logger!();
+        let info_hash = InfoHash::from_str("a1dfefec1a9dd7fa8a041ebeeea271db55126d2f").unwrap();
+        let http_server = HttpServer::with_port(0).await.unwrap();
+        let server = TrackerServer::with_listeners(vec![Box::new(http_server)]).unwrap();
+        let connection = HttpClient::new(
+            TrackerHandle::new(),
+            server.url().clone(),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+
+        // add a dummy peer to the server
+        server
+            .add_peer(
+                info_hash.clone(),
+                (Ipv4Addr::LOCALHOST, 1010).into(),
+                PeerId::new(),
+                6881,
+                true,
+            )
+            .await;
+
+        // scrape the torrent results
+        match connection.scrape(&vec![info_hash.clone()]).await {
+            Ok(scrape_result) => match scrape_result.files.get(&info_hash) {
+                Some(scrape_file) => assert_eq!(1, scrape_file.complete),
+                None => assert!(false, "expected a scrape file result"),
+            },
+            Err(e) => assert!(false, "expected Result::Ok, got {:?}", e),
+        }
+    }
+
+    mod client {
+        use super::*;
+        use httpmock::MockServer;
+
+        #[tokio::test]
+        async fn test_paused_not_supported() {
+            init_logger!();
+            let info_hash = InfoHash::from_str("A1DFEFEC1A9DD7FA8A041EBEEEA271DB55126D2F").unwrap();
+            let server = MockServer::start();
+            server.mock(|when, then| {
+                when.path("/announce").query_param("event", "paused");
+                then.status(400).body(
+                    bencode::to_string(&HttpResponse {
+                        failure_reason: Some("invalid event".to_string()),
+                        interval: None,
+                        tracker_id: None,
+                        complete: None,
+                        incomplete: None,
+                        external_ip: None,
+                        peers: Default::default(),
+                        peers6: Default::default(),
+                    })
+                    .unwrap(),
+                );
+            });
+            server.mock(|when, then| {
+                when.path("/announce").query_param("event", "");
+                then.status(200).body(
+                    bencode::to_string(&HttpResponse {
+                        failure_reason: None,
+                        interval: Some(1200),
+                        tracker_id: None,
+                        complete: Some(2),
+                        incomplete: Some(1),
+                        external_ip: Some(CompactIp::from(IpAddr::from(Ipv4Addr::LOCALHOST))),
+                        peers: Default::default(),
+                        peers6: Default::default(),
+                    })
+                    .unwrap(),
+                );
+            });
+            let client = HttpClient::new(
+                TrackerHandle::new(),
+                Url::from_str(server.url("/announce").as_str()).unwrap(),
+                Duration::from_secs(2),
+            )
+            .await
+            .unwrap();
+
+            // send a pause announcement
+            let result = client
+                .announce(Announcement {
+                    info_hash,
+                    peer_id: PeerId::new(),
+                    peer_port: 6881,
+                    event: AnnounceEvent::Paused,
+                    bytes_completed: 1024,
+                    bytes_remaining: 96000,
+                })
+                .await
+                .expect("expected the announcement to succeed");
+            assert_eq!(1200, result.interval_seconds);
+
+            // verify that the pause event is not supported
+            let result = *client.supports_pause_event.lock().await;
+            assert_eq!(
+                false, result,
+                "expected the pause event support to be disabled"
+            );
+        }
+    }
+}

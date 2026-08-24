@@ -1,0 +1,20 @@
+# Rust
+/target/
+Cargo.lock
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 输出文件
+torrents/
+*.json
+*.db
+
+# 日志
+*.log
+
+# 个人脚本（不提交到仓库）
+scripts/

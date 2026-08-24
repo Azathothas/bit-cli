@@ -1,0 +1,50 @@
+{
+  "name": "web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate:types": "bun run --cwd ../client generate:types",
+    "build:wasm": "bun run --cwd ../client build:wasm",
+    "dev": "bun run build:wasm && vite dev",
+    "dev:e2e:web": "vite dev --mode e2e-web --host 127.0.0.1 --port 4173 --strictPort",
+    "dev:e2e:desktop": "vite dev --mode e2e-desktop --host 127.0.0.1 --port 4174 --strictPort",
+    "dev:e2e:android": "vite dev --mode e2e-android --host 127.0.0.1 --port 4175 --strictPort",
+    "build": "bun run build:wasm && bun run build:prepared",
+    "build:prepared": "vite build && bun scripts/validate-service-worker.js",
+    "preview": "vite preview",
+    "prepare": "svelte-kit sync || echo ''",
+    "check": "bun run build:wasm && bun run check:prepared",
+    "check:prepared": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
+    "check:watch": "bun run generate:types && svelte-kit sync && svelte-check --tsconfig ./jsconfig.json --watch",
+    "test:e2e": "bun run generate:types && playwright test",
+    "test:e2e:ui": "bun run generate:types && playwright test --ui",
+    "desktop": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "desktop:build:rpm": "tauri build --bundles rpm"
+  },
+  "dependencies": {
+    "@iroh-fm/client": "workspace:*",
+    "@tauri-apps/api": "^2.11.0",
+    "oxfmt": "^0.59.0",
+    "wanakana": "^5.3.1"
+  },
+  "devDependencies": {
+    "@iconify-json/ri": "^1.2.10",
+    "@playwright/test": "1.57.0",
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.63.0",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tailwindcss/vite": "^4.1.14",
+    "@tauri-apps/cli": "^2.11.4",
+    "oxlint": "^1.74.0",
+    "prettier-plugin-svelte": "^4.1.1",
+    "svelte": "https://pkg.pr.new/svelte@18558",
+    "svelte-check": "^4.6.0",
+    "tailwindcss": "^4.1.14",
+    "typescript": "^6.0.3",
+    "unplugin-icons": "^23.0.1",
+    "vite": "^8.0.16"
+  }
+}

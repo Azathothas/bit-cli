@@ -1,0 +1,17 @@
+joal 90e710ba01ac6a8665eb352a612ce4e9581483c8 https://github.com/anthonyraymond/joal.git
+DOAL 10551f69c80b96a587a27e35068ae1565ee0c58e https://github.com/DylanBricar/DOAL.git
+fake-torrent-client b59f1fedfa2ca976e526003c19ae5ae76333acbe https://codeberg.org/slundi/fake-torrent-client.git
+RatioTracker 45dc7d40a365921dc9d050bff06c57a16cd82ab7 https://github.com/7h30th3r0n3/RatioTracker.git
+iroh-fm d09fcf1953db0701f170c4cb60b76d16940348f4 https://github.com/usagi-coffee/iroh-fm.git
+iroh-experiments b66d8b861235d7b5123c62491cb9fafab950c0f4 https://github.com/n0-computer/iroh-experiments.git
+dig-nat 077df12cbe653d623c13264c86e198c5bd926e77 https://github.com/DIG-Network/dig-nat.git
+ed2k-server 3924f0ab6762dd09ed88ceb646987af4c2fbfd48 https://github.com/andrey23127/ed2k-server.git
+Hollow 0d93e5c057c6e1eba93686dccb21e4f833a1b765 https://github.com/Gaok1/Hollow.git
+tcp-transfer-ice 9be46cc06331039480c2a4c805d1d3e0ff6048fe https://github.com/well0nez/tcp-transfer-ice.git
+NetDrop 534d319e06b47164d0268ced4b847f5a665f1f31 https://github.com/NETFORY/NetDrop.git
+demagnetize-rs 479a1186914ee3b287c8e3755c0a6789ff48901a https://github.com/jwodder/demagnetize-rs.git
+dht-crawler 571472d16f9b4b71fecdf5ba47e90efb74ff9e99 https://github.com/0xddy/dht-crawler.git
+rustatio 04dc139d780765b9f4b5c9635389fa545087e8c3 https://github.com/takitsu21/rustatio.git
+RatioForge 7870575c5288052ac7c3016fd0dd141f8e20d5a0 https://github.com/tsautier/RatioForge.git
+Seedr 33d3430ec6bfd3750f7b5bf858f98359bd2ab25e https://github.com/rursache/Seedr.git
+gaia 30fc0403b92cf599f910bded4f7a2771fd5909a0 https://github.com/vaz3r/gaia.git

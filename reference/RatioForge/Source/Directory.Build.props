@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <RatioForgeVersion>1.0.13</RatioForgeVersion>
+    <Version>$(RatioForgeVersion)</Version>
+    <VersionPrefix>$(RatioForgeVersion)</VersionPrefix>
+    <AssemblyVersion>$(RatioForgeVersion).0</AssemblyVersion>
+    <FileVersion>$(RatioForgeVersion).0</FileVersion>
+    <InformationalVersion>$(RatioForgeVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/tsautier/RatioForge</RepositoryUrl>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+</Project>

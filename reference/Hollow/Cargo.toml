@@ -1,0 +1,42 @@
+[workspace]
+members = [
+    "crates/p2p-connection",
+    "crates/hollow-steam",
+    "crates/hollow-audio",
+    "crates/hollow-core",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.4.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/luisphillip/Hollow"
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "fs",
+    "io-util",
+    # stdio is the RPC transport with the Electron shell.
+    "io-std",
+    "sync",
+    # Windows named pipes, for the PCM audio stream.
+    "net",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

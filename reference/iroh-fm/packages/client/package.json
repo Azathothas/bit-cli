@@ -1,0 +1,18 @@
+{
+  "name": "@iroh-fm/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./core": "./src/core.js",
+    "./types": "./src/types.ts"
+  },
+  "scripts": {
+    "generate:types": "cargo test -p protocol -p client export_bindings",
+    "build:wasm": "bun run generate:types && bun run build.js"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.0"
+  }
+}

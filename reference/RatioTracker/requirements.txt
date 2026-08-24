@@ -1,0 +1,2 @@
+requests>=2.28.0
+bencodepy>=0.9.5

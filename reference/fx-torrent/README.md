@@ -1,0 +1,366 @@
+# fx-torrent
+
+> **Note on this copy.** Trimmed for BitTorrent research: badges and the
+> "most complete" claim were removed from this file, and the 7.8 MiB
+> `test/piece-1_30.iso` payload was deleted. All `.torrent` fixtures under
+> `test/` are retained.
+
+> **Manifest sweep.** All `Cargo.toml` / `Cargo.lock` / `go.mod` / `go.sum` /
+> `package.json` / lock files and JS build config were removed corpus-wide, so
+> this tree is for reading, not building. Passages below that reference them,
+> or that give build or install instructions, are upstream prose left as
+> written.
+A BitTorrent implementation in Rust (Linux, macOS, Windows). Naming and
+behaviour follow `libtorrent`. Supports multi-file torrents, validating
+existing files, and resume.
+
+
+- [Getting Started](#getting-started)
+- [Features](#features)
+- [CLI example](#cli-example)
+- [Extensions](#extensions)
+
+## Getting Started
+
+Create a new `FxSession` which manages one or more torrents.
+A `Torrent` can be created from a magnet link, torrent file, or passing the raw `TorrentMetadata`.
+
+_create a new session with torrent_
+```rust
+// The fx-torrent crate makes use of async tokio runtimes
+// this requires that new sessions and torrents need to be created within a tokio runtime
+#[tokio::main]
+async fn main() -> Result<(), std::io::Error> {
+    let session = FxSession::builder()
+        .config(
+            SessionConfig::builder()
+                .base_path("/downloads")
+                .client_name("MyClient")
+                .build(),
+        )
+        .default_extensions()
+        .dht(DhtTracker::builder()
+            .default_routing_nodes()
+            .build()
+            .await?)
+        .build()?;
+
+    // 1. Add a torrent via Magnet URI
+    let magnet_torrent = session
+        .add_torrent_from_uri("magnet:?xt=urn:btih:...", TorrentFlags::default())
+        .await;
+
+    // 2. Add a torrent from a local .torrent file
+    let file_torrent = session
+        .add_torrent_from_uri("/path/to/file.torrent", TorrentFlags::default())
+        .await;
+
+    // 3. Add a torrent from raw metadata bytes
+    let data: &[u8] = &[0; 1024]; // Replace with actual bencoded bytes
+    let metadata = TorrentMetadata::try_from(data)?;
+    let metadata_torrent = session
+        .add_torrent_from_metadata(metadata, TorrentFlags::Paused)
+        .await;
+
+    Ok(())
+}
+```
+
+For more examples, see the [examples](./examples) directory.
+
+### CLI example
+
+The CLI example makes use of most of the functionality provided by the library and 
+can be used to download torrents from magnet links or torrent files.
+The CLI also allows the introspection of the DHT network and Trackers.
+
+The example is built on top of the [Ratatui](https://ratatui.rs/) as terminal UI library.
+
+#### Tracing & Tokio Unstable
+
+The CLI example enables the **tracing** feature by default to support the `tokio-console` subscriber. 
+This requires the `tokio_unstable` configuration flag to be passed to the compiler.
+
+```shell
+RUSTFLAGS="--cfg tokio_unstable" cargo run --example cli
+```
+
+If you do not wish to use experimental tokio features, you must disable the `tracing` feature in the example.
+
+### Streaming
+
+The `fx_torrent` engine supports sequential file streaming through `FileStream`.
+This allows you to stream file data (such as media files) over the network before
+the entire torrent finishes downloading.
+
+Because `FileStream` implements the standard `futures::Stream` trait,
+it can be easily integrated into asynchronous loops or piped directly into web frameworks like axum.
+
+_Basic Usage_
+```rust
+fn example() {
+    let torrent = Torrent::request()
+        .build()
+        .unwrap();
+    let file = torrent.file_by_name("example.mp4").await.unwrap();
+
+    let mut stream = torrent.stream(&file).await.unwrap();
+    while let Some(bytes) = stream.next().await {
+        // use the bytes here
+    }
+}
+```
+
+_Axum Integration Example_
+```rust
+fn axum_example(filename: &str) -> Response<Body> {
+    let torrent = Torrent::request()
+         .build()
+         .unwrap();
+    let file = torrent.file_by_name(filename).await.unwrap();
+
+    let stream = torrent.stream(&file).await.unwrap();
+    Response::builder()
+        .body(Body::from_stream(Box::into_pin(stream)))
+}
+```
+
+## Extensions
+
+The `fx_torrent` crate is designed to be highly extensible.
+You can modify the core behavior of components by implementing and registering "extension" traits.
+These allow for custom logic in peer communication and data persistence.
+
+### Peer Extension
+
+Peer extensions allow you to extend the BitTorrent protocol with custom messaging and handshake
+capabilities, following the **BEP 10** specification.
+
+To modify peer protocol behavior, implement the `peer::extension::Extension` trait.
+Once implemented, these extensions can be attached to individual torrents or globally across a session.
+
+_example peer extension_
+```rust
+#[derive(Debug)]
+pub struct MyPeerExtension;
+impl Extension for MyPeerExtension {
+    fn name(&self) -> &str {
+        "my-extension"
+    }
+
+    // Additional trait methods
+}
+
+fn example() {
+    // 1. Peer extension directly in a torrent
+    let torrent = Torrent::request()
+        .extension(|| MyPeerExtension.into())
+        .build()
+        .unwrap();
+
+    // 2. Peer extension in a session
+    let session = FxSession::builder()
+        .extension(|| MyPeerExtension.into())
+        .build()
+        .unwrap();
+}
+```
+
+### Storage Extension
+
+Storage extensions allow you to customize how data is read from and written to disk (or memory).
+This is useful for implementing custom caching layers, encrypted storage, or cloud-backed persistence.
+
+To create your own storage backend, implement the `storage::Extension` trait.
+
+_example storage extension_
+```rust
+#[derive(Debug)]
+pub struct MyStorageExtension;
+impl MyStorageExtension {
+    pub fn new(_params: StorageParams) -> Self {
+        Self
+    }
+}
+impl Extension for MyStorageExtension {
+    async fn read(&self, buffer: &mut [u8], piece: &PieceIndex, offset: usize) -> Result<usize> {
+        // Read piece data from storage
+        Ok(0)
+    }
+
+    // Additional trait methods
+}
+
+fn example() {
+    // 1. Storage extension directly in a torrent
+    let torrent = Torrent::request()
+        .storage(|params| MyStorageExtension::new(params).into())
+        .build()
+        .unwrap();
+
+    // 2. Storage extension in a session
+    let session = FxSession::builder()
+        .storage(|params| MyStorageExtension::new(params).into())
+        .build().unwrap();
+}
+```
+
+### Operation Extension
+
+Operation extensions are **tick-based** tasks invoked by the `TorrentContext`.
+These operations are executed sequentially in an order-dependent chain,
+meaning the sequence in which you register them determines their execution priority.
+
+_example operation extension_
+```rust
+#[derive(Debug)]
+pub struct MyOperation;
+#[async_trait]
+impl Extension for MyOperation {
+    /// The `tick` method is called periodically by the torrent engine.
+    async fn tick(&self, context: &mut TorrentContext, peer_discoveries: &[PeerDiscovery]) -> TorrentOperationResult {
+        // Logic for your custom operation goes here
+        TorrentOperationResult::Continue
+    }
+
+    // Additional trait methods
+}
+
+fn example() {
+    // 1. Operation extension directly in a torrent
+    let torrent = Torrent::request()
+        .operation(MyOperation.into())
+        .build()
+        .unwrap();
+
+    // 2. Operation extension in a session
+    let session = FxSession::builder()
+        .operation(|| MyOperation.into())
+        .build()
+        .unwrap();
+}
+```
+
+### Piece Picker Extension
+
+Piece picker extensions allow you to customize or completely override the core piece selection algorithm.
+Piece selection tasks are executed either periodically via a background ticker or instantly on-demand when requested by a peer.
+
+To implement a custom piece picker algorithm, implement the `fx_torrent::piece_picker::Extension` trait.
+
+_example piece picker extension_
+```rust
+#[derive(Debug)]
+pub struct MyPiecePicker;
+#[async_trait]
+impl Extension for MyPiecePicker {
+    async fn pick_pieces(&mut self, peer: &Peer) {
+        // Your custom piece picking algorithm goes here
+    }
+
+    async fn tick<'a>(&'a mut self, peers: Vec<&'a Peer>) {
+        // Tick-based piece picking logic goes here
+    }
+
+    // Additional trait methods
+}
+
+fn example () {
+    // 1. Piece picker extension directly in a torrent
+    let torrent = Torrent::request()
+        .piece_picker(|
+            torrent: InnerTorrent,
+            data_pool: DataPool,
+            storage: Storage,
+            options: PickerOptions| MyPiecePicker.into())
+        .build()
+        .unwrap();
+
+    // 2. Piece picker extension in a session
+    let session = FxSession::builder()
+        .piece_picker(|
+            torrent: InnerTorrent,
+            data_pool: DataPool,
+            storage: Storage,
+            options: PickerOptions| MyPiecePicker.into())
+        .build()
+        .unwrap();
+}
+```
+
+#### Piece Picker Strategy Extension
+
+The `fx_torrent::piece_picker::FxPiecePicker` architecture allows sub-strategies to be sequentially stacked or overridden.
+These strategies operate in an order-dependent chain,
+meaning their registration order explicitly dictates execution priority during the piece picking lifecycle.
+
+```rust
+#[derive(Debug)]
+pub struct MyStrategy;
+impl Extension for MyStrategy {
+    async fn pick_pieces<'a>(
+        &self,
+        peer: &Peer,
+        blocks: &'a Vec<PiecePickerBlock>,
+        target_queue_len: usize,
+        suggested_pieces: &[PieceIndex],
+        is_end_game: bool,
+        options: PickerOptions,
+    ) -> Vec<&'a PiecePickerBlock> {
+        // Your custom piece picking logic goes here
+        vec![]
+    }
+}
+
+fn example() {
+    let torrent = Torrent::request()
+        .piece_picker(|
+            torrent: InnerTorrent,
+            data_pool: DataPool,
+            storage: Storage,
+            options: PickerOptions| FxPiecePicker::new(
+            torrent,
+            data_pool,
+            storage,
+            vec![
+                MyStrategy.into(),
+                PriorityStrategy::new().into(),
+            ],
+            32 * 1024 * 1024
+        ))
+        .build()
+        .unwrap();
+}
+```
+
+## Features
+
+- [x] [BEP3](https://www.bittorrent.org/beps/bep_0003.html) - The BitTorrent Protocol Specification
+- [x] [BEP4](https://www.bittorrent.org/beps/bep_0004.html) - Assigned Numbers
+- [x] [BEP5](https://www.bittorrent.org/beps/bep_0005.html) - DHT Protocol
+- [x] [BEP6](https://www.bittorrent.org/beps/bep_0006.html) - Fast Extension
+- [x] [BEP7](https://www.bittorrent.org/beps/bep_0007.html) - IPv6 Tracker Extension
+- [x] [BEP9](https://www.bittorrent.org/beps/bep_0009.html) - Extension for Peers to Send Metadata Files
+- [x] [BEP10](https://www.bittorrent.org/beps/bep_0010.html) - Extension Protocol
+- [x] [BEP11](https://www.bittorrent.org/beps/bep_0011.html) - Peer Exchange (PEX)
+- [x] [BEP12](https://www.bittorrent.org/beps/bep_0012.html) - Multitracker Metadata Extension
+- [x] [BEP14](https://www.bittorrent.org/beps/bep_0014.html) - Local Service Discovery
+- [x] [BEP15](https://www.bittorrent.org/beps/bep_0015.html) - UDP Tracker Protocol for BitTorrent
+- [x] [BEP19](https://www.bittorrent.org/beps/bep_0019.html) - WebSeed - HTTP/FTP Seeding (GetRight style)
+- [x] [BEP20](https://www.bittorrent.org/beps/bep_0020.html) - Peer ID Conventions
+- [x] [BEP21](https://www.bittorrent.org/beps/bep_0021.html) - Extension for partial seeds
+- [x] [BEP24](https://www.bittorrent.org/beps/bep_0024.html) - Tracker Returns External IP
+- [x] [BEP29](https://www.bittorrent.org/beps/bep_0029.html) - uTorrent transport protocol
+- [x] [BEP32](https://www.bittorrent.org/beps/bep_0032.html) - BitTorrent DHT Extensions for IPv6
+- [x] [BEP33](https://www.bittorrent.org/beps/bep_0033.html) - DHT scrape
+- [x] [BEP40](https://www.bittorrent.org/beps/bep_0040.html) - Canonical Peer Priority
+- [x] [BEP42](https://www.bittorrent.org/beps/bep_0042.html) - DHT Security extension
+- [x] [BEP43](https://www.bittorrent.org/beps/bep_0043.html) - Read-only DHT Nodes
+- [x] [BEP44](https://www.bittorrent.org/beps/bep_0044.html) - Storing arbitrary data in the DHT
+- [x] [BEP47](https://www.bittorrent.org/beps/bep_0047.html) - Padding files and extended file attributes
+- [x] [BEP48](https://www.bittorrent.org/beps/bep_0048.html) - Tracker Protocol Extension: Scrape
+- [x] [BEP51](https://www.bittorrent.org/beps/bep_0051.html) - DHT Infohash Indexing
+- [ ] [BEP52](https://www.bittorrent.org/beps/bep_0052.html) - The BitTorrent Protocol Specification v2 (WIP)
+- [x] [BEP53](https://www.bittorrent.org/beps/bep_0053.html) - Magnets
+- [x] [BEP54](https://www.bittorrent.org/beps/bep_0054.html) - The lt_donthave extension
+- [x] [BEP55](https://www.bittorrent.org/beps/bep_0055.html) - Holepunch extension

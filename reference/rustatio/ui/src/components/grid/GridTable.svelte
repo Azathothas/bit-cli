@@ -1,0 +1,587 @@
+<script>
+  import { cn } from '$lib/utils.js';
+  import { getGridLivePeers, getGridLiveRate } from '$lib/gridMetrics.js';
+  import { getTrackerIssue } from '$lib/status.js';
+  import ConfirmDialog from '../common/ConfirmDialog.svelte';
+  import { selectedIds, gridActions, gridSort } from '$lib/gridStore.js';
+  import TagBadge from './TagBadge.svelte';
+  import {
+    ArrowUp,
+    ArrowDown,
+    ArrowUpDown,
+    Circle,
+    Pause,
+    Moon,
+    Square,
+    LoaderCircle,
+    Play,
+    Trash2,
+    Copy,
+    Pencil,
+    AlertTriangle,
+  } from '@lucide/svelte';
+
+  let { data = [], oncontextaction = () => {} } = $props();
+
+  // Context menu state
+  let ctxVisible = $state(false);
+  let ctxX = $state(0);
+  let ctxY = $state(0);
+  let ctxInstance = $state(null);
+  let menuEl = $state(null);
+
+  // Shift+click range select
+  let lastSelectedIndex = $state(null);
+
+  // Delete confirmation dialog state
+  let deleteConfirmVisible = $state(false);
+  let deleteTarget = $state(null);
+
+  function openContextMenu(e, instance) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctxX = e.clientX;
+    ctxY = e.clientY;
+    ctxInstance = instance;
+    ctxVisible = true;
+  }
+
+  function closeContextMenu() {
+    ctxVisible = false;
+    ctxInstance = null;
+  }
+
+  function handleCtxAction(actionId) {
+    const inst = ctxInstance;
+    closeContextMenu();
+    if (actionId === 'delete') {
+      deleteTarget = inst;
+      deleteConfirmVisible = true;
+      return;
+    }
+    oncontextaction(actionId, inst);
+  }
+
+  function confirmDelete() {
+    const inst = deleteTarget;
+    deleteConfirmVisible = false;
+    deleteTarget = null;
+    oncontextaction('delete', inst);
+  }
+
+  function cancelDelete() {
+    deleteConfirmVisible = false;
+    deleteTarget = null;
+  }
+
+  function getCtxActions(inst) {
+    if (!inst) return [];
+    const state = inst.state?.toLowerCase();
+    const items = [];
+
+    if (state === 'stopped') {
+      items.push({ id: 'start', label: 'Start', icon: Play, color: 'text-stat-upload' });
+    }
+    if (state === 'running' || state === 'idle') {
+      items.push({ id: 'pause', label: 'Pause', icon: Pause, color: 'text-stat-ratio' });
+    }
+    if (state === 'paused') {
+      items.push({ id: 'resume', label: 'Resume', icon: Play, color: 'text-stat-upload' });
+    }
+    if (state === 'running' || state === 'idle' || state === 'paused' || state === 'starting') {
+      items.push({ id: 'stop', label: 'Stop', icon: Square, color: 'text-stat-danger' });
+    }
+
+    items.push(null); // separator
+    items.push({
+      id: 'edit',
+      label: 'Edit in Standard View',
+      icon: Pencil,
+      color: 'text-foreground',
+    });
+    items.push({
+      id: 'copy_hash',
+      label: 'Copy Info Hash',
+      icon: Copy,
+      color: 'text-muted-foreground',
+    });
+    items.push(null); // separator
+    items.push({ id: 'delete', label: 'Delete', icon: Trash2, color: 'text-stat-danger' });
+
+    return items;
+  }
+
+  let ctxActions = $derived(getCtxActions(ctxInstance));
+
+  // Adjust position to stay within viewport
+  let ctxStyle = $derived.by(() => {
+    if (!ctxVisible) return '';
+    const menuWidth = 180;
+    const menuHeight = ctxActions.length * 32 + 40;
+    const adjX = ctxX + menuWidth > window.innerWidth ? ctxX - menuWidth : ctxX;
+    const adjY = ctxY + menuHeight > window.innerHeight ? ctxY - menuHeight : ctxY;
+    return `left: ${adjX}px; top: ${adjY}px;`;
+  });
+
+  // Close on click outside / escape
+  function handleWindowMousedown(e) {
+    if (ctxVisible && menuEl && !menuEl.contains(e.target)) {
+      closeContextMenu();
+    }
+  }
+
+  function handleWindowKeydown(e) {
+    if (ctxVisible && e.key === 'Escape') {
+      closeContextMenu();
+    }
+  }
+
+  const ROW_HEIGHT = 28;
+  const BUFFER_ROWS = 10;
+
+  let scrollContainer = $state(null);
+  let scrollTop = $state(0);
+  let containerHeight = $state(0);
+
+  function onScroll(e) {
+    scrollTop = e.target.scrollTop;
+  }
+
+  let totalHeight = $derived(data.length * ROW_HEIGHT);
+  let startIndex = $derived(Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER_ROWS));
+  let visibleCount = $derived(Math.ceil(containerHeight / ROW_HEIGHT) + BUFFER_ROWS * 2);
+  let endIndex = $derived(Math.min(data.length, startIndex + visibleCount));
+  let visibleData = $derived(data.slice(startIndex, endIndex));
+  let offsetY = $derived(startIndex * ROW_HEIGHT);
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  function formatRate(rate) {
+    if (!rate || rate === 0) return '-';
+    if (rate >= 1000) return (rate / 1024).toFixed(1) + ' MB/s';
+    return rate.toFixed(1) + ' KB/s';
+  }
+
+  function getStateIcon(state) {
+    switch (state?.toLowerCase()) {
+      case 'starting':
+      case 'stopping':
+        return LoaderCircle;
+      case 'running':
+        return Circle;
+      case 'paused':
+        return Pause;
+      case 'idle':
+        return Moon;
+      case 'stopped':
+        return Square;
+      default:
+        return Circle;
+    }
+  }
+
+  function getStateColor(state) {
+    switch (state?.toLowerCase()) {
+      case 'starting':
+        return 'text-primary';
+      case 'stopping':
+        return 'text-stat-danger';
+      case 'running':
+        return 'text-stat-upload';
+      case 'paused':
+        return 'text-stat-ratio';
+      case 'idle':
+        return 'text-violet-500';
+      case 'stopped':
+        return 'text-muted-foreground';
+      default:
+        return 'text-muted-foreground';
+    }
+  }
+
+  function isAnimatedState(state) {
+    const value = state?.toLowerCase();
+    return value === 'starting' || value === 'stopping';
+  }
+
+  function getIssueMessage(instance) {
+    return getTrackerIssue(instance)?.statusMessage || null;
+  }
+
+  const columns = [
+    { id: 'select', header: '', width: 32, sortable: false },
+    { id: 'name', header: 'Name', width: 300, sortable: true },
+    { id: 'totalSize', header: 'Size', width: 80, sortable: true },
+    { id: 'progress', header: 'Progress', width: 110, sortable: true },
+    { id: 'state', header: 'State', width: 70, sortable: true },
+    { id: 'tags', header: 'Tags', width: 120, sortable: false },
+    { id: 'uploaded', header: 'UL', width: 80, sortable: true },
+    { id: 'downloaded', header: 'DL', width: 80, sortable: true },
+    { id: 'ratio', header: 'Ratio', width: 55, sortable: true },
+    { id: 'currentUploadRate', header: 'UL Rate', width: 90, sortable: true },
+    { id: 'currentDownloadRate', header: 'DL Rate', width: 90, sortable: true },
+    { id: 'seeders', header: 'S/L', width: 65, sortable: true },
+  ];
+
+  function setItemSelected(id, shouldSelect) {
+    selectedIds.update(s => {
+      const next = new Set(s);
+      if (shouldSelect) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  function setRangeSelected(fromIdx, toIdx, shouldSelect) {
+    if (fromIdx == null || toIdx == null) return;
+
+    const start = Math.max(0, Math.min(fromIdx, toIdx));
+    const end = Math.min(data.length - 1, Math.max(fromIdx, toIdx));
+
+    selectedIds.update(s => {
+      const next = new Set(s);
+      for (let i = start; i <= end; i++) {
+        const id = data[i]?.id;
+        if (id == null) continue;
+        if (shouldSelect) {
+          next.add(id);
+        } else {
+          next.delete(id);
+        }
+      }
+      return next;
+    });
+  }
+
+  function handleRowClick(e, instance) {
+    const currentIndex = data.findIndex(d => d.id === instance.id);
+    if (currentIndex < 0) return;
+
+    const shouldSelect = !$selectedIds.has(instance.id);
+    if (e.shiftKey && lastSelectedIndex !== null && lastSelectedIndex !== currentIndex) {
+      setRangeSelected(lastSelectedIndex, currentIndex, shouldSelect);
+    } else {
+      setItemSelected(instance.id, shouldSelect);
+    }
+    lastSelectedIndex = currentIndex;
+  }
+
+  function handleCheckboxChange(e, instance) {
+    const currentIndex = data.findIndex(d => d.id === instance.id);
+    if (currentIndex < 0) return;
+
+    const shouldSelect = Boolean(e.currentTarget.checked);
+    if (e.shiftKey && lastSelectedIndex !== null && lastSelectedIndex !== currentIndex) {
+      setRangeSelected(lastSelectedIndex, currentIndex, shouldSelect);
+    } else {
+      setItemSelected(instance.id, shouldSelect);
+    }
+
+    lastSelectedIndex = currentIndex;
+  }
+
+  function handleSelectAll() {
+    const allIds = data.map(d => d.id);
+    const currentSelected = $selectedIds;
+    const everySelected = allIds.length > 0 && allIds.every(id => currentSelected.has(id));
+
+    if (everySelected) {
+      gridActions.deselectAll();
+    } else {
+      gridActions.selectAll();
+    }
+  }
+
+  function handleSort(col) {
+    if (!col.sortable) return;
+    gridActions.toggleSort(col.id);
+  }
+
+  let allSelected = $derived(data.length > 0 && data.every(d => $selectedIds.has(d.id)));
+  let someSelected = $derived(data.some(d => $selectedIds.has(d.id)) && !allSelected);
+
+  $effect(() => {
+    if (lastSelectedIndex === null) return;
+    if (lastSelectedIndex >= data.length) {
+      lastSelectedIndex = null;
+    }
+  });
+</script>
+
+<svelte:window onmousedown={handleWindowMousedown} onkeydown={handleWindowKeydown} />
+
+<div
+  bind:this={scrollContainer}
+  bind:clientHeight={containerHeight}
+  class="overflow-auto flex-1 border border-border rounded-lg"
+  onscroll={onScroll}
+>
+  <table class="w-full text-xs table-fixed">
+    <thead class="sticky top-0 z-20">
+      <tr class="border-b border-border bg-card">
+        {#each columns as col (col.id)}
+          <th
+            class={cn(
+              'bg-card px-2 py-1 text-left text-[10px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap',
+              col.sortable && 'cursor-pointer select-none hover:text-foreground'
+            )}
+            style="width: {col.width}px"
+            onclick={() => handleSort(col)}
+          >
+            {#if col.id === 'select'}
+              <input
+                type="checkbox"
+                checked={allSelected}
+                indeterminate={someSelected}
+                onchange={handleSelectAll}
+                class="h-3.5 w-3.5 rounded border-input accent-primary cursor-pointer"
+              />
+            {:else}
+              <div class="flex items-center gap-1">
+                <span>{col.header}</span>
+                {#if $gridSort.column === col.id && $gridSort.direction === 'asc'}
+                  <ArrowUp size={12} />
+                {:else if $gridSort.column === col.id && $gridSort.direction === 'desc'}
+                  <ArrowDown size={12} />
+                {:else if col.sortable}
+                  <ArrowUpDown size={12} class="opacity-30" />
+                {/if}
+              </div>
+            {/if}
+          </th>
+        {/each}
+      </tr>
+    </thead>
+    <tbody>
+      {#if data.length === 0}
+        <tr>
+          <td colspan={columns.length} class="px-2 py-12 text-center text-muted-foreground">
+            No instances found. Import torrents to get started.
+          </td>
+        </tr>
+      {:else}
+        <!-- Spacer row for virtual scroll offset -->
+        <tr style="height: {offsetY}px" aria-hidden="true">
+          <td colspan={columns.length}></td>
+        </tr>
+
+        {#each visibleData as instance (instance.id)}
+          {@const isSelected = $selectedIds.has(instance.id)}
+          {@const StateIcon = getStateIcon(instance.state)}
+          {@const completionPct = instance.torrentCompletion ?? 100}
+          {@const issueMessage = getIssueMessage(instance)}
+          {@const liveRateUp = getGridLiveRate(instance.state, instance.currentUploadRate)}
+          {@const liveRateDown = getGridLiveRate(instance.state, instance.currentDownloadRate)}
+          {@const livePeers = getGridLivePeers(instance.state, instance.seeders, instance.leechers)}
+          <tr
+            class={cn(
+              'border-t border-border/50 transition-colors cursor-pointer',
+              isSelected ? 'bg-primary/10' : 'hover:bg-muted/30'
+            )}
+            style="height: {ROW_HEIGHT}px"
+            onclick={e => handleRowClick(e, instance)}
+            oncontextmenu={e => openContextMenu(e, instance)}
+          >
+            <!-- Select -->
+            <td class="px-2 py-1 whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onclick={e => e.stopPropagation()}
+                onchange={e => handleCheckboxChange(e, instance)}
+                class="h-3.5 w-3.5 rounded border-input accent-primary cursor-pointer"
+              />
+            </td>
+
+            <!-- Name -->
+            <td
+              class="px-2 py-1 whitespace-nowrap overflow-hidden select-none"
+              ondblclick={e => {
+                e.preventDefault();
+                e.stopPropagation();
+                oncontextaction('edit', instance);
+              }}
+            >
+              <span class="inline-flex max-w-full items-center gap-1.5">
+                <span class="text-foreground font-medium truncate" title={instance.name}>
+                  {instance.name}
+                </span>
+                {#if issueMessage}
+                  <span
+                    class="flex-shrink-0 text-amber-400"
+                    title={issueMessage}
+                    aria-label={issueMessage}
+                  >
+                    <AlertTriangle size={11} />
+                  </span>
+                {/if}
+              </span>
+            </td>
+
+            <!-- Size -->
+            <td class="px-2 py-1 whitespace-nowrap">
+              <span class="text-muted-foreground">{formatBytes(instance.totalSize)}</span>
+            </td>
+
+            <!-- Progress -->
+            <td class="px-0.5 py-1 whitespace-nowrap">
+              <div
+                class="relative h-4 bg-muted rounded overflow-hidden"
+                title="{completionPct.toFixed(1)}%"
+              >
+                <div
+                  class={cn(
+                    'absolute inset-y-0 left-0 rounded transition-all',
+                    completionPct >= 100 ? 'bg-stat-upload/60' : 'bg-stat-leecher/60'
+                  )}
+                  style="width: {Math.min(completionPct, 100)}%"
+                ></div>
+                <span
+                  class="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-foreground"
+                >
+                  {completionPct.toFixed(1)}%
+                </span>
+              </div>
+            </td>
+
+            <!-- State -->
+            <td class="px-2 py-1 whitespace-nowrap">
+              <span class={cn('flex items-center gap-1', getStateColor(instance.state))}>
+                <span class={cn('inline-flex', isAnimatedState(instance.state) && 'animate-spin')}>
+                  <StateIcon
+                    size={11}
+                    fill={instance.state?.toLowerCase() === 'running' ||
+                    instance.state?.toLowerCase() === 'idle'
+                      ? 'currentColor'
+                      : 'none'}
+                  />
+                </span>
+                <span class="capitalize">{instance.state}</span>
+              </span>
+            </td>
+
+            <!-- Tags -->
+            <td class="px-2 py-1 whitespace-nowrap">
+              <div class="flex items-center gap-0.5 overflow-hidden max-w-[110px]">
+                {#each (instance.tags || []).slice(0, 2) as tag (tag)}
+                  <TagBadge {tag} compact />
+                {/each}
+                {#if (instance.tags || []).length > 2}
+                  <span class="text-[10px] text-muted-foreground">+{instance.tags.length - 2}</span>
+                {/if}
+              </div>
+            </td>
+
+            <!-- Uploaded -->
+            <td class="px-2 py-1 whitespace-nowrap">
+              <span class="text-stat-upload">{formatBytes(instance.uploaded)}</span>
+            </td>
+
+            <!-- Downloaded -->
+            <td class="px-2 py-1 whitespace-nowrap">
+              <span class="text-stat-leecher">{formatBytes(instance.downloaded)}</span>
+            </td>
+
+            <!-- Ratio -->
+            <td class="px-2 py-1 whitespace-nowrap">
+              <span
+                class={cn(
+                  'font-semibold',
+                  (instance.ratio || 0) >= 1 ? 'text-stat-upload' : 'text-stat-ratio'
+                )}
+              >
+                {instance.ratio?.toFixed(2) || '0.00'}
+              </span>
+            </td>
+
+            <!-- UL Rate -->
+            <td class="px-2 py-1 whitespace-nowrap overflow-hidden">
+              <span class="text-stat-upload">{formatRate(liveRateUp)}</span>
+            </td>
+
+            <!-- DL Rate -->
+            <td class="px-2 py-1 whitespace-nowrap overflow-hidden">
+              <span class="text-stat-leecher">{formatRate(liveRateDown)}</span>
+            </td>
+
+            <!-- Seeders / Leechers -->
+            <td class="px-2 py-1 whitespace-nowrap">
+              <span class="text-stat-upload">{livePeers.seeders ?? '-'}</span>
+              <span class="text-muted-foreground">/</span>
+              <span class="text-stat-leecher">{livePeers.leechers ?? '-'}</span>
+            </td>
+          </tr>
+        {/each}
+
+        <!-- Bottom spacer for remaining rows -->
+        <tr
+          style="height: {totalHeight - offsetY - visibleData.length * ROW_HEIGHT}px"
+          aria-hidden="true"
+        >
+          <td colspan={columns.length}></td>
+        </tr>
+      {/if}
+    </tbody>
+  </table>
+</div>
+
+<!-- Context menu -->
+{#if ctxVisible && ctxInstance}
+  <div
+    bind:this={menuEl}
+    class="fixed z-50 min-w-[180px] rounded-lg border border-border bg-popover shadow-xl shadow-black/20 py-1"
+    style={ctxStyle}
+    role="menu"
+    tabindex="-1"
+    onmousedown={e => e.stopPropagation()}
+  >
+    <div class="px-3 py-1.5 border-b border-border/50 mb-1">
+      <span
+        class="text-xs text-muted-foreground font-medium truncate block max-w-[160px]"
+        title={ctxInstance.name}
+      >
+        {ctxInstance.name}
+      </span>
+    </div>
+
+    {#each ctxActions as action, i (i)}
+      {#if action === null}
+        <div class="h-px bg-border/50 my-1 mx-2"></div>
+      {:else}
+        {@const Icon = action.icon}
+        <button
+          class={cn(
+            'w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-foreground',
+            'hover:bg-accent/80 transition-colors cursor-pointer',
+            'focus:outline-none focus:bg-accent/80'
+          )}
+          role="menuitem"
+          onclick={() => handleCtxAction(action.id)}
+        >
+          <Icon size={14} class={action.color} />
+          <span class={action.id === 'delete' ? 'text-stat-danger' : ''}>{action.label}</span>
+        </button>
+      {/if}
+    {/each}
+  </div>
+{/if}
+
+<ConfirmDialog
+  bind:open={deleteConfirmVisible}
+  title="Delete Instance"
+  message={`${deleteTarget?.name || ''}\n\nThis action cannot be undone.`}
+  confirmLabel="Delete"
+  kind="danger"
+  titleId="delete-confirm-title"
+  onCancel={cancelDelete}
+  onConfirm={confirmDelete}
+/>

@@ -1,0 +1,45 @@
+[workspace]
+members = [
+  "crates/android-native",
+  "crates/client",
+  "crates/protocol",
+  "crates/server",
+  "crates/subsonic",
+  "crates/web-wasm",
+  "packages/web/src-tauri",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+
+[workspace.dependencies]
+axum = "0.8"
+image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+iroh = "1.0.3"
+iroh-tickets = "1.0.0"
+iroh-mdns-address-lookup = "0.4"
+lofty = "0.24"
+md5 = "0.8"
+notify = "8"
+rayon = "1"
+reqwest = { version = "0.13", default-features = false, features = [
+  "blocking",
+  "json",
+  "rustls-tls",
+] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+ts-rs = "12.0.1"
+
+[profile.wasm-release]
+inherits = "release"
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = "symbols"

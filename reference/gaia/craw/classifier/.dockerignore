@@ -1,0 +1,16 @@
+*.pyc
+__pycache__/
+.git/
+target/
+hf_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.env
+data/fastembed_cache/
+data/predictions/
+data/models/embeddings_cache.npy
+data/models/transformer/model.onnx
+data/models/transformer/model/
+data/models/transformer/training_report.txt

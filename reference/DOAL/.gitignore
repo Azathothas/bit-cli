@@ -1,0 +1,28 @@
+# Binary
+doal
+doal.exe
+
+# Config runtime files
+upload-stats.txt
+doal.log
+config.json
+
+# Torrents (user data)
+torrents/
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+coverage.out
+*~

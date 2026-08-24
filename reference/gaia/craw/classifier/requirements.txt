@@ -1,0 +1,7 @@
+fastembed>=0.4.0
+scikit-learn
+joblib
+pyyaml
+numpy
+onnxruntime
+transformers

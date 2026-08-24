@@ -1,0 +1,27 @@
+[package]
+name = "server"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+image.workspace = true
+iroh.workspace = true
+iroh-mdns-address-lookup.workspace = true
+iroh-tickets.workspace = true
+lofty.workspace = true
+md5.workspace = true
+notify.workspace = true
+protocol = { path = "../protocol" }
+rayon.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "iroh-fm"
+path = "src/main.rs"

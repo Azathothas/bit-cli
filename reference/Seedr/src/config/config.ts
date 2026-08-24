@@ -1,0 +1,234 @@
+import { z } from 'zod';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import type { AppConfig, SeedState } from './types.js';
+import { createLogger } from '../utils/logger.js';
+
+const logger = createLogger('config');
+
+const configSchema = z.object({
+  client: z.string().min(1),
+  port: z.number().int().min(1).max(65535).default(49152),
+  minUploadRate: z.number().min(0).default(100),
+  maxUploadRate: z.number().min(0).default(500),
+  simultaneousSeed: z.number().int().min(-1).refine((v) => v !== 0, { message: 'Must be -1 (unlimited) or >= 1' }).default(-1),
+  seedRotationInterval: z.number().int().min(1).max(999999).default(15),
+  keepTorrentWithZeroLeechers: z.boolean().default(true),
+  skipIfNoPeers: z.boolean().default(true),
+  minLeechers: z.number().int().min(0).default(1),
+  minSeeders: z.number().int().min(0).default(1),
+  uploadRatioTarget: z.number().default(-1),
+  showFileName: z.boolean().default(true),
+  // The set of themes lives in the UI, since that is where their CSS lives.
+  // Validated as a bounded slug here; an unknown id falls back in the browser.
+  theme: z.string().min(1).max(32).regex(/^[a-z0-9-]+$/).default('midnight'),
+  colorStyle: z.enum(['auto', 'light', 'dark']).default('auto'),
+});
+
+const stateSchema = z.object({
+  torrents: z.record(
+    z.string(),
+    z.object({
+      infoHash: z.string(),
+      uploaded: z.number(),
+      downloaded: z.number(),
+      lastAnnounce: z.number(),
+      announceCount: z.number(),
+    })
+  ),
+  lastSaved: z.number(),
+});
+
+export const DATA_DIR = resolve(process.env['DATA_DIR'] || 'data');
+export const CLIENTS_DIR = resolve(process.env['CLIENTS_DIR'] || join(DATA_DIR, 'clients'));
+export const TORRENTS_DIR = resolve(process.env['TORRENTS_DIR'] || join(DATA_DIR, 'torrents'));
+const CONFIG_PATH = join(DATA_DIR, 'config.json');
+const STATE_PATH = join(DATA_DIR, 'state.json');
+
+// Project-level clients directory (ships with the repo)
+const PROJECT_CLIENTS_DIR = resolve('clients');
+
+function ensureDataDirs(): void {
+  for (const dir of [DATA_DIR, CLIENTS_DIR, TORRENTS_DIR]) {
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+  }
+}
+
+/**
+ * Copies the bundled profiles into the data directory on every start, so a
+ * profile added or corrected in a release reaches existing installs too. It
+ * previously only ran when the directory was empty, which meant upgrades never
+ * saw new profiles.
+ *
+ * A bundled profile always wins over the copy on disk. Profiles the release
+ * does not ship are left alone, so custom ones survive — but an edit to a
+ * bundled profile is overwritten, and customisations belong in a file with its
+ * own name.
+ */
+function syncBundledClients(): void {
+  if (!existsSync(PROJECT_CLIENTS_DIR)) return;
+
+  const bundled = readdirSync(PROJECT_CLIENTS_DIR).filter((f) => f.endsWith('.client'));
+  const added: string[] = [];
+  const replaced: string[] = [];
+
+  for (const file of bundled) {
+    const source = join(PROJECT_CLIENTS_DIR, file);
+    const target = join(CLIENTS_DIR, file);
+
+    if (!existsSync(target)) {
+      added.push(file);
+    } else if (readFileSync(source).equals(readFileSync(target))) {
+      continue; // unchanged, leave the file and its mtime alone
+    } else {
+      replaced.push(file);
+    }
+
+    copyFileSync(source, target);
+  }
+
+  if (added.length > 0 || replaced.length > 0) {
+    logger.info({ added, replaced }, 'Synced bundled client profiles');
+  }
+}
+
+export function listClientFiles(): string[] {
+  if (!existsSync(CLIENTS_DIR)) return [];
+  return readdirSync(CLIENTS_DIR)
+    .filter((f) => f.endsWith('.client'))
+    .sort();
+}
+
+function pickDefaultClient(): string {
+  const clients = listClientFiles();
+  const qb = clients.find((c) => c.startsWith('qbittorrent'));
+  return qb || clients[0] || 'qbittorrent-5.1.4.client';
+}
+
+function defaultConfig(): AppConfig {
+  return {
+    client: pickDefaultClient(),
+    port: 49152,
+    minUploadRate: 100,
+    maxUploadRate: 500,
+    simultaneousSeed: -1,
+    seedRotationInterval: 15,
+    keepTorrentWithZeroLeechers: true,
+    skipIfNoPeers: true,
+    minLeechers: 1,
+    minSeeders: 1,
+    uploadRatioTarget: -1,
+    showFileName: true,
+    theme: 'midnight',
+    colorStyle: 'auto',
+  };
+}
+
+export function loadConfig(): AppConfig {
+  ensureDataDirs();
+  syncBundledClients();
+
+  if (!existsSync(CONFIG_PATH)) {
+    const cfg = defaultConfig();
+    saveConfig(cfg);
+    logger.info('Created default config.json');
+    return cfg;
+  }
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throw new Error('Not an object');
+    }
+  } catch {
+    logger.warn('Could not parse config.json — using defaults');
+    const cfg = defaultConfig();
+    saveConfig(cfg);
+    return cfg;
+  }
+
+  // Try strict parse first — fast path for valid configs
+  const strict = configSchema.safeParse(raw);
+  if (strict.success) {
+    return strict.data as AppConfig;
+  }
+
+  // Merge: validate each field individually, keep valid ones, default the rest
+  const defaults = defaultConfig();
+  const repaired: Record<string, unknown> = {};
+  const repairedFields: string[] = [];
+
+  for (const key of Object.keys(configSchema.shape) as (keyof AppConfig)[]) {
+    if (key in raw) {
+      const fieldSchema = configSchema.shape[key];
+      const fieldResult = fieldSchema.safeParse(raw[key]);
+      if (fieldResult.success) {
+        repaired[key] = fieldResult.data;
+        continue;
+      }
+      repairedFields.push(key);
+    } else {
+      repairedFields.push(key);
+    }
+    repaired[key] = defaults[key];
+  }
+
+  logger.warn({ repairedFields }, 'Config had invalid entries — repaired with defaults');
+  const cfg = repaired as unknown as AppConfig;
+  saveConfig(cfg);
+  return cfg;
+}
+
+/**
+ * Validate a partial config update. Returns the validated partial or throws.
+ */
+export function validateConfigUpdate(updates: unknown): Partial<AppConfig> {
+  const partialSchema = configSchema.partial();
+  const result = partialSchema.safeParse(updates);
+  if (!result.success) {
+    throw new Error(result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', '));
+  }
+  // A partial schema still fills in field defaults, so echo back only the keys
+  // the caller actually sent — otherwise a single-field save would reset every
+  // other setting to its default. Unknown keys are dropped either way.
+  const provided = (updates ?? {}) as Record<string, unknown>;
+  const allowed = new Set(Object.keys(configSchema.shape));
+  const clean: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(result.data)) {
+    if (allowed.has(key) && Object.hasOwn(provided, key)) clean[key] = value;
+  }
+  return clean as Partial<AppConfig>;
+}
+
+export function saveConfig(config: AppConfig): void {
+  ensureDataDirs();
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
+}
+
+export function loadState(): SeedState {
+  if (!existsSync(STATE_PATH)) {
+    return { torrents: {}, lastSaved: Date.now() };
+  }
+
+  try {
+    const raw = JSON.parse(readFileSync(STATE_PATH, 'utf-8'));
+    const result = stateSchema.safeParse(raw);
+    if (result.success) {
+      return result.data as SeedState;
+    }
+    logger.warn('Invalid state.json — starting fresh');
+  } catch {
+    logger.warn('Could not parse state.json — starting fresh');
+  }
+
+  return { torrents: {}, lastSaved: Date.now() };
+}
+
+export function saveState(state: SeedState): void {
+  ensureDataDirs();
+  state.lastSaved = Date.now();
+  writeFileSync(STATE_PATH, JSON.stringify(state, null, 2), 'utf-8');
+}

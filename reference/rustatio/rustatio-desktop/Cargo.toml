@@ -1,0 +1,40 @@
+[package]
+name = "rustatio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Modern BitTorrent ratio faker"
+
+[[bin]]
+name = "rustatio-desktop"
+path = "src/main.rs"
+
+[dependencies]
+rustatio-core = { path = "../rustatio-core", features = ["desktop"] }
+rustatio-watch = { path = "../rustatio-watch" }
+async-trait = "0.1"
+
+tauri = { version = "2.9", features = ["tray-icon"] }
+tauri-plugin-dialog = "2.0"
+tauri-plugin-updater = "2.0"
+tauri-plugin-process = "2.0"
+tauri-plugin-shell = "2.0"
+tauri-plugin-os = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+os-release = "0.1.0"
+
+tokio = { version = "1.48", features = ["full"] }
+
+log = "0.4"
+env_logger = "0.11"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

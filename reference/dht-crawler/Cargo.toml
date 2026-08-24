@@ -1,0 +1,71 @@
+[package]
+name = "dht-crawler"
+version = "0.2.1"
+edition = "2024"
+authors = ["桥下红药 <1121744186@qq.com>"]
+description = "高性能的 Rust DHT (Distributed Hash Table) 爬虫库 | A high-performance Rust DHT crawler library for fetching torrent information from the BitTorrent DHT network"
+license = "MIT"
+documentation = "https://docs.rs/dht-crawler"
+repository = "https://github.com/0xddy/dht-crawler"
+keywords = ["dht", "bittorrent", "crawler", "p2p", "torrent"]
+categories = ["network-programming", "asynchronous"]
+readme = "README.md"
+
+[lib]
+name = "dht_crawler"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+tokio = { version = "1.35", features = ["rt", "rt-multi-thread", "net", "sync", "time", "macros"] }
+tokio-util = { version = "0.7" }
+serde = { version = "1.0", features = ["derive"] }
+serde_bencode = "0.2"
+sha1 = "0.10"
+hex = "0.4"
+rand = "0.8"
+log = "0.4"
+thiserror = "1.0"
+socket2 = { version = "0.5", features = ["all"] }
+rbit = "0.2"
+bytes = "1.0"
+ahash = "0.8"
+serde_bytes = "0.11.19"
+metrics = { version = "0.24", optional = true }
+async-channel = "2.5.0"
+crossbeam-queue = "0.3"
+jni = { version = "0.21", optional = true }
+arc-swap = "1.7"
+
+[dev-dependencies]
+tokio = { version = "1.35", features = ["signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "tracing-log"] }
+mimalloc = "0.1"
+# 禁用默认 features，只启用 http-listener（不包含 hyper-rustls）
+# 这样可以避免引入 aws-lc-sys
+metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
+
+
+[features]
+default = []
+metrics = ["dep:metrics"]
+mimalloc = []
+jni = ["dep:jni"]
+
+[[example]]
+name = "dht_crawler_example"
+path = "examples/main.rs"
+
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+

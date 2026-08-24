@@ -1,0 +1,435 @@
+use std::env;
+use std::process::ExitCode;
+use std::str::FromStr;
+use std::time::Duration;
+
+use axum::Router;
+use axum::body::Body;
+use axum::extract::{Path, RawQuery, State};
+use axum::http::HeaderValue;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use client::{Error, IrohConfig, Result};
+use iroh::{EndpointAddr, EndpointId, RelayUrl, SecretKey};
+use iroh_tickets::endpoint::EndpointTicket;
+use subsonic::{
+    Backend, RemoteBackend, RequestContext, SubsonicConfig, SubsonicResponse, handle_request,
+};
+use tokio_util::io::ReaderStream;
+
+const BACKEND_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AppState {
+    config: SubsonicConfig,
+    backend: RemoteBackend,
+}
+
+async fn run() -> Result<()> {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if args.is_empty() {
+        print_usage();
+        return Ok(());
+    }
+
+    let config = parse_config(args.into_iter())?;
+    let relay = parse_relay(config.relay.as_deref())?;
+    let backend_addr = backend_addr_from_config(&config, relay.clone())?;
+    eprintln!(
+        "[subsonic] startup bind={} backend={} relay={}",
+        config.bind,
+        backend_addr.id,
+        relays_for_log(&backend_addr)
+    );
+    eprintln!(
+        "[subsonic] connecting backend local_secret={}",
+        if config.secret.is_some() {
+            "provided"
+        } else {
+            "random"
+        }
+    );
+    if config.secret.is_none() {
+        eprintln!(
+            "[subsonic] warning: no --secret supplied; playlist ownership is tied to this adapter's Endpoint ID and will not survive a restart with a new random identity"
+        );
+    }
+    let backend = connect_backend_with_retry(&config, backend_addr).await;
+    let bind = config.bind.clone();
+    let state = AppState { config, backend };
+    let app = Router::new()
+        .route("/rest/{*rest}", get(rest_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    println!("subsonic facade listening on http://{bind}");
+    axum::serve(listener, app).await.map_err(Error::from)?;
+
+    Ok(())
+}
+
+async fn connect_backend_with_retry(
+    config: &SubsonicConfig,
+    backend_addr: EndpointAddr,
+) -> RemoteBackend {
+    let mut attempt = 0_u32;
+
+    loop {
+        attempt = attempt.saturating_add(1);
+        eprintln!(
+            "[subsonic] backend connect attempt={} remote_endpoint={}",
+            attempt, backend_addr.id
+        );
+        match RemoteBackend::connect_addr_with_config(
+            backend_addr.clone(),
+            IrohConfig {
+                secret: config.secret.clone(),
+                relay: None,
+                peers: Default::default(),
+            },
+        )
+        .await
+        {
+            Ok(backend) => {
+                eprintln!("[subsonic] backend transport connected, probing summary");
+                match backend.summary().await {
+                    Ok(summary) => {
+                        eprintln!("[subsonic] backend summary probe ok: {summary:?}");
+                        return backend;
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "[subsonic] backend summary probe failed attempt={} error={} retry_in={}s",
+                            attempt,
+                            error,
+                            BACKEND_RETRY_DELAY.as_secs()
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "[subsonic] backend connect failed attempt={} error={} retry_in={}s",
+                    attempt,
+                    error,
+                    BACKEND_RETRY_DELAY.as_secs()
+                );
+            }
+        }
+
+        tokio::time::sleep(BACKEND_RETRY_DELAY).await;
+    }
+}
+
+async fn rest_handler(
+    State(state): State<AppState>,
+    Path(rest): Path<String>,
+    RawQuery(raw_query): RawQuery,
+) -> Response {
+    let normalized = normalize_rest_path(&rest);
+    let query = raw_query
+        .as_deref()
+        .map(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .into_owned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let value = |key: &str| {
+        query
+            .iter()
+            .find_map(|(candidate, value)| (candidate == key).then_some(value.as_str()))
+    };
+    let format = match value("f") {
+        Some("json") => ResponseFormat::Json,
+        _ => ResponseFormat::Xml,
+    };
+    let auth_mode = if value("t").is_some() && value("s").is_some() {
+        "token"
+    } else if value("p").is_some() {
+        "password"
+    } else {
+        "none"
+    };
+    let request = RequestContext {
+        path: normalized,
+        query,
+    };
+    eprintln!(
+        "[subsonic] request path={} format={} auth={} id={:?} query={:?}",
+        request.path,
+        format.as_str(),
+        auth_mode,
+        request
+            .query
+            .iter()
+            .find(|(k, _)| k == "id")
+            .map(|(_, v)| v.as_str()),
+        request
+            .query
+            .iter()
+            .find(|(k, _)| k == "query")
+            .map(|(_, v)| v.as_str())
+    );
+
+    match handle_request(&state.config, &state.backend, request).await {
+        Ok(response) => {
+            if response_is_ok(&response) {
+                eprintln!("[subsonic] request ok path={}", rest);
+            } else {
+                eprintln!(
+                    "[subsonic] request subsonic-error path={} response={}",
+                    rest,
+                    response_summary(&response)
+                );
+            }
+            into_http_response(response)
+        }
+        Err(error) => {
+            eprintln!("[subsonic] request failed path={} error={error}", rest);
+            into_http_response(error_response(
+                format,
+                &format!("backend error on /rest/{rest}: {error}"),
+            ))
+        }
+    }
+}
+
+fn normalize_rest_path(rest: &str) -> String {
+    let rest = rest.strip_suffix(".view").unwrap_or(rest);
+    format!("/rest/{rest}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponseFormat {
+    Xml,
+    Json,
+}
+
+impl ResponseFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Xml => "xml",
+            Self::Json => "json",
+        }
+    }
+}
+
+fn error_response(format: ResponseFormat, message: &str) -> SubsonicResponse {
+    match format {
+        ResponseFormat::Xml => SubsonicResponse::Xml(format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><subsonic-response status=\"failed\" version=\"1.16.1\"><error code=\"0\" message=\"{}\" /></subsonic-response>",
+            xml_escape(message)
+        )),
+        ResponseFormat::Json => SubsonicResponse::Json(
+            serde_json::json!({
+                "subsonic-response": {
+                    "status": "failed",
+                    "version": "1.16.1",
+                    "error": { "code": 0, "message": message }
+                }
+            })
+            .to_string(),
+        ),
+    }
+}
+
+fn xml_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn into_http_response(response: SubsonicResponse) -> Response {
+    match response {
+        SubsonicResponse::Xml(body) => (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/xml"),
+            )],
+            body,
+        )
+            .into_response(),
+        SubsonicResponse::Json(body) => (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            )],
+            body,
+        )
+            .into_response(),
+        SubsonicResponse::Binary {
+            content_type,
+            bytes,
+        } => {
+            let mut response = bytes.into_response();
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_str(&content_type)
+                    .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+            );
+            response
+        }
+        SubsonicResponse::Stream {
+            content_type,
+            content_length,
+            stream,
+        } => {
+            let mut response = Body::from_stream(ReaderStream::new(stream)).into_response();
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_str(&content_type)
+                    .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+            );
+            if let Some(content_length) = content_length
+                && let Ok(value) = HeaderValue::from_str(&content_length.to_string())
+            {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::CONTENT_LENGTH, value);
+            }
+            response
+        }
+    }
+}
+
+fn response_is_ok(response: &SubsonicResponse) -> bool {
+    match response {
+        SubsonicResponse::Xml(body) => body.contains("status=\"ok\""),
+        SubsonicResponse::Json(body) => !body.contains("\"status\":\"failed\""),
+        SubsonicResponse::Binary { .. } | SubsonicResponse::Stream { .. } => true,
+    }
+}
+
+fn response_summary(response: &SubsonicResponse) -> String {
+    match response {
+        SubsonicResponse::Xml(body) | SubsonicResponse::Json(body) => body.clone(),
+        SubsonicResponse::Binary {
+            content_type,
+            bytes,
+        } => format!("binary content_type={} bytes={}", content_type, bytes.len()),
+        SubsonicResponse::Stream {
+            content_type,
+            content_length,
+            ..
+        } => format!(
+            "stream content_type={} content_length={}",
+            content_type,
+            content_length
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<unknown>".to_string())
+        ),
+    }
+}
+
+fn parse_config(args: impl Iterator<Item = String>) -> Result<SubsonicConfig> {
+    let mut config = SubsonicConfig::default();
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--bind" => config.bind = args.next().ok_or_else(missing_value)?,
+            "--endpoint" => config.endpoint = args.next().ok_or_else(missing_value)?,
+            "--ticket" => config.ticket = Some(args.next().ok_or_else(missing_value)?),
+            "--relay" => config.relay = Some(args.next().ok_or_else(missing_value)?),
+            "--secret" => config.secret = Some(args.next().ok_or_else(missing_value)?),
+            "--username" => config.username = args.next().ok_or_else(missing_value)?,
+            "--password" => config.password = args.next().ok_or_else(missing_value)?,
+            other => {
+                return Err(Error::InvalidRequest(format!("unknown argument: {other}")));
+            }
+        }
+    }
+    if config.endpoint.trim().is_empty()
+        && config
+            .ticket
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+    {
+        return Err(Error::InvalidRequest(
+            "expected --endpoint or --ticket".to_string(),
+        ));
+    }
+    if let Some(secret) = &config.secret {
+        SecretKey::from_str(secret)
+            .map_err(|error| Error::InvalidRequest(format!("invalid --secret: {error}")))?;
+    }
+    Ok(config)
+}
+
+fn parse_relay(relay: Option<&str>) -> Result<Option<RelayUrl>> {
+    relay
+        .map(|relay| {
+            RelayUrl::from_str(relay)
+                .map_err(|error| Error::InvalidRequest(format!("invalid --relay: {error}")))
+        })
+        .transpose()
+}
+
+fn backend_addr_from_config(
+    config: &SubsonicConfig,
+    relay: Option<RelayUrl>,
+) -> Result<EndpointAddr> {
+    if let Some(ticket) = config
+        .ticket
+        .as_deref()
+        .filter(|ticket| !ticket.trim().is_empty())
+    {
+        let ticket = EndpointTicket::from_str(ticket)
+            .map_err(|error| Error::InvalidRequest(format!("invalid --ticket: {error}")))?;
+        let mut addr: EndpointAddr = ticket.into();
+        if let Some(relay) = relay {
+            addr = addr.with_relay_url(relay);
+        }
+        return Ok(addr);
+    }
+
+    let endpoint = EndpointId::from_str(&config.endpoint)
+        .map_err(|error| Error::InvalidRequest(format!("invalid --endpoint: {error}")))?;
+    let addr = match relay {
+        Some(relay) => EndpointAddr::new(endpoint).with_relay_url(relay),
+        None => EndpointAddr::new(endpoint),
+    };
+    Ok(addr)
+}
+
+fn relays_for_log(addr: &EndpointAddr) -> String {
+    let relays = addr
+        .addrs
+        .iter()
+        .filter_map(|addr| match addr {
+            iroh::TransportAddr::Relay(relay) => Some(relay.to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if relays.is_empty() {
+        "<none>".to_string()
+    } else {
+        relays.join(",")
+    }
+}
+
+fn missing_value() -> Error {
+    Error::InvalidRequest("missing value for flag".to_string())
+}
+
+fn print_usage() {
+    println!("usage:");
+    println!(
+        "  subsonic --bind 127.0.0.1:4040 (--ticket <endpoint-ticket> | --endpoint <server-endpoint-id> [--relay <relay-url>]) [--secret <secret-key>]"
+    );
+    println!("  Use a stable --secret to preserve playlist ownership across restarts.");
+}

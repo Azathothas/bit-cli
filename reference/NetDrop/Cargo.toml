@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["netdrop-core", "netdrop-cli", "netdrop-ui/src-tauri"]
+default-members = ["netdrop-core", "netdrop-cli"]
+
+[workspace.package]
+version = "0.6.7"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/smartholdem/netdrop"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

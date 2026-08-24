@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/autobrr/mkbrr/main/schema/batch.json
+version: 1
+jobs:
+  - output: randomtracker_random_movie.torrent
+    path: /Users/user/Downloads/Random.Movie.Title.2023.1080p.WEB-DL.mkv
+    trackers:
+      - https://tracker.randomtracker.org/announce
+    comment: "Random Movie Title - A thrilling adventure"
+    private: false
+
+  - output: anothertracker_random_release.torrent
+    path: '/Users/user/Downloads/Random Album - Best Hits (2025)'
+    trackers:
+      - https://tracker.anothertracker.com/announce
+    private: true
+    source: "anothertracker"
+    no_date: true
+    fail_on_season_warning: true # Fail if incomplete season pack detected
+    exclude_patterns: # Example: exclude NFO files and samples
+      - "*.nfo"
+      - "*sample*"
+    include_patterns: # Example: include only video files
+      - "*.mkv"
+      - "*.mp4"
+      - "*.avi"

@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+/*
+ * The token vocabulary and the rules a theme follows. Read this first — it
+ * explains the naming and lists what a theme may override.
+ */
+@import "./styles/tokens.css";
+
+/*
+ * One file per theme, in the order they appear in the Theme dropdown.
+ *
+ * Adding a theme is three steps: drop a file in styles/themes, add its import
+ * here, and register it in themes.ts. Nothing else. tests/ui-themes.test.ts
+ * fails if those three fall out of sync, including if a theme's file is missing
+ * or is not named after its id.
+ *
+ * midnight goes first because it is the default: it declares the tokens the
+ * other themes override, and its palette is what renders before Vue mounts.
+ * Beyond that, import order does not decide which theme wins — every non-default
+ * theme block names both data-theme and data-color-style, so it outranks
+ * midnight's on specificity rather than on position.
+ */
+@import "./styles/themes/midnight.css";
+@import "./styles/themes/ember.css";
+@import "./styles/themes/amethyst.css";

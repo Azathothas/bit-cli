@@ -1,0 +1,104 @@
+use crate::stats::enums::stats_event::StatsEvent;
+use crate::tracker::enums::updates_action::UpdatesAction;
+use crate::tracker::structs::info_hash::InfoHash;
+use crate::tracker::structs::torrent_tracker::TorrentTracker;
+use log::{
+    error,
+    info
+};
+use std::collections::hash_map::Entry;
+use std::collections::{
+    BTreeMap,
+    HashMap
+};
+use std::sync::Arc;
+use std::time::SystemTime;
+
+impl TorrentTracker {
+    /// Queues an announce-key change (with expiry) for the next database flush; returns `true`
+    /// when a new slot was created.
+    pub fn add_key_update(&self, info_hash: InfoHash, timeout: i64, updates_action: UpdatesAction) -> bool
+    {
+        let mut lock = self.keys_updates.write();
+        let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos();
+        if lock.insert(timestamp, (info_hash, timeout, updates_action)).is_none() {
+            self.update_stats(StatsEvent::KeyUpdates, 1);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns a clone of the pending key-update queue.
+    pub fn get_key_updates(&self) -> HashMap<u128, (InfoHash, i64, UpdatesAction)>
+    {
+        let lock = self.keys_updates.read_recursive();
+        lock.clone()
+    }
+
+    /// Removes a single queued key update by its sequence key; returns `true` when it existed.
+    pub fn remove_key_update(&self, timestamp: &u128) -> bool
+    {
+        let mut lock = self.keys_updates.write();
+        if lock.remove(timestamp).is_some() {
+            self.update_stats(StatsEvent::KeyUpdates, -1);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Drops all queued key updates and resets the queue statistic.
+    pub fn clear_key_updates(&self)
+    {
+        let mut lock = self.keys_updates.write();
+        lock.clear();
+        self.set_stats(StatsEvent::KeyUpdates, 0);
+    }
+
+    /// Deduplicates a snapshot of the key-update queue (newest wins) and flushes it to the
+    /// database, removing the flushed entries only after the write succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(())` when the flush fails; the queued updates remain intact.
+    pub async fn save_key_updates(&self, torrent_tracker: Arc<TorrentTracker>) -> Result<(), ()>
+    {
+        let updates = self.get_key_updates();
+        let mut mapping: HashMap<InfoHash, (u128, i64, UpdatesAction)> = HashMap::new();
+        let mut timestamps_to_remove = Vec::new();
+        for (timestamp, (info_hash, timeout, updates_action)) in updates {
+            match mapping.entry(info_hash) {
+                Entry::Occupied(mut o) => {
+                    let existing = o.get();
+                    if timestamp > existing.0 {
+                        timestamps_to_remove.push(existing.0);
+                        o.insert((timestamp, timeout, updates_action));
+                    } else {
+                        timestamps_to_remove.push(timestamp);
+                    }
+                }
+                Entry::Vacant(v) => {
+                    v.insert((timestamp, timeout, updates_action));
+                }
+            }
+        }
+        let keys_to_save: BTreeMap<InfoHash, (i64, UpdatesAction)> = mapping
+            .iter()
+            .map(|(info_hash, (_, timeout, updates_action))| (*info_hash, (*timeout, *updates_action)))
+            .collect();
+        if let Ok(()) = self.save_keys(torrent_tracker, keys_to_save).await {
+            info!("[SYNC KEY UPDATES] Synced {} keys", mapping.len());
+            for (_, (timestamp, _, _)) in mapping {
+                self.remove_key_update(&timestamp);
+            }
+            for timestamp in timestamps_to_remove {
+                self.remove_key_update(&timestamp);
+            }
+            Ok(())
+        } else {
+            error!("[SYNC KEY UPDATES] Unable to sync {} keys", mapping.len());
+            Err(())
+        }
+    }
+}

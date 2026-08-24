@@ -1,0 +1,340 @@
+use crate::api::api::{
+    api_parse_body,
+    api_service_token,
+    api_validation
+};
+use crate::api::structs::api_service_data::ApiServiceData;
+use crate::common::common::{
+    hash_id,
+    hex2bin
+};
+use crate::tracker::enums::updates_action::UpdatesAction;
+use crate::tracker::structs::user_entry_item::UserEntryItem;
+use crate::tracker::structs::user_id::UserId;
+use actix_web::http::header::ContentType;
+use actix_web::http::StatusCode;
+use actix_web::web::Data;
+use actix_web::{
+    web,
+    HttpRequest,
+    HttpResponse
+};
+use serde_json::{
+    json,
+    Value
+};
+use std::collections::{
+    BTreeMap,
+    HashMap
+};
+use std::sync::Arc;
+
+/// Accepts only the lowercase hyphenated UUID form, e.g. `550e8400-e29b-41d4-a716-446655440000`.
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36 && s.bytes().enumerate().all(|(i, b)| match i {
+        8 | 13 | 18 | 23 => b == b'-',
+        _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
+    })
+}
+
+/// Validates `id` against the configured identifier form and builds the tombstone entry
+/// enqueued for a user removal, returning `None` when it does not match.
+///
+/// The database connectors locate the row by `user_uuid` or `user_id` depending on the
+/// `id_uuid` setting, so the matching field has to be populated here: an entry with both
+/// unset leaves them nothing to build a `DELETE` from. Validating is what makes that safe —
+/// `id` arrives straight from a path segment or a JSON array, and this is the only gate
+/// between it and the removal statement.
+///
+/// The accepted forms match [`api_service_user_post`] exactly, so a user can always be deleted
+/// by the same identifier it was created with. `is_uuid` already requires lowercase, which is
+/// why the value is stored verbatim rather than case-folded.
+fn user_removal_entry(id: &str, id_uuid: bool) -> Option<UserEntryItem>
+{
+    let (user_id, user_uuid) = if id_uuid {
+        if !is_uuid(id) {
+            return None;
+        }
+        (None, Some(id.to_string()))
+    } else {
+        (Some(id.parse::<u64>().ok()?), None)
+    };
+    Some(UserEntryItem {
+        key: UserId([0u8; 20]),
+        user_id,
+        user_uuid,
+        uploaded: 0,
+        downloaded: 0,
+        completed: 0,
+        updated: 0,
+        active: 0,
+        torrents_active: BTreeMap::new(),
+    })
+}
+
+/// `GET /api/user/{id}` — returns a user entry as JSON; `{id}` is the user id or UUID.
+pub async fn api_service_user_get(request: HttpRequest, path: web::Path<String>, data: Data<Arc<ApiServiceData>>) -> HttpResponse
+{
+    if let Some(error_return) = api_validation(&request, &data).await { return error_return; }
+    if let Some(response) = api_service_token(&request, Arc::clone(&data.torrent_tracker.config)).await { return response; }
+    let id = path.into_inner();
+    let (status_code, data) = api_service_users_return_json(id, data);
+    match status_code {
+        StatusCode::OK => HttpResponse::Ok().content_type(ContentType::json()).json(data),
+        _ => HttpResponse::NotFound().content_type(ContentType::json()).json(data),
+    }
+}
+
+/// `GET /api/users` — returns user entries for a JSON array of ids/UUIDs in the body.
+pub async fn api_service_users_get(request: HttpRequest, payload: web::Payload, data: Data<Arc<ApiServiceData>>) -> HttpResponse
+{
+    if let Some(error_return) = api_validation(&request, &data).await { return error_return; }
+    if let Some(response) = api_service_token(&request, Arc::clone(&data.torrent_tracker.config)).await { return response; }
+    let body = match api_parse_body(payload).await {
+        Ok(data) => data,
+        Err(error) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": error.to_string()})),
+    };
+    let ids = match serde_json::from_slice::<Vec<String>>(&body) {
+        Ok(id) => id,
+        Err(_) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "bad json body"})),
+    };
+    let mut users_output = HashMap::with_capacity(ids.len());
+    for id in ids {
+        let (_, user_data) = api_service_users_return_json(id.clone(), Data::clone(&data));
+        users_output.insert(id, user_data);
+    }
+    HttpResponse::Ok().content_type(ContentType::json()).json(json!({
+        "status": "ok",
+        "users": users_output
+    }))
+}
+
+/// `POST /api/user/{id}/{key}/{uploaded}/{downloaded}/{completed}/{updated}/{active}` —
+/// creates or replaces a user with the given announce key and statistics.
+pub async fn api_service_user_post(request: HttpRequest, path: web::Path<(String, String, u64, u64, u64, u64, u8)>, data: Data<Arc<ApiServiceData>>) -> HttpResponse
+{
+    if let Some(error_return) = api_validation(&request, &data).await { return error_return; }
+    if let Some(response) = api_service_token(&request, Arc::clone(&data.torrent_tracker.config)).await { return response; }
+    let (id, key, uploaded, downloaded, completed, updated, active) = path.into_inner();
+    if key.len() != 40 {
+        return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "bad key_hash"}));
+    }
+    let key_hash = match hex2bin(key) {
+        Ok(hash) => UserId(hash),
+        Err(_) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "invalid key_hash"})),
+    };
+    let mut user_entry = UserEntryItem {
+        key: key_hash,
+        user_id: None,
+        user_uuid: None,
+        uploaded,
+        downloaded,
+        completed,
+        updated,
+        active,
+        torrents_active: BTreeMap::new(),
+    };
+    let id_hash = if data.torrent_tracker.config.database_structure.users.id_uuid {
+        if !is_uuid(&id) {
+            return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "invalid uuid"}));
+        }
+        user_entry.user_uuid = Some(id.to_lowercase());
+        hash_id(&id)
+    } else {
+        match id.parse::<u64>() {
+            Ok(user_id) => {
+                user_entry.user_id = Some(user_id);
+                hash_id(&id)
+            }
+            Err(_) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "invalid id"})),
+        }
+    };
+    if data.torrent_tracker.config.database_structure.users.persistent.unwrap_or(data.torrent_tracker.config.database.persistent) {
+        let _ = data.torrent_tracker.add_user_update(UserId(id_hash), user_entry.clone(), UpdatesAction::Add);
+    }
+    if data.torrent_tracker.add_user(UserId(id_hash), user_entry) {
+        HttpResponse::Ok().content_type(ContentType::json()).json(json!({"status": "user_hash added"}))
+    } else {
+        HttpResponse::NotModified().content_type(ContentType::json()).json(json!({"status": "user_hash updated"}))
+    }
+}
+
+/// `POST /api/users` — creates or replaces multiple users from a JSON array of tuples
+/// (arrays), each shaped `[id, key_hash, uploaded, downloaded, completed, updated, active]`.
+pub async fn api_service_users_post(request: HttpRequest, payload: web::Payload, data: Data<Arc<ApiServiceData>>) -> HttpResponse
+{
+    if let Some(error_return) = api_validation(&request, &data).await { return error_return; }
+    if let Some(response) = api_service_token(&request, Arc::clone(&data.torrent_tracker.config)).await { return response; }
+    let body = match api_parse_body(payload).await {
+        Ok(data) => data,
+        Err(error) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": error.to_string()})),
+    };
+    let hashes = match serde_json::from_slice::<Vec<(String, String, u64, u64, u64, u64, u8)>>(&body) {
+        Ok(data) => data,
+        Err(_) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "bad json body"})),
+    };
+    let mut users_output = HashMap::with_capacity(hashes.len());
+    for (id, key, uploaded, downloaded, completed, updated, active) in hashes {
+        if key.len() == 40 {
+            let key_hash = match hex2bin(key) {
+                Ok(hash) => UserId(hash),
+                Err(_) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "invalid key_hash"})),
+            };
+            let mut user_entry = UserEntryItem {
+                key: key_hash,
+                user_id: None,
+                user_uuid: None,
+                uploaded,
+                downloaded,
+                completed,
+                updated,
+                active,
+                torrents_active: BTreeMap::new(),
+            };
+            let id_hash = if data.torrent_tracker.config.database_structure.users.id_uuid {
+                if !is_uuid(&id) {
+                    return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "invalid uuid"}));
+                }
+                user_entry.user_uuid = Some(id.to_lowercase());
+                hash_id(&id)
+            } else {
+                match id.parse::<u64>() {
+                    Ok(user_id) => {
+                        user_entry.user_id = Some(user_id);
+                        hash_id(&id)
+                    }
+                    Err(_) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "invalid id"})),
+                }
+            };
+            if data.torrent_tracker.config.database_structure.users.persistent.unwrap_or(data.torrent_tracker.config.database.persistent) {
+                let _ = data.torrent_tracker.add_user_update(UserId(id_hash), user_entry.clone(), UpdatesAction::Add);
+            }
+            let status = if data.torrent_tracker.add_user(UserId(id_hash), user_entry) {
+                json!({"status": "user_hash added"})
+            } else {
+                json!({"status": "user_hash updated"})
+            };
+            users_output.insert(id, status);
+        }
+    }
+    HttpResponse::Ok().content_type(ContentType::json()).json(json!({
+        "status": "ok",
+        "users": users_output
+    }))
+}
+
+/// `DELETE /api/user/{id}` — removes a user; `{id}` is the user id or UUID, using the same
+/// identifier contract (and internal SHA-1 hashing) as the GET/POST routes.
+pub async fn api_service_user_delete(request: HttpRequest, path: web::Path<String>, data: Data<Arc<ApiServiceData>>) -> HttpResponse
+{
+    if let Some(error_return) = api_validation(&request, &data).await { return error_return; }
+    if let Some(response) = api_service_token(&request, Arc::clone(&data.torrent_tracker.config)).await { return response; }
+    let id = path.into_inner();
+    let id_hash = UserId(hash_id(&id));
+    if data.torrent_tracker.config.database_structure.users.persistent.unwrap_or(data.torrent_tracker.config.database.persistent) {
+        match user_removal_entry(&id, data.torrent_tracker.config.database_structure.users.id_uuid) {
+            Some(removal) => { let _ = data.torrent_tracker.add_user_update(id_hash, removal, UpdatesAction::Remove); }
+            None => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "invalid id"})),
+        }
+    }
+    match data.torrent_tracker.remove_user(id_hash) {
+        None => HttpResponse::NotModified().content_type(ContentType::json()).json(json!({"status": "unknown user_hash"})),
+        Some(_) => HttpResponse::Ok().content_type(ContentType::json()).json(json!({"status": "ok"})),
+    }
+}
+
+/// `DELETE /api/users` — removes a JSON array of users by id/UUID, using the same identifier
+/// contract (and internal SHA-1 hashing) as the GET/POST routes.
+pub async fn api_service_users_delete(request: HttpRequest, payload: web::Payload, data: Data<Arc<ApiServiceData>>) -> HttpResponse
+{
+    if let Some(error_return) = api_validation(&request, &data).await { return error_return; }
+    if let Some(response) = api_service_token(&request, Arc::clone(&data.torrent_tracker.config)).await { return response; }
+    let body = match api_parse_body(payload).await {
+        Ok(data) => data,
+        Err(error) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": error.to_string()})),
+    };
+    let ids = match serde_json::from_slice::<Vec<String>>(&body) {
+        Ok(data) => data,
+        Err(_) => return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "bad json body"})),
+    };
+    let users_persistent = data.torrent_tracker.config.database_structure.users.persistent.unwrap_or(data.torrent_tracker.config.database.persistent);
+    let id_uuid = data.torrent_tracker.config.database_structure.users.id_uuid;
+    let mut users_output = HashMap::with_capacity(ids.len());
+    for id in ids {
+        let id_hash = UserId(hash_id(&id));
+        if users_persistent {
+            match user_removal_entry(&id, id_uuid) {
+                Some(removal) => { let _ = data.torrent_tracker.add_user_update(id_hash, removal, UpdatesAction::Remove); }
+                None => {
+                    users_output.insert(id, json!({"status": "invalid id"}));
+                    continue;
+                }
+            }
+        }
+        let status = match data.torrent_tracker.remove_user(id_hash) {
+            None => json!({"status": "unknown user_hash"}),
+            Some(_) => json!({"status": "ok"}),
+        };
+        users_output.insert(id, status);
+    }
+    HttpResponse::Ok().content_type(ContentType::json()).json(json!({
+        "status": "ok",
+        "users": users_output
+    }))
+}
+
+/// Looks up a user by id/UUID and returns the HTTP status plus JSON body for the API response.
+pub fn api_service_users_return_json(id: String, data: Data<Arc<ApiServiceData>>) -> (StatusCode, Value)
+{
+    let id_hash = hash_id(&id);
+    let uses_uuid = data.torrent_tracker.config.database_structure.users.id_uuid;
+    match data.torrent_tracker.get_user(UserId(id_hash)) {
+        None => (StatusCode::NOT_FOUND, json!({"status": "unknown user_hash"})),
+        Some(user_data) => {
+            let response = if uses_uuid {
+                json!({
+                    "status": "ok",
+                    "uuid": user_data.user_uuid,
+                    "key": user_data.key,
+                    "uploaded": user_data.uploaded,
+                    "downloaded": user_data.downloaded,
+                    "completed": user_data.completed,
+                    "updated": user_data.updated,
+                    "active": user_data.active,
+                    "torrents_active": user_data.torrents_active
+                })
+            } else {
+                json!({
+                    "status": "ok",
+                    "id": user_data.user_id,
+                    "key": user_data.key,
+                    "uploaded": user_data.uploaded,
+                    "downloaded": user_data.downloaded,
+                    "completed": user_data.completed,
+                    "updated": user_data.updated,
+                    "active": user_data.active,
+                    "torrents_active": user_data.torrents_active
+                })
+            };
+            (StatusCode::OK, response)
+        }
+    }
+}
+/// `DELETE /api/users/clear` — removes all users.
+pub async fn api_service_users_clear(request: HttpRequest, data: Data<Arc<ApiServiceData>>) -> HttpResponse
+{
+    if let Some(error_return) = api_validation(&request, &data).await { return error_return; }
+    if let Some(response) = api_service_token(&request, Arc::clone(&data.torrent_tracker.config)).await { return response; }
+    if !data.torrent_tracker.config.tracker_config.users_enabled {
+        return HttpResponse::BadRequest().content_type(ContentType::json()).json(json!({"status": "users not enabled"}));
+    }
+    if data.torrent_tracker.config.database_structure.users.persistent.unwrap_or(data.torrent_tracker.config.database.persistent) {
+        let table = data.torrent_tracker.config.database_structure.users.table_name.clone();
+        if data.torrent_tracker.sqlx.clear_table(&table).await.is_err() {
+            return HttpResponse::InternalServerError().content_type(ContentType::json()).json(json!({"status": "database error"}));
+        }
+    }
+    data.torrent_tracker.clear_users();
+    data.torrent_tracker.clear_user_updates();
+    HttpResponse::Ok().content_type(ContentType::json()).json(json!({"status": "ok"}))
+}
