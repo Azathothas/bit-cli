@@ -89,8 +89,8 @@ it, and it says so in its own first paragraph.
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-two** jobs. Green at run **32730292888**, against commit
-  `4acc095`. Three runs this session and none was red.
+- **CI:** **twenty-two** jobs. Green at run **32731290459**, against commit
+  `5ec11e8`. Three runs this session and none was red.
 
 ```bash
 gh run list --limit 1
@@ -221,9 +221,14 @@ documents said 93; the cited range is `:148-250` and two said `:150-270`; and
 two line numbers in [T-236](peers.md) drifted by this session's own edits,
 `listener.rs:50` to `:51` and `:186` to `:194`. All corrected.
 
-**The commit body of `4acc095` still says 93 and is not corrected**, because
-rewriting a pushed commit message is worse than leaving one wrong number in it.
-The entry is the record and the entry is right.
+**Two commit bodies carry a wrong statement and neither is corrected**, because
+rewriting a pushed commit message is worse than the statement in it. `4acc095`
+says libtorrent's table carries 93 codes; it carries 92. `5ec11e8` ends "so
+-NoCi", and the flag was not passed: `git-sync` would have refused it anyway,
+because the push carries `crates/bit-cli-core/src/peer_id.rs` and a
+documentation-only push carrying a source file is exactly the one that needed
+CI. Run **32731290459** is that push's, and it is green. The entries are the
+record and the entries are right.
 
 **Review 2, a cold read for a document contradicting another.** Two claims in
 [`docs/examples/inputs.md`](../docs/examples/inputs.md) were stated rather than
