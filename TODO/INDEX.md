@@ -247,13 +247,14 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-254](webseed.md) | P2 | webseed | **done** | No report carries a response header, so a CDN cache hit is invisible |
 | [T-255](cli-surface.md) | P2 | cli | **done** | Regenerating the schema deletes four hand-written sections and nothing fails |
 | [T-256](trackers.md) | P1 | trackers | **done** | A UDP announce sends its event on every request, where an HTTP one sends it once |
-| [T-257](cli-surface.md) | P2 | cli | open | Two documents answer to type progress, and the guard against that only covers documents |
-| [T-258](cli-surface.md) | P2 | cli | open | A seeder re-sends every peer it has ever seen, every report interval |
+| [T-257](cli-surface.md) | P2 | cli | **done** | Two documents answer to type progress, and the guard against that only covers documents *(session_start and session_end were being unioned too)* |
+| [T-258](cli-surface.md) | P2 | cli | **done** | A seeder re-sends every peer it has ever seen, every report interval *(1.6 percent of the stdout after, on the same workload)* |
+| [T-259](cli-surface.md) | P3 | cli | open | The schema's prose is generated and nothing compares it to what is committed |
 
 ## Counts
 
-207 items: 196 to work through, and 11 deferred to Phase C.
-31 open, 3 partial, 0 blocked, 162 done.
+208 items: 197 to work through, and 11 deferred to Phase C.
+30 open, 3 partial, 0 blocked, 164 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -262,10 +263,10 @@ when a number here disagrees with them.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 2 | 0 | 0 | 70 | 72 |
-| P2 | 20 | 3 | 0 | 59 | 82 |
-| P3 | 9 | 0 | 0 | 21 | 30 |
+| P2 | 18 | 3 | 0 | 61 | 82 |
+| P3 | 10 | 0 | 0 | 21 | 31 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **31** | **3** | **0** | **162** | **207** |
+| **All** | **30** | **3** | **0** | **164** | **208** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

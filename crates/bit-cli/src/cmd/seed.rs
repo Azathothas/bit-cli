@@ -499,7 +499,11 @@ pub fn run(
                     "download_rate": snapshot.download_rate,
                     "ratio": format!("{:.3}", snapshot.ratio()),
                     "peers": snapshot.peers,
-                    "peer_detail": peers,
+                    // The peers this session holds right now, not every peer
+                    // it has ever held. See `swarm::currently_held` for what
+                    // the old array cost and why the count here is one the
+                    // same event already carries.
+                    "peer_detail": swarm::currently_held(&peers),
                     // What the process costs right now, so a soak reads a slope out of
                     // the event stream rather than sampling the process from outside.
                     // See `TODO/memory.md`, T-040.

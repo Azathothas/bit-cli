@@ -1547,7 +1547,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1502` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1569` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -4833,7 +4833,7 @@ Source:      found reading a soak's `--jsonl` output, 2026-08-24
 Category:    cli
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-25
 
 Problem:     `bit-cli seed --jsonl` and `bit-cli download --jsonl` both emit
              `"type": "progress"`, and the two documents differ in nine of
@@ -4903,13 +4903,85 @@ Prove:       ```
              `docs/schema.md`'s `progress` section naming what each command
              emits rather than a union credited to one of them.
 
+#### Closed, 2026-08-25, on the operator's ruling, and it is the third option
+
+**The ruling accepted the recommendation**: one `type`, two shapes recorded.
+`type` is what a consumer selects on, breaking it is what `schema_version` is
+for, and [T-191](bench.md) took the identical fork the same way for `kind`.
+Nothing about the wire format changed and `schema_version` did not move.
+
+**`docs/schema.md`'s `progress` section says who writes what.** Every command
+that produces a shape is named above the table, and a third column names which
+of them writes each field, reading `both` or `all` where every one of them
+does:
+
+| field | type | from |
+| --- | --- | --- |
+| `at` | string | both |
+| `peer_detail[]` | array | seed |
+| `percent` | string | download |
+| `listener.probes` | integer | seed |
+
+The six `listener.*` rows and `peer_detail[]` this entry named are attributed
+to `seed` now. They were under a line reading "From
+`bit-cli download <TORRENT> --web-seed <URL> --jsonl`", which has never emitted
+one of them.
+
+**The Problem's "nine of seventeen" is not the number in the committed
+section, and both are right.** That measurement is two plain runs at
+`--report-interval 1s`. The generator's `seed` run passes `--listener-check 5s`,
+which is what puts the six `listener.*` rows in the contract at all, so the
+section reads **fifteen of thirty-two**. Nine of the fifteen are there whatever
+flags are passed. The code comments quote the section's figure, because that is
+the one a reader sees beside the table.
+
+**The Approach's guard is not what shipped, and that is the ruling's doing.**
+It said "giving events the same guard is a few lines and it fails on `progress`
+immediately". Under option 3 a shared `type` is legal, so a panic would refuse
+the thing the ruling permits. What replaced it removes the failure mode rather
+than detecting it: `Sample` keys its commands and records, per field, which of
+them wrote it, so a section for a shape two commands produce **cannot** be
+rendered as a union credited to one. `fold_document`'s panic for a document
+`kind` is unchanged, because merging two documents under one name still
+describes a document that exists nowhere.
+
+**Two more shapes were being unioned and this entry named neither.**
+
+- **`session_start`**, from `download` and `seed`, differing in five of nine
+  fields: `directory`, `max_concurrent_downloads` and `sources` are the
+  downloader's and `data_directory` and `source` are the seeder's.
+- **`session_end`**, from **four** commands, where `error` is written by
+  `bit-cli info` alone.
+
+`progress` was the one a reader would have tripped on and it was not the only
+one.
+
+Acceptance, run:
+
+```bash
+cargo test -p bit-cli --lib schema
+```
+
+18 passed. Three tests are this entry's:
+`a_shape_two_commands_write_names_which_one_writes_each_field` and
+`a_shape_one_command_writes_keeps_the_two_column_table` in `schema.rs`, and
+`two_commands_sharing_one_event_type_are_attributed_rather_than_merged` in
+`schema_gen.rs`. `two_commands_cannot_claim_one_document_kind` is unchanged and
+still panics, which is the pair the two halves make.
+
+**The Prove section above asked for a test "that two commands cannot claim one
+event `type`", and that test would now be wrong.** It was written before the
+ruling and describes option 1. The test that shipped asserts the opposite and
+is what option 3 needs: that a `type` two commands claim is recorded as two
+shapes rather than merged into one.
+
 ### T-258 A seeder re-sends every peer it has ever seen, every report interval
 
 Source:      the operator's six hour soak of 2026-08-24, read while it ran
 Category:    cli
 Priority:    P2
 Effort:      S
-Status:      open
+Status:      **done**, 2026-08-25
 
 Problem:     `peer_detail` in a `seed --jsonl` progress event carries every
              peer row the engine holds, and the engine holds rows for peers
@@ -5039,3 +5111,132 @@ The `Prove` section's assertion has to change with it, and the change makes it
 easier rather than harder to check: not "the per-record size stops growing
 with peers seen", which is already true after two hours, but that **the record
 size after the bound engages is a small fraction of what it is today**.
+
+#### Closed, 2026-08-25, on the operator's ruling: a tick carries what is connected
+
+**The ruling accepted the recommendation.** A `seed --jsonl` progress tick
+carries the peers the session holds and the final document goes on carrying
+every peer it ever held, which is where a caller counting who connected already
+looks.
+
+**What "holds" means is not a new idea, it is the event's own counts.**
+`swarm::currently_held` drops the two terminal states, `dead` and `not needed`,
+and keeps `live`, `connecting` and `queued`. Those three are exactly the
+buckets a session reports a number for, so the length of a tick's
+`peer_detail` is now `peers.live + peers.connecting + peers.queued` from the
+same event. It was a length nothing in the event described.
+
+**Two soaks, twenty minutes each, four leechers, one binary either side of the
+one line.** `crates/bit-cli/src/cmd/seed.rs:506` is the line.
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 20 -Leechers 4
+```
+
+`bench/soak-20260825T021602651Z.json` is the before run and
+`bench/soak-20260825T023859926Z.json` the after; the stdout figures are the
+seeder's own `seed.out`, which `-Keep` leaves behind and the reports do not
+carry.
+
+| | before | after |
+| --- | --- | --- |
+| seeder stdout | **1,046,872 bytes** | **16,993 bytes** |
+| progress records | 41 | 41 |
+| last record | 50,649 bytes | 410 bytes |
+| rows in the last record | 160 | 0 |
+| peers seen by then | 160 | 160 |
+
+**1.6 percent of the stdout and 0.8 percent of the last
+record.** That is the assertion the correction above asked for: not that the
+record stops growing, which it already did after two hours, but that what it
+settles at is a small fraction of what it was.
+
+**The run's own numbers do not change**, which is what the soak's ceilings
+already assert and what makes this a reporting change rather than a behaviour
+one. 160 leech cycles completed before and 156 after, none failed either way,
+and both runs saw the same 160 peers.
+
+**The `peers` count in the final document is untouched.** `build` at
+`crates/bit-cli/src/cmd/seed.rs:545` takes the whole `view.rows`, so
+`peers_seen` and `peers_served` are computed over every peer as before, and so
+is the `peers` array a `--json` run prints at the end.
+
+**This is a narrowing and it is a break for one kind of consumer**, which the
+entry said and the ruling accepted: a script reading `peer_detail` off a tick
+to count total peers gets a smaller number. `peers.seen` is in the same event
+and is the count that field never was. `docs/examples/machine-output.md` says
+so under "What a tick carries, and what only the final document carries".
+
+**A snapshot of a fast workload is often empty, and that is the honest
+answer rather than a defect.** At the last tick of the after run that carried
+no rows, `peers.seen` read **160** and `peer_detail` was empty, because
+a leech cycle here connects, transfers 16 MiB and leaves inside one 30 second
+interval. A cumulative array would have carried 160 rows at that
+instant and none of them a peer the seeder was talking to. What a caller
+wanting finer grain has is
+`--report-interval`, and what a caller wanting the total has is `peers.seen` in
+the same event and the `peers` array in the final document.
+
+### T-259 The schema's prose is generated and nothing compares it to what is committed
+
+Source:      found while closing [T-257](#t-257-two-documents-answer-to-type-progress-and-the-guard-against-that-only-covers-documents),
+             2026-08-25
+Category:    cli
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     `docs/schema.md` is generated, and the test that keeps it true
+             compares **field rows only**. `the_committed_schema_matches_what_the_program_writes`
+             at `crates/bit-cli/src/schema_gen.rs:1608` filters both sides to
+             lines starting with `` | ` `` before comparing, so every other
+             line of the file is outside the check: the header, the "How this
+             file is kept true" section, and the one-line description under
+             each `###` heading.
+
+             An edit to `HEADER` in `crates/bit-cli/src/schema.rs:431` that is
+             not followed by a regeneration therefore never reaches the reader,
+             and nothing fails. This session made that edit and found out by
+             reading the file afterwards.
+Premise:     Measured. Three sentences were added to `HEADER`, `cargo test -p
+             bit-cli --lib schema` passed with 18 tests, and `docs/schema.md`
+             did not carry them until `BIT_CLI_UPDATE_SCHEMA=1` was run.
+Relevance:   It is the same shape as [T-255](#t-255-regenerating-the-schema-deletes-four-hand-written-sections-and-nothing-fails)
+             one direction over: that entry was about regeneration **deleting**
+             prose nobody generated, and this is about regeneration being the
+             only way generated prose arrives, with nothing saying so.
+
+             The cost is bounded and real: the file's own prose is what tells a
+             consumer that a `progress` event has two shapes and which command
+             writes which field. A stale copy of that describes a contract the
+             program does not have, which is what the row check exists to stop.
+
+             `scripts/check-docs.ps1` cannot catch it either. It resolves
+             links, flags and output fields; it has no idea the file is
+             generated.
+Approach:    The row filter is there for a reason and it stays: the check is
+             deliberately **containment** over rows, because these runs are
+             timed and a download that beats its own report tick emits no
+             `progress`. See the comment at
+             `crates/bit-cli/src/schema_gen.rs:1600`.
+
+             What can be equality is everything that is **not** a row.
+             `HEADER` is a constant, the per-name descriptions come from
+             `DOCUMENT_KINDS` and `EVENT_TYPES` at
+             `crates/bit-cli/src/schema.rs:33`, and none of them depends on
+             what a run happened to produce. So: compare the non-row lines for
+             equality and keep the row lines as containment, in the same test.
+
+             The hand-written sections `carry_across` preserves have to stay
+             exempt, or the new half fails on the four sections at the end of
+             the file that the generator does not produce. `carry_across` at
+             `crates/bit-cli/src/schema_gen.rs:1371` already knows which `##`
+             headings those are, and the test can ask it the same question.
+Prove:       ```
+             cargo test -p bit-cli --lib schema
+             ```
+
+             A test in the shape of the existing one that fails when a line of
+             `HEADER` differs from the committed file and passes when they
+             agree, with the hand-written tail exempt. Editing `HEADER` and not
+             regenerating must turn the tree red.

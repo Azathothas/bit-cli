@@ -59,6 +59,17 @@ fn producer(label: &str) -> String {
         .join(" ")
 }
 
+/// The name a `from` cell carries, which is [`producer`] without the binary.
+///
+/// `bit-cli download <TORRENT> --jsonl` becomes `download` and
+/// `bit-cli bench disk --jsonl` becomes `bench disk`. Every row of a shared
+/// section carries one of these, so the four words they all begin with would
+/// be four words repeated on every row and read as noise.
+fn short_name(command: &str) -> String {
+    let full = producer(command);
+    full.strip_prefix("bit-cli ").unwrap_or(&full).to_string()
+}
+
 /// The half of [`observe_document`] that works on a value already parsed.
 ///
 /// **Two commands cannot share a `kind` here.** The map is keyed by `kind`, so
@@ -74,23 +85,20 @@ fn fold_document(into: &mut BTreeMap<String, Sample>, command: &str, value: &ser
     };
     let flattened = fields(value);
     if let Some(existing) = into.get(kind)
-        && producer(&existing.command) != producer(command)
+        && producer(existing.command()) != producer(command)
     {
         panic!(
             "two commands write `kind: \"{kind}\"`: `{}` and `{command}`. \
              Folding both in would describe a document neither one writes. \
              Give one of them its own discriminator, or leave the second out \
              of the generator. See TODO/bench.md, T-191.",
-            existing.command
+            existing.command()
         );
     }
+    let who = short_name(command);
     into.entry(kind.to_string())
-        .and_modify(|sample| sample.merge(flattened.clone()))
-        .or_insert_with(|| Sample {
-            name: kind.to_string(),
-            command: command.to_string(),
-            fields: flattened,
-        });
+        .and_modify(|sample| sample.merge(&who, command, flattened.clone()))
+        .or_insert_with(|| Sample::new(kind, &who, command, flattened));
 }
 
 /// Fold one `bench` report in, without the machine it ran on.
@@ -119,7 +127,24 @@ fn observe_report(into: &mut BTreeMap<String, Sample>, command: &str, out: &str)
 }
 
 /// Fold one run's events into the sample for each `type`.
+///
+/// **Two commands may share an event `type` and a document `kind` may not.**
+/// [`fold_document`] panics on a shared `kind` because merging two documents
+/// under one name describes a document that exists nowhere. An event is the
+/// other case: `bit-cli seed --jsonl` and `bit-cli download --jsonl` both write
+/// `type: "progress"` and both are honest, because a progress tick from a run
+/// that is downloading and one from a run that is not are the same event with
+/// two shapes. `type` is what a consumer selects on, so renaming one is a break
+/// and `schema_version` is what a break is for.
+///
+/// So this attributes rather than refuses. Every field records which command
+/// wrote it, and [`crate::schema::Sample`] renders a `from` column for any
+/// shape more than one command produces. Before this, the union went out under
+/// one `From` line: `docs/schema.md` credited `peer_detail[]` and six
+/// `listener.*` rows to `bit-cli download`, which has never emitted one of
+/// them. See `TODO/cli-surface.md`, T-257.
 fn observe_events(into: &mut BTreeMap<String, Sample>, command: &str, out: &str) {
+    let who = short_name(command);
     for line in out.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -129,12 +154,8 @@ fn observe_events(into: &mut BTreeMap<String, Sample>, command: &str, out: &str)
         };
         let flattened = fields(&value);
         into.entry(event.to_string())
-            .and_modify(|sample| sample.merge(flattened.clone()))
-            .or_insert_with(|| Sample {
-                name: event.to_string(),
-                command: command.to_string(),
-                fields: flattened,
-            });
+            .and_modify(|sample| sample.merge(&who, command, flattened.clone()))
+            .or_insert_with(|| Sample::new(event, &who, command, flattened));
     }
 }
 
@@ -1157,6 +1178,48 @@ mod tests {
             "{:?}",
             sample.fields
         );
+        assert_eq!(
+            sample.commands.len(),
+            1,
+            "one command run two ways is one producer: {:?}",
+            sample.commands
+        );
+    }
+
+    /// Two commands sharing one event `type` are recorded as two shapes.
+    ///
+    /// The document half of this panics, above. The event half does not,
+    /// because two commands writing one `type` is what `progress` actually is
+    /// and renaming it would break every consumer selecting on it. What must
+    /// not happen is the union going out credited to one of them, which is
+    /// what `docs/schema.md` said until 2026-08-25. See
+    /// `TODO/cli-surface.md`, T-257.
+    #[test]
+    fn two_commands_sharing_one_event_type_are_attributed_rather_than_merged() {
+        let mut events: BTreeMap<String, Sample> = BTreeMap::new();
+        observe_events(
+            &mut events,
+            "bit-cli download <TORRENT> --jsonl",
+            "{\"type\":\"progress\",\"at\":\"t\",\"percent\":\"1.0\"}",
+        );
+        observe_events(
+            &mut events,
+            "bit-cli seed <TORRENT> --jsonl",
+            "{\"type\":\"progress\",\"at\":\"t\",\"peer_detail\":[]}",
+        );
+        let sample = events.get("progress").expect("one section");
+        assert_eq!(
+            sample.commands.len(),
+            2,
+            "both commands are named: {:?}",
+            sample.commands
+        );
+        assert_eq!(
+            sample.fields["percent"].producers.len(),
+            1,
+            "only download writes percent"
+        );
+        assert_eq!(sample.fields["at"].producers.len(), 2, "both write at");
     }
 
     use super::*;
@@ -1604,12 +1667,12 @@ mod tests {
         let undocumented_documents: Vec<String> = documents
             .iter()
             .filter(|sample| !DOCUMENT_KINDS.iter().any(|(kind, _)| *kind == sample.name))
-            .map(|sample| format!("{} from `{}`", sample.name, sample.command))
+            .map(|sample| format!("{} from `{}`", sample.name, sample.command()))
             .collect();
         let undocumented_events: Vec<String> = events
             .iter()
             .filter(|sample| !EVENT_TYPES.iter().any(|(event, _)| *event == sample.name))
-            .map(|sample| format!("{} from `{}`", sample.name, sample.command))
+            .map(|sample| format!("{} from `{}`", sample.name, sample.command()))
             .collect();
         assert!(
             undocumented_documents.is_empty() && undocumented_events.is_empty(),

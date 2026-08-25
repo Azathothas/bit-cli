@@ -46,6 +46,27 @@ Three fields on every event and they are the ones a consumer relies on:
 there rather than from a socket table, because a uTP listener is a UDP socket
 and `Get-NetTCPConnection` cannot see it.
 
+## What a tick carries, and what only the final document carries
+
+A `progress` event is a tick of `--report-interval`, and it describes the run
+**right now**. A `seed` tick's `peer_detail` is therefore the peers the session
+is holding at that instant: the three states it reports a count for, `live`,
+`connecting` and `queued`. The length of the array is
+`peers.live + peers.connecting + peers.queued` from the same event, which is a
+cross-check worth making.
+
+Peers that have disconnected are history and they are in the final document,
+under `peers`, which is where a caller counting who ever connected already
+looks. `peers.seen` in every tick is the running total.
+
+So do not read a tick's array to count a swarm. `peers.seen` is that number and
+it is in the same event.
+
+What the split buys is a tick whose size follows what is connected rather than
+how long the run has been going. On a seeder that peers arrive at and leave,
+the difference is the whole history: at the last sample of a six hour run,
+none of the rows a tick would otherwise carry described a connected peer.
+
 ## Waiting for the port, in PowerShell
 
 ```powershell

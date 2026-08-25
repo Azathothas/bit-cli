@@ -1220,6 +1220,33 @@ pub fn without_probe_rows(rows: Vec<PeerSnapshot>, ports: &HashSet<u16>) -> Peer
     view
 }
 
+/// The rows for peers this session still holds, in the order they were in.
+///
+/// A peer row survives the connection it describes: the session keeps it so
+/// that the run's final document can say who ever connected, and `librqbit`
+/// settles a closed one on `not needed`. That is history, and history belongs
+/// in a document written once rather than in every report tick.
+///
+/// Measured before this existed, on the operator's six hour soak of
+/// 2026-08-24: a `seed --jsonl` tick carried **873** rows, every one of them
+/// `not needed`, **zero** of them connected, in a 270 KB object emitted every
+/// 30 seconds. The row count plateaus rather than growing, so the cost is a
+/// constant 32 MB an hour for as long as the process runs, for a 16 MiB
+/// payload. See `TODO/cli-surface.md`, T-258.
+///
+/// **What is left is what the event's own counts already describe**:
+/// `live`, `connecting` and `queued` are the three buckets a session reports,
+/// and the two it does not report a bucket for, `dead` and `not needed`, are
+/// the two this drops. So the length of a tick's `peer_detail` is
+/// `peers.live + peers.connecting + peers.queued` from the same event, which
+/// is a cross-check a consumer could not make against the old array.
+#[must_use]
+pub fn currently_held(rows: &[PeerSnapshot]) -> Vec<&PeerSnapshot> {
+    rows.iter()
+        .filter(|row| !matches!(row.state.as_str(), "dead" | "not needed"))
+        .collect()
+}
+
 /// Take this run's own probe out of a snapshot's peer counts.
 ///
 /// The rows are dropped from the reported list by [`without_probe_rows`]; this
@@ -2387,6 +2414,52 @@ udp://cli.example:80
         let kept = without_probe_rows(rows, &HashSet::new());
         assert_eq!(kept.rows.len(), 1);
         assert_eq!(kept.dropped, 0);
+    }
+
+    /// A report tick carries the peers this session holds, not its history.
+    ///
+    /// The operator's six hour soak of 2026-08-24 sent 873 rows every 30
+    /// seconds, every one of them `not needed` and none of them connected, in
+    /// a 270 KB object. The two terminal states are the two the session
+    /// reports no bucket for, so what is left is exactly
+    /// `peers.live + peers.connecting + peers.queued` from the same event. See
+    /// `TODO/cli-surface.md`, T-258.
+    #[test]
+    fn a_tick_carries_the_peers_a_session_holds_and_not_the_ones_it_has_lost() {
+        let mut rows = Vec::new();
+        for (addr, state) in [
+            ("10.0.0.1:1", "live"),
+            ("10.0.0.2:2", "connecting"),
+            ("10.0.0.3:3", "queued"),
+            ("10.0.0.4:4", "dead"),
+            ("10.0.0.5:5", "not needed"),
+        ] {
+            let mut row = peer_row(addr);
+            row.state = state.into();
+            rows.push(row);
+        }
+
+        let held = currently_held(&rows);
+        let addrs: Vec<&str> = held.iter().map(|row| row.addr.as_str()).collect();
+        assert_eq!(
+            addrs,
+            vec!["10.0.0.1:1", "10.0.0.2:2", "10.0.0.3:3"],
+            "the three reported buckets survive and the two terminal states do not"
+        );
+        assert_eq!(rows.len(), 5, "the rows themselves are untouched");
+    }
+
+    /// A run that has lost every peer sends an empty array rather than its
+    /// whole history, which is the shape the soak was in at its last sample.
+    #[test]
+    fn a_tick_with_nothing_connected_carries_nothing() {
+        let mut rows = Vec::new();
+        for addr in ["10.0.0.1:1", "10.0.0.2:2"] {
+            let mut row = peer_row(addr);
+            row.state = "not needed".into();
+            rows.push(row);
+        }
+        assert!(currently_held(&rows).is_empty());
     }
 
     fn peer_row(addr: &str) -> PeerSnapshot {

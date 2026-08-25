@@ -32,13 +32,14 @@
 # `all` is not the default and should not be the six-hour run. Churn strands
 # sockets at about 30,000 handles an hour (measured, see TODO/memory.md), which
 # is T-020 rather than T-040 and swamps every other series in the same chart.
-# It no longer starves the leechers, and that line used to say it did. Measured
-# again on 2026-08-25, three minutes each, two leechers, -ListenerCheck on: 22
-# cycles completed with no churn, and 26 completed with the default churn beside
-# them, none failed either way. The old figures, 1 completed and 2 failed, were
-# taken before T-020 closed. Starving them now takes -ChurnConnections 20000
-# with -ChurnConcurrency 256 or more, which is what the two runs behind T-232's
-# attribution use.
+# It no longer starves the leechers, and that line used to say it did. The claim
+# that carries is the failure count rather than the cycle count: measured on
+# 2026-08-25 at two leechers with -ListenerCheck on, **no cycle failed either
+# way**, 22 completed over two minutes with no churn and 26 over three minutes
+# with the default churn beside them. The old figures, 1 completed and 2 failed,
+# were taken before T-020 closed. Starving them now takes -ChurnConnections
+# 20000 with -ChurnConcurrency 256 or more, which is what the two runs behind
+# T-232's attribution use.
 #
 # Three series, sampled every -SampleSeconds from outside the process:
 # resident memory, handle count, and TCP socket states. The seeder reports the

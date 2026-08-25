@@ -40,6 +40,16 @@ omitted from the JSON rather than written as `null`, so a reader cannot mistake
 "not applicable" for "none", and several runs of the same command are folded
 together here to cover as many of them as possible.
 
+**An event `type` can have more than one shape and a document `kind` cannot.**
+`bit-cli seed --jsonl` and `bit-cli download --jsonl` both write
+`type: "progress"`, and the section they share differs in fifteen of its
+thirty-two rows. Six of those fifteen are `--listener-check`'s, which the run
+behind that section passes and an ordinary seeder does not. Those
+sections carry a third column saying which command writes each field, and name
+every command above the table rather than one of them. A `kind` two commands
+claimed would describe a document neither one writes, so the generator refuses
+it instead. See `TODO/cli-surface.md`, T-257.
+
 The check is containment, not equality: a row this file has and a run did not
 produce passes, because these runs are timed and a failure-only field like
 `sources[].error` appears only when a source fails.
@@ -1041,19 +1051,24 @@ run and `at` is ISO 8601 UTC with millisecond precision.
 
 The session is up. Carries the listen address and what it was asked to do.
 
-From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`.
+From `bit-cli download <TORRENT> --web-seed <URL> --jsonl` and `bit-cli seed <TORRENT> --jsonl`.
 
-| field | type |
-| --- | --- |
-| `at` | string |
-| `data_directory` | string |
-| `directory` | string |
-| `listen_addr` | string |
-| `max_concurrent_downloads` | integer |
-| `seq` | integer |
-| `source` | string |
-| `sources` | integer |
-| `type` | string |
+More than one command writes this shape and they do not carry the same
+fields. The `from` column names which of them writes each one, and reads
+`both` where every one of them does, so a consumer selecting by `type`
+alone knows what may be absent.
+
+| field | type | from |
+| --- | --- | --- |
+| `at` | string | both |
+| `data_directory` | string | seed |
+| `directory` | string | download |
+| `listen_addr` | string | both |
+| `max_concurrent_downloads` | integer | download |
+| `seq` | integer | both |
+| `source` | string | seed |
+| `sources` | integer | download |
+| `type` | string | both |
 
 ### `torrent_added`
 
@@ -1253,42 +1268,47 @@ From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`.
 
 A tick of the report interval: rates, peers, and what the process costs.
 
-From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`.
+From `bit-cli download <TORRENT> --web-seed <URL> --jsonl` and `bit-cli seed <TORRENT> --jsonl`.
 
-| field | type |
-| --- | --- |
-| `at` | string |
-| `download_rate` | integer |
-| `eta_confidence` | string |
-| `eta_ms` | null |
-| `from_web_seeds` | integer |
-| `info_hash` | string |
-| `listener.consecutive_failures` | integer |
-| `listener.failed` | integer |
-| `listener.healthy` | bool |
-| `listener.last_failure` | null |
-| `listener.last_rtt_ms` | null |
-| `listener.probes` | integer |
-| `peer_detail[]` | array |
-| `peers.connecting` | integer |
-| `peers.dead` | integer |
-| `peers.live` | integer |
-| `peers.queued` | integer |
-| `peers.seen` | integer |
-| `percent` | string |
-| `process.cpu_ms` | integer |
-| `process.cpu_system_ms` | integer |
-| `process.cpu_user_ms` | integer |
-| `process.open_handles` | integer |
-| `process.peak_rss_bytes` | integer |
-| `process.rss_bytes` | integer |
-| `progress_bytes` | integer |
-| `ratio` | string |
-| `seq` | integer |
-| `total_bytes` | integer |
-| `type` | string |
-| `upload_rate` | integer |
-| `uploaded_bytes` | integer |
+More than one command writes this shape and they do not carry the same
+fields. The `from` column names which of them writes each one, and reads
+`both` where every one of them does, so a consumer selecting by `type`
+alone knows what may be absent.
+
+| field | type | from |
+| --- | --- | --- |
+| `at` | string | both |
+| `download_rate` | integer | both |
+| `eta_confidence` | string | download |
+| `eta_ms` | null | download |
+| `from_web_seeds` | integer | download |
+| `info_hash` | string | both |
+| `listener.consecutive_failures` | integer | seed |
+| `listener.failed` | integer | seed |
+| `listener.healthy` | bool | seed |
+| `listener.last_failure` | null | seed |
+| `listener.last_rtt_ms` | null | seed |
+| `listener.probes` | integer | seed |
+| `peer_detail[]` | array | seed |
+| `peers.connecting` | integer | both |
+| `peers.dead` | integer | both |
+| `peers.live` | integer | both |
+| `peers.queued` | integer | both |
+| `peers.seen` | integer | both |
+| `percent` | string | download |
+| `process.cpu_ms` | integer | both |
+| `process.cpu_system_ms` | integer | both |
+| `process.cpu_user_ms` | integer | both |
+| `process.open_handles` | integer | both |
+| `process.peak_rss_bytes` | integer | both |
+| `process.rss_bytes` | integer | both |
+| `progress_bytes` | integer | download |
+| `ratio` | string | seed |
+| `seq` | integer | both |
+| `total_bytes` | integer | download |
+| `type` | string | both |
+| `upload_rate` | integer | both |
+| `uploaded_bytes` | integer | seed |
 
 ### `bench_sample`
 
@@ -1375,19 +1395,24 @@ From `bit-cli download <TORRENT> --no-continue --jsonl`.
 
 The run is over. Always last, always present, whatever happened.
 
-From `bit-cli download <TORRENT> --web-seed <URL> --jsonl`.
+From `bit-cli bench disk --jsonl`, `bit-cli download <TORRENT> --web-seed <URL> --jsonl`, `bit-cli info <MISSING> --jsonl` and `bit-cli seed <TORRENT> --jsonl`.
 
-| field | type |
-| --- | --- |
-| `at` | string |
-| `elapsed_human` | string |
-| `elapsed_ms` | integer |
-| `error` | string |
-| `exit_code` | integer |
-| `exit_status` | string |
-| `ok` | bool |
-| `seq` | integer |
-| `type` | string |
+More than one command writes this shape and they do not carry the same
+fields. The `from` column names which of them writes each one, and reads
+`all` where every one of them does, so a consumer selecting by `type`
+alone knows what may be absent.
+
+| field | type | from |
+| --- | --- | --- |
+| `at` | string | all |
+| `elapsed_human` | string | all |
+| `elapsed_ms` | integer | all |
+| `error` | string | info |
+| `exit_code` | integer | all |
+| `exit_status` | string | all |
+| `ok` | bool | all |
+| `seq` | integer | all |
+| `type` | string | all |
 
 ## Machine output, from the README
 

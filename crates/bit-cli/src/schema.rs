@@ -18,7 +18,7 @@
 //!
 //! See `TODO/cli-surface.md`, T-117 and T-110.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -244,27 +244,88 @@ fn walk(prefix: &str, value: &Value, out: &mut BTreeMap<String, &'static str>) {
     }
 }
 
+/// One field of a documented shape: its type, and who writes it.
+#[derive(Clone, Debug)]
+pub struct Field {
+    /// The JSON type this run measured.
+    pub kind: &'static str,
+    /// Which of [`Sample::commands`] emit it, by the short name the `from`
+    /// column carries.
+    pub producers: BTreeSet<String>,
+}
+
 /// One documented shape: what produced it and what it carried.
 pub struct Sample {
     /// The `kind` or event `type`.
     pub name: String,
-    /// The command that produced it, with volatile arguments removed.
-    pub command: String,
+    /// Every command that produced it, from the short name a `from` cell
+    /// carries to the full label a reader can run.
+    ///
+    /// **More than one is normal for an event and impossible for a document.**
+    /// `bit-cli seed --jsonl` and `bit-cli download --jsonl` both write
+    /// `type: "progress"`, and the section below them differs in fifteen of
+    /// its thirty-two rows; a
+    /// document's `kind` is guarded against exactly that in
+    /// `schema_gen::fold_document`. See `TODO/cli-surface.md`, T-257.
+    pub commands: BTreeMap<String, String>,
     /// Every field, flattened.
-    pub fields: BTreeMap<String, &'static str>,
+    pub fields: BTreeMap<String, Field>,
 }
 
 impl Sample {
+    /// The first observation of a shape.
+    pub fn new(
+        name: &str,
+        producer: &str,
+        command: &str,
+        fields: BTreeMap<String, &'static str>,
+    ) -> Self {
+        let mut sample = Sample {
+            name: name.to_string(),
+            commands: BTreeMap::new(),
+            fields: BTreeMap::new(),
+        };
+        sample.merge(producer, command, fields);
+        sample
+    }
+
     /// Fold another observation of the same shape in.
     ///
     /// One run rarely exercises every optional field: a download with no
     /// renamed paths omits `renamed`, and one with no sources omits
     /// `sources[]`. Several runs of the same command union together into the
     /// shape a reader should expect.
-    pub fn merge(&mut self, other: BTreeMap<String, &'static str>) {
+    ///
+    /// **The union is attributed rather than anonymous**, which is the whole
+    /// of T-257. Merging two commands' fields under one name and printing one
+    /// command above the table describes a document neither one writes: that
+    /// is what `docs/schema.md` said about `progress` for six field rows no
+    /// `download` run has ever emitted. Every field remembers which producers
+    /// wrote it, so a section for a shape two commands share says so.
+    pub fn merge(&mut self, producer: &str, command: &str, other: BTreeMap<String, &'static str>) {
+        self.commands
+            .entry(producer.to_string())
+            .or_insert_with(|| command.to_string());
         for (path, kind) in other {
-            self.fields.entry(path).or_insert(kind);
+            self.fields
+                .entry(path)
+                .and_modify(|field| {
+                    field.producers.insert(producer.to_string());
+                })
+                .or_insert_with(|| Field {
+                    kind,
+                    producers: BTreeSet::from([producer.to_string()]),
+                });
         }
+    }
+
+    /// The label a reader should copy, which is the first command seen.
+    pub fn command(&self) -> &str {
+        self.commands
+            .values()
+            .next()
+            .map(String::as_str)
+            .unwrap_or("")
     }
 }
 
@@ -300,14 +361,71 @@ pub fn render(documents: &[Sample], events: &[Sample]) -> String {
 }
 
 fn section(sample: &Sample) -> String {
-    let mut out = format!(
-        "\nFrom `{}`.\n\n| field | type |\n| --- | --- |\n",
-        sample.command
-    );
-    for (path, kind) in &sample.fields {
-        out.push_str(&format!("| `{path}` | {kind} |\n"));
+    let labels: Vec<&str> = sample.commands.values().map(String::as_str).collect();
+    if labels.len() < 2 {
+        let mut out = format!(
+            "\nFrom `{}`.\n\n| field | type |\n| --- | --- |\n",
+            sample.command()
+        );
+        for (path, field) in &sample.fields {
+            out.push_str(&format!("| `{path}` | {} |\n", field.kind));
+        }
+        return out;
+    }
+
+    // Two shapes under one name, which is what the data is: a progress tick
+    // from a run that is downloading and one from a run that is not. The
+    // alternative was renaming the event, which breaks every consumer
+    // selecting `progress` today, and `schema_version` is what a break is for.
+    // See `TODO/cli-surface.md`, T-257.
+    let mut out = format!("\nFrom {}.\n", joined(&labels));
+    let every = match labels.len() {
+        2 => "both",
+        _ => "all",
+    };
+    out.push_str(&format!(
+        "\nMore than one command writes this shape and they do not carry the same\nfields. The `from` column names which of them writes each one, and reads\n`{every}` where every one of them does, so a consumer selecting by `type`\nalone knows what may be absent.\n",
+    ));
+    out.push_str("\n| field | type | from |\n| --- | --- | --- |\n");
+    for (path, field) in &sample.fields {
+        out.push_str(&format!(
+            "| `{path}` | {} | {} |\n",
+            field.kind,
+            from_cell(field, labels.len())
+        ));
     }
     out
+}
+
+/// What a `from` cell says: the commands that write the field, or one word
+/// when every command in the section does.
+///
+/// A field every producer writes is the common case, and spelling all of them
+/// out on every row makes the exceptions harder to find rather than easier.
+/// `complete` is written by four commands here and they differ in one field.
+fn from_cell(field: &Field, producers: usize) -> String {
+    if field.producers.len() == producers {
+        return match producers {
+            2 => "both".to_string(),
+            _ => "all".to_string(),
+        };
+    }
+    field
+        .producers
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `` `a` ``, `` `a` and `b` ``, `` `a`, `b` and `c` ``.
+fn joined(labels: &[&str]) -> String {
+    let quoted: Vec<String> = labels.iter().map(|label| format!("`{label}`")).collect();
+    match quoted.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 const HEADER: &str = r##"# The JSON contract
@@ -351,6 +469,16 @@ A field that a given run did not produce is not listed. Optional fields are
 omitted from the JSON rather than written as `null`, so a reader cannot mistake
 "not applicable" for "none", and several runs of the same command are folded
 together here to cover as many of them as possible.
+
+**An event `type` can have more than one shape and a document `kind` cannot.**
+`bit-cli seed --jsonl` and `bit-cli download --jsonl` both write
+`type: "progress"`, and the section they share differs in fifteen of its
+thirty-two rows. Six of those fifteen are `--listener-check`'s, which the run
+behind that section passes and an ordinary seeder does not. Those
+sections carry a third column saying which command writes each field, and name
+every command above the table rather than one of them. A `kind` two commands
+claimed would describe a document neither one writes, so the generator refuses
+it instead. See `TODO/cli-surface.md`, T-257.
 
 The check is containment, not equality: a row this file has and a run did not
 produce passes, because these runs are timed and a failure-only field like
@@ -399,15 +527,90 @@ mod tests {
     /// union is what a reader should expect.
     #[test]
     fn merging_two_observations_keeps_every_field_either_one_had() {
-        let mut sample = Sample {
-            name: "download".into(),
-            command: "bit-cli download".into(),
-            fields: fields(&serde_json::json!({ "a": 1, "b": "x" })),
-        };
-        sample.merge(fields(&serde_json::json!({ "b": "y", "c": true })));
+        let mut sample = Sample::new(
+            "download",
+            "bit-cli download",
+            "bit-cli download <TORRENT> --json",
+            fields(&serde_json::json!({ "a": 1, "b": "x" })),
+        );
+        sample.merge(
+            "bit-cli download",
+            "bit-cli download <TORRENT> --json",
+            fields(&serde_json::json!({ "b": "y", "c": true })),
+        );
         assert_eq!(sample.fields.len(), 3);
-        assert_eq!(sample.fields["a"], "integer");
-        assert_eq!(sample.fields["c"], "bool");
+        assert_eq!(sample.fields["a"].kind, "integer");
+        assert_eq!(sample.fields["c"].kind, "bool");
+        assert_eq!(sample.commands.len(), 1, "one command, one label");
+    }
+
+    /// A shape two commands write is rendered as two shapes, not as a union
+    /// credited to whichever one ran first.
+    ///
+    /// This is T-257. `bit-cli seed --jsonl` and `bit-cli download --jsonl`
+    /// both write `type: "progress"` and differ in fifteen of the section's
+    /// thirty-two rows,
+    /// and `docs/schema.md` listed the union under one `From` line, including
+    /// six `listener.*` rows and `peer_detail[]` that no `download` run has
+    /// ever emitted. The event keeps one `type`, because that is what
+    /// consumers select on and breaking it is what `schema_version` is for.
+    /// What changes is that the section says who writes what.
+    #[test]
+    fn a_shape_two_commands_write_names_which_one_writes_each_field() {
+        let mut sample = Sample::new(
+            "progress",
+            "download",
+            "bit-cli download <TORRENT> --jsonl",
+            fields(&serde_json::json!({ "at": "t", "percent": "1.0" })),
+        );
+        sample.merge(
+            "seed",
+            "bit-cli seed <TORRENT> --jsonl",
+            fields(&serde_json::json!({ "at": "t", "ratio": "1.000" })),
+        );
+
+        assert_eq!(sample.commands.len(), 2);
+        assert_eq!(sample.fields["at"].producers.len(), 2, "both write it");
+        assert!(sample.fields["percent"].producers.contains("download"));
+        assert!(!sample.fields["percent"].producers.contains("seed"));
+
+        let rendered = section(&sample);
+        assert!(
+            rendered.contains("| field | type | from |"),
+            "a shared shape renders the from column: {rendered}"
+        );
+        assert!(
+            rendered.contains("| `percent` | string | download |"),
+            "and attributes a field only one of them writes: {rendered}"
+        );
+        assert!(
+            rendered.contains("| `at` | string | both |"),
+            "and says so in one word when every command writes it: {rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "From `bit-cli download <TORRENT> --jsonl` and `bit-cli seed <TORRENT> --jsonl`."
+            ),
+            "naming both commands rather than one: {rendered}"
+        );
+    }
+
+    /// One command still renders the two column table it always did.
+    #[test]
+    fn a_shape_one_command_writes_keeps_the_two_column_table() {
+        let sample = Sample::new(
+            "info",
+            "info",
+            "bit-cli info <TORRENT> --json",
+            fields(&serde_json::json!({ "kind": "info" })),
+        );
+        let rendered = section(&sample);
+        assert!(rendered.contains("| field | type |"), "{rendered}");
+        assert!(!rendered.contains("| from |"), "{rendered}");
+        assert!(
+            rendered.contains("From `bit-cli info <TORRENT> --json`."),
+            "{rendered}"
+        );
     }
 
     /// Every name in the two tables is unique, so a section cannot be written

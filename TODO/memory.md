@@ -1610,9 +1610,11 @@ pwsh -NoProfile -File scripts/soak.ps1 -Minutes 3 -SampleSeconds 10 -Workload al
 | `bench/soak-20260825T013344925Z` | 13 probes, **3 failed**, first unhealthy at `t+40s` | `1 of 6 leech cycles failed, 16.67 percent ... The seeder stopped answering its own listener probe at t+40s, so the fault is the seeder's` |
 | `bench/soak-20260825T014217900Z` | 7 probes, **0 failed** | `1 of 7 leech cycles failed, 14.29 percent ... The seeder answered its own listener probe throughout, 7 probes and 0 failed, so the fault is not the seeder's accept path` |
 
-Both exit 1, read from the process rather than from a pipeline. The moderate
-run's CSV is committed beside its report because it is where the three new
-columns are visible per sample.
+Both carry a non-empty `failures` list, which is what the script exits 1 on.
+The moderate run's exit code was read unpiped and is 1; the heavy run's was
+read through a `tail`, so what that reported is the pipeline's. Its CSV is
+committed beside its report because it is where the three new columns are
+visible per sample.
 
 **A fourth failure case comes with it.** `-ListenerCheck` passed, progress
 events arriving, and not one of them carrying a `listener` block is a run that
@@ -1631,7 +1633,9 @@ names the leecher's exit code beside it.
 **One claim in `scripts/soak.ps1`'s own header was disproved on the way.** It
 said `-Workload all` starves the leechers, "the same run that completed 22
 downloads in two minutes without churn completed 1 and failed 2 with it". At
-the default churn now: **26 cycles completed and none failed**, against 22
-completed with no churn at all. Those figures were taken before
+the default churn now: **no cycle fails**, 26 completed over three minutes with
+churn and 22 over two minutes without it. The two runs are different lengths,
+so the cycle counts are not a comparison and the failure count is: it is zero
+either way against 2 failures out of 3. Those figures were taken before
 [T-020](peers.md) closed. The comment carries the new measurement and says what
 starving them now takes.
