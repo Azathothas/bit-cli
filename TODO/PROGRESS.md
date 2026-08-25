@@ -51,8 +51,8 @@ answers "could a release retire this patch on its own?" and nothing else.
 **The six hour soak is run by the operator, in a foreground terminal.** No agent
 session lasts six hours, and a session ending kills the process it started. A
 session's job is to read the CSV the operator's run leaves behind, not to start
-one. This session is the worked example: the operator's run was in flight for
-its whole window and it read it at the end.
+one. A short soak is a different thing and a session may run one: this session
+ran five, the longest twenty minutes, all of them inside its own window.
 
 ## One decision was reopened, and it is section 6's iroh line
 
@@ -82,28 +82,14 @@ it, and it says so in its own first paragraph.
   from the instant above, and a duration written down twice is a number two
   documents disagree about.
 
-  **The plan, written before starting, per [RULES.md](RULES.md) section 1
-  step 4.** The work order below is taken in its own order, and the three
-  accepted rulings settle what each of the middle three items builds:
-
-  1. [T-232](memory.md)'s one field, in `scripts/soak.ps1`: carry `listener`
-     out of the seeder's progress events into `self_reported` and into the
-     report, so the next operator soak can answer its own question.
-  2. [T-257](cli-surface.md), ruling accepted: keep one event `type`, add the
-     `fold_document` style guard to `observe_events` in
-     `crates/bit-cli/src/schema_gen.rs`, and make `docs/schema.md` say which
-     command emits which field rather than crediting a union to one of them.
-  3. [T-258](cli-surface.md), ruling accepted: a `seed` progress tick carries
-     the peers currently connected, at `crates/bit-cli/src/cmd/seed.rs:502`,
-     and the final document keeps carrying all of them. Twenty minute soaks
-     either side.
-  4. [T-241](metainfo.md), ruling accepted: magnet resolution goes under
-     `source::resolve_source`, so `info`, `files` and `tree` stop exiting 4 on
-     a magnet, rather than `--output` on `magnet` alone.
-- **Tests:** 1,361 passing, 0 failing, up from 1,359. Plus **153** in the
-  vendored `rqbit` tree, up from 149, and **76** in `librqbit-utp`, which the
-  workspace gates do not run. `vendor/` moved this session, for
-  [T-256](trackers.md).
+  **The plan was written before starting**, per [RULES.md](RULES.md) section 1
+  step 4: the work order's items 2, 3 and 4 in that order, which the three
+  accepted rulings had unblocked. **It held**, and the only thing added to it
+  was the operator's, twice, mid-session: promote what a scratchpad script did
+  into the repository, and wire a manual step into the gates. Both shipped.
+- **Tests:** 1,370 passing, 0 failing, up from 1,361. Plus **153** in the
+  vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
+  do not run. `vendor/` did not move this session.
 
 ```bash
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
@@ -117,237 +103,208 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-two** jobs. Green at run **32787614038**, against commit
-  `acfd173`, which is this session's last push. Three runs this session and all
-  three green, but only the third has all twenty-two jobs green: the first two
-  had `Clippy (tracking beta)` failing on this session's own new code, which
-  is what that job is for. It does not fail the run.
+- **CI:** **twenty-two** jobs. Four runs this session. Run **32806330167**,
+  against `f44d5c0`, failed on one job, `Create round trip (ubuntu-latest)`,
+  because this session's new interop case polled a Windows-only cmdlet; the
+  fix is in the push after it and the review section below carries the whole
+  finding. The run to read is the last one.
 
 ```bash
 gh run list --limit 1
 ```
 
-- **Soak:** the operator's run of 2026-08-24T16:46:05Z finished inside this
-  session's window and **closed [T-224](memory.md)**. Six hours,
-  `-Leechers 4 -ListenerCheck 60s`, 704 samples over 5.9999 hours, **2,812
-  leech cycles completed and none failed**, every named ceiling held, and
-  `tcp_close_wait` was 0 at every sample. `bench/soak-20260824T164609340Z` is
-  committed as the evidence for both entries it was started for.
+- **Soak:** nothing six hours long ran this session. Five short ones did, and
+  four of them are committed as evidence: two three-minute churn runs for
+  [T-232](memory.md) and two twenty-minute runs either side of one line for
+  [T-258](cli-surface.md).
 
 ```bash
-pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260824T164609340Z.csv
+pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260825T014217900Z.csv
 ```
-
-  **[T-232](memory.md) stays open and what it needs changed.** The stop did not
-  reproduce, so neither branch of its acceptance fired. What the run did find is
-  that a finished soak records that `--listener-check` was on and never records
-  what it saw: no `listener` key in the report, no listener column in the CSV,
-  and `.tmp/soak/` deleted at the end. So that branch could not have been
-  answered even if the stop had happened. The entry now waits on one field
-  rather than on a lucky run.
 
 - **Entries:** 208 items. 29 open, 3 partial, 0 blocked, 165 done, 11 deferred
   to Phase C. 165 of 197 workable done, 32 left.
-- **Tree:** 99 Rust files, 60,566 lines of code, 15,826 of comment,
+- **Tree:** 99 Rust files, 61,217 lines of code, 16,123 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
   `reference/HISTORY/`. [`reference-map.md`](reference-map.md) carries the
   licence per tree and where the determination came from. Nothing was mined
   this session and nothing was read from it: every entry was about this tree's
-  own surface or the operator's soak.
+  own surface.
 - **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **32 patches**
   across twenty-two sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
-  One patch and one section are this session's, for [T-256](trackers.md), and
-  `patches/TASKS.md` carries its row.
-- **Version:** `bit-cli` 0.2.0, unchanged. `CHANGELOG.md` gained three sections
-  under the unreleased heading.
+  Unchanged: nothing under `vendor/` moved.
+- **Version:** `bit-cli` 0.2.0, unchanged.
 
 ## What the last session did
 
-**Three entries closed, one of them filed and closed on the way, two filed, one
-re-estimated, and one advanced to partial.** Nothing was mined from the corpus
-and nothing needed to be: every entry was about this tree's own surface or the
-operator's soak.
+**Four entries closed, one filed, and two tools the operator asked for
+mid-session.** The three open questions were all ruled on in the kickoff and
+every ruling was the recommendation, so the middle three items of the work
+order were unblocked before the session started.
 
-**The order was the work order's, with one substitution.** Item 4,
-[T-237](trackers.md), went before item 3, [T-241](metainfo.md), because the
-soak was in flight for the whole session and T-237 touches nothing it uses,
-while T-241 is the item the work order itself said to re-estimate before
-opening. That re-estimate is below and it turned T-241 from `S` into `M`.
+**The plan held and the order was the work order's**, with one addition: the
+operator asked twice, mid-session, for scratchpad work to be promoted into the
+repository. Both asks are shipped and both are documented where an agent is
+told to look.
 
-### [T-237](trackers.md), P2: three announce paths, and the third was hiding a defect
+### [T-232](memory.md), P1: the listener figures reach the report, and a stop names its own side
 
-`scripts/check-announce.ps1` has **nine judged cases where it had six**.
-`redirect` follows a `302` and compares the three numbers across the hop,
-`failure-reason` proves a rejection at HTTP 200 is reported as a failure, and
-`udp` is the same six assertions over a BEP 15 announce rather than a second
-set. `bench/announce-20260824T222123899Z.json` is the run.
+`scripts/soak.ps1` reads the `listener` block out of the seeder's own progress
+events, the same events `peak_rss_bytes` already came from, and carries it into
+`self_reported`, into three new CSV columns, and into `-ReadCsv`. A run without
+`-ListenerCheck` writes null and empty columns, so a reader tells "not watched"
+from "watched and fine" without going to `parameters`.
 
-`loopback-tracker` grew `--redirect-announce <N>`, `--fail-announce <REASON>`
-and a UDP socket speaking BEP 15, refusing a connection id it never issued.
-Both flags record the announce **before** refusing or redirecting it, which is
-what lets the check tell a rejection apart from a request that never arrived.
+**The last event's values are not enough and one of the two runs proves it.**
+The heavy churn run ends at `"healthy": true` having failed three probes and
+been unhealthy at `t+40s`. `worst_consecutive_failures`, `unhealthy_events` and
+`first_unhealthy_elapsed_s` sit beside the last values for that reason.
 
-### [T-256](trackers.md), P1: filed and closed, and the `udp` case is what found it
+**Both attribution branches ran**, three minutes each, because the spontaneous
+stop of 2026-08-23T15:47:16Z cannot be summoned and its shape can:
 
-The vendored UDP announce loop read the BEP 3 event off the torrent's **current
-state** on every announce, where the HTTP loop in the same file sends `started`
-once and nothing after. One client, one 22 second run, the same payload over
-both protocols:
-
-| protocol | events the tracker recorded |
-| --- | --- |
-| udp | `started`, `started`, `started`, `started`, `started`, `stopped` |
-| http | `started`, none, none, none, none, `stopped` |
-
-With a seeder present the leecher sent `completed` four times, and the seeder,
-which had the whole payload before it started, sent it on every announce, which
-BEP 3 says it must not send at all. The cost is the tracker's and is invisible
-here: `completed` is how a tracker counts finished downloads.
-
-**Run against the defect, rebuilding in between**: the `udp` row reads
-`1 of 5 failed: completed (4 completed events, and BEP 3 asks for one)` and the
-check exits 1. Five judged rather than six is part of the evidence, because
-with every announce carrying an event the `interval` case has nothing to
-measure.
-
-**`completed` is not sent from the loop at all**, which is the half worth
-arguing about. The HTTP monitor has no `Completed` arm, and `bit-cli` announces
-its own completion at the instant it happens; a `completed` in the loop too
-made one run tell the tracker twice, which was measured before it was removed.
-
-### [T-251](trackers.md), P2: advanced to partial, and it is the half [T-245](cli-surface.md) left
-
-`bit-cli trackers` was the one command that refused a `.torrent` named by a
-URL, saying the source carried no info hash while the document behind it
-carries one. It reads five kinds through `source::resolve_source` now, the same
-one line `info`, `files` and `tree` use, and a URL and the file on disk produce
-the same report. `left` is what proves the fetch happened: 131,072 bytes either
-way, a number nothing but the metainfo could supply.
-
-The entry's own subject, the per-tracker table of timeouts and intervals, is
-untouched, so it is `partial` rather than `done`.
-
-### [T-241](metainfo.md), P2: re-estimated from `S` to `M`, and not started
-
-The work order asked for this and it changed both the size and the shape.
-Writing a `.torrent` out of a resolved magnet is a few lines; getting a
-resolved magnet inside `bit-cli magnet` is the entry, because that command has
-no swarm, no tracker and no DHT anywhere in it.
-
-**One premise the entry wrote down is false.** It said
-`bit-cli info <magnet> --json` already prints what was resolved. Measured:
-`info`, `files` and `tree` all exit 4 on a magnet with the same refusal, and
-only `bit-cli magnet` answers, from the URI's own fields. The correction is
-under the entry rather than over it.
-
-### [T-257](cli-surface.md) and [T-258](cli-surface.md), P2 each: filed from the running soak's output
-
-**T-257**: `seed --jsonl` and `download --jsonl` both emit `type: "progress"`
-and differ in nine of seventeen fields, and `docs/schema.md` credits the union
-to one command. `fold_document` panics when two commands claim one `kind`;
-`observe_events` keys by `type` and merges whatever arrives, with no such
-check. It is [T-191](bench.md) one layer down, and T-191 predicted it.
-
-**T-258**: a seeder re-sends every peer row it holds on every tick. 151,679,859
-bytes of stdout over 666 records at 5.5 hours, for a 16 MiB payload.
-
-**T-258's own premise was corrected in the same session, by the review.** It
-said the total grows with the square of the run length. It does not: the record
-grows with `peers.seen` for two hours, then the row count stops following
-`seen` and the size plateaus at about 270 KB. So the finding is a constant
-32 MB an hour rather than a curve, which is the more useful claim. And the
-plateau is at 894 rows, below [T-040](memory.md)'s 1,024 ceiling, so it is the
-reclaim keeping up rather than the cap engaging.
-
-### [T-224](memory.md), P2: closed on the operator's soak, and the step did not reproduce
-
-The entry's second half offered two ways to finish, and the run took the
-second: two runs at different leech rates showing the step is not tied to
-completed work.
-
-| | committed, 2 leechers | this run, 4 leechers |
+| run | listener | what the report says |
 | --- | --- | --- |
-| samples | 681 over 5.992 h | 704 over 5.993 h |
-| leech cycles | 1,360 completed, 0 failed | 2,812 completed, 0 failed |
-| `rss_bytes` per hour | 3.71 MiB, r2 0.72 | 1.81 MiB, r2 0.65 |
-| largest single rise | **11.61 MiB at t+1.16 h** | 7.82 MiB at t+4.92 h |
-| largest single fall | -7.23 MiB | -7.13 MiB |
+| `bench/soak-20260825T013344925Z` | 13 probes, **3 failed** | the fault is the seeder's |
+| `bench/soak-20260825T014217900Z` | 7 probes, **0 failed** | the fault is not the seeder's accept path |
 
-**There is no step in this run**, and that is the finding. The committed run's
-is one move that stays: 15.68, 15.85, then 27.46, and 27.51 and 27.63 after it.
-This run instead oscillates from `t+1.045 h` onward, 126 single interval
-changes over 3 MiB, every rise matched by a fall of nearly the same size within
-a sample or two. The floor of that band holds between 16.5 and 19.3 MiB while
-its ceiling drifts from 20 to 26.
+### [T-257](cli-surface.md), P2: one event type, two shapes, and the section says which is which
 
-The cycle counts are what rule out completed work as the cause: the committed
-run's step lands at **264** cycles, and this run passed 264 cycles inside its
-first thirty-five minutes with nothing happening. Its own largest rise is at
-2,332.
+A `Sample` keys its commands and records, per field, which of them wrote it, so
+a section for a shape two commands produce cannot be rendered as a union
+credited to one. `docs/schema.md`'s `progress` section names both commands
+above the table and carries a `from` column, reading `both` or `all` where
+every command writes the field.
 
-It does not name the allocation, and the entry says so. What it answers is the
-question it was filed for: the reported slope was not describing a leak tied to
-work.
+**The Approach asked for a guard that panics on `progress` and that is not what
+shipped**, because under the accepted ruling a shared `type` is legal and a
+panic would refuse what the ruling permits. Attribution removes the failure
+mode rather than detecting it. `fold_document`'s panic for a document `kind` is
+unchanged.
+
+**Two more shapes were being unioned and the entry named neither.**
+`session_start` differs in five of nine fields between `download` and `seed`,
+and `session_end` comes from **four** commands with `error` written by
+`bit-cli info` alone.
+
+### [T-258](cli-surface.md), P2: a tick carries what is connected
+
+`swarm::currently_held` drops the two terminal states, `dead` and `not needed`,
+so a tick's `peer_detail` is `peers.live + peers.connecting + peers.queued` from
+the same event. It was a length nothing in the event described.
+
+Two twenty minute soaks, four leechers, one binary either side of one line:
+
+| | before | after |
+| --- | --- | --- |
+| seeder stdout | 1,046,872 bytes | **16,993 bytes** |
+| last record | 50,649 bytes | **410 bytes** |
+| rows in it | 160 | **0** |
+| leech cycles | 160, none failed | 156, none failed |
+
+### [T-241](metainfo.md), P2: nine commands take a magnet, where eight exited 4
+
+The ruling was option two, so the swarm-backed path is under
+`source::resolve_source` rather than on `bit-cli magnet` alone. `info`, `files`,
+`tree`, `verify` and the four `webseed` subcommands all exited 4 through the one
+door; `bit-cli magnet` is the ninth and answered from the URI's own fields.
+`resolve_from_swarm` starts a session with a temporary directory, adds the
+source with `list_only`, and parses the bytes it assembled.
+
+`SwarmSourceArgs` is `--peer`, `--no-dht`, `--no-lsd` and `--no-tracker` under
+a "Resolving a magnet" heading, flattened into `info`, `files`, `tree`,
+`magnet`, `verify` and the four `webseed` subcommands, **last in each struct**
+because `next_help_heading` applies from where it appears onward. `trackers`
+does not get it: it flattens `TrackerArgs`, which defines `--no-tracker`, and
+it does not need one.
+
+`bit-cli magnet --output` writes the resolved metainfo, with `-` for stdout and
+`--force` to overwrite. `scripts/interop-roundtrip.ps1` has a fourth case for
+it and `aria2c` opens what it writes: **4 of 4 cases round tripped**.
+
+### [T-259](cli-surface.md), P3: filed, and this session's own edit found it
+
+The schema test compares field rows only, so an edit to the generator's own
+prose never reaches `docs/schema.md` and nothing fails.
+
+### The two tools, and both were the operator's ask
+
+- **`scripts/set-status.ps1`** is the writer for the numbers `check-todo.ps1`
+  reads. Closing one entry moves seven of them across two files and every
+  session has done that by hand. `-Entry` with `-Status` moves a row and
+  re-derives every count from the rows, `-Recount` does the counts alone,
+  `-Check` writes nothing. It does not touch the entry's own `Status:` line,
+  which is prose, and prints whether that line agrees.
+- **`scripts/check-eol.ps1`** is the `eol` gate. `.gitattributes` normalises
+  the index, so a file written with CRLF commits as LF and `git diff` shows
+  nothing; what it does not normalise is the working tree, which is what every
+  `(?m)^...$` here actually reads. Measured before the gate existed: **99**
+  tracked files disagreed, `TODO/create-seed.md` was **mixed**, and ten `.rs`
+  files under `crates/` were CRLF. `-Fix` rewrote all of them and the staged
+  set did not change by one file, which is the proof that it repairs a working
+  tree and never a commit. `vendor/` is reported and left alone, because
+  `vendor-diff.ps1` derives the series with `git diff --no-index`.
 
 ### What the reviews found
 
-**Review 1, every claim against the code it cites.** Five errors, all in this
-session's own writing, and two of them changed what an entry says rather than
-how it reads.
+**Review 1, every claim against the code it cites.** Five things, and three
+changed what a document says rather than how it reads.
 
-- **[T-258](cli-surface.md)'s premise was wrong**, above. Its first table also
-  mixed two instants and presented them as one reading, which is how the error
-  survived being written down.
-- **894 rows was called [T-040](memory.md)'s bound engaging.** T-040's bound is
-  1,024 and the table never reaches it.
-- Two line citations off by one or two: `magnet.rs:79` for a `run` at 80, and
-  `schema_gen.rs:120` for an `observe_events` at 122.
-- A detail string in `check-announce.ps1` said "of six" with the six written
-  out, so a seventh case would have left it saying six forever. Counted now,
-  and the check was re-run so the entry quotes what it prints.
+- **A number two documents disagreed about.** The code comments said `progress`
+  differs in "nine of seventeen fields", the entry's own measurement; the
+  committed section shows **fifteen of thirty-two**, because the generator's
+  `seed` run passes `--listener-check` and an ordinary one does not. The
+  comments quote the section's figure now and the entry says why both are right.
+- **[T-232](memory.md) claimed both attribution runs exit 1** when only one had
+  its exit code read unpiped. That is [RULES.md](RULES.md) section 4a's own
+  rule and it was broken in the same session that quotes it.
+- **`soak.ps1`'s churn comment compared two runs of different lengths.** 22
+  cycles over two minutes against 26 over three is not a comparison; zero
+  failures against two out of three is, and that is what the comment says now.
+- Two citations off by ninety-seven lines after `cli.rs` grew, and seven more
+  the `record` gate caught on the same push.
+- One `schema_gen.rs` citation off by sixty-seven lines.
+- **Two figures in this session's own commit messages are wrong**, both caught
+  after the push that carried them and neither correctable: `7b36a12` says
+  seven `.rs` files were CRLF where ten were, and `f44d5c0` says five commands
+  exited 4 on a magnet where eight did. The entries and
+  [RULES.md](RULES.md) carry the right numbers, and this line is here because a
+  reader comparing a commit message against a file would otherwise find two
+  disagreements and no explanation.
 
-**Review 2, a cold read.** Three things, and the third is the one a reader
-would have tripped on.
+**Review 2, a cold read.** Two things, both in `docs/`.
 
-- `docs/examples/inputs.md` carried a paragraph saying `trackers` is the one
-  command that still refuses a URL. It is not, as of this session.
-- The `bench/` evidence file's name said `214800Z` and its `generated_at` said
-  `222123899Z` after the re-run. Renamed to match.
-- Both the fixture's own module documentation and
-  `docs/examples/interop.md` said the UDP socket is on the same port as HTTP.
-  It asks for that port and does not always get it, which the fixture's own
-  fallback exists for, so both now say to read the printed line.
+- `docs/examples/inputs.md` said a magnet is refused by the read-only commands
+  and that `bit-cli download` is what does the lookup. Rewritten.
+- The short-flag table said `-o`/`--output` is on "create, edit, man". `magnet`
+  is on it now, and nothing mechanical checks that column: the test compares
+  the `(letter, name)` pair, which was already there.
 
-**Review 3, and it was CI's rather than a person's.** The `Clippy (tracking
-beta)` job failed on the first push, on this session's own new code:
-`AtomicU32::fetch_update` is deprecated on beta in favour of `try_update`,
-which is not on stable yet. Neither name is portable, so the fixture uses the
-compare and exchange loop both of them wrap. That job fails without failing the
-run, which is what made the warning arrive while the code was still in hand.
-It is the second time it has paid, after [T-218](cli-surface.md).
+**Review 3, and it was CI's.** The magnet interop case waited for its seeder
+with `Get-NetTCPConnection`, which does not exist on Linux, so
+`Create round trip (ubuntu-latest)` failed at run **32806330167** and the
+Windows job passed. It waits on the seeder's own first `progress` event now,
+which is cross-platform and is also the stronger condition: a bound port is not
+a session ready to answer, which is [T-221](windows.md). Every gate here is
+Windows only by construction, so the only thing that could have caught this is
+a run, and it took one.
 
-**And a measurement that disproved a suspicion rather than a premise.** A
-`download` with nothing to talk to looked like it exited 0, which would have
-been a defect worth an entry. It exits **9**. The 0 was the measuring script's:
-`Start-Process -Wait` does not set `$LASTEXITCODE`, so what was read was the
-exit code of whatever ran before it. Nothing was filed and nothing needed
-fixing.
+**Review 4, and it was the prose gate's.** The first draft of the `docs/`
+section for [T-258](cli-surface.md) said a tick's array "is smaller than it
+used to be". `check-docs.ps1` failed it twice on one line: `docs/` says what
+the tool does, not what the project did.
 
 ## In progress
 
-Nothing is half-written. Both closed entries closed complete, with the
+Nothing is half-written. All four closed entries closed complete, with the
 acceptance run and its output recorded in the entry.
 
-- **[T-251](trackers.md)** is `partial`: the source half is done and the
-  per-tracker knobs are not. The Acceptance is unchanged and is about the
-  knobs.
+- **[T-251](trackers.md)** is `partial`, untouched this session: the source
+  half is done and the per-tracker knobs are not.
 - **[T-253](cli-surface.md)** is still `partial`, untouched, and still needs a
   certificate generator its acceptance forbids fetching.
 - **[T-164](peers.md)** is still `partial`, untouched.
-- **[T-232](memory.md)** is open and what it waits on changed: not a
-  recurrence, but the listener figures reaching the soak report. The section
-  under it says where they already exist and where they have to go.
 - The entries the last sessions left open are untouched except where named
   above: [T-233](peers.md), [T-239](peers.md), [T-240](dht.md),
   [T-101](bep-coverage.md), [T-102](bep-coverage.md), [T-168](bep-coverage.md),
@@ -357,7 +314,7 @@ acceptance run and its output recorded in the entry.
 
 ## Start here next session
 
-**The shape of the work order is the operator's, and it has not changed.** Not
+**The shape of the work order is the operator's and it has not changed.** Not
 priority first. Clear small entries so the open count comes down, then take the
 bigger ones a **category at a time**. The counts are derived from the rows:
 
@@ -373,34 +330,29 @@ pwsh -NoProfile -File scripts/check-todo.ps1
 gh run list --limit 1
 ```
 
-2. **[T-232](memory.md)'s one field, and it goes first because it is the
-   smallest thing that unblocks a six hour run.** A soak with
-   `-ListenerCheck` records that the flag was on and nothing about what it saw.
-   `self_reported` in `scripts/soak.ps1` is already built from the seeder's own
-   progress events, and `listener` arrives in the same event, so carrying it
-   through is one field. Until it is there, the next operator soak cannot
-   answer the question T-232 asks even if the stop reproduces.
+2. **[T-259](cli-surface.md), P3, `S`, and it is this session's own filing.**
+   The smallest thing open and the cheapest to prove: compare the non-row lines
+   of `docs/schema.md` for equality while keeping the row lines as containment,
+   with the hand-written tail `carry_across` preserves exempt. The entry names
+   both seams with their lines.
 
-3. **[T-257](cli-surface.md) and [T-258](cli-surface.md), both P2 and both
-   `S`.** They are this session's own filings and the cheapest things open.
-   T-257's guard is a few lines modelled on `fold_document` and it fails on
-   `progress` the moment it exists, which is what makes its second half
-   unavoidable; that second half is a three-way decision with a recommendation
-   already written. T-258 is one line at `crates/bit-cli/src/cmd/seed.rs:502`
-   plus a decision about what a tick owes, and it wants a **20 minute** soak
-   before and after rather than a six hour one.
+3. **[T-250](cli-surface.md), P2.** Cheaper than it was and now much cheaper
+   than that: `Kind::classify` produces three distinct refusals, and this
+   session gave `source_kind` a fifth value that a report can carry, because
+   `info` over a magnet says `magnet` where the same torrent on disk says
+   `file`. What is left is deciding what "how it was resolved" means for a
+   fetch and for a swarm lookup, and both now exist to describe.
 
-4. **[T-241](metainfo.md), P2, now `M` rather than `S`.** Re-estimated and not
-   started. The fork under the entry is the thing to settle first: `--output`
-   on `magnet` alone, or a swarm-backed path under `source::resolve_source` so
-   `info`, `files` and `tree` stop exiting 4 on a magnet. Two is recommended on
-   [T-245](cli-surface.md)'s own argument and it is the larger job.
+4. **[T-251](trackers.md), P2, `M`, `partial`.** What is left is the entry's
+   own subject: a `[[tracker]]` table in the file `--web-seed-config` reads,
+   with `url`, `tier`, `timeout`, `connect_timeout`, `interval`, `enabled` and
+   `key`, then the `[[peer]]` table after it. The Acceptance is unchanged and
+   `scripts/check-announce.ps1` is where the case goes.
 
-5. **[T-251](trackers.md), P2, `M`, and now `partial`.** What is left is the
-   entry's own subject: a `[[tracker]]` table in the file `--web-seed-config`
-   reads, with `url`, `tier`, `timeout`, `connect_timeout`, `interval`,
-   `enabled` and `key`, then the `[[peer]]` table after it. The Acceptance is
-   unchanged and `scripts/check-announce.ps1` is where the case goes.
+5. **[T-244](cli-surface.md), P2.** The ruling is static extraction with a
+   browser-shaped header set and a `--render` opt-in. It is the last source
+   kind `docs/examples/inputs.md` lists under "What is not an input yet", and
+   that section is down to one item because of this session.
 
 6. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
@@ -408,13 +360,7 @@ gh run list --limit 1
    lines. Build the fixture first: a pair of real `librqbit_utp` streams in one
    process.
 
-7. **[T-244](cli-surface.md) and [T-250](cli-surface.md)**, which are cheaper
-   than they were. T-244's ruling is static extraction with a browser-shaped
-   header set and a `--render` opt-in. T-250 wants to report how an input was
-   resolved, and `Kind::classify` now produces three distinct refusals, so
-   there is something to report.
-
-8. **The three entries that were ruled on and are still work.**
+7. **The three entries that were ruled on and are still work.**
    [T-227](memory.md) is a throughput curve then a flag.
    [T-242](performance.md) is two sweeps from `scripts/bench-leech.ps1`.
    [T-234](peers.md) and [T-238](peers.md) are the two large ones and both need
@@ -422,7 +368,7 @@ gh run list --limit 1
    second value for `bit_cli_core::peer_id::CLIENT_CODE` and its version
    characters, and that module is the only place either is read from.
 
-9. **Then the category pass, and `bep-coverage.md` is still first.**
+8. **Then the category pass, and `bep-coverage.md` is still first.**
    [T-101](bep-coverage.md) is open on a latency measurement loopback cannot
    produce, which [T-239](peers.md) is the prerequisite for.
    [T-102](bep-coverage.md) and [T-168](bep-coverage.md) are the untouched two,
@@ -437,30 +383,10 @@ from it this session.
 
 ## Open questions for the operator
 
-**Three, and all three are forks with a recommendation already written under
-the entry.** None of them blocks the next session: each entry says what to do
-if no ruling arrives, which is to take the recommendation.
-
-**[T-241](metainfo.md): where does magnet resolution live?** `--output` on
-`bit-cli magnet` alone, which leaves `info`, `files` and `tree` exiting 4 on a
-magnet, or a swarm-backed path under `source::resolve_source` so every command
-that reads a source can take one. **Recommended: the second**, on
-[T-245](cli-surface.md)'s own argument, that a source kind one command accepts
-and four refuse is the defect T-245 closed. It is the reason the entry is now
-`M`.
-
-**[T-257](cli-surface.md): two documents share one event `type`.** Rename one
-and break every consumer selecting `progress`; emit the union from both
-commands with nulls; or keep one `type` and record that it has two shapes.
-**Recommended: the third**, because T-191 took the identical fork the same way
-for `kind` and because breaking the wire format is what `schema_version` is
-for.
-
-**[T-258](cli-surface.md): is narrowing `peer_detail` on a tick a break worth
-making?** A tick would carry the peers currently connected rather than every
-peer ever seen, and the final document would keep carrying all of them.
-**Recommended: yes.** At the last sample of the soak, zero of the 873 rows sent
-every 30 seconds were connected peers.
+**None.** All three of the last session's were ruled on in this session's
+kickoff and all three were the recommendation. Nothing this session found needs
+a decision: [T-259](cli-surface.md) is filed with one approach and no fork, and
+every entry closed on its own acceptance.
 
 **Three things to be aware of rather than to decide.**
 
@@ -469,7 +395,7 @@ remaining half needs the loopback file server to speak TLS, its acceptance
 forbids the network, and nothing in this tree can make a self-signed
 certificate: `rustls` and `tokio-rustls` are workspace dependencies already and
 `rcgen` is not one. The options are a new dependency or a checked-in test
-certificate that expires. Nothing was decided and nothing changed this session.
+certificate that expires. Unchanged, and nothing was decided this session.
 
 **Twelve repositories in `TheDancingDeveloper-org`** redistribute Apache-2.0
 code under MIT with no licence file and no attribution. Nothing was said to
@@ -477,32 +403,34 @@ anybody, by [RULES.md](RULES.md) section 6a, and it is in `RESEARCH.md` entry
 40. Unchanged.
 
 **One dependabot pull request is still open**, number 6,
-`ci(deps): bump taiki-e/install-action from 2.86.3 to 2.86.5`, with its own CI
-run. It was not taken again, for the same reason as last session: a dependency
-bump is a change to the build rather than to the work this session was given.
+`ci(deps): bump taiki-e/install-action from 2.86.3 to 2.86.5`. Not taken again,
+for the same reason as the last two sessions: a dependency bump is a change to
+the build rather than to the work the session was given.
 
 ## Behaviour changes worth the operator's eye
 
-**A UDP announce carries three events and no more.** `started` once,
-`completed` once when a download finishes, `stopped` at the end, and nothing on
-the announces in between. It repeated `started` at every interval while
-downloading and `completed` at every interval afterwards, and a seeder sent
-`completed` at all, which BEP 3 forbids. Nothing about an HTTP announce
-changed, and the three events a run sends are the same three it sent before.
-A tracker's completed count for this client will stop climbing.
+**Every command that reads a source reads a magnet.** `info`, `files`, `tree`,
+`magnet`, `verify` and the four `webseed` subcommands exited 4 on a magnet or a
+bare info hash and now join the swarm it names. **That means they can touch the
+network where they could not before**: the DHT and local discovery are on by
+default, the same as `download`, and `--no-dht --no-lsd --no-tracker` with
+`--peer` leaves a swarm of exactly the addresses on the command line. A script
+that branched on exit 4 to mean "this is not a source I can read" will now get
+a real lookup. The deadline is `--timeout` where set and 60 seconds otherwise,
+and running out is exit 9.
 
-**`bit-cli trackers` reads a `.torrent` named by a URL or a metalink.** It
-exited 4 on both before, saying the source carried no info hash. A script that
-branched on 4 to mean "this is not a source I can announce for" will now get a
-real announce, which is the point. A magnet and a bare info hash are unchanged.
+**`bit-cli magnet` grew `--output`, `--force` and the four swarm flags.**
+Without `--output` the command is unchanged and still costs nothing: it reads
+the URI and reports it, no swarm at all.
 
-**`loopback-tracker` prints a third URL.** The IPv4 HTTP URL is still the first
-line, which is what `scripts/soak.ps1` and `scripts/interop-roundtrip.ps1`
-read, and `scripts/check-tracker-family.ps1` still finds exactly two `^http`
-lines. The `udp://` line is last, and its port is not always the HTTP one:
-Windows reserves twelve UDP port ranges and a bind inside one fails, so the
-fixture falls back to a free port and prints what it got.
+**A `seed --jsonl` progress tick carries the peers currently held.** A consumer
+reading `peer_detail` off a tick to count a swarm gets a smaller number;
+`peers.seen` is in the same event and is the count that field never was. The
+final document is unchanged and still carries every peer.
 
-The peer id change from two sessions ago is unchanged and still worth knowing:
-every peer id `bit-cli` emits is `-CL0200-` now.
+**`docs/schema.md`'s `progress`, `session_start` and `session_end` sections
+carry a third column.** No event's fields changed and `schema_version` did not
+move: what changed is that the file says which command writes which field.
 
+**`scripts/gates.ps1` prints ten gates rather than nine**, and `-Fix`
+normalises line endings as well as formatting and regenerating the manuals.

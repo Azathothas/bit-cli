@@ -134,16 +134,20 @@ valid torrent: unexpected byte '<' at byte 0, expected a bencode value
 
 **A magnet and a bare info hash carry no piece hashes**, so there is nothing to
 report until the metadata has been pulled from the swarm. Every command that
-reads a source does that lookup:
+reads a source does that lookup, `trackers` excepted for the reason above:
 
 ```bash
 bit-cli info "magnet:?xt=urn:btih:..." --json
 ```
 
 It joins the swarm the source names, asks a peer for the `info` dictionary over
-BEP 9, and reports the same document the `.torrent` would have produced. That
-is a different operation from a `GET`, so it has flags of its own, under
-**Resolving a magnet** in any of those commands' help:
+BEP 9, and reports the same document the `.torrent` would have produced.
+
+**That reaches further than a fetch does, and it is worth knowing before you
+run it.** A `GET` contacts the one host in the URL you gave. A magnet lookup
+uses the DHT and local service discovery as well as the trackers the magnet
+names, all three on by default, the same as `bit-cli download`. So it has flags
+of its own, under **Resolving a magnet** in any of those commands' help:
 
 | flag | what it does |
 | --- | --- |
@@ -153,7 +157,8 @@ is a different operation from a `GET`, so it has flags of its own, under
 | `--no-tracker` | do not announce to the trackers the magnet names |
 
 All four together leave a swarm of exactly the addresses on the command line,
-which is what a private network wants and what every test here uses:
+which is what a private network wants and what this repository's own tests use
+to stay off the network:
 
 ```bash
 bit-cli info "magnet:?xt=urn:btih:..." --peer 127.0.0.1:6881 --no-dht --no-lsd --no-tracker

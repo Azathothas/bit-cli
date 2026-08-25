@@ -641,7 +641,7 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   status cell reads as `done` plus a byte and matches nothing. It arrives from
   this repository's own tooling, because `Set-Content` writes CRLF on Windows.
   Measured on 2026-08-25, before the gate existed: 99 tracked files disagreed
-  with `.gitattributes`, `TODO/create-seed.md` was **mixed**, and seven `.rs`
+  with `.gitattributes`, `TODO/create-seed.md` was **mixed**, and ten `.rs`
   files under `crates/` were CRLF. `gates.ps1 -Fix` is the whole fix and there
   is no manual step.
 - **A control byte goes in a source file as an escape, never as itself.** A raw

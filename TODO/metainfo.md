@@ -890,9 +890,17 @@ inside its own window and did not open an `M` before reading it.
 #### Closed, 2026-08-25, on the operator's ruling: option two
 
 **The ruling accepted the recommendation**, so magnet resolution lives under
-`source::resolve_source` rather than on `bit-cli magnet` alone. Nine commands
-that read a source take a magnet or a bare info hash now, where five of them
-exited 4 on one.
+`source::resolve_source` rather than on `bit-cli magnet` alone. **Nine commands
+take a magnet or a bare info hash now**: `info`, `files`, `tree`, `magnet`,
+`verify`, and the four `webseed` subcommands.
+
+**Eight of the nine exited 4 on one**, and `bit-cli magnet` is the ninth: it
+answered from the URI's own fields and still does. The eight all went through
+one door, `resolve_source`, and it refused both kinds; `info`, `files` and
+`tree` are the three the re-estimate above measured, and `verify` and the four
+`webseed` subcommands share that door rather than having a refusal of their
+own. `trackers` is not in the count and never refused one: it announces from
+the info hash, which a magnet carries.
 
 **The seam is `resolve_from_swarm` at `crates/bit-cli/src/source.rs:398`.**
 It starts a session with nothing but a temporary directory to write in, adds
@@ -984,6 +992,14 @@ magnet     pass     a6291a9a2794b3ff158e6db9d9424e6b166ddca7   info hash survive
 `bench/interop-magnet-20260825T033412Z.json` is that run. Nothing in it touches
 the network: `--no-dht --no-lsd --no-tracker` on both sides leaves a swarm of
 one loopback address.
+
+**The first version of that case was Windows only and CI said so.** It waited
+for the seeder by polling `Get-NetTCPConnection`, which does not exist on
+Linux: `Create round trip (ubuntu-latest)` failed at run **32806330167** with
+`The term 'Get-NetTCPConnection' is not recognized as a name of a cmdlet`. It
+waits on the seeder's own first `progress` event now, read out of its stdout,
+which is both cross-platform and a stronger condition: a bound port is not a
+session ready to answer for this info hash, which is [T-221](windows.md).
 
 Four tests come with it, in process:
 

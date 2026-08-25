@@ -550,27 +550,32 @@ function Invoke-MagnetCase {
         $port = 51414
         $seeder = Start-Background "magnet-seed" $bitCli @(
             "seed", $torrent, "--data", $Root, "--port", "$port",
-            "--no-dht", "--no-lsd", "--no-tracker", "--seed-time", "120s"
+            "--no-dht", "--no-lsd", "--no-tracker", "--seed-time", "120s",
+            "--report-interval", "1s", "--jsonl"
         ) $Root
-        [void]$seeder
 
-        # Waited on the condition. A bound port is not a session ready to
-        # answer for this info hash, so this dials until one completes rather
-        # than sleeping a guess. See TODO/windows.md, T-221.
-        $deadline = (Get-Date).AddSeconds(30)
-        $listening = $false
+        # Waited on the condition, and the condition is the seeder's own first
+        # progress event rather than a socket table. A bound port is not a
+        # session ready to answer for this info hash, which is T-221, and
+        # `Get-NetTCPConnection` is Windows only, which is what turned
+        # `Create round trip (ubuntu-latest)` red the first time this case ran.
+        # The seeder emits `progress` once it is live, after the hash check.
+        $deadline = (Get-Date).AddSeconds(60)
+        $serving = $false
         while ((Get-Date) -lt $deadline) {
-            if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) {
-                $listening = $true
+            if ((Test-Path $seeder.Stdout) -and
+                (Select-String -Path $seeder.Stdout -Pattern '"type":"progress"' -Quiet)) {
+                $serving = $true
                 break
             }
+            if ($seeder.Process.HasExited) { break }
             Start-Sleep -Milliseconds 200
         }
-        if (-not $listening) {
-            [void]$failures.Add("the seeder never listened on $port")
+        if (-not $serving) {
+            [void]$failures.Add("the seeder never reported serving; see $($seeder.Stderr)")
             return [pscustomobject]@{ name = "magnet"; passed = $false; failures = $failures; steps = $steps }
         }
-        Write-Step "  seeder on 127.0.0.1:$port"
+        Write-Step "  seeder serving on 127.0.0.1:$port"
 
         $resolve = Invoke-Recorded "magnet-resolve" $bitCli @(
             "magnet", $magnet, "--peer", "127.0.0.1:$port",
