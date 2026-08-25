@@ -103,11 +103,12 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-two** jobs. Four runs this session. Run **32806330167**,
-  against `f44d5c0`, failed on one job, `Create round trip (ubuntu-latest)`,
-  because this session's new interop case polled a Windows-only cmdlet; the
-  fix is in the push after it and the review section below carries the whole
-  finding. The run to read is the last one.
+- **CI:** **twenty-two** jobs. Green at run **32807034096**, against commit
+  `fb5a39f`, with all twenty-two green. Five runs this session and four were
+  green; run **32806330167** against `f44d5c0` failed on one job,
+  `Create round trip (ubuntu-latest)`, because this session's new interop case
+  polled a Windows-only cmdlet. The fix is in `fb5a39f` and the review section
+  below carries the finding.
 
 ```bash
 gh run list --limit 1
