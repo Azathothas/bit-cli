@@ -222,7 +222,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-229](bench.md) | P1 | bench | **done** | A concurrency sweep charged its warmup to its own first steps |
 | [T-230](cli-surface.md) | P1 | ci | **done** | A run's output reached the remote because nothing said what belongs here |
 | [T-231](memory.md) | P1 | memory | **done** | A soak killed mid-write reads as a final sample of zeros |
-| [T-232](memory.md) | P1 | memory | open | A six hour soak reported a pass on a workload that stopped after 78 minutes |
+| [T-232](memory.md) | P1 | memory | **done** | A six hour soak reported a pass on a workload that stopped after 78 minutes *(the stop never reproduced; what closed it is the listener figures reaching the report)* |
 | [T-233](peers.md) | P1 | peers | open | MSE over uTP stalls after the handshake |
 | [T-234](peers.md) | P2 | peers | open | bit-cli cannot present itself as a client a restrictive peer will talk to |
 | [T-235](trackers.md) | P1 | trackers | **done** | Nothing compares the numbers a tracker sees against the run that made them |
@@ -253,7 +253,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 207 items: 196 to work through, and 11 deferred to Phase C.
-32 open, 3 partial, 0 blocked, 161 done.
+31 open, 3 partial, 0 blocked, 162 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -261,11 +261,11 @@ when a number here disagrees with them.
 | Priority | Open | Partial | Blocked | Done | Total |
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
-| P1 | 3 | 0 | 0 | 69 | 72 |
+| P1 | 2 | 0 | 0 | 70 | 72 |
 | P2 | 20 | 3 | 0 | 59 | 82 |
 | P3 | 9 | 0 | 0 | 21 | 30 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **32** | **3** | **0** | **161** | **207** |
+| **All** | **31** | **3** | **0** | **162** | **207** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

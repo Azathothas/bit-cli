@@ -34,6 +34,11 @@
 #   - Fails on any C0 control byte except tab, newline and return, in any
 #     tracked text file. Four were in this tree and none was noticed, because
 #     a file with one in it is what `grep` calls binary and skips.
+#   - Normalises line endings, under `-Fix`, and fails on them otherwise. A
+#     carriage return in a file `.gitattributes` says is LF is invisible to
+#     git, because the index is normalised either way, and visible to every
+#     regex in this repository that reads the working tree. Wiring it here is
+#     what makes it never a step anybody runs by hand.
 #   - Runs `check-todo.ps1`, so a push cannot carry a record that contradicts
 #     the tree. `patches/TASKS.md` said two P0 entries were open for a session
 #     after both closed, because nothing compared the two files.
@@ -178,6 +183,30 @@ foreach ($relative in $tracked) {
 }
 Record "text" ($binaryish.Count -eq 0) $(if ($binaryish.Count -eq 0) { "" }
     else { "control byte in $($binaryish -join ', ')" })
+
+# ---------------------------------------------------------------------------
+# eol
+# ---------------------------------------------------------------------------
+#
+# Beside `text` because it is the same subject: bytes in a tracked text file
+# that nobody typed and nobody can see. `.gitattributes` normalises the index,
+# so a file written with CRLF commits as LF and `git diff` shows nothing at
+# all. What it does not normalise is the working tree, which is what
+# `check-todo.ps1`, `check-docs.ps1` and every `(?m)^...$` in this repository
+# actually read: in .NET that anchor matches before the newline and leaves the
+# carriage return inside the capture.
+#
+# It runs before `record` for the same reason `man` and `fmt` do: it rewrites
+# files under -Fix, and a gate that reports on a tree the run then changes is
+# T-220. See scripts/check-eol.ps1 for what it costs and why vendor/ is
+# reported rather than rewritten.
+
+$eolArgs = @("-NoProfile", "-File", (Join-Path $PSScriptRoot "check-eol.ps1"))
+if ($Fix) { $eolArgs += "-Fix" }
+$eolSaid = & pwsh @eolArgs 2>&1
+$eolOk = ($LASTEXITCODE -eq 0)
+Record "eol" $eolOk $(if ($eolOk) { "" }
+    else { "$(@($eolSaid | Select-String '^  wrong ').Count) file(s) disagree with .gitattributes; run with -Fix" })
 
 # ---------------------------------------------------------------------------
 # man

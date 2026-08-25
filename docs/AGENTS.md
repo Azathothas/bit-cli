@@ -62,7 +62,9 @@ session reaches for most:
 | how does this work, who calls it, what is the blast radius | `codegraph_explore`, or `codegraph explore "<question>"`. `.codegraph/` is indexed at the repo root |
 | is the tree green | `pwsh -NoProfile -File scripts/gates.ps1` |
 | does the record agree with itself | `pwsh -NoProfile -File scripts/check-todo.ps1` |
+| an entry closed, so the counts have to move | `pwsh -NoProfile -File scripts/set-status.ps1 -Entry T-NNN -Status done`. It derives every count from the rows; never retype one |
 | do the docs still resolve | `pwsh -NoProfile -File scripts/check-docs.ps1` |
+| a file came out with the wrong line endings | nothing: `gates.ps1 -Fix` normalises them. `scripts/check-eol.ps1 -Fix` is the same step on its own |
 | what is the flag for X | `man/bit-cli.json`. Never grep the source, never page `--help`, never guess |
 | what has a run done, measured | `pwsh -NoProfile -File scripts/session-report.ps1 -Since <ISO>` |
 | commit and push | `pwsh -NoProfile -File scripts/git-sync.ps1`. Nothing else |
@@ -78,12 +80,12 @@ that failed reads as green. This has caught sessions here more than once.
 ## The gate contract
 
 `scripts/gates.ps1` runs every gate and prints one verdict. A default run
-prints `text`, `man`, `fmt`, `record`, `tree`, `docs`, `clippy`, `test` and
-`deny`.
+prints `text`, `eol`, `man`, `fmt`, `record`, `tree`, `docs`, `clippy`, `test`
+and `deny`.
 
 | switch | what it does |
 | --- | --- |
-| `-Fix` | formats rather than checking |
+| `-Fix` | formats, regenerates the manuals, and normalises line endings, rather than failing on any of them |
 | `-Fast` | skips `deny` and the build |
 | `-Build` | adds `--bins --examples` |
 | `-Json` | for a machine |
@@ -115,6 +117,10 @@ What is easy to miss:
 as the work. `gates.ps1` has a `record` gate and CI has a `Record` job, both
 running `check-todo.ps1`, so a count that disagrees with the rows cannot reach
 a commit.
+
+`scripts/set-status.ps1` is the writer for those counts and `check-todo.ps1` is
+the reader. Closing an entry moves seven numbers across two files, and none of
+them is worth doing by hand.
 
 **`docs/` and `docs/examples/` are updated in the same push too**, when the
 session changed what the tool does. `scripts/check-docs.ps1` is the gate, and

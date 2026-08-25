@@ -300,6 +300,15 @@ exist.
   the entry it names cannot disagree in a commit. Section 5 has what that cost
   to learn.
 
+  **It normalises line endings too, and that is why nothing here asks anybody
+  to run `dos2unix`.** `scripts/check-eol.ps1` is the `eol` gate: it compares
+  every tracked file's working tree endings against what `.gitattributes`
+  resolves for it, using git's own answer rather than a second table, and
+  `-Fix` rewrites the ones that disagree. Rewriting produces no git diff, since
+  the index is LF on both sides, so it is a working tree repair and never a
+  commit. `vendor/` is reported and left alone: `vendor-diff.ps1` derives the
+  patch series with `git diff --no-index`, which normalises nothing.
+
   It prints the toolchain first and warns when the `stable` it is using is
   behind the one CI would install. **Green here is not green there when this
   machine's rustc is older**: CI pins `stable`, which moves, and clippy gains
@@ -346,6 +355,35 @@ pwsh -NoProfile -File scripts/gates.ps1
 ```bash
 pwsh -NoProfile -File scripts/check-todo.ps1
 ```
+
+- **`scripts/set-status.ps1`.** The writer for the numbers `check-todo.ps1`
+  reads. Closing one entry moves seven of them: INDEX.md's prose total line,
+  the open and done figures beside it, one row of the priority table, that
+  row's total, the **All** row, and PROGRESS.md's two count lines. Every one is
+  derived from the rows rather than typed, so the arithmetic that used to be
+  done by hand at the end of a session, and got caught by the `record` gate at
+  the push, is not done by hand any more.
+
+```bash
+pwsh -NoProfile -File scripts/set-status.ps1 -Entry T-232 -Status done
+```
+
+  `-Item` rewrites the row's title in the same pass, which is where a
+  correction like *(title disproved: ...)* goes. `-Recount` re-derives every
+  count and touches no row, which is what to run after editing rows by hand.
+  `-Check` reports what would change and writes nothing, exiting 1 when
+  something would.
+
+  **It does not touch the entry's own `Status:` line**, in `TODO/<category>.md`.
+  That line sits in prose a session is writing anyway, usually with a closing
+  date and a clause beside it, and rewriting prose from a script is how a
+  closing sentence loses its meaning. It reads that line and prints whether it
+  agrees, so the disagreement is visible while the edit is still open rather
+  than at the gate.
+
+  It writes nothing `check-todo.ps1` does not then verify, and that is why
+  there are two: this derives the numbers from the rows and that one asserts
+  them against the rows independently. Run both.
 
 - **`scripts/session-report.ps1`.** What the session did, measured, and the
   answer to "how long, how much, how far": **elapsed** from the start instant
@@ -596,6 +634,16 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   raw integers in JSON with any formatted string alongside rather than instead.
 - **Anything consuming `--jsonl` selects by `type` or `kind`, never by
   position.**
+- **A carriage return in a file `.gitattributes` says is LF is invisible to
+  git and visible to everything else.** The index is normalised either way, so
+  `git diff` shows nothing and a review cannot see it; `(?m)^...$` in .NET
+  matches before the newline and leaves the return inside the capture, so a
+  status cell reads as `done` plus a byte and matches nothing. It arrives from
+  this repository's own tooling, because `Set-Content` writes CRLF on Windows.
+  Measured on 2026-08-25, before the gate existed: 99 tracked files disagreed
+  with `.gitattributes`, `TODO/create-seed.md` was **mixed**, and seven `.rs`
+  files under `crates/` were CRLF. `gates.ps1 -Fix` is the whole fix and there
+  is no manual step.
 - **A control byte goes in a source file as an escape, never as itself.** A raw
   NUL makes the whole file binary to `grep`, which then skips it and says so in
   a line nobody reads. Two got in and neither was noticed for a session:

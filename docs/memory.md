@@ -34,9 +34,19 @@ process it started.
 pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260823T154716064Z.csv
 ```
 
-Two things that run taught, and both are about the instrument rather than the
-tool. A soak killed mid-append leaves a NUL-filled tail that reads as one more
-sample of zeros, so the reader validates its own input now. And a report that
-judges only its named ceilings will report a pass over a workload that stopped:
-the harness judges the workload too, and its leech failure threshold defaults
-to 5 percent.
+Three things that run taught, and all three are about the instrument rather
+than the tool. A soak killed mid-append leaves a NUL-filled tail that reads as
+one more sample of zeros, so the reader validates its own input now. A report
+that judges only its named ceilings will report a pass over a workload that
+stopped: the harness judges the workload too, and its leech failure threshold
+defaults to 5 percent. And a run given `-ListenerCheck` records what the check
+saw, not only that it was asked for, so a run whose workload stops says which
+side stopped.
+
+`self_reported.listener` in the report and the three `listener_` columns in the
+CSV are that record. They are null and empty on a run without `-ListenerCheck`,
+which is how a reader tells a listener nobody watched from one that answered
+every probe. `probes` and `failed` are totals for the run;
+`worst_consecutive_failures` and `first_unhealthy_elapsed_s` sit beside them
+because a listener that failed in the middle and recovered ends the run looking
+healthy.

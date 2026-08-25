@@ -32,8 +32,13 @@
 # `all` is not the default and should not be the six-hour run. Churn strands
 # sockets at about 30,000 handles an hour (measured, see TODO/memory.md), which
 # is T-020 rather than T-040 and swamps every other series in the same chart.
-# It also starves the leechers: the same run that completed 22 downloads in two
-# minutes without churn completed 1 and failed 2 with it.
+# It no longer starves the leechers, and that line used to say it did. Measured
+# again on 2026-08-25, three minutes each, two leechers, -ListenerCheck on: 22
+# cycles completed with no churn, and 26 completed with the default churn beside
+# them, none failed either way. The old figures, 1 completed and 2 failed, were
+# taken before T-020 closed. Starving them now takes -ChurnConnections 20000
+# with -ChurnConcurrency 256 or more, which is what the two runs behind T-232's
+# attribution use.
 #
 # Three series, sampled every -SampleSeconds from outside the process:
 # resident memory, handle count, and TCP socket states. The seeder reports the
@@ -298,9 +303,29 @@ if ($ReadCsv) {
         }
     }
 
+    # The listener columns, when the run that wrote the file had them. A CSV
+    # from before 2026-08-25 has no such columns and reads as a run that was
+    # not watched, which is what it was. See TODO/memory.md, T-232.
+    $readListener = $null
+    $readListenerBadAt = $null
+    foreach ($sampleRow in $read) {
+        if ("$($sampleRow.listener_probes)" -notmatch '^\d+$') { continue }
+        $readListener = $sampleRow
+        if ("$($sampleRow.listener_healthy)" -eq "0" -and $null -eq $readListenerBadAt) {
+            $readListenerBadAt = [int]$sampleRow.elapsed_s
+        }
+    }
+
     Write-Host ""
     Write-Host "csv:       $ReadCsv"
     Write-Host "samples:   $($read.Count) over $([math]::Round($readHours, 3)) hours"
+    if ($readListener) {
+        $readListenerState = if ($null -ne $readListenerBadAt) {
+            "first unhealthy at t+${readListenerBadAt}s"
+        }
+        else { "healthy at every sample" }
+        Write-Host "listener:  $($readListener.listener_probes) probes, $($readListener.listener_failed) failed, $readListenerState"
+    }
     if ($dropped -gt 0) {
         Write-Host "truncated: $dropped line(s) are not samples and are excluded from every fit below."
         Write-Host "           A soak killed mid-write leaves the file extended and zero filled."
@@ -352,6 +377,15 @@ if ($ReadCsv) {
                 last_progress_s      = if ($lastProgress) { [int]$lastProgress.elapsed_s } else { $null }
                 measured_its_workload = -not (($LeechFailurePercent -gt 0) -and ($readShare -gt $LeechFailurePercent))
             }
+            listener     = $(if ($readListener) {
+                    [ordered]@{
+                        probes                    = [int64]$readListener.listener_probes
+                        failed                    = [int64]$readListener.listener_failed
+                        healthy                   = ("$($readListener.listener_healthy)" -eq "1")
+                        first_unhealthy_elapsed_s = $readListenerBadAt
+                    }
+                }
+                else { $null })
             slopes       = $readFits
         }
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent (Join-Path $repo $ReadJson)) | Out-Null
@@ -562,6 +596,24 @@ $script:SelfPeakRss = $null
 $script:SelfHandles = $null
 $script:SelfEvents = 0
 
+# What --listener-check found, out of the same events.
+#
+# A finished run used to say the flag was on and nothing about what it saw:
+# bench/soak-20260824T164609340Z.json carries parameters.listener_check "60s",
+# no listener key anywhere, and no listener column in the CSV. The seeder
+# reports it in every progress event and $Root is deleted when the run ends, so
+# the only place it existed was a file the run then destroyed. See
+# TODO/memory.md, T-232.
+#
+# probes and failed are counters the seeder accumulates, so the last event
+# carries the totals. healthy and consecutive_failures are levels, so the
+# worst one seen is kept beside the last: a listener that failed for an hour
+# and recovered is a run whose middle cannot be read off the final values.
+$script:SelfListener = $null
+$script:SelfListenerWorst = 0
+$script:SelfListenerUnhealthy = 0
+$script:SelfListenerFirstBad = $null
+
 function Update-SelfReported {
     try {
         if (-not $script:SelfReader) {
@@ -588,6 +640,20 @@ function Update-SelfReported {
             }
             if ($null -eq $script:SelfHandles -or $reported.process.open_handles -gt $script:SelfHandles) {
                 $script:SelfHandles = $reported.process.open_handles
+            }
+            # Absent unless --listener-check was asked for, which is what lets
+            # a reader tell "watched and fine" from "not watched".
+            if ($reported.listener) {
+                $script:SelfListener = $reported.listener
+                if ($reported.listener.consecutive_failures -gt $script:SelfListenerWorst) {
+                    $script:SelfListenerWorst = $reported.listener.consecutive_failures
+                }
+                if (-not $reported.listener.healthy) {
+                    $script:SelfListenerUnhealthy++
+                    if ($null -eq $script:SelfListenerFirstBad) {
+                        $script:SelfListenerFirstBad = [int]($clock.Elapsed.TotalSeconds)
+                    }
+                }
             }
         }
     } catch { }
@@ -650,8 +716,36 @@ function Write-SoakSummary([bool]$Complete) {
     $leechFailShare = if ($leechAttempted -gt 0) { [math]::Round(100.0 * $leechFailed / $leechAttempted, 2) } else { 0 }
     if ($wantLeech -and $LeechFailurePercent -gt 0 -and $leechAttempted -gt 0 -and
         $leechFailShare -gt $LeechFailurePercent) {
+        # And who to blame, when the run was asked to watch the listener.
+        #
+        # T-232's two candidates are a seeder that stopped accepting and
+        # leechers that stopped connecting, and nothing in a finished run
+        # distinguished them. A listener probe completes a real handshake
+        # against this run's own port, so a seeder that answers it while every
+        # leech cycle fails is not the one at fault. That sentence is the
+        # entry's first branch and it is written at the instant the share
+        # trips rather than left for somebody to cross-read two files for.
+        $blame = ""
+        if ($script:SelfListener) {
+            if ($script:SelfListenerUnhealthy -gt 0) {
+                $blame = ". The seeder stopped answering its own listener probe at t+$($script:SelfListenerFirstBad)s, so the fault is the seeder's"
+            }
+            else {
+                $blame = ". The seeder answered its own listener probe throughout, $($script:SelfListener.probes) probes and $($script:SelfListener.failed) failed, so the fault is not the seeder's accept path"
+            }
+        }
         [void]$summaryFailures.Add(
-            "$leechFailed of $leechAttempted leech cycles failed, $leechFailShare percent, over the $LeechFailurePercent percent this run treats as still measuring its workload")
+            "$leechFailed of $leechAttempted leech cycles failed, $leechFailShare percent, over the $LeechFailurePercent percent this run treats as still measuring its workload$blame")
+    }
+
+    # A run asked to watch the listener and given nothing to read has not done
+    # what it was asked. The seeder refuses --listener-check when it bound no
+    # listen port and says so on stderr, which a finished report never carried:
+    # this is that case, named in the report rather than in a file the run
+    # deletes.
+    if ($ListenerCheck -and $script:SelfEvents -gt 0 -and -not $script:SelfListener) {
+        [void]$summaryFailures.Add(
+            "-ListenerCheck $ListenerCheck was passed and none of the $($script:SelfEvents) progress events carried a listener block, so this run cannot say whether the seeder was still answering")
     }
 
     $summaryJudged = ($RssCeilingMiBPerHour -gt 0) -or ($HandleCeilingPerHour -gt 0) -or ($CloseWaitCeilingPerHour -gt 0)
@@ -711,6 +805,22 @@ function Write-SoakSummary([bool]$Complete) {
         self_reported    = [ordered]@{
             peak_rss_bytes = $script:SelfPeakRss
             open_handles   = $script:SelfHandles
+            # Null when -ListenerCheck was not passed, so a reader tells "not
+            # watched" from "watched and fine" without reading parameters.
+            listener       = $(if ($script:SelfListener) {
+                    [ordered]@{
+                        healthy                    = [bool]$script:SelfListener.healthy
+                        probes                     = [int64]$script:SelfListener.probes
+                        failed                     = [int64]$script:SelfListener.failed
+                        consecutive_failures       = [int]$script:SelfListener.consecutive_failures
+                        last_rtt_ms                = $script:SelfListener.last_rtt_ms
+                        last_failure               = $script:SelfListener.last_failure
+                        worst_consecutive_failures = [int]$script:SelfListenerWorst
+                        unhealthy_events           = [int]$script:SelfListenerUnhealthy
+                        first_unhealthy_elapsed_s  = $script:SelfListenerFirstBad
+                    }
+                }
+                else { $null })
         }
         seed_exited_early = $seedDied
         verdict          = $summaryVerdict
@@ -728,7 +838,8 @@ function Write-SoakSummary([bool]$Complete) {
             "peak_rss_bytes is a high-water mark rather than a level, so its slope is bounded below by zero and says nothing on its own. rss_bytes is the series that can fall as well as rise, and it is the one a leak shows in.",
             "The loopback tracker never expires a peer, so under -Workload announce or all the peer list handed to the seeder grows for the whole run. That is deliberate: it is the shape a busy tracker has, and it is the path T-040's report points at.",
             "complete is false while the run is still sampling. This file is rewritten after every sample, so a run that is killed leaves the report it had reached rather than nothing at all.",
-            "leech_failed_percent is judged whether or not a ceiling is named, because every ceiling here is a statement about the seeder and a seeder nobody is talking to holds all of them. leech_failures says why the first few failed, which is the thing a finished run cannot be asked afterwards. See TODO/memory.md, T-232."
+            "leech_failed_percent is judged whether or not a ceiling is named, because every ceiling here is a statement about the seeder and a seeder nobody is talking to holds all of them. leech_failures says why the first few failed, which is the thing a finished run cannot be asked afterwards. See TODO/memory.md, T-232.",
+            "self_reported.listener is null unless -ListenerCheck was passed. probes and failed are the seeder's own counters, so they are totals for the run; consecutive_failures and healthy are the last event's levels, and worst_consecutive_failures with unhealthy_events say whether the middle of the run differed from its end. The same three figures are the last columns of the CSV, one per sample. See TODO/memory.md, T-232."
         )
         # Written beside the report and renamed over it, never into it. A
         # `Set-Content` straight onto $jsonPath truncates first and fills
@@ -756,9 +867,13 @@ function Write-SoakSummary([bool]$Complete) {
 $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")
 $csvPath = Join-Path $ReportDir "soak-$stamp.csv"
 $jsonPath = Join-Path $ReportDir "soak-$stamp.json"
+# The three listener columns are empty on a run without -ListenerCheck, and on
+# every CSV written before 2026-08-25. Import-Csv reads by name, so an older
+# file still reads: the columns are absent rather than wrong.
 $header = "sample,iso,elapsed_s,rss_bytes,peak_rss_bytes,handles,threads,cpu_ms," +
 "tcp_total,tcp_established,tcp_listen,tcp_close_wait,tcp_time_wait,tcp_other," +
-"leech_completed,leech_failed,churn_runs"
+"leech_completed,leech_failed,churn_runs," +
+"listener_probes,listener_failed,listener_healthy"
 Set-Content -Path $csvPath -Value $header -Encoding utf8NoBOM
 
 $samples = [System.Collections.ArrayList]::new()
@@ -821,6 +936,11 @@ while ((Get-Date) -lt $endAt) {
             $churnProcess = Start-Churn
         }
     
+        # Before the row is built rather than after it, so the listener columns
+        # in a sample are the events that arrived before that sample and not
+        # the ones before the previous one.
+        Update-SelfReported
+
         $seed.Refresh()
         $states = @{}
         foreach ($group in (Get-NetTCPConnection -OwningProcess $seed.Id -ErrorAction SilentlyContinue |
@@ -852,6 +972,9 @@ while ((Get-Date) -lt $endAt) {
             leech_completed  = $leechDone
             leech_failed     = $leechFailed
             churn_runs       = $churnRuns
+            listener_probes  = if ($script:SelfListener) { $script:SelfListener.probes } else { "" }
+            listener_failed  = if ($script:SelfListener) { $script:SelfListener.failed } else { "" }
+            listener_healthy = if ($script:SelfListener) { [int][bool]$script:SelfListener.healthy } else { "" }
         }
         [void]$samples.Add($row)
         Add-Content -Path $csvPath -Encoding utf8NoBOM -Value (($row.Values | ForEach-Object { "$_" }) -join ",")
@@ -859,7 +982,6 @@ while ((Get-Date) -lt $endAt) {
         # Rewrite the report now rather than only when the window ends, so a run
         # that is killed at hour four leaves four hours of slopes. See
         # Write-SoakSummary.
-        Update-SelfReported
         [void](Write-SoakSummary $false)
     
         if ($sample % 10 -eq 0) {
@@ -928,6 +1050,16 @@ if ($script:LoadErrors -gt 0) {
 }
 if ($null -ne $script:SelfPeakRss) {
     Write-Host "self reported: peak RSS $([math]::Round($script:SelfPeakRss / 1MB, 2)) MiB, $script:SelfHandles handles, over $($script:SelfEvents) progress events"
+}
+if ($script:SelfListener) {
+    $listenerState = if ($script:SelfListenerUnhealthy -gt 0) {
+        "went unhealthy at t+$($script:SelfListenerFirstBad)s, worst run of $script:SelfListenerWorst"
+    }
+    else { "healthy throughout" }
+    Write-Host "listener:      $($script:SelfListener.probes) probes, $($script:SelfListener.failed) failed, $listenerState"
+}
+elseif ($ListenerCheck) {
+    Write-Host "listener:      -ListenerCheck $ListenerCheck was passed and no progress event carried a listener block"
 }
 Write-Host "verdict: $($summary.verdict)"
 

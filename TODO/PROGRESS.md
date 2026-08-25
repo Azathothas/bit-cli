@@ -76,15 +76,30 @@ it, and it says so in its own first paragraph.
 
 ## State
 
-- **Last session:** 2026-08-24T21:01:41Z, unattended, and the operator's six
-  hour soak was in flight for its whole window. The duration is not restated
-  here: `scripts/session-report.ps1` derives it from the instant above, and a
-  duration written down twice is a number two documents disagree about.
+- **Last session:** 2026-08-25T01:19:24Z, unattended, and the operator ruled on
+  all three open questions in the kickoff: every recommendation is accepted.
+  The duration is not restated here: `scripts/session-report.ps1` derives it
+  from the instant above, and a duration written down twice is a number two
+  documents disagree about.
 
-  It wrote the plan down before starting, per [RULES.md](RULES.md) section 1
-  step 4: the soak was already running, so it took the work order's item 4
-  first, read the soak when it landed, and re-estimated item 3 rather than
-  opening it. The plan held.
+  **The plan, written before starting, per [RULES.md](RULES.md) section 1
+  step 4.** The work order below is taken in its own order, and the three
+  accepted rulings settle what each of the middle three items builds:
+
+  1. [T-232](memory.md)'s one field, in `scripts/soak.ps1`: carry `listener`
+     out of the seeder's progress events into `self_reported` and into the
+     report, so the next operator soak can answer its own question.
+  2. [T-257](cli-surface.md), ruling accepted: keep one event `type`, add the
+     `fold_document` style guard to `observe_events` in
+     `crates/bit-cli/src/schema_gen.rs`, and make `docs/schema.md` say which
+     command emits which field rather than crediting a union to one of them.
+  3. [T-258](cli-surface.md), ruling accepted: a `seed` progress tick carries
+     the peers currently connected, at `crates/bit-cli/src/cmd/seed.rs:502`,
+     and the final document keeps carrying all of them. Twenty minute soaks
+     either side.
+  4. [T-241](metainfo.md), ruling accepted: magnet resolution goes under
+     `source::resolve_source`, so `info`, `files` and `tree` stop exiting 4 on
+     a magnet, rather than `--output` on `magnet` alone.
 - **Tests:** 1,361 passing, 0 failing, up from 1,359. Plus **153** in the
   vendored `rqbit` tree, up from 149, and **76** in `librqbit-utp`, which the
   workspace gates do not run. `vendor/` moved this session, for
@@ -94,8 +109,9 @@ it, and it says so in its own first paragraph.
 cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
 ```
 
-- **Gates:** clean, on rustc 1.98.0. A default run prints **nine**: `text`,
-  `man`, `fmt`, `record`, `tree`, `docs`, `clippy`, `test`, `deny`.
+- **Gates:** clean, on rustc 1.98.0. A default run prints **ten**: `text`,
+  `eol`, `man`, `fmt`, `record`, `tree`, `docs`, `clippy`, `test`, `deny`.
+  `eol` is this session's and `-Fix` is what it wants.
 
 ```bash
 pwsh -NoProfile -File scripts/gates.ps1
@@ -130,8 +146,8 @@ pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260824T164609340Z.c
   answered even if the stop had happened. The entry now waits on one field
   rather than on a lucky run.
 
-- **Entries:** 207 items. 32 open, 3 partial, 0 blocked, 161 done, 11 deferred
-  to Phase C. 161 of 196 workable done, 35 left.
+- **Entries:** 207 items. 31 open, 3 partial, 0 blocked, 162 done, 11 deferred
+  to Phase C. 162 of 196 workable done, 34 left.
 - **Tree:** 99 Rust files, 60,566 lines of code, 15,826 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus

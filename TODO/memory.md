@@ -1371,7 +1371,7 @@ Source:      the operator's second six hour soak,
 Category:    memory
 Priority:    P1
 Effort:      M
-Status:      open
+Status:      **done**, 2026-08-25
 
 Problem:     The run's own summary line says
              `leech cycles: 298 completed, 1080 failed`, and its report says
@@ -1574,3 +1574,64 @@ hours costs nothing a ceiling notices. `tcp_close_wait` is 0 at every one of
 704 samples and the handle series has an r squared of 0.06, so the flag can be
 left on in future soaks rather than being the thing that makes two runs
 incomparable.
+
+#### Closed, 2026-08-25: the listener figures are in the report, and a stop now names its own side
+
+**`self_reported.listener` exists.** `scripts/soak.ps1` reads the `listener`
+block out of the seeder's own progress events, the same events
+`peak_rss_bytes` and `open_handles` already came from, and carries it into the
+report, into three new CSV columns, and into `-ReadCsv`. A run without
+`-ListenerCheck` writes null and empty columns, so a reader tells "not watched"
+from "watched and fine" without going to `parameters`.
+
+**The last event's values are not enough, and one of the two runs below proves
+it.** `probes` and `failed` are counters the seeder accumulates, so the last
+event carries the totals; `healthy` and `consecutive_failures` are levels. The
+heavy churn run ends at `"healthy": true` having failed three probes and been
+unhealthy at `t+40s`. Reporting only the last event would have said the
+listener was fine. `worst_consecutive_failures`, `unhealthy_events` and
+`first_unhealthy_elapsed_s` sit beside the last values for that reason.
+
+**And the run names which side stopped.** When the leech failure share trips,
+the failure line says what the listener was doing, which is the entry's own
+question written at the instant it can be answered rather than left for
+somebody to cross-read two files for four hours later.
+
+**Run against both branches**, three minutes each, because the spontaneous stop
+of 2026-08-23T15:47:16Z cannot be summoned and the shape can: heavy churn
+starves the seeder's accept path, moderate churn starves only the leechers.
+
+```bash
+pwsh -NoProfile -File scripts/soak.ps1 -Minutes 3 -SampleSeconds 10 -Workload all -Leechers 2 -ChurnConnections 20000 -ChurnConcurrency 256 -ListenerCheck 20s
+```
+
+| run | listener | what the report says |
+| --- | --- | --- |
+| `bench/soak-20260825T013344925Z` | 13 probes, **3 failed**, first unhealthy at `t+40s` | `1 of 6 leech cycles failed, 16.67 percent ... The seeder stopped answering its own listener probe at t+40s, so the fault is the seeder's` |
+| `bench/soak-20260825T014217900Z` | 7 probes, **0 failed** | `1 of 7 leech cycles failed, 14.29 percent ... The seeder answered its own listener probe throughout, 7 probes and 0 failed, so the fault is not the seeder's accept path` |
+
+Both exit 1, read from the process rather than from a pipeline. The moderate
+run's CSV is committed beside its report because it is where the three new
+columns are visible per sample.
+
+**A fourth failure case comes with it.** `-ListenerCheck` passed, progress
+events arriving, and not one of them carrying a `listener` block is a run that
+was asked to watch the listener and given nothing to read. The seeder refuses
+the flag when it bound no listen port, on stderr, into a file the run deletes.
+That is a failure in the report now.
+
+**What this entry does not answer, and cannot.** The stop of
+2026-08-23T15:47:16Z has no attribution and will not get one: its `$Root` was
+deleted, its CSV has no listener columns, and the two six hour runs either side
+of it did not reproduce it. The entry closes on the instrument, which is what
+its own previous section said it was waiting for: a recurrence answers the
+question by itself now, and the failure output capture built on 2026-08-23
+names the leecher's exit code beside it.
+
+**One claim in `scripts/soak.ps1`'s own header was disproved on the way.** It
+said `-Workload all` starves the leechers, "the same run that completed 22
+downloads in two minutes without churn completed 1 and failed 2 with it". At
+the default churn now: **26 cycles completed and none failed**, against 22
+completed with no churn at all. Those figures were taken before
+[T-020](peers.md) closed. The comment carries the new measurement and says what
+starving them now takes.
