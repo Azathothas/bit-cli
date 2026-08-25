@@ -267,7 +267,7 @@ pub fn run(
     env: &mut Env,
 ) -> Result<ExitCode> {
     let kind = Kind::classify(&args.source.source, env)?;
-    let meta = resolve_source(&kind, env, global, None)?;
+    let meta = resolve_source(&kind, env, global, None, &args.swarm)?;
     let layout = meta.layout();
 
     let index_out = crate::selection::index_out(&args.index_out, Some(layout.files.len()))?;

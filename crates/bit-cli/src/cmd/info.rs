@@ -7,7 +7,7 @@ use bit_cli_core::torrent::Metainfo;
 use bit_cli_core::units::{Size, format_size};
 use serde::Serialize;
 
-use crate::cli::{Global, SourceArgs};
+use crate::cli::{Global, ReadSourceArgs};
 use crate::env::Env;
 use crate::output::{Renderer, field};
 use crate::source::{Kind, resolve_source};
@@ -169,13 +169,13 @@ impl Report {
 
 /// Run the command.
 pub fn run(
-    args: &SourceArgs,
+    args: &ReadSourceArgs,
     global: &Global,
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let kind = Kind::classify(&args.source, env)?;
-    let meta = resolve_source(&kind, env, global, None)?;
+    let kind = Kind::classify(&args.source.source, env)?;
+    let meta = resolve_source(&kind, env, global, None, &args.swarm)?;
     let report = Report::new(&meta, kind.name());
     renderer.emit(env, "info", &report, || report.lines())?;
     Ok(ExitCode::Success)
@@ -183,6 +183,55 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
+    /// `bit-cli info` reads a magnet, which it exited 4 on until 2026-08-25.
+    ///
+    /// This is T-241's first half and the ruling behind it: the swarm-backed
+    /// path lives under `source::resolve_source`, so every command that reads
+    /// a source takes a magnet rather than `magnet` alone taking one. The
+    /// report has to be the same document the `.torrent` produces, because it
+    /// is the same torrent: the metadata came over BEP 9 from the one peer
+    /// named here, with the DHT, local discovery and trackers all off, so the
+    /// swarm is exactly one process on loopback.
+    #[test]
+    fn a_magnet_is_read_from_the_swarm_and_reports_what_the_torrent_does() {
+        use crate::test_support::{TorrentFixture, free_port, run_json, run_ok, seed_fixture};
+
+        let fixture = TorrentFixture::multi_file();
+        let dir = fixture.dir();
+        let port = free_port();
+        let seeder = seed_fixture(&fixture, port);
+
+        let magnet = run_ok(&["magnet", fixture.path_str()], dir.clone());
+        let magnet = magnet.trim().to_string();
+        let peer = format!("127.0.0.1:{port}");
+
+        let from_swarm = run_json(
+            &[
+                "info",
+                &magnet,
+                "--peer",
+                &peer,
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+            ],
+            dir.clone(),
+        );
+        let from_disk = run_json(&["info", fixture.path_str()], dir);
+
+        assert_eq!(from_swarm["info_hash"], from_disk["info_hash"]);
+        assert_eq!(from_swarm["name"], from_disk["name"]);
+        assert_eq!(from_swarm["file_count"], from_disk["file_count"]);
+        assert_eq!(from_swarm["piece_count"], from_disk["piece_count"]);
+        assert_eq!(from_swarm["total"]["bytes"], from_disk["total"]["bytes"]);
+        assert_eq!(
+            from_swarm["source_kind"], "magnet",
+            "and it says what it was given: {from_swarm}"
+        );
+
+        let _ = seeder.join();
+    }
+
     /// T-252's acceptance, both halves. `--stats` prints every field that has
     /// a value, and `--json --stats` is the same document as `--json`.
     #[test]
@@ -440,14 +489,90 @@ mod tests {
         assert!(captured.err().contains("error:"));
     }
 
+    /// A magnet with nowhere to look says so at once rather than waiting.
+    ///
+    /// **This test asserted the old refusal until 2026-08-25**, exit 4 with
+    /// "no piece hashes", and it is inverted rather than deleted: the refusal
+    /// is what [T-241](../../TODO/metainfo.md) closed. The code is still 4,
+    /// because it is still not retryable, and the sentence is now about the
+    /// swarm rather than about piece hashes.
+    ///
+    /// **The three flags are what keep this off the network.** Without them a
+    /// magnet resolution bootstraps the DHT, which is correct for a client and
+    /// wrong for a test, and the first run of this after the change spent
+    /// sixty seconds proving it. With them and no `--peer` there is nowhere to
+    /// look at all, and the session says that before it starts rather than
+    /// after a deadline. Nothing here waits on a duration.
     #[test]
-    fn a_magnet_says_it_needs_the_swarm_rather_than_guessing() {
+    fn a_magnet_with_nowhere_to_look_says_so_rather_than_waiting() {
         let fixture = TorrentFixture::multi_file();
         let magnet = format!("magnet:?xt=urn:btih:{}", fixture.info_hash);
-        let (mut env, captured) = crate::env::Env::test(&["info", &magnet], fixture.dir());
-        assert_eq!(crate::run(&mut env), ExitCode::SourceResolution);
+        let (mut env, captured) = crate::env::Env::test(
+            &["info", &magnet, "--no-dht", "--no-lsd", "--no-tracker"],
+            fixture.dir(),
+        );
+        let code = crate::run(&mut env);
+        assert_eq!(
+            code,
+            ExitCode::SourceResolution,
+            "stderr said: {}",
+            captured.err()
+        );
+        assert_eq!(captured.out(), "");
         assert!(
-            captured.err().contains("no piece hashes"),
+            captured.err().contains("no known way to resolve peers"),
+            "{}",
+            captured.err()
+        );
+    }
+
+    /// A magnet with somewhere to look and nobody there runs out of time.
+    ///
+    /// The other half of the case above, and the one that is retryable: there
+    /// **is** a way to resolve peers, it is the address on the command line,
+    /// and nothing answers it. Exit 9 rather than 4, and the deadline is named
+    /// in milliseconds so a caller can tell a short `--timeout` from a swarm
+    /// that has nothing.
+    ///
+    /// Nothing waits on a duration here either. The peer below accepts and
+    /// then holds the socket open without handshaking, so the session has
+    /// something to wait on for as long as the test needs and `--timeout` is
+    /// the only thing that can end the run. A peer that **refuses** the
+    /// connection is a different case and is not this one: the session
+    /// exhausts its address list and says so at once, which is exit 4.
+    #[test]
+    fn a_magnet_whose_only_peer_never_answers_exits_nine_and_names_the_deadline() {
+        let fixture = TorrentFixture::multi_file();
+        let magnet = format!("magnet:?xt=urn:btih:{}", fixture.info_hash);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let peer = format!("127.0.0.1:{}", listener.local_addr().expect("addr").port());
+        std::thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    drop(stream);
+                });
+            }
+        });
+        let (mut env, captured) = crate::env::Env::test(
+            &[
+                "info",
+                &magnet,
+                "--peer",
+                &peer,
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--timeout",
+                "3s",
+            ],
+            fixture.dir(),
+        );
+        let code = crate::run(&mut env);
+        assert_eq!(code, ExitCode::Timeout, "stderr said: {}", captured.err());
+        assert_eq!(captured.out(), "");
+        assert!(
+            captured.err().contains("did not resolve in 3000ms"),
             "{}",
             captured.err()
         );

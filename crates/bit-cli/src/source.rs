@@ -11,9 +11,16 @@
 //!
 //! A magnet or a bare info hash carries no piece hashes, so it has to be
 //! resolved against the swarm before the torrent's shape is known. Commands
-//! that need only the info hash work from it directly; commands that need the
-//! file layout say so rather than resolving silently, because a swarm lookup
-//! is a network operation with a very different cost from reading a file.
+//! that need only the info hash work from it directly, and the rest join the
+//! swarm the source names and ask a peer for the metadata over BEP 9.
+//!
+//! **That last part is the one thing here that is not a read.** A swarm lookup
+//! is a different operation from a `GET`, with a different cost, so it has its
+//! own flags rather than happening silently: `--peer`, `--no-dht`, `--no-lsd`
+//! and `--no-tracker` under "Resolving a magnet" in any command's help. It is
+//! not opt-in, for the reason [T-245](../../TODO/cli-surface.md) closed on: a
+//! source kind one command accepts and four refuse is a defect rather than a
+//! safeguard. See `TODO/metainfo.md`, T-241.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -253,7 +260,10 @@ pub fn load_local(kind: &Kind, env: &mut Env) -> Result<Metainfo> {
             "a magnet URI and a bare info hash carry no piece hashes, so the metadata has to be resolved from the swarm first",
         )
         .with("source_kind", kind.name())
-        .with("hint", "use `bit-cli download` or supply the .torrent")),
+        .with(
+            "hint",
+            "this is the local-only path; `resolve` joins the swarm and reads it",
+        )),
     }
 }
 
@@ -266,17 +276,20 @@ pub fn load_local(kind: &Kind, env: &mut Env) -> Result<Metainfo> {
 /// torrent themselves refused the same URL their own help text offers. See
 /// `TODO/cli-surface.md`, T-245.
 ///
-/// A magnet and a bare info hash are still refused, and the refusal is still
-/// [`load_local`]'s. Those two need the swarm rather than one `GET`, which is
-/// a different operation with a different cost, and the commands that can do
-/// it call the engine directly.
+/// A magnet and a bare info hash are resolved against the swarm they name,
+/// which is [`resolve_from_swarm`]. That was a refusal until 2026-08-25 and
+/// four commands exited 4 on a source kind a fifth accepted. See
+/// `TODO/metainfo.md`, T-241.
 pub async fn resolve(
     kind: &Kind,
     env: &mut Env,
     user_agent: &str,
     deadline: Duration,
+    swarm: &SwarmResolve,
 ) -> Result<Metainfo> {
     match kind {
+        Kind::Magnet(magnet) => resolve_from_swarm(&magnet.to_uri(), swarm, deadline).await,
+        Kind::InfoHash(hash) => resolve_from_swarm(&hash.hex(), swarm, deadline).await,
         Kind::Url(url) => Ok(fetch_torrent(url, user_agent, deadline).await?.0),
         Kind::Metalink(path) => {
             let document = Metalink::read(path)?;
@@ -306,13 +319,9 @@ pub fn resolve_blocking(
     env: &mut Env,
     user_agent: &str,
     deadline: Duration,
+    swarm: &SwarmResolve,
 ) -> Result<Metainfo> {
     if !kind.needs_network() {
-        return load_local(kind, env);
-    }
-    // A magnet and a bare info hash reach `load_local`'s refusal without a
-    // runtime being built for a fetch that is not going to happen.
-    if matches!(kind, Kind::Magnet(_) | Kind::InfoHash(_)) {
         return load_local(kind, env);
     }
     if tokio::runtime::Handle::try_current().is_ok() {
@@ -321,11 +330,121 @@ pub fn resolve_blocking(
         )
         .with("source_kind", kind.name()));
     }
+    // A swarm needs a reactor with more than one thread on it: the session
+    // listens, dials, announces and answers BEP 9 at the same time, and a
+    // current-thread runtime is what every other command here avoids for
+    // exactly that. A document fetch keeps the cheap one, because a `GET` is
+    // one task.
+    if matches!(kind, Kind::Magnet(_) | Kind::InfoHash(_)) {
+        return crate::swarm::runtime()?.block_on(resolve(kind, env, user_agent, deadline, swarm));
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| Error::generic(format!("cannot build a runtime to fetch the source: {e}")))?;
-    runtime.block_on(resolve(kind, env, user_agent, deadline))
+    runtime.block_on(resolve(kind, env, user_agent, deadline, swarm))
+}
+
+/// What resolving a magnet or a bare info hash is allowed to talk to.
+///
+/// Built from the "Resolving a magnet" flags every command that reads a source
+/// carries. The default is a client's default: the DHT, local discovery and
+/// the trackers the magnet itself names, which is the only way a magnet
+/// carrying nothing but `xt` can be read at all. See `TODO/metainfo.md`,
+/// T-241.
+#[derive(Debug, Clone)]
+pub struct SwarmResolve {
+    /// Peers to ask before any are discovered.
+    pub peers: Vec<std::net::SocketAddr>,
+    pub enable_dht: bool,
+    pub enable_lsd: bool,
+    pub enable_trackers: bool,
+}
+
+impl Default for SwarmResolve {
+    fn default() -> Self {
+        Self {
+            peers: Vec::new(),
+            enable_dht: true,
+            enable_lsd: true,
+            enable_trackers: true,
+        }
+    }
+}
+
+impl SwarmResolve {
+    /// The flags as the command line gave them.
+    pub fn from_args(args: &crate::cli::SwarmSourceArgs) -> Result<Self> {
+        Ok(Self {
+            peers: crate::swarm::peer_addrs(&args.peers)?,
+            enable_dht: !args.no_dht,
+            enable_lsd: !args.no_lsd,
+            enable_trackers: !args.no_tracker,
+        })
+    }
+}
+
+/// Join the swarm a magnet names and read the metadata off it.
+///
+/// Nothing is written and nothing is started: `list_only` stops the session at
+/// the point the `info` dictionary has arrived, which is the same call
+/// `download` makes before it applies `--exclude-file`. The bytes come back as
+/// the session assembled them, so the info hash of what is parsed here equals
+/// the one in the magnet.
+///
+/// The payload directory is a temporary one that is removed when this returns.
+/// A session insists on having somewhere to write even when it is told not to
+/// write, and the caller's working directory is not that place.
+async fn resolve_from_swarm(
+    source: &str,
+    swarm: &SwarmResolve,
+    deadline: Duration,
+) -> Result<Metainfo> {
+    use bit_cli_core::engine::{AddOptions, Engine, EngineOptions};
+
+    let scratch = tempfile::tempdir()
+        .map_err(|e| from_io(e, "cannot create a directory to resolve the metadata in"))?;
+    let options = EngineOptions {
+        download_directory: scratch.path().to_path_buf(),
+        // The OS picks. A command that reads a torrent has no --port and
+        // nothing about it wants a fixed one.
+        listen_ports: 0..=0,
+        enable_dht: swarm.enable_dht,
+        enable_lsd: swarm.enable_lsd,
+        enable_trackers: swarm.enable_trackers,
+        ..Default::default()
+    };
+    let engine = Engine::start(&options).await?;
+    let add = AddOptions {
+        list_only: true,
+        initial_peers: swarm.peers.clone(),
+        disable_trackers: !swarm.enable_trackers,
+        ..Default::default()
+    };
+    let resolved = tokio::time::timeout(deadline, engine.resolve_with(source, &add))
+        .await
+        .map_err(|_| {
+            Error::timeout(format!(
+                "{source}: the metadata did not resolve in {}ms",
+                deadline.as_millis()
+            ))
+            .with("phase", "resolving_metadata")
+            .with("source_kind", "magnet")
+            .with(
+                "waited_ms",
+                deadline.as_millis().min(u128::from(u64::MAX)) as u64,
+            )
+        });
+    let resolved = match resolved {
+        Ok(inner) => inner,
+        Err(timeout) => {
+            engine.stop().await;
+            return Err(timeout);
+        }
+    }?;
+    let meta = Metainfo::parse(&resolved.torrent_bytes);
+    engine.stop().await;
+    meta
 }
 
 /// [`resolve_blocking`] with the two things the command line decides read out
@@ -340,12 +459,22 @@ pub fn resolve_source(
     env: &mut Env,
     global: &crate::cli::Global,
     user_agent: Option<&str>,
+    swarm: &crate::cli::SwarmSourceArgs,
 ) -> Result<Metainfo> {
     let agent = user_agent
         .map(str::to_string)
         .unwrap_or_else(bit_cli_core::webseed::fetch::default_user_agent);
     let timeout = crate::swarm::optional_duration(&global.timeout, "timeout")?;
-    resolve_blocking(kind, env, &agent, deadline(timeout))
+    let resolve = SwarmResolve::from_args(swarm)?;
+    let budget = match kind {
+        // A swarm lookup is not a fetch. Finding a peer, handshaking and
+        // pulling the metadata takes longer than a `GET` of the same bytes,
+        // and 30 seconds is a deadline a healthy magnet would miss.
+        // `--timeout` still wins where the caller set one.
+        Kind::Magnet(_) | Kind::InfoHash(_) => timeout.unwrap_or(RESOLVE_TIMEOUT),
+        _ => deadline(timeout),
+    };
+    resolve_blocking(kind, env, &agent, budget, &resolve)
 }
 
 /// The deadline for one document fetch, from `--timeout` when it was given.
@@ -568,6 +697,14 @@ pub async fn resolve_metalink(
 /// bounded by this; a source fetch takes `--timeout` instead when the caller
 /// set one, which is what [`deadline`] decides.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Longest a magnet or a bare info hash may take to resolve, by default.
+///
+/// The swarm counterpart of [`FETCH_TIMEOUT`], and larger than it because the
+/// work is larger: find a peer through the DHT or a tracker, handshake it, and
+/// pull the `info` dictionary over BEP 9. `--timeout` replaces it where the
+/// caller set one, the same way it replaces the fetch deadline.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Largest list body accepted, in bytes.
 ///
@@ -1106,7 +1243,14 @@ mod tests {
     async fn a_fetch_from_inside_a_runtime_is_an_error_not_a_panic() {
         let mut env = env();
         let kind = Kind::classify("https://e.com/x.torrent", &env).unwrap();
-        let err = resolve_blocking(&kind, &mut env, "agent", Duration::from_secs(1)).unwrap_err();
+        let err = resolve_blocking(
+            &kind,
+            &mut env,
+            "agent",
+            Duration::from_secs(1),
+            &SwarmResolve::default(),
+        )
+        .unwrap_err();
         assert!(
             err.message().contains("inside a runtime"),
             "{}",
@@ -1125,18 +1269,56 @@ mod tests {
         let fixture = TorrentFixture::multi_file();
         let mut env = Env::test(&[], fixture.dir()).0;
         let kind = Kind::classify(fixture.path_str(), &env).unwrap();
-        let meta = resolve_blocking(&kind, &mut env, "agent", Duration::from_secs(1)).unwrap();
+        let meta = resolve_blocking(
+            &kind,
+            &mut env,
+            "agent",
+            Duration::from_secs(1),
+            &SwarmResolve::default(),
+        )
+        .unwrap();
         assert_eq!(meta.info_hash().hex(), fixture.info_hash);
     }
 
-    /// A magnet reaches the refusal without a runtime being built for a fetch
-    /// that was never going to happen. The message is `load_local`'s, because
-    /// the reason is the same one it has always given.
+    /// A magnet from inside a runtime names the entry point rather than
+    /// starting a swarm under one.
+    ///
+    /// **This asserted `load_local`'s refusal until 2026-08-25.** A magnet
+    /// short-circuited to it before any runtime was considered, because no
+    /// fetch was going to happen; now it needs a runtime like every other
+    /// remote kind, so it reaches the same guard a URL does. The guard is
+    /// worth keeping pointed at: building a second runtime inside one is a
+    /// tokio panic, and this is the error that replaced it.
     #[tokio::test]
-    async fn a_magnet_is_refused_without_a_fetch_being_attempted() {
+    async fn a_magnet_from_inside_a_runtime_is_an_error_not_a_panic() {
         let mut env = env();
         let kind = Kind::classify(&format!("magnet:?xt=urn:btih:{HEX}"), &env).unwrap();
-        let err = resolve_blocking(&kind, &mut env, "agent", Duration::from_secs(1)).unwrap_err();
+        let err = resolve_blocking(
+            &kind,
+            &mut env,
+            "agent",
+            Duration::from_secs(1),
+            &SwarmResolve::default(),
+        )
+        .unwrap_err();
+        assert!(
+            err.message().contains("blocking entry point"),
+            "{}",
+            err.message()
+        );
+    }
+
+    /// The local-only path still refuses a magnet, and still says why.
+    ///
+    /// [`load_local`] is what a caller uses when it must not touch the
+    /// network, and a magnet is the one kind it cannot answer. The message is
+    /// the one it has always given; what changed is that `resolve` no longer
+    /// forwards to it. See `TODO/metainfo.md`, T-241.
+    #[test]
+    fn the_local_only_path_still_refuses_a_magnet() {
+        let mut env = env();
+        let kind = Kind::classify(&format!("magnet:?xt=urn:btih:{HEX}"), &env).unwrap();
+        let err = load_local(&kind, &mut env).unwrap_err();
         assert!(
             err.message().contains("no piece hashes"),
             "{}",
@@ -1168,8 +1350,14 @@ mod tests {
         let mut env = env();
         let url = format!("http://127.0.0.1:{port}/x.torrent");
         let kind = Kind::classify(&url, &env).unwrap();
-        let err =
-            resolve_blocking(&kind, &mut env, "agent", Duration::from_millis(300)).unwrap_err();
+        let err = resolve_blocking(
+            &kind,
+            &mut env,
+            "agent",
+            Duration::from_millis(300),
+            &SwarmResolve::default(),
+        )
+        .unwrap_err();
         assert_eq!(err.code(), bit_cli_core::ExitCode::Timeout);
         assert!(err.message().contains("--timeout"), "{}", err.message());
         assert_eq!(err.context()["timeout_ms"], 300);

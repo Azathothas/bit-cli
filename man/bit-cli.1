@@ -657,7 +657,7 @@ Emit a progress event this often
 .SH NAME
 bit\-cli\-info \- Parse a torrent, magnet, or metalink and print its metadata
 .SH SYNOPSIS
-\fBbit\-cli\-info\fR [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-info\fR [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Parse a torrent, magnet, or metalink and print its metadata
 .SH OPTIONS
@@ -669,13 +669,28 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
 
 `help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
+.SH "RESOLVING A MAGNET"
+.TP
+\fB\-\-peer\fR \fI<ADDR>\fR
+Try this peer before any are discovered, as HOST:PORT. Repeatable.
+
+With `\-\-no\-dht`, `\-\-no\-lsd` and `\-\-no\-tracker` this resolves the metadata from exactly the peers named here and nowhere else.
+.TP
+\fB\-\-no\-dht\fR
+Disable the DHT while resolving
+.TP
+\fB\-\-no\-lsd\fR
+Disable local service discovery while resolving
+.TP
+\fB\-\-no\-tracker\fR
+Do not announce to the magnet\*(Aqs trackers while resolving
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-files 1  "bit-cli-files " 
 .SH NAME
 bit\-cli\-files \- List files with index, path, size, and priority
 .SH SYNOPSIS
-\fBbit\-cli\-files\fR [\fB\-\-sort\fR] [\fB\-\-against\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-files\fR [\fB\-\-sort\fR] [\fB\-\-against\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 List files with index, path, size, and priority
 .SH OPTIONS
@@ -695,13 +710,28 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
 
 `help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
+.SH "RESOLVING A MAGNET"
+.TP
+\fB\-\-peer\fR \fI<ADDR>\fR
+Try this peer before any are discovered, as HOST:PORT. Repeatable.
+
+With `\-\-no\-dht`, `\-\-no\-lsd` and `\-\-no\-tracker` this resolves the metadata from exactly the peers named here and nowhere else.
+.TP
+\fB\-\-no\-dht\fR
+Disable the DHT while resolving
+.TP
+\fB\-\-no\-lsd\fR
+Disable local service discovery while resolving
+.TP
+\fB\-\-no\-tracker\fR
+Do not announce to the magnet\*(Aqs trackers while resolving
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-tree 1  "bit-cli-tree " 
 .SH NAME
 bit\-cli\-tree \- Print the torrent\*(Aqs directory structure, rolled up
 .SH SYNOPSIS
-\fBbit\-cli\-tree\fR [\fB\-\-depth\fR] [\fB\-\-no\-sizes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-tree\fR [\fB\-\-depth\fR] [\fB\-\-no\-sizes\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Print the torrent\*(Aqs directory structure, rolled up
 .SH OPTIONS
@@ -721,6 +751,21 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
 
 `help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
+.SH "RESOLVING A MAGNET"
+.TP
+\fB\-\-peer\fR \fI<ADDR>\fR
+Try this peer before any are discovered, as HOST:PORT. Repeatable.
+
+With `\-\-no\-dht`, `\-\-no\-lsd` and `\-\-no\-tracker` this resolves the metadata from exactly the peers named here and nowhere else.
+.TP
+\fB\-\-no\-dht\fR
+Disable the DHT while resolving
+.TP
+\fB\-\-no\-lsd\fR
+Disable local service discovery while resolving
+.TP
+\fB\-\-no\-tracker\fR
+Do not announce to the magnet\*(Aqs trackers while resolving
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-peers 1  "bit-cli-peers " 
@@ -1011,7 +1056,7 @@ Print this message or the help of the given subcommand(s)
 .SH NAME
 bit\-cli\-verify \- Hash\-check existing data against the torrent
 .SH SYNOPSIS
-\fBbit\-cli\-verify\fR [\fB\-\-data\fR] [\fB\-\-per\-piece\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-verify\fR [\fB\-\-data\fR] [\fB\-\-per\-piece\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Hash\-check existing data against the torrent
 .SH OPTIONS
@@ -1042,6 +1087,21 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
 
 `help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
+.SH "RESOLVING A MAGNET"
+.TP
+\fB\-\-peer\fR \fI<ADDR>\fR
+Try this peer before any are discovered, as HOST:PORT. Repeatable.
+
+With `\-\-no\-dht`, `\-\-no\-lsd` and `\-\-no\-tracker` this resolves the metadata from exactly the peers named here and nowhere else.
+.TP
+\fB\-\-no\-dht\fR
+Disable the DHT while resolving
+.TP
+\fB\-\-no\-lsd\fR
+Disable local service discovery while resolving
+.TP
+\fB\-\-no\-tracker\fR
+Do not announce to the magnet\*(Aqs trackers while resolving
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-create 1  "bit-cli-create " 
@@ -1218,10 +1278,18 @@ The torrent to read
 .SH NAME
 bit\-cli\-magnet \- Convert a torrent to a magnet URI, or resolve a magnet to metadata
 .SH SYNOPSIS
-\fBbit\-cli\-magnet\fR [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-magnet\fR [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-force\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Convert a torrent to a magnet URI, or resolve a magnet to metadata
 .SH OPTIONS
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<PATH>\fR
+Write the resolved metainfo here as a `.torrent`. `\-` is stdout.
+
+The whole point of resolving a magnet twice is not having to: the metadata came off the swarm once and this keeps it. The bytes written carry the `info` dictionary exactly as it arrived, so the info hash of the file equals the one in the magnet, and `write_to_vec` proves that rather than trusting it. See `TODO/metainfo.md`, T\-241.
+.TP
+\fB\-\-force\fR
+Overwrite the output file if it is already there
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
@@ -1230,6 +1298,21 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `\-` for stdin.
 
 `help_heading = None` keeps it in clap\*(Aqs own "Arguments" section wherever it is flattened. Without it, a command that sets a heading before flattening this would file its own positional under that heading. `TODO/cli\-surface.md`, T\-159.
+.SH "RESOLVING A MAGNET"
+.TP
+\fB\-\-peer\fR \fI<ADDR>\fR
+Try this peer before any are discovered, as HOST:PORT. Repeatable.
+
+With `\-\-no\-dht`, `\-\-no\-lsd` and `\-\-no\-tracker` this resolves the metadata from exactly the peers named here and nowhere else.
+.TP
+\fB\-\-no\-dht\fR
+Disable the DHT while resolving
+.TP
+\fB\-\-no\-lsd\fR
+Disable local service discovery while resolving
+.TP
+\fB\-\-no\-tracker\fR
+Do not announce to the magnet\*(Aqs trackers while resolving
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-seed 1  "bit-cli-seed " 

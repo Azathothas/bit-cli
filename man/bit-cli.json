@@ -642,6 +642,30 @@
           "required": true,
           "type": "string",
           "value_name": "SOURCE"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT while resolving",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery while resolving",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Do not announce to the magnet's trackers while resolving",
+          "name": "--no-tracker",
+          "type": "boolean"
         }
       ],
       "description": "Parse a torrent, magnet, or metalink and print its metadata",
@@ -670,6 +694,30 @@
           "name": "--against",
           "type": "array",
           "value_name": "TORRENT"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT while resolving",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery while resolving",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Do not announce to the magnet's trackers while resolving",
+          "name": "--no-tracker",
+          "type": "boolean"
         }
       ],
       "description": "List files with index, path, size, and priority",
@@ -696,6 +744,30 @@
           "default": "false",
           "description": "Print the piece ranges without the size and file count columns",
           "name": "--no-sizes",
+          "type": "boolean"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT while resolving",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery while resolving",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Do not announce to the magnet's trackers while resolving",
+          "name": "--no-tracker",
           "type": "boolean"
         }
       ],
@@ -1307,6 +1379,30 @@
           "description": "Fail the run if a declared source turns out to be unusable",
           "name": "--web-seed-require",
           "type": "boolean"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT while resolving",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery while resolving",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Do not announce to the magnet's trackers while resolving",
+          "name": "--no-tracker",
+          "type": "boolean"
         }
       ],
       "description": "Resolve every binding and print the exact URL each file maps to. No network",
@@ -1581,6 +1677,30 @@
           "name": "--web-seed-report-header",
           "type": "array",
           "value_name": "NAME"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT while resolving",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery while resolving",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Do not announce to the magnet's trackers while resolving",
+          "name": "--no-tracker",
+          "type": "boolean"
         }
       ],
       "description": "Probe each source: range support, size, redirects, TLS, latency",
@@ -1850,6 +1970,30 @@
           "name": "--concurrency-sweep",
           "type": "string",
           "value_name": "SPEC"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT while resolving",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery while resolving",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Do not announce to the magnet's trackers while resolving",
+          "name": "--no-tracker",
+          "type": "boolean"
         }
       ],
       "description": "Measure ranged-GET latency and throughput as concurrency scales",
@@ -2147,6 +2291,30 @@
           "description": "Verify against the torrent's piece hashes",
           "name": "--verify",
           "type": "boolean"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT while resolving",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery while resolving",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Do not announce to the magnet's trackers while resolving",
+          "name": "--no-tracker",
+          "type": "boolean"
         }
       ],
       "description": "Fetch one range from one source and verify it against the torrent",
@@ -2194,6 +2362,30 @@
           "short": "-O",
           "type": "array",
           "value_name": "INDEX=PATH"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT while resolving",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery while resolving",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Do not announce to the magnet's trackers while resolving",
+          "name": "--no-tracker",
+          "type": "boolean"
         }
       ],
       "description": "Hash-check existing data against the torrent",
@@ -2502,6 +2694,43 @@
           "required": true,
           "type": "string",
           "value_name": "SOURCE"
+        },
+        {
+          "description": "Write the resolved metainfo here as a `.torrent`. `-` is stdout",
+          "name": "--output",
+          "short": "-o",
+          "type": "string",
+          "value_name": "PATH"
+        },
+        {
+          "default": "false",
+          "description": "Overwrite the output file if it is already there",
+          "name": "--force",
+          "type": "boolean"
+        },
+        {
+          "description": "Try this peer before any are discovered, as HOST:PORT. Repeatable",
+          "name": "--peer",
+          "type": "array",
+          "value_name": "ADDR"
+        },
+        {
+          "default": "false",
+          "description": "Disable the DHT while resolving",
+          "name": "--no-dht",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Disable local service discovery while resolving",
+          "name": "--no-lsd",
+          "type": "boolean"
+        },
+        {
+          "default": "false",
+          "description": "Do not announce to the magnet's trackers while resolving",
+          "name": "--no-tracker",
+          "type": "boolean"
         }
       ],
       "description": "Convert a torrent to a magnet URI, or resolve a magnet to metadata",

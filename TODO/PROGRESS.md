@@ -146,8 +146,8 @@ pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260824T164609340Z.c
   answered even if the stop had happened. The entry now waits on one field
   rather than on a lucky run.
 
-- **Entries:** 208 items. 30 open, 3 partial, 0 blocked, 164 done, 11 deferred
-  to Phase C. 164 of 197 workable done, 33 left.
+- **Entries:** 208 items. 29 open, 3 partial, 0 blocked, 165 done, 11 deferred
+  to Phase C. 165 of 197 workable done, 32 left.
 - **Tree:** 99 Rust files, 60,566 lines of code, 15,826 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus

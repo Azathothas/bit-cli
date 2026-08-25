@@ -160,7 +160,7 @@ pub fn run(
     env: &mut Env,
 ) -> Result<ExitCode> {
     let kind = Kind::classify(&args.source.source, env)?;
-    let meta = resolve_source(&kind, env, global, None)?;
+    let meta = resolve_source(&kind, env, global, None, &args.swarm)?;
     let layout = meta.layout();
     let total = layout.total_length;
 
@@ -169,7 +169,7 @@ pub fn run(
     let mut others = Vec::with_capacity(args.against.len());
     for source in &args.against {
         let kind = Kind::classify(source, env)?;
-        let other = resolve_source(&kind, env, global, None)?;
+        let other = resolve_source(&kind, env, global, None, &args.swarm)?;
         others.push((source.clone(), other));
     }
 

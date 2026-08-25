@@ -256,11 +256,18 @@ impl ListReport {
 fn resolve(
     source: &str,
     web_seeds: &crate::cli::WebSeedArgs,
+    swarm: &crate::cli::SwarmSourceArgs,
     global: &Global,
     env: &mut Env,
 ) -> Result<(Metainfo, Layout, BindingSet)> {
     let kind = Kind::classify(source, env)?;
-    let meta = resolve_source(&kind, env, global, web_seeds.web_seed_user_agent.as_deref())?;
+    let meta = resolve_source(
+        &kind,
+        env,
+        global,
+        web_seeds.web_seed_user_agent.as_deref(),
+        swarm,
+    )?;
     let layout = meta.layout();
     let specs = webseed_args::collect(web_seeds, Some(&meta), None, env, webseed_args::no_network)?;
     if specs.is_empty() {
@@ -280,7 +287,13 @@ pub fn list(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, global, env)?;
+    let (meta, layout, set) = resolve(
+        &args.source.source,
+        &args.web_seeds,
+        &args.swarm,
+        global,
+        env,
+    )?;
     let report = ListReport::new(&meta, &layout, &set);
     warn_about_cache(&set, renderer, env);
 
@@ -356,7 +369,13 @@ pub fn fetch(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, global, env)?;
+    let (meta, layout, set) = resolve(
+        &args.source.source,
+        &args.web_seeds,
+        &args.swarm,
+        global,
+        env,
+    )?;
 
     // Work out which bytes were asked for. Exactly one selector is allowed,
     // and the clap definition already refuses the conflicting combinations.
@@ -645,7 +664,13 @@ pub fn test(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, global, env)?;
+    let (meta, layout, set) = resolve(
+        &args.source.source,
+        &args.web_seeds,
+        &args.swarm,
+        global,
+        env,
+    )?;
     if global.dry_run {
         // A dry run of a probe is `webseed list`: the addressing without the
         // network. Saying so is more useful than probing anyway.
@@ -655,6 +680,7 @@ pub fn test(
                     source: args.source.source.clone(),
                 },
                 web_seeds: args.web_seeds.clone(),
+                swarm: args.swarm.clone(),
             },
             global,
             renderer,
@@ -868,7 +894,13 @@ pub fn probe(
     renderer: &mut Renderer,
     env: &mut Env,
 ) -> Result<ExitCode> {
-    let (meta, layout, set) = resolve(&args.source.source, &args.web_seeds, global, env)?;
+    let (meta, layout, set) = resolve(
+        &args.source.source,
+        &args.web_seeds,
+        &args.swarm,
+        global,
+        env,
+    )?;
     let duration = bit_cli_core::units::parse_duration(&args.duration)
         .map_err(|e| Error::usage(format!("--duration: {e}")))?;
     let sweep = parse_sweep(&args.concurrency_sweep)?;

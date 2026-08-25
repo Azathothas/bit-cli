@@ -2132,11 +2132,17 @@ fn resolve(
     env: &mut Env,
 ) -> Result<(Metainfo, Layout, BindingSet)> {
     let kind = SourceKind::classify(source, env)?;
+    // `bench` defines `--peer`, `--no-dht` and `--no-lsd` of its own, for the
+    // session it is measuring, and those are not the same swarm as the one a
+    // magnet would resolve against. A magnet here therefore resolves with the
+    // client defaults. Every `bench` source in `scripts/` is a local torrent.
+    // See `TODO/metainfo.md`, T-241.
     let meta = crate::source::resolve_source(
         &kind,
         env,
         global,
         web_seeds.web_seed_user_agent.as_deref(),
+        &crate::cli::SwarmSourceArgs::default(),
     )?;
     let layout = meta.layout();
     let specs = webseed_args::collect(web_seeds, Some(&meta), None, env, webseed_args::no_network)?;

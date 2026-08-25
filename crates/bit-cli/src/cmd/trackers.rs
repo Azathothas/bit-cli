@@ -103,7 +103,13 @@ pub fn run(
     // refusal said it did not. See `TODO/trackers.md`, T-251.
     let meta = match &kind {
         Kind::Magnet(_) | Kind::InfoHash(_) => None,
-        _ => Some(crate::source::resolve_source(&kind, env, global, None)?),
+        _ => Some(crate::source::resolve_source(
+            &kind,
+            env,
+            global,
+            None,
+            &crate::cli::SwarmSourceArgs::default(),
+        )?),
     };
     let info_hash = match (&meta, kind.info_hash()) {
         (Some(meta), _) => meta.info_hash(),

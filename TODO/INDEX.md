@@ -231,7 +231,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-238](peers.md) | P2 | peers | open | NAT traversal beyond the BEPs, and what a relay would actually buy |
 | [T-239](peers.md) | P2 | peers | open | Nothing says what shape of network bit-cli is on, or whether a peer path is direct |
 | [T-240](dht.md) | P3 | dht | open | A DHT node that answers slowly or emptily is queried again at the same rank |
-| [T-241](metainfo.md) | P2 | metainfo | open | A resolved magnet keeps the payload and loses the metainfo |
+| [T-241](metainfo.md) | P2 | metainfo | **done** | A resolved magnet keeps the payload and loses the metainfo *(nine commands take a magnet now, not one)* |
 | [T-242](performance.md) | P2 | performance | open | The request depth is a constant, and the run sits at 40 percent of it |
 | [T-243](phase-c.md) | n/a | phase-c | deferred | A user interface, and which of the two kinds decision 7.4 permits |
 | [T-244](cli-surface.md) | P2 | cli | open | A web page is not a source, and nothing extracts a link from one |
@@ -254,7 +254,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 ## Counts
 
 208 items: 197 to work through, and 11 deferred to Phase C.
-30 open, 3 partial, 0 blocked, 164 done.
+29 open, 3 partial, 0 blocked, 165 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -263,10 +263,10 @@ when a number here disagrees with them.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 2 | 0 | 0 | 70 | 72 |
-| P2 | 18 | 3 | 0 | 61 | 82 |
+| P2 | 17 | 3 | 0 | 62 | 82 |
 | P3 | 10 | 0 | 0 | 21 | 31 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **30** | **3** | **0** | **164** | **208** |
+| **All** | **29** | **3** | **0** | **165** | **208** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

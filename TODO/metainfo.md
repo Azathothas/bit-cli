@@ -758,7 +758,7 @@ Source:      `RESEARCH.md` entry 38's gap table, and a run, 2026-08-24
 Category:    metainfo
 Priority:    P2
 Effort:      M, re-estimated from S on 2026-08-24
-Status:      open
+Status:      **done**, 2026-08-25
 
 Problem:     `bit-cli` resolves a magnet to metainfo and never writes it out.
              `man/bit-cli.json` has `bit-cli magnet` taking one positional
@@ -887,6 +887,154 @@ case, and it gets larger under option two rather than smaller.
 **Not started.** The session that re-estimated it had a six hour soak landing
 inside its own window and did not open an `M` before reading it.
 
+#### Closed, 2026-08-25, on the operator's ruling: option two
+
+**The ruling accepted the recommendation**, so magnet resolution lives under
+`source::resolve_source` rather than on `bit-cli magnet` alone. Nine commands
+that read a source take a magnet or a bare info hash now, where five of them
+exited 4 on one.
+
+**The seam is `resolve_from_swarm` at `crates/bit-cli/src/source.rs:398`.**
+It starts a session with nothing but a temporary directory to write in, adds
+the source with `list_only`, and parses the `.torrent` bytes the session
+assembled. `Engine::resolve_with` already existed for `download --exclude-file`,
+which is why the Premise was right that the hard half was done: the metadata
+exchange was never the work.
+
+**A swarm lookup is not a fetch, so it has flags rather than happening
+silently.** `SwarmSourceArgs` at `crates/bit-cli/src/cli.rs:383` is `--peer`,
+`--no-dht`, `--no-lsd` and `--no-tracker`, under a "Resolving a magnet" help
+heading, and it is flattened into `info`, `files`, `tree`, `magnet`, `verify`
+and the four `webseed` subcommands. The names are `download`'s and `seed`'s,
+because a caller who has restricted one swarm means the same thing here.
+
+**Three commands do not get the group and each has its own reason.**
+
+| command | why |
+| --- | --- |
+| `trackers` | it flattens `TrackerArgs`, which defines `--no-tracker`, and clap refuses two definitions of one flag. It also does not need one: a magnet carries the info hash an announce needs, so it never reaches the resolver |
+| `peers`, `download`, `seed` | they own `--peer` and `--no-dht` already and hand the source straight to the engine |
+| `bench` | the same, and its swarm flags describe the session it is measuring rather than a metadata lookup. A magnet there resolves with the client defaults |
+
+**The group is the last field of every struct it is flattened into**, which is
+not cosmetic. `next_help_heading` applies from where it appears onward, so a
+group in the middle files every flag after it under "Resolving a magnet". That
+is [T-245](cli-surface.md)'s neighbour [T-159](cli-surface.md), which put
+subcommand flags under "Report options" once already.
+
+**The deadline is its own constant.** `RESOLVE_TIMEOUT` at
+`crates/bit-cli/src/source.rs:707` is 60 seconds against `FETCH_TIMEOUT`'s 30,
+because finding a peer, handshaking it and pulling the `info` dictionary is
+more work than a `GET` of the same bytes. `--timeout` replaces it either way.
+
+#### `magnet --output`, which is what the entry was filed for
+
+`crates/bit-cli/src/cmd/magnet.rs:133` writes it. `-` is stdout and `--force`
+overwrites, the same as `create --output` and `edit --output`, and `-o` is the
+same letter those two already use.
+
+**Without `--output`, `bit-cli magnet <magnet>` still costs nothing**: it reads
+the URI and reports it, with no swarm, no tracker and no DHT. `--output` is the
+one thing on that command that needs the metadata behind the URI, so it is the
+one thing that joins a swarm. The report is the same either way.
+
+**The info hash cannot move and it is proved rather than trusted.**
+`Metainfo::write_to_vec` splices the `info` dictionary in as the bytes that
+arrived, decodes what it produced, and refuses to return it if the hash
+differs.
+
+**A `ws=` web seed is carried across as `url-list`, and that was measured
+rather than assumed.** A torrent created with
+`--web-seed https://mirror.example.com/pub/` produces a magnet carrying
+`ws=https%3A%2F%2Fmirror%2Eexample%2Ecom%2Fpub%2F`; resolving that magnet and
+writing it out gives a file whose `web_seeds` is
+`https://mirror.example.com/pub/` and whose info hash is unchanged. The session
+does not put it there, because `ws=` is magnet addressing rather than something
+the `info` dictionary carries.
+
+**Two keys come out that the session puts in.** Measured against a magnet
+carrying only `xt`, `dn` and `xl`: the file began
+`d8:announce0:13:announce-listllee`, an `announce` of the empty string and one
+empty `announce-list` tier, because `torrent_file_from_info_bytes` in
+`vendor/rqbit/crates/librqbit/src/session.rs:542` writes both unconditionally.
+Neither means anything and an empty announce URL is a value a client would try
+to dial, so both are dropped when they are empty. After: `d4:infod5:fi`, 589
+bytes against 621.
+
+#### Acceptance, and it is the cross-tool one the entry asked for
+
+`scripts/interop-roundtrip.ps1` has a fourth case. It creates a torrent, prints
+its magnet, resolves that magnet off a `bit-cli` seeder with `--output`,
+re-reads the written file through `bit-cli info`, and hands it to `aria2c`.
+
+```bash
+pwsh -NoProfile -File scripts/interop-roundtrip.ps1
+```
+
+```text
+CASE       RESULT   INFO HASH                                  DETAIL
+v1         pass     a6291a9a2794b3ff158e6db9d9424e6b166ddca7   490012 bytes matched
+private    pass     7240f139d5bbabedba0e2c7522bcafd6b087e8c5   490012 bytes matched
+webseed    pass     a6291a9a2794b3ff158e6db9d9424e6b166ddca7   490012 bytes matched
+magnet     pass     a6291a9a2794b3ff158e6db9d9424e6b166ddca7   info hash survived the write, and aria2c opened it
+
+4 of 4 cases round tripped byte for byte
+```
+
+`bench/interop-magnet-20260825T033412Z.json` is that run. Nothing in it touches
+the network: `--no-dht --no-lsd --no-tracker` on both sides leaves a swarm of
+one loopback address.
+
+Four tests come with it, in process:
+
+```bash
+cargo test -p bit-cli --lib magnet
+```
+
+`a_magnet_is_read_from_the_swarm_and_reports_what_the_torrent_does` compares
+`info` over a magnet against `info` over the `.torrent`, field for field.
+`a_resolved_magnet_is_written_back_out_with_the_same_info_hash` is `--output`
+and the two empty keys. The other two are the failure shapes, below.
+
+#### Two tests asserted the old refusal and are inverted rather than deleted
+
+That is [RULES.md](RULES.md) section 5's rule, and both inversions found
+something.
+
+- **`a_magnet_with_nowhere_to_look_says_so_rather_than_waiting`**, in
+  `crates/bit-cli/src/cmd/info.rs`. The code is still 4, because a magnet with
+  the DHT, local discovery and trackers all off and no `--peer` is still not
+  retryable, and the session says so at once:
+  `no known way to resolve peers (no DHT, no trackers, no initial_peers)`.
+  The old assertion was "no piece hashes".
+- **`a_magnet_from_inside_a_runtime_is_an_error_not_a_panic`**, in
+  `crates/bit-cli/src/source.rs`. A magnet used to short-circuit to
+  `load_local` before a runtime was considered; it needs one now, so it reaches
+  the same guard a URL does. `the_local_only_path_still_refuses_a_magnet` is
+  new beside it, because `load_local` is still the door for a caller that must
+  not touch the network and its refusal still has to say why.
+
+**And the first run of the inverted test spent sixty seconds proving something
+worth writing down.** Without the three flags it bootstrapped the real DHT.
+That is correct for a client and wrong for a test, and it is why every test
+here passes all three.
+
+#### What the deadline is actually for, measured
+
+`a_magnet_whose_only_peer_never_answers_exits_nine_and_names_the_deadline`
+needed a peer that **accepts and stays silent**, not one that refuses. A peer
+that refuses is an address list that exhausts, and the session says
+`input address stream exhausted, no way to discover torrent metainfo` and exits
+4 at once. The deadline is what bounds a swarm that keeps something in flight,
+and exit 9 with the milliseconds named is what a caller gets from it.
+
+#### What this entry does not do
+
+**`xs=` and `as=` are not carried into the written torrent.** `ws=` is, as
+`url-list`, and the trackers arrive with the session's own assembly. The other
+two are magnet-only addressing with no agreed metainfo key, and nothing in this
+tree reads one, so writing one would be inventing a field. It is named here
+rather than left implicit.
 
 ### T-248 There is no way to ask what two torrents disagree about
 

@@ -64,7 +64,7 @@ in `cli.rs` to stop it.
 | `-l` | `--log-file` | global | `-l` log | Same concept. |
 | `-O` | `--index-out` | download, verify, seed | `-O` index out | Same concept, zero-based like every other index flag here. The path is a request: it is sanitised and disambiguated like a torrent path, so it cannot escape the output directory. The three commands are one payload read three ways: `download` writes it there, `verify` reads it back from there, and `seed` serves it from there. |
 | `-o` | `--out` | download | `-o` out | Same concept. |
-| `-o` | `--output` | create, edit, man | unclaimed in this position | `-` means stdout, following `intermodal`. |
+| `-o` | `--output` | create, edit, magnet, man | unclaimed in this position | `-` means stdout, following `intermodal`. |
 | `-q` | `--quiet` | global | `-q` quiet | Same concept. |
 | `-s` | `--split` | download | `-s` split | Same concept, and the **same knob as `-x`** here. See below. |
 | `-u` | `--max-upload-rate` | download, seed | `-u` max upload limit | Same concept. |

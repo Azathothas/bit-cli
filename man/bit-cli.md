@@ -184,6 +184,10 @@ Effects: `read_only`.
 | option | type | accepts | default | what it does |
 | --- | --- | --- | --- | --- |
 | `source <SOURCE>` | string |  |  | A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
+| `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 
 ### `bit-cli files`
 
@@ -196,6 +200,10 @@ Effects: `read_only`.
 | `source <SOURCE>` | string |  |  | A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin |
 | `--sort <KEY>` | string |  | `index` | Sort key, as KEY or KEY:ORDER. Keys: index, path, size |
 | `--against <TORRENT>` | array |  |  | Also report which files another torrent holds identically. Repeatable |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
+| `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 
 ### `bit-cli tree`
 
@@ -208,6 +216,10 @@ Effects: `read_only`.
 | `source <SOURCE>` | string |  |  | A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin |
 | `--depth <N>` | string |  |  | Stop at this depth and roll the rest up. The root is depth 0 |
 | `--no-sizes` | boolean |  | `false` | Print the piece ranges without the size and file count columns |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
+| `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 
 ### `bit-cli peers`
 
@@ -330,6 +342,10 @@ Effects: `read_only`.
 | `--web-seed-priority <N>` | string |  |  | Bias among sources. Higher wins when several can serve a piece |
 | `--prefer-web-seed` | boolean |  | `false` | Bias the picker toward HTTP when both a peer and a source have a piece |
 | `--web-seed-require` | boolean |  | `false` | Fail the run if a declared source turns out to be unusable |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
+| `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 
 ### `bit-cli webseed test`
 
@@ -379,6 +395,10 @@ Effects: `read_only`.
 | `--head` | boolean |  | `false` | Use HEAD rather than a one-byte ranged GET |
 | `--concurrency <N>` | string |  | `16` | Sources probed at once |
 | `--web-seed-report-header <NAME>` | array |  |  | Report this response header as well. Repeatable, case insensitive |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
+| `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 
 ### `bit-cli webseed probe`
 
@@ -427,6 +447,10 @@ Effects: `read_only`.
 | `--web-seed-require` | boolean |  | `false` | Fail the run if a declared source turns out to be unusable |
 | `--duration <DUR>` | string |  | `10s` | How long to run |
 | `--concurrency-sweep <SPEC>` | string |  | `1,2,4,8,16` | Step concurrency and report the curve |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
+| `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 
 ### `bit-cli webseed fetch`
 
@@ -480,6 +504,10 @@ Effects: `idempotent`.
 | `--bytes <RANGE>` | string |  |  | Fetch a byte range |
 | `--output <PATH>` | string |  |  | Write the bytes here, or `-` for stdout. Writes nothing without this |
 | `--verify` | boolean |  | `true` | Verify against the torrent's piece hashes |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
+| `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 
 ### `bit-cli verify`
 
@@ -495,6 +523,10 @@ Effects: `read_only`.
 | `--select-file <INDEX>` | array |  |  | Verify only the files a `--select-file` download asked for. Accepts ranges: 1-5,8 |
 | `--exclude-file <INDEX>` | array |  |  | Skip these files, as `--select-file`'s complement |
 | `--index-out <INDEX=PATH>`, `-O` | array |  |  | Where a file was written, as INDEX=PATH, for a payload downloaded with `-O`/`--index-out` |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
+| `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 
 ### `bit-cli create`
 
@@ -567,6 +599,12 @@ Effects: `read_only`.
 | option | type | accepts | default | what it does |
 | --- | --- | --- | --- | --- |
 | `source <SOURCE>` | string |  |  | A .torrent path, an HTTP(S) URL, a magnet URI, an info hash, a metalink, or `-` for stdin |
+| `--output <PATH>`, `-o` | string |  |  | Write the resolved metainfo here as a `.torrent`. `-` is stdout |
+| `--force` | boolean |  | `false` | Overwrite the output file if it is already there |
+| `--peer <ADDR>` | array |  |  | Try this peer before any are discovered, as HOST:PORT. Repeatable |
+| `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
+| `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
+| `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 
 ### `bit-cli seed`
 

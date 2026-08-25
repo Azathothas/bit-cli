@@ -908,6 +908,60 @@ pub fn free_port() -> u16 {
         .port()
 }
 
+/// Seed one fixture on a thread, and wait until its listener answers.
+///
+/// The swarm a magnet resolves against has to be a real one, and it has to be
+/// exactly this process: `--no-dht --no-lsd --no-tracker` on both sides leaves
+/// a swarm of the addresses on the command line and nothing else, so nothing
+/// here reaches the network.
+///
+/// The wait is not optional and it is not politeness. The seeder is on a
+/// thread and the resolver dials it from another, and `librqbit` does not
+/// retry a dead peer for ten seconds, which is longer than any deadline a test
+/// sets. That is [`TODO/cli-surface.md`], T-160, and it turned CI red on a
+/// documentation-only commit.
+///
+/// The payload is placed under the torrent's own name, which is what a seeder
+/// resolves `--data` against.
+///
+/// **`--stop-after` bounds the fixture and the caller joins the handle.**
+/// Twenty seconds is the seeder's whole life: it is not a deadline anything in
+/// a test waits on, because the wait above is on the listener and the work
+/// after it is a loopback resolution that takes about a second. Joining is
+/// what keeps the thread from reading out of a `TempDir` the fixture is
+/// dropping, which on Windows is a directory that will not delete.
+pub fn seed_fixture(fixture: &TorrentFixture, port: u16) -> std::thread::JoinHandle<ExitCode> {
+    let dir = fixture.dir();
+    let data = dir.join("seeded");
+    fixture.place(&data, &[]);
+    let torrent = fixture.path_str().to_string();
+    let data = data.to_str().expect("utf-8 path").to_string();
+    let handle = std::thread::spawn(move || {
+        let (mut env, _) = Env::test(
+            &[
+                "seed",
+                &torrent,
+                "--data",
+                &data,
+                "--port",
+                &port.to_string(),
+                "--no-dht",
+                "--no-lsd",
+                "--no-tracker",
+                "--stop-after",
+                "20s",
+            ],
+            dir,
+        );
+        crate::run(&mut env)
+    });
+    assert!(
+        wait_for_listener(port, std::time::Duration::from_secs(15)),
+        "the seeder never listened on {port}"
+    );
+    handle
+}
+
 /// Block until something accepts on `port`, or the timeout runs out.
 ///
 /// `free_port` binds a port to learn its number and then drops the listener, so

@@ -5,11 +5,16 @@
 # with bit-cli, and then downloads it with a second client over loopback. It
 # passes only when the second client's output is byte-identical to the input.
 #
-# Three cases run:
+# Four cases run:
 #   v1        a plain multi-file torrent, served by bit-cli seed over BitTorrent
 #   private   the same with --private, so the private flag is exercised
 #   webseed   --web-seed with no peer at all, so the second client has to
 #             resolve the url-list and fetch over HTTP alone
+#   magnet    a magnet resolved off a bit-cli seeder with `magnet --output`,
+#             then opened by the second client. The property is cross-tool: a
+#             torrent this tree writes out of metadata it pulled over BEP 9 is
+#             only worth writing if another client will open it. See
+#             TODO/metainfo.md, T-241.
 #
 # Nothing here touches the network. The tracker, the web seed, the seeder, and
 # the second client all bind 127.0.0.1.
@@ -499,6 +504,129 @@ function Invoke-Case {
 }
 
 # ---------------------------------------------------------------------------
+# The magnet case
+# ---------------------------------------------------------------------------
+#
+# Not `Invoke-Case`, because the property is a different one. The three cases
+# above prove the payload survives a round trip; this proves the **metainfo**
+# does. A magnet carries an info hash and nothing else, so a client that pulls
+# the metadata over BEP 9 and writes it back out has produced a file nobody has
+# checked against anything: the hash it claims is the hash of the bytes it
+# assembled, and the only real test is whether another client opens it.
+#
+# Nothing here touches the network either. `--no-dht --no-lsd --no-tracker` on
+# the seeder and on the resolver leaves a swarm of one loopback address.
+
+function Invoke-MagnetCase {
+    Write-Step "case magnet"
+    $failures = [System.Collections.ArrayList]@()
+    $steps = [System.Collections.ArrayList]@()
+    $torrent = Join-Path $Root "magnet.torrent"
+    $written = Join-Path $Root "from-magnet.torrent"
+
+    try {
+        $create = Invoke-Recorded "magnet-create" $bitCli @(
+            "create", "payload", "--piece-length", "32KiB", "--no-creation-date",
+            "--output", $torrent, "--force", "--json"
+        ) $Root 60
+        [void]$steps.Add($create)
+        if ($create.exit_code -ne 0) {
+            [void]$failures.Add("bit-cli create exited $($create.exit_code)")
+            return [pscustomobject]@{ name = "magnet"; passed = $false; failures = $failures; steps = $steps }
+        }
+        $created = Get-Content $create.stdout -Raw | ConvertFrom-Json
+
+        $uri = Invoke-Recorded "magnet-uri" $bitCli @("magnet", $torrent) $Root 30
+        [void]$steps.Add($uri)
+        if ($uri.exit_code -ne 0) {
+            [void]$failures.Add("bit-cli magnet exited $($uri.exit_code)")
+            return [pscustomobject]@{ name = "magnet"; passed = $false; failures = $failures; steps = $steps }
+        }
+        $magnet = (Get-Content $uri.stdout -Raw).Trim()
+        Write-Step "  magnet $magnet"
+
+        # A fixed port, the way the seeding cases above use 51413. This one
+        # is its own so the two can never be in flight together.
+        $port = 51414
+        $seeder = Start-Background "magnet-seed" $bitCli @(
+            "seed", $torrent, "--data", $Root, "--port", "$port",
+            "--no-dht", "--no-lsd", "--no-tracker", "--seed-time", "120s"
+        ) $Root
+        [void]$seeder
+
+        # Waited on the condition. A bound port is not a session ready to
+        # answer for this info hash, so this dials until one completes rather
+        # than sleeping a guess. See TODO/windows.md, T-221.
+        $deadline = (Get-Date).AddSeconds(30)
+        $listening = $false
+        while ((Get-Date) -lt $deadline) {
+            if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) {
+                $listening = $true
+                break
+            }
+            Start-Sleep -Milliseconds 200
+        }
+        if (-not $listening) {
+            [void]$failures.Add("the seeder never listened on $port")
+            return [pscustomobject]@{ name = "magnet"; passed = $false; failures = $failures; steps = $steps }
+        }
+        Write-Step "  seeder on 127.0.0.1:$port"
+
+        $resolve = Invoke-Recorded "magnet-resolve" $bitCli @(
+            "magnet", $magnet, "--peer", "127.0.0.1:$port",
+            "--no-dht", "--no-lsd", "--no-tracker",
+            "--output", $written, "--force"
+        ) $Root 90
+        [void]$steps.Add($resolve)
+        if ($resolve.exit_code -ne 0) {
+            [void]$failures.Add("bit-cli magnet --output exited $($resolve.exit_code)")
+        }
+
+        # The hash the written file actually has, read back through the tool
+        # rather than trusted from the run that wrote it.
+        $reread = Invoke-Recorded "magnet-reread" $bitCli @("info", $written, "--json") $Root 30
+        [void]$steps.Add($reread)
+        $writtenHash = $null
+        if ($reread.exit_code -eq 0) {
+            $writtenHash = (Get-Content $reread.stdout -Raw | ConvertFrom-Json).info_hash
+            if ($writtenHash -ne $created.info_hash) {
+                [void]$failures.Add("the written torrent has info hash $writtenHash, the original has $($created.info_hash)")
+            }
+        } else {
+            [void]$failures.Add("bit-cli info on the written torrent exited $($reread.exit_code)")
+        }
+
+        # And the point of the case: another client opens it.
+        $opened = Invoke-Recorded "magnet-client" $clientPath (Get-ShowArgs $written) $Root 60
+        [void]$steps.Add($opened)
+        if ($opened.exit_code -ne 0) {
+            [void]$failures.Add("$Client could not open the written torrent, exit $($opened.exit_code)")
+        } else {
+            $said = (Get-Content $opened.stdout -Raw) + (Get-Content $opened.stderr -Raw)
+            foreach ($wanted in (Get-ShowExpectation $created.info_hash)) {
+                if ($said -notmatch [regex]::Escape($wanted)) {
+                    [void]$failures.Add("$Client opened the written torrent and did not report ``$wanted``")
+                }
+            }
+        }
+
+        $passed = $failures.Count -eq 0
+        Write-Step ("  {0}" -f $(if ($passed) { "the written torrent round tripped and $Client opened it" } else { "FAILED" }))
+        [pscustomobject]@{
+            name         = "magnet"
+            passed       = $passed
+            failures     = $failures
+            info_hash    = $created.info_hash
+            written_hash = $writtenHash
+            magnet       = $magnet
+            steps        = $steps
+        }
+    } finally {
+        Stop-Background
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 
@@ -520,6 +648,7 @@ try {
     } else {
         $cases += Invoke-Case -Name "webseed" -WebSeedOnly
     }
+    $cases += Invoke-MagnetCase
 } finally {
     Stop-Background
 }
@@ -550,7 +679,11 @@ Write-Output "report:  $reportPath"
 Write-Output ""
 Write-Output ("{0,-10} {1,-8} {2,-42} {3}" -f "CASE", "RESULT", "INFO HASH", "DETAIL")
 foreach ($case in $cases) {
-    $detail = if ($case.passed) { "$($case.total_bytes) bytes matched" } else { $case.failures -join "; " }
+    # The magnet case matches a torrent rather than a payload, so it says what
+    # it matched rather than borrowing a byte count it never took.
+    $detail = if (-not $case.passed) { $case.failures -join "; " }
+    elseif ($null -ne $case.total_bytes) { "$($case.total_bytes) bytes matched" }
+    else { "info hash survived the write, and $Client opened it" }
     Write-Output ("{0,-10} {1,-8} {2,-42} {3}" -f $case.name, $(if ($case.passed) { "pass" } else { "FAIL" }), $case.info_hash, $detail)
 }
 foreach ($case in $skipped) {

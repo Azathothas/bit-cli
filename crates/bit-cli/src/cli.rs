@@ -300,7 +300,7 @@ pub enum Command {
     Download(DownloadArgs),
 
     /// Parse a torrent, magnet, or metalink and print its metadata.
-    Info(SourceArgs),
+    Info(ReadSourceArgs),
 
     /// List files with index, path, size, and priority.
     Files(FilesArgs),
@@ -328,7 +328,7 @@ pub enum Command {
     Edit(EditArgs),
 
     /// Convert a torrent to a magnet URI, or resolve a magnet to metadata.
-    Magnet(SourceArgs),
+    Magnet(MagnetArgs),
 
     /// Seed existing data in the foreground.
     Seed(SeedArgs),
@@ -363,6 +363,82 @@ pub struct SourceArgs {
     /// heading. `TODO/cli-surface.md`, T-159.
     #[arg(value_name = "SOURCE", help_heading = None)]
     pub source: String,
+}
+
+/// How a magnet or a bare info hash is turned into metainfo.
+///
+/// Every other source kind is a document: a file to read, or a URL to fetch
+/// with one `GET`. These two carry an info hash and nothing else, so the only
+/// way to read one is to join the swarm it names and ask a peer for the
+/// metadata over BEP 9. That is a different operation from a fetch, with a
+/// different cost, so it has flags of its own rather than happening silently.
+///
+/// The four names are the ones `download` and `seed` already use, because a
+/// caller who has restricted one swarm means the same thing here. They are not
+/// on `SourceArgs` itself: `seed` and the three `bench` subcommands flatten
+/// that and define `--peer` and `--no-dht` of their own, and clap refuses two
+/// definitions of one flag. See `TODO/metainfo.md`, T-241.
+#[derive(Debug, Args, Clone, Default)]
+#[command(next_help_heading = "Resolving a magnet")]
+pub struct SwarmSourceArgs {
+    /// Try this peer before any are discovered, as HOST:PORT. Repeatable.
+    ///
+    /// With `--no-dht`, `--no-lsd` and `--no-tracker` this resolves the
+    /// metadata from exactly the peers named here and nowhere else.
+    #[arg(long = "peer", value_name = "ADDR")]
+    pub peers: Vec<String>,
+
+    /// Disable the DHT while resolving.
+    #[arg(long)]
+    pub no_dht: bool,
+
+    /// Disable local service discovery while resolving.
+    #[arg(long)]
+    pub no_lsd: bool,
+
+    /// Do not announce to the magnet's trackers while resolving.
+    #[arg(long)]
+    pub no_tracker: bool,
+}
+
+/// A source that may be a magnet, and the swarm flags that resolve one.
+///
+/// `SourceArgs` on its own is the positional and nothing else, and it stays
+/// that way for the commands that already own their swarm flags. This is what
+/// a read-only command flattens.
+#[derive(Debug, Args)]
+pub struct ReadSourceArgs {
+    #[command(flatten)]
+    pub source: SourceArgs,
+
+    #[command(flatten)]
+    pub swarm: SwarmSourceArgs,
+}
+
+/// `bit-cli magnet`: a torrent to a magnet, or a magnet back to a torrent.
+#[derive(Debug, Args)]
+pub struct MagnetArgs {
+    #[command(flatten)]
+    pub source: SourceArgs,
+
+    /// Write the resolved metainfo here as a `.torrent`. `-` is stdout.
+    ///
+    /// The whole point of resolving a magnet twice is not having to: the
+    /// metadata came off the swarm once and this keeps it. The bytes written
+    /// carry the `info` dictionary exactly as it arrived, so the info hash of
+    /// the file equals the one in the magnet, and `write_to_vec` proves that
+    /// rather than trusting it. See `TODO/metainfo.md`, T-241.
+    #[arg(short = 'o', long, value_name = "PATH")]
+    pub output: Option<String>,
+
+    /// Overwrite the output file if it is already there.
+    #[arg(long)]
+    pub force: bool,
+
+    // Last, so the group's help heading does not swallow --output above it.
+    // See the note where it is flattened into the other read-only commands.
+    #[command(flatten)]
+    pub swarm: SwarmSourceArgs,
 }
 
 /// Web seed flags, shared by every command that can attach one.
@@ -1123,6 +1199,9 @@ pub struct FilesArgs {
     /// which proves nothing and is what a differing piece length leaves.
     #[arg(long = "against", value_name = "TORRENT")]
     pub against: Vec<String>,
+
+    #[command(flatten)]
+    pub swarm: SwarmSourceArgs,
 }
 
 /// `bit-cli tree`.
@@ -1142,6 +1221,9 @@ pub struct TreeArgs {
     /// Print the piece ranges without the size and file count columns.
     #[arg(long = "no-sizes")]
     pub no_sizes: bool,
+
+    #[command(flatten)]
+    pub swarm: SwarmSourceArgs,
 }
 
 /// `bit-cli peers`.
@@ -1271,6 +1353,9 @@ pub struct WebseedListArgs {
 
     #[command(flatten)]
     pub web_seeds: WebSeedArgs,
+
+    #[command(flatten)]
+    pub swarm: SwarmSourceArgs,
 }
 
 /// `bit-cli webseed test`.
@@ -1308,6 +1393,9 @@ pub struct WebseedTestArgs {
     /// redacted unless `--no-redact` is given.
     #[arg(long = "web-seed-report-header", value_name = "NAME")]
     pub report_headers: Vec<String>,
+
+    #[command(flatten)]
+    pub swarm: SwarmSourceArgs,
 }
 
 /// `bit-cli webseed probe`.
@@ -1326,6 +1414,9 @@ pub struct WebseedProbeArgs {
     /// Step concurrency and report the curve.
     #[arg(long, value_name = "SPEC", default_value = "1,2,4,8,16")]
     pub concurrency_sweep: String,
+
+    #[command(flatten)]
+    pub swarm: SwarmSourceArgs,
 }
 
 /// `bit-cli webseed fetch`.
@@ -1364,6 +1455,9 @@ pub struct WebseedFetchArgs {
     /// Verify against the torrent's piece hashes.
     #[arg(long, default_value_t = true)]
     pub verify: bool,
+
+    #[command(flatten)]
+    pub swarm: SwarmSourceArgs,
 }
 
 /// `bit-cli verify`.
@@ -1404,6 +1498,9 @@ pub struct VerifyArgs {
     /// that file as missing. See `TODO/cli-surface.md`, T-116.
     #[arg(short = 'O', long, value_name = "INDEX=PATH")]
     pub index_out: Vec<String>,
+
+    #[command(flatten)]
+    pub swarm: SwarmSourceArgs,
 }
 
 /// `bit-cli create`.

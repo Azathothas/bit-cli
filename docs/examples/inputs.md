@@ -65,22 +65,23 @@ The forms above are what the argument parser understands. What a command can
 then do with one is narrower, and the difference is worth knowing before it
 surprises you.
 
-The split is one question: does the form name a document that one `GET` can
-answer, or does it name something only a swarm can.
+Every form reaches every command that reads a source. What differs is what
+reading one costs: a file is read, a URL and a Metalink are fetched, and a
+magnet or a bare info hash is resolved against the swarm it names.
 
 | form | `info`, `files`, `tree`, `magnet`, `verify`, `webseed`, `bench webseed` | `download`, `seed` |
 | --- | --- | --- |
 | local `.torrent` | yes | yes |
 | stdin | yes | yes |
-| HTTP(S) URL | yes | yes |
+| HTTP(S) URL | yes, one `GET` | yes |
 | Metalink, local or by URL | yes, after fetching the torrent it names | yes |
-| magnet or info hash | no | yes, after a swarm lookup |
+| magnet or info hash | yes, after a swarm lookup | yes, after a swarm lookup |
 
-`bit-cli trackers` sits across both columns and is worth its own line. It takes
-every form in the left column, because an announce needs the info hash and the
-length that a document carries, and it takes a magnet or a bare info hash too,
-because those carry the hash already. What it does not have is a length to
-announce for the last two, and it says so rather than claiming zero:
+`bit-cli trackers` is the one that does not resolve a magnet, and it is worth
+its own line. An announce needs the info hash and the length, and a magnet or a
+bare info hash carries the hash already, so it announces from that rather than
+joining a swarm to learn something it has. What it does not have is a length,
+and it says so rather than claiming zero:
 
 ```bash
 bit-cli trackers https://host/album.torrent --json
@@ -129,17 +130,62 @@ error: https://host/downloads/: the server answered with text/html: not a
 valid torrent: unexpected byte '<' at byte 0, expected a bencode value
 ```
 
-**A magnet and a bare info hash carry no piece hashes**, so there is nothing to
-report until the metadata has been pulled from the swarm. The refusal says so
-and names what to do:
+## A magnet is resolved, and that is not a fetch
 
-```text
-error: a magnet URI and a bare info hash carry no piece hashes, so the metadata
-has to be resolved from the swarm first
+**A magnet and a bare info hash carry no piece hashes**, so there is nothing to
+report until the metadata has been pulled from the swarm. Every command that
+reads a source does that lookup:
+
+```bash
+bit-cli info "magnet:?xt=urn:btih:..." --json
 ```
 
-`bit-cli download` does that lookup. So does `bit-cli magnet` in the other
-direction, turning a `.torrent` into a URI without any network at all.
+It joins the swarm the source names, asks a peer for the `info` dictionary over
+BEP 9, and reports the same document the `.torrent` would have produced. That
+is a different operation from a `GET`, so it has flags of its own, under
+**Resolving a magnet** in any of those commands' help:
+
+| flag | what it does |
+| --- | --- |
+| `--peer <ADDR>` | ask this peer before any are discovered. Repeatable |
+| `--no-dht` | do not use the DHT |
+| `--no-lsd` | do not use local service discovery |
+| `--no-tracker` | do not announce to the trackers the magnet names |
+
+All four together leave a swarm of exactly the addresses on the command line,
+which is what a private network wants and what every test here uses:
+
+```bash
+bit-cli info "magnet:?xt=urn:btih:..." --peer 127.0.0.1:6881 --no-dht --no-lsd --no-tracker
+```
+
+The deadline is `--timeout` where you set one and **60 seconds** where you do
+not, which is longer than the 30 a document fetch gets because the work is
+larger: find a peer, handshake it, then pull the metadata. Running out exits
+**9** and names the deadline in milliseconds.
+
+## Keeping what a resolution produced
+
+Resolving the same magnet twice means finding peers twice. `bit-cli magnet
+--output` writes what came back as a `.torrent`, so the second time is a file
+read:
+
+```bash
+bit-cli magnet "magnet:?xt=urn:btih:..." --peer 127.0.0.1:6881 --no-dht --no-lsd --no-tracker --output album.torrent
+```
+
+`-` writes it to stdout, and `--force` overwrites a file that is already there.
+
+**The info hash cannot move.** The `info` dictionary is spliced in as the bytes
+that arrived rather than re-encoded, and the written file is decoded again and
+its hash compared before anything reaches the disk. The trackers the magnet
+named are in the file; a `ws=` web seed is carried across as `url-list` when
+the magnet had one.
+
+Without `--output`, `bit-cli magnet` on a magnet reads the URI and stops:
+no swarm, no tracker, no DHT. `--output` is the only thing on that command that
+needs the metadata behind the URI. In the other direction it turns a
+`.torrent` into a URI with no network at all.
 
 ## What is not an input yet
 
@@ -201,8 +247,13 @@ What needs the network is the `.torrent` the document names by URL.
 ## What a failing source exits with
 
 Most of them exit **4, source resolution**: the source names something, and
-that something could not be read. A `.torrent` that is not there, a URL that
-answered with a page, a magnet whose metadata never arrived.
+that something could not be read. A `.torrent` that is not there, or a URL that
+answered with a page.
+
+**Running out of time is 9 rather than 4**, and it is its own answer because a
+retry could succeed where a re-read of the same bad document could not. A fetch
+that misses its deadline and a magnet whose metadata never arrived both exit
+there, naming the deadline in milliseconds.
 
 Three exit **2** instead, because they are not sources at all and no retry
 makes them one. A directory:
