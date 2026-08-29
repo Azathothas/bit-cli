@@ -116,15 +116,16 @@ pwsh -NoProfile -File scripts/gates.ps1
 
 - **CI:** **twenty-four** jobs, one more than last session: `The rendered tier`
   is new and builds `--features render`, lints it, tests it and drives both
-  tiers of the proving ground. Green at run **33245679142** against commit
-  `b6151ea`, with every job passing including all three release targets, which
-  is what answers the one question T-244 had left to CI: the vendored trees
-  build on both musl targets. Run **33249228182** against `c979227` is the one
-  the second push started.
+  tiers of the proving ground. Green at run **33250896807** against commit
+  `2282658`, with **all twenty-four passing**, including all three release
+  targets and the rendered tier driving a real Chrome on the runner. That
+  answers the one question T-244 had left to CI: the vendored trees build on
+  both musl targets.
   A **second** workflow arrived, `Staleness`, which is a schedule and a
   `workflow_dispatch` and does not run on a push at all.
 
-  **The new job failed once and it was the job's own fault, not the code's.**
+  **The new job failed once, at run 33249228182, and it was the job's own
+  fault rather than the code's.**
   `dtolnay/rust-toolchain` installs a toolchain and nothing else, so a job that
   runs clippy has to name `components: clippy`, and this one did not:
   `cargo-clippy is not installed for the toolchain`. Every other clippy job in
