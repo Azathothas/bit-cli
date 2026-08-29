@@ -91,7 +91,7 @@ function Record([string]$name, [bool]$ok, [string]$detail) {
 # start it early, and every gates run in between would otherwise end it. The
 # run is the measurement, so losing it silently costs the whole session.
 $tmpRoot = [System.IO.Path]::GetFullPath((Join-Path $repo ".tmp")) + [System.IO.Path]::DirectorySeparatorChar
-$candidates = @(Get-Process bit-cli, loopback-fileserver, loopback-tracker, loopback-churn -ErrorAction SilentlyContinue)
+$candidates = @(Get-Process bit-cli, loopback-fileserver, loopback-tracker, loopback-churn, loopback-tlsprobe -ErrorAction SilentlyContinue)
 $spared = @($candidates | Where-Object {
         $path = try { $_.Path } catch { $null }
         $path -and $path.StartsWith($tmpRoot, [StringComparison]::OrdinalIgnoreCase)

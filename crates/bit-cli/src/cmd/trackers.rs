@@ -109,6 +109,7 @@ pub fn run(
             global,
             None,
             &crate::cli::SwarmSourceArgs::default(),
+            &crate::cli::PageSourceArgs::default(),
         )?),
     };
     let info_hash = match (&meta, kind.info_hash()) {

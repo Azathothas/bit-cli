@@ -666,6 +666,12 @@
           "description": "Do not announce to the magnet's trackers while resolving",
           "name": "--no-tracker",
           "type": "boolean"
+        },
+        {
+          "description": "Take the one link on a page whose URL or text contains TEXT",
+          "name": "--page-select",
+          "type": "string",
+          "value_name": "TEXT"
         }
       ],
       "description": "Parse a torrent, magnet, or metalink and print its metadata",
@@ -718,6 +724,12 @@
           "description": "Do not announce to the magnet's trackers while resolving",
           "name": "--no-tracker",
           "type": "boolean"
+        },
+        {
+          "description": "Take the one link on a page whose URL or text contains TEXT",
+          "name": "--page-select",
+          "type": "string",
+          "value_name": "TEXT"
         }
       ],
       "description": "List files with index, path, size, and priority",
@@ -769,6 +781,12 @@
           "description": "Do not announce to the magnet's trackers while resolving",
           "name": "--no-tracker",
           "type": "boolean"
+        },
+        {
+          "description": "Take the one link on a page whose URL or text contains TEXT",
+          "name": "--page-select",
+          "type": "string",
+          "value_name": "TEXT"
         }
       ],
       "description": "Print the torrent's directory structure, rolled up",
@@ -1403,6 +1421,12 @@
           "description": "Do not announce to the magnet's trackers while resolving",
           "name": "--no-tracker",
           "type": "boolean"
+        },
+        {
+          "description": "Take the one link on a page whose URL or text contains TEXT",
+          "name": "--page-select",
+          "type": "string",
+          "value_name": "TEXT"
         }
       ],
       "description": "Resolve every binding and print the exact URL each file maps to. No network",
@@ -1701,6 +1725,12 @@
           "description": "Do not announce to the magnet's trackers while resolving",
           "name": "--no-tracker",
           "type": "boolean"
+        },
+        {
+          "description": "Take the one link on a page whose URL or text contains TEXT",
+          "name": "--page-select",
+          "type": "string",
+          "value_name": "TEXT"
         }
       ],
       "description": "Probe each source: range support, size, redirects, TLS, latency",
@@ -1994,6 +2024,12 @@
           "description": "Do not announce to the magnet's trackers while resolving",
           "name": "--no-tracker",
           "type": "boolean"
+        },
+        {
+          "description": "Take the one link on a page whose URL or text contains TEXT",
+          "name": "--page-select",
+          "type": "string",
+          "value_name": "TEXT"
         }
       ],
       "description": "Measure ranged-GET latency and throughput as concurrency scales",
@@ -2315,6 +2351,12 @@
           "description": "Do not announce to the magnet's trackers while resolving",
           "name": "--no-tracker",
           "type": "boolean"
+        },
+        {
+          "description": "Take the one link on a page whose URL or text contains TEXT",
+          "name": "--page-select",
+          "type": "string",
+          "value_name": "TEXT"
         }
       ],
       "description": "Fetch one range from one source and verify it against the torrent",
@@ -2386,6 +2428,12 @@
           "description": "Do not announce to the magnet's trackers while resolving",
           "name": "--no-tracker",
           "type": "boolean"
+        },
+        {
+          "description": "Take the one link on a page whose URL or text contains TEXT",
+          "name": "--page-select",
+          "type": "string",
+          "value_name": "TEXT"
         }
       ],
       "description": "Hash-check existing data against the torrent",
@@ -2731,6 +2779,12 @@
           "description": "Do not announce to the magnet's trackers while resolving",
           "name": "--no-tracker",
           "type": "boolean"
+        },
+        {
+          "description": "Take the one link on a page whose URL or text contains TEXT",
+          "name": "--page-select",
+          "type": "string",
+          "value_name": "TEXT"
         }
       ],
       "description": "Convert a torrent to a magnet URI, or resolve a magnet to metadata",

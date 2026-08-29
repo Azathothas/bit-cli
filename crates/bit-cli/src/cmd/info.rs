@@ -175,7 +175,7 @@ pub fn run(
     env: &mut Env,
 ) -> Result<ExitCode> {
     let kind = Kind::classify(&args.source.source, env)?;
-    let meta = resolve_source(&kind, env, global, None, &args.swarm)?;
+    let meta = resolve_source(&kind, env, global, None, &args.swarm, &args.page)?;
     let report = Report::new(&meta, kind.name());
     renderer.emit(env, "info", &report, || report.lines())?;
     Ok(ExitCode::Success)

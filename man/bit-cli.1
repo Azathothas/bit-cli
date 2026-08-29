@@ -657,7 +657,7 @@ Emit a progress event this often
 .SH NAME
 bit\-cli\-info \- Parse a torrent, magnet, or metalink and print its metadata
 .SH SYNOPSIS
-\fBbit\-cli\-info\fR [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-info\fR [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Parse a torrent, magnet, or metalink and print its metadata
 .SH OPTIONS
@@ -684,13 +684,19 @@ Disable local service discovery while resolving
 .TP
 \fB\-\-no\-tracker\fR
 Do not announce to the magnet\*(Aqs trackers while resolving
+.SH "RESOLVING A WEB PAGE"
+.TP
+\fB\-\-page\-select\fR \fI<TEXT>\fR
+Take the one link on a page whose URL or text contains TEXT.
+
+Matched case insensitively, as a substring, against both the resolved URL and the anchor text beside it. A page is still refused when this leaves more than one link, because a selector that matches two is not a selection.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-files 1  "bit-cli-files " 
 .SH NAME
 bit\-cli\-files \- List files with index, path, size, and priority
 .SH SYNOPSIS
-\fBbit\-cli\-files\fR [\fB\-\-sort\fR] [\fB\-\-against\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-files\fR [\fB\-\-sort\fR] [\fB\-\-against\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 List files with index, path, size, and priority
 .SH OPTIONS
@@ -725,13 +731,19 @@ Disable local service discovery while resolving
 .TP
 \fB\-\-no\-tracker\fR
 Do not announce to the magnet\*(Aqs trackers while resolving
+.SH "RESOLVING A WEB PAGE"
+.TP
+\fB\-\-page\-select\fR \fI<TEXT>\fR
+Take the one link on a page whose URL or text contains TEXT.
+
+Matched case insensitively, as a substring, against both the resolved URL and the anchor text beside it. A page is still refused when this leaves more than one link, because a selector that matches two is not a selection.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-tree 1  "bit-cli-tree " 
 .SH NAME
 bit\-cli\-tree \- Print the torrent\*(Aqs directory structure, rolled up
 .SH SYNOPSIS
-\fBbit\-cli\-tree\fR [\fB\-\-depth\fR] [\fB\-\-no\-sizes\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-tree\fR [\fB\-\-depth\fR] [\fB\-\-no\-sizes\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Print the torrent\*(Aqs directory structure, rolled up
 .SH OPTIONS
@@ -766,6 +778,12 @@ Disable local service discovery while resolving
 .TP
 \fB\-\-no\-tracker\fR
 Do not announce to the magnet\*(Aqs trackers while resolving
+.SH "RESOLVING A WEB PAGE"
+.TP
+\fB\-\-page\-select\fR \fI<TEXT>\fR
+Take the one link on a page whose URL or text contains TEXT.
+
+Matched case insensitively, as a substring, against both the resolved URL and the anchor text beside it. A page is still refused when this leaves more than one link, because a selector that matches two is not a selection.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-peers 1  "bit-cli-peers " 
@@ -1056,7 +1074,7 @@ Print this message or the help of the given subcommand(s)
 .SH NAME
 bit\-cli\-verify \- Hash\-check existing data against the torrent
 .SH SYNOPSIS
-\fBbit\-cli\-verify\fR [\fB\-\-data\fR] [\fB\-\-per\-piece\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-verify\fR [\fB\-\-data\fR] [\fB\-\-per\-piece\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Hash\-check existing data against the torrent
 .SH OPTIONS
@@ -1102,6 +1120,12 @@ Disable local service discovery while resolving
 .TP
 \fB\-\-no\-tracker\fR
 Do not announce to the magnet\*(Aqs trackers while resolving
+.SH "RESOLVING A WEB PAGE"
+.TP
+\fB\-\-page\-select\fR \fI<TEXT>\fR
+Take the one link on a page whose URL or text contains TEXT.
+
+Matched case insensitively, as a substring, against both the resolved URL and the anchor text beside it. A page is still refused when this leaves more than one link, because a selector that matches two is not a selection.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-create 1  "bit-cli-create " 
@@ -1278,7 +1302,7 @@ The torrent to read
 .SH NAME
 bit\-cli\-magnet \- Convert a torrent to a magnet URI, or resolve a magnet to metadata
 .SH SYNOPSIS
-\fBbit\-cli\-magnet\fR [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-force\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-magnet\fR [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-force\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Convert a torrent to a magnet URI, or resolve a magnet to metadata
 .SH OPTIONS
@@ -1313,6 +1337,12 @@ Disable local service discovery while resolving
 .TP
 \fB\-\-no\-tracker\fR
 Do not announce to the magnet\*(Aqs trackers while resolving
+.SH "RESOLVING A WEB PAGE"
+.TP
+\fB\-\-page\-select\fR \fI<TEXT>\fR
+Take the one link on a page whose URL or text contains TEXT.
+
+Matched case insensitively, as a substring, against both the resolved URL and the anchor text beside it. A page is still refused when this leaves more than one link, because a selector that matches two is not a selection.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-seed 1  "bit-cli-seed " 

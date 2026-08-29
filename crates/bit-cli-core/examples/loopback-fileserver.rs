@@ -516,7 +516,8 @@ fn serve_one(
     );
 
     let mut head = format!(
-        "HTTP/1.1 {status} {reason}\r\nAccept-Ranges: bytes\r\nContent-Type: application/octet-stream\r\nContent-Length: {count}\r\nConnection: {}\r\n",
+        "HTTP/1.1 {status} {reason}\r\nAccept-Ranges: bytes\r\nContent-Type: {}\r\nContent-Length: {count}\r\nConnection: {}\r\n",
+        content_type(path),
         connection_header(keep_alive)
     );
     if status == 206 {
@@ -651,6 +652,26 @@ fn respond_redirect(
 ///
 /// HTTP/1.1 keeps a connection open unless told otherwise, but saying so
 /// explicitly is what makes a packet capture of a failing run readable.
+/// The `Content-Type` for a served path, from its extension.
+///
+/// Everything is `application/octet-stream` unless the extension says
+/// otherwise, which is what a web seed serving payload bytes wants. The
+/// exceptions exist so a fixture can serve a **page**: T-244 tells a page from
+/// a `.torrent` by parsing the body first and reading this header second, and
+/// a server that labels every page as octet-stream cannot exercise the second
+/// half. See `TODO/cli-surface.md`, T-244.
+fn content_type(path: &str) -> &'static str {
+    let lower = path.to_ascii_lowercase();
+    let lower = lower.split(['?', '#']).next().unwrap_or("");
+    match () {
+        () if lower.ends_with(".html") || lower.ends_with(".htm") => "text/html; charset=utf-8",
+        () if lower.ends_with(".xhtml") => "application/xhtml+xml",
+        () if lower.ends_with(".json") => "application/json",
+        () if lower.ends_with(".txt") => "text/plain; charset=utf-8",
+        () if lower.ends_with(".torrent") => "application/x-bittorrent",
+        () => "application/octet-stream",
+    }
+}
 const fn connection_header(keep_alive: bool) -> &'static str {
     match keep_alive {
         true => "keep-alive",

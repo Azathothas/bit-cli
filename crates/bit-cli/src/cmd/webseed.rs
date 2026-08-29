@@ -257,6 +257,7 @@ fn resolve(
     source: &str,
     web_seeds: &crate::cli::WebSeedArgs,
     swarm: &crate::cli::SwarmSourceArgs,
+    page: &crate::cli::PageSourceArgs,
     global: &Global,
     env: &mut Env,
 ) -> Result<(Metainfo, Layout, BindingSet)> {
@@ -267,6 +268,7 @@ fn resolve(
         global,
         web_seeds.web_seed_user_agent.as_deref(),
         swarm,
+        page,
     )?;
     let layout = meta.layout();
     let specs = webseed_args::collect(web_seeds, Some(&meta), None, env, webseed_args::no_network)?;
@@ -291,6 +293,7 @@ pub fn list(
         &args.source.source,
         &args.web_seeds,
         &args.swarm,
+        &args.page,
         global,
         env,
     )?;
@@ -373,6 +376,7 @@ pub fn fetch(
         &args.source.source,
         &args.web_seeds,
         &args.swarm,
+        &args.page,
         global,
         env,
     )?;
@@ -668,6 +672,7 @@ pub fn test(
         &args.source.source,
         &args.web_seeds,
         &args.swarm,
+        &args.page,
         global,
         env,
     )?;
@@ -681,6 +686,7 @@ pub fn test(
                 },
                 web_seeds: args.web_seeds.clone(),
                 swarm: args.swarm.clone(),
+                page: args.page.clone(),
             },
             global,
             renderer,
@@ -898,6 +904,7 @@ pub fn probe(
         &args.source.source,
         &args.web_seeds,
         &args.swarm,
+        &args.page,
         global,
         env,
     )?;

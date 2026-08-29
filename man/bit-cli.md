@@ -188,6 +188,7 @@ Effects: `read_only`.
 | `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
+| `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 
 ### `bit-cli files`
 
@@ -204,6 +205,7 @@ Effects: `read_only`.
 | `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
+| `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 
 ### `bit-cli tree`
 
@@ -220,6 +222,7 @@ Effects: `read_only`.
 | `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
+| `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 
 ### `bit-cli peers`
 
@@ -346,6 +349,7 @@ Effects: `read_only`.
 | `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
+| `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 
 ### `bit-cli webseed test`
 
@@ -399,6 +403,7 @@ Effects: `read_only`.
 | `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
+| `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 
 ### `bit-cli webseed probe`
 
@@ -451,6 +456,7 @@ Effects: `read_only`.
 | `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
+| `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 
 ### `bit-cli webseed fetch`
 
@@ -508,6 +514,7 @@ Effects: `idempotent`.
 | `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
+| `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 
 ### `bit-cli verify`
 
@@ -527,6 +534,7 @@ Effects: `read_only`.
 | `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
+| `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 
 ### `bit-cli create`
 
@@ -605,6 +613,7 @@ Effects: `read_only`.
 | `--no-dht` | boolean |  | `false` | Disable the DHT while resolving |
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
+| `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 
 ### `bit-cli seed`
 

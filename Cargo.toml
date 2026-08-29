@@ -42,6 +42,14 @@ md-5 = "0.11.0"
 percent-encoding = "2.3.2"
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 rand = "0.10.2"
+# A throwaway certificate for `loopback-tlsprobe`, which is the fixture that
+# reads this client's own TLS fingerprint off the wire. A **dev** dependency
+# only: `about.toml` sets `ignore-dev-dependencies`, so it reaches no released
+# binary and no notice file. `ring` rather than the default `aws_lc_rs`,
+# because `ring` is already under `rustls` here and a second crypto provider
+# would be a second C build for a test fixture. See `TODO/cli-surface.md`,
+# T-244.
+rcgen = { version = "0.14.0", default-features = false, features = ["crypto", "ring"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "stream"] }
 rustls = { version = "0.23.41", default-features = false, features = ["std", "tls12", "ring"] }
 rustls-pki-types = "1.14.1"

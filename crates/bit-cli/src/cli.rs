@@ -401,6 +401,27 @@ pub struct SwarmSourceArgs {
     pub no_tracker: bool,
 }
 
+/// How a URL that turns out to be a web page is turned into one source.
+///
+/// A page is fetched with one `GET`, the same as a `.torrent` URL, and is only
+/// told apart from one after the bencode parse has failed. What needs a flag
+/// is the case where the page names **several** torrents: that is refused
+/// rather than guessed at, and this is how a caller says which one they meant
+/// without going and reading the page by hand. See `TODO/cli-surface.md`,
+/// T-244.
+#[derive(Debug, Args, Clone, Default)]
+#[command(next_help_heading = "Resolving a web page")]
+pub struct PageSourceArgs {
+    /// Take the one link on a page whose URL or text contains TEXT.
+    ///
+    /// Matched case insensitively, as a substring, against both the resolved
+    /// URL and the anchor text beside it. A page is still refused when this
+    /// leaves more than one link, because a selector that matches two is not a
+    /// selection.
+    #[arg(long = "page-select", value_name = "TEXT")]
+    pub page_select: Option<String>,
+}
+
 /// A source that may be a magnet, and the swarm flags that resolve one.
 ///
 /// `SourceArgs` on its own is the positional and nothing else, and it stays
@@ -413,6 +434,9 @@ pub struct ReadSourceArgs {
 
     #[command(flatten)]
     pub swarm: SwarmSourceArgs,
+
+    #[command(flatten)]
+    pub page: PageSourceArgs,
 }
 
 /// `bit-cli magnet`: a torrent to a magnet, or a magnet back to a torrent.
@@ -439,6 +463,9 @@ pub struct MagnetArgs {
     // See the note where it is flattened into the other read-only commands.
     #[command(flatten)]
     pub swarm: SwarmSourceArgs,
+
+    #[command(flatten)]
+    pub page: PageSourceArgs,
 }
 
 /// Web seed flags, shared by every command that can attach one.
@@ -1202,6 +1229,9 @@ pub struct FilesArgs {
 
     #[command(flatten)]
     pub swarm: SwarmSourceArgs,
+
+    #[command(flatten)]
+    pub page: PageSourceArgs,
 }
 
 /// `bit-cli tree`.
@@ -1224,6 +1254,9 @@ pub struct TreeArgs {
 
     #[command(flatten)]
     pub swarm: SwarmSourceArgs,
+
+    #[command(flatten)]
+    pub page: PageSourceArgs,
 }
 
 /// `bit-cli peers`.
@@ -1356,6 +1389,9 @@ pub struct WebseedListArgs {
 
     #[command(flatten)]
     pub swarm: SwarmSourceArgs,
+
+    #[command(flatten)]
+    pub page: PageSourceArgs,
 }
 
 /// `bit-cli webseed test`.
@@ -1396,6 +1432,9 @@ pub struct WebseedTestArgs {
 
     #[command(flatten)]
     pub swarm: SwarmSourceArgs,
+
+    #[command(flatten)]
+    pub page: PageSourceArgs,
 }
 
 /// `bit-cli webseed probe`.
@@ -1417,6 +1456,9 @@ pub struct WebseedProbeArgs {
 
     #[command(flatten)]
     pub swarm: SwarmSourceArgs,
+
+    #[command(flatten)]
+    pub page: PageSourceArgs,
 }
 
 /// `bit-cli webseed fetch`.
@@ -1458,6 +1500,9 @@ pub struct WebseedFetchArgs {
 
     #[command(flatten)]
     pub swarm: SwarmSourceArgs,
+
+    #[command(flatten)]
+    pub page: PageSourceArgs,
 }
 
 /// `bit-cli verify`.
@@ -1501,6 +1546,9 @@ pub struct VerifyArgs {
 
     #[command(flatten)]
     pub swarm: SwarmSourceArgs,
+
+    #[command(flatten)]
+    pub page: PageSourceArgs,
 }
 
 /// `bit-cli create`.

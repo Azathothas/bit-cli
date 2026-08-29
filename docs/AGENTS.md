@@ -41,7 +41,7 @@ fixed here rather than described as somebody else's problem.
 | --- | --- |
 | `crates/bit-cli/` | the binary: argument parsing, the commands, the reports |
 | `crates/bit-cli-core/` | the library: web seed fetching, the bridge, storage, metainfo, encryption |
-| `crates/bit-cli-core/examples/` | loopback fixtures the acceptance scripts drive: a tracker, a file server, a churn generator |
+| `crates/bit-cli-core/examples/` | loopback fixtures the acceptance scripts drive: a tracker, a file server, a churn generator, and a TLS and HTTP/2 fingerprint oracle |
 | `vendor/` | the vendored `librqbit` trees. **Changeable here**, and a change is recorded in `patches/` |
 | `patches/` | the patch series derived from `vendor/`, plus `UPSTREAM.md`, which is the record Apache-2.0 asks for |
 | `TODO/` | the authoritative record: one file per category, plus `INDEX.md`, `PROGRESS.md` and `RULES.md` |

@@ -19,6 +19,7 @@ pub mod layout;
 pub mod listener;
 pub mod metalink;
 pub mod mse;
+pub mod page;
 pub mod paths;
 pub mod peer_id;
 pub mod piece_order;

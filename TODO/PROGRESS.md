@@ -76,17 +76,39 @@ it, and it says so in its own first paragraph.
 
 ## State
 
-- **Last session:** 2026-08-25T01:19:24Z, unattended, and the operator ruled on
-  all three open questions in the kickoff: every recommendation is accepted.
+- **Last session:** 2026-08-29T04:24:07Z, unattended, and it is a **one-off**:
+  the kickoff carried its own work order rather than taking this file's, per
+  [RULES.md](RULES.md) section 3. The whole session is
+  [T-244](cli-surface.md), the only `L` open in `cli-surface.md`. The ordinary
+  work order resumes under "Start here next session" below.
   The duration is not restated here: `scripts/session-report.ps1` derives it
   from the instant above, and a duration written down twice is a number two
   documents disagree about.
 
   **The plan was written before starting**, per [RULES.md](RULES.md) section 1
-  step 4: the work order's items 2, 3 and 4 in that order, which the three
-  accepted rulings had unblocked. **It held**, and the only thing added to it
-  was the operator's, twice, mid-session: promote what a scratchpad script did
-  into the repository, and wire a manual step into the gates. Both shipped.
+  step 4, and it is the kickoff's eight tasks in its order:
+
+  1. Move the operator's own prior research tooling out of `.tmp/`, which is
+     gitignored and wiped, and into the tree: the TLS fingerprint oracle, and
+     whichever half of the browser-version tracker this tree can use.
+  2. Answer the premise before building the expensive half. Fetch the pages
+     `bit-cli` actually has to read with a plain client and count the
+     failures. That measurement decides whether an impersonating HTTP client
+     is this session's work or a documented contingency.
+  3. Build the proving ground: a generator emitting six escalating levels of
+     page, each with its expected extraction beside it, served through
+     `loopback-fileserver`.
+  4. Ship the static tier: classify a page, extract every `.torrent` href and
+     every `magnet:` URI with its anchor text, resolve against the document,
+     one match resolves, several are named and refused, zero names `--render`.
+  5. Assert the header set and the TLS fingerprint against a recorded capture,
+     which is the second half of the entry's own Acceptance.
+  6. `--render`, off by default, never bundled, a typed error when no browser
+     is found.
+  7. The tooling backlog, in the kickoff's value order, if 4 lands.
+
+  Task 2 gates only how much of task 4's fetch half is impersonation. Task 4
+  depends on nothing external and ships whatever tasks 2 and 5 conclude.
 - **Tests:** 1,370 passing, 0 failing, up from 1,361. Plus **153** in the
   vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
   do not run. `vendor/` did not move this session.
@@ -123,7 +145,7 @@ gh run list --limit 1
 pwsh -NoProfile -File scripts/soak.ps1 -ReadCsv bench/soak-20260825T014217900Z.csv
 ```
 
-- **Entries:** 208 items. 29 open, 3 partial, 0 blocked, 165 done, 11 deferred
+- **Entries:** 208 items. 28 open, 4 partial, 0 blocked, 165 done, 11 deferred
   to Phase C. 165 of 197 workable done, 32 left.
 - **Tree:** 99 Rust files, 61,217 lines of code, 16,123 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.

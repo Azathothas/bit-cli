@@ -700,7 +700,7 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
 - **Kill stray release processes before rebuilding:**
 
 ```bash
-pwsh -NoProfile -Command "Get-Process bit-cli,loopback-fileserver,loopback-tracker,loopback-churn -ErrorAction SilentlyContinue | Stop-Process -Force"
+pwsh -NoProfile -Command "Get-Process bit-cli,loopback-fileserver,loopback-tracker,loopback-churn,loopback-tlsprobe -ErrorAction SilentlyContinue | Stop-Process -Force"
 ```
 
 - Windows firewall is handled. `aria2c` 1.37.0 and `rqbit` 9.0.1 are installed

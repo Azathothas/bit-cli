@@ -64,6 +64,10 @@ walkdir.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
+# `loopback-tlsprobe` terminates TLS so it can read the HTTP/2 half of a
+# client's fingerprint, and a handshake needs a certificate. Nothing in this
+# tree could make one before, which is the blocker T-253 carries.
+rcgen.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync", "fs", "test-util"] }
 
@@ -80,4 +84,14 @@ test = true
 # side refusing it rather than the far side leaking a socket.
 [[example]]
 name = "loopback-churn"
+test = true
+
+# The oracle for T-244's acceptance. Its ClientHello parser, its HPACK decoder
+# and its golden-manifest reader are the things every fingerprint assertion
+# rests on, so `test = true` puts their unit tests in `cargo test --workspace`
+# with everything else. A parser that reads a hello wrong asserts the wrong
+# fingerprint and says PASS.
+[[example]]
+name = "loopback-tlsprobe"
+path = "examples/loopback-tlsprobe/main.rs"
 test = true

@@ -578,7 +578,7 @@ pub fn run(
     env: &mut Env,
 ) -> Result<ExitCode> {
     let kind = Kind::classify(&args.source.source, env)?;
-    let meta = resolve_source(&kind, env, global, None, &args.swarm)?;
+    let meta = resolve_source(&kind, env, global, None, &args.swarm, &args.page)?;
     let layout = meta.layout();
     let padding: Vec<bool> = meta.info().files.iter().map(|f| f.is_padding()).collect();
 

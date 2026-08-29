@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2819` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2597` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2633` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2328` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2867` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2645` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2681` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2376` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2819` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2867` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -4043,10 +4043,11 @@ Source:      the operator's brief of 2026-08-24, measured the same day
 Category:    cli
 Priority:    P2
 Effort:      L
-Status:      open
+Status:      partial, 2026-08-29: the static tier ships, the impersonating
+             fetch tier and `--render` do not
 
-Problem:     `source.rs:68` maps every `http://` and `https://` string to
-             `Kind::Url`, documented at `source.rs:32` as "an HTTP(S) URL
+Problem:     `source.rs:86` maps an `http://` or `https://` string to
+             `Kind::Url`, documented at `source.rs:40` as "an HTTP(S) URL
              pointing at a `.torrent`". A page that *links* to a torrent is
              classified the same way, fetched, and handed to the bencode
              parser, which fails on the first byte of the markup.
@@ -4107,6 +4108,308 @@ Notes:       [T-245](#t-245-four-commands-refuse-the-url-download-accepts) was
              the prerequisite, and it closed on 2026-08-24: a plain `.torrent`
              URL resolves under `info` now, so a page is the remaining step
              rather than the second of two.
+
+Correction:  **Two citations in the Problem were eight lines stale and are
+             fixed above.** `source.rs:68` and `source.rs:32` became `:86` and
+             `:40` on 2026-08-25 when T-241 added to that file's module header.
+             `check-todo.ps1` did not catch it, and the reason is worth
+             recording: it checks a short-form citation's line only when the
+             prose names a symbol occurring **exactly once** in the file, and
+             `Kind::Url` occurs four times in `source.rs`.
+
+             **And the Problem's sentence was imprecise in a way that mattered
+             to the design.** Line 86 does not map every `http(s)` string to
+             `Kind::Url`: it reads the extension off the URL's **path** and
+             returns `Kind::MetalinkUrl` for a metalink, `Kind::Url` otherwise.
+             A page arrives as `Kind::Url` because it is not a metalink, not
+             because nothing looks. That branch is what page detection extends.
+
+Correction:  **An off-host link is a match, and the first design said it was a
+             decoy.** Restricting matches to the document's own host was
+             written into the proving ground's L3 level as a decoy and is
+             wrong. Measured 2026-08-29 by `scripts/check-page-fetch.ps1`:
+             `kali.org` serves its download page from `www.kali.org` and every
+             one of the **113** torrent links on it sits on
+             `cdimage.kali.org`. A same-host rule returns nothing there. The
+             host is reported per link instead, so a caller can see it.
+
+Correction:  **An unquoted `href` is not exotic and the first count missed
+             113 links because of it.** `check-page-fetch.ps1`'s first run
+             counted torrent links with a quoted-only pattern and reported
+             **0** for `kali.org`. Kali serves minified HTML and writes every
+             link as `href=https://...iso.torrent>torrent`. All three HTML5
+             attribute framings are read now, and the same page reports 113.
+
+Measured:    **How much impersonation the static half needs, over a named
+             set.** The premise the whole Approach rests on had never been
+             tested, and `RESEARCH.md` review 5.5 put it first: fetch the pages
+             `bit-cli` has to read with a plain client and count the failures.
+
+             `scripts/check-page-fetch.ps1` is that measurement, committed as
+             `bench/page-fetch-20260829.json`. Fifteen pages in three groups,
+             all named in the script: the three mirrors RULES.md section 5
+             permits, nine distribution download pages, and three public
+             indexes that publish a page with no account. One `GET` per page,
+             `robots.txt` fetched and honoured per host, `bit-cli/0.2.0` as the
+             User-Agent, everything under `.tmp/`.
+
+             | verdict | pages |
+             | --- | --- |
+             | served | **15** |
+             | bot check | 0 |
+             | refused | 0 |
+             | error | 0 |
+
+             **That number does not retire the impersonating tier and the
+             operator ruled that it must not.** Fifteen friendly distribution
+             pages are not the population `bit-cli` meets, the measurement is
+             one client from one address on one day, and two of the fifteen sit
+             behind Cloudflare already. The ruling of 2026-08-29 is to build
+             the browser-shaped fetch rather than carry it as a contingency.
+
+Measured:    **What this client actually looks like on the wire, and it looks
+             like nothing else.** Captured 2026-08-29 with the oracle this
+             session put in the tree, `bit-cli` against
+             `loopback-tlsprobe --raw`:
+
+             ```
+             t13i1010h1_61a7ad8aa9b6_3fcd1a44f3e3
+             ```
+
+             Read it: TLS 1.3, no SNI because the probe is an IP literal, **10
+             ciphers, 10 extensions, and ALPN offering `http/1.1`**. No GREASE,
+             no ECH, no ALPS, no certificate compression, no post-quantum key
+             share. A current Chrome offers 15 ciphers, 15 or 16 extensions and
+             `h2`. The `a` segment alone separates the two before any hash is
+             compared.
+
+Measured:    **Whether `impit` can enter this tree at all**, which the survey
+             could not know because it never read this tree. Five questions,
+             four answered here and one left to CI, all on 2026-08-29,
+             x86_64 Windows, with the commands recorded.
+
+             | question | answer |
+             | --- | --- |
+             | MSRV 1.88 (`cargo +1.88 check --locked`) | **passes**, 289 packages |
+             | `x86_64-pc-windows-msvc` with `+crt-static` | **builds**, 8.59 MiB |
+             | `scripts/check-static.ps1` on that binary | **passes**, no VCRUNTIME or UCRT import |
+             | apify's `rustls` fork at the workspace root | **the whole workspace checks**, vendored `librqbit` included, on one `rustls 0.23.43` |
+             | `x86_64-` and `aarch64-unknown-linux-musl` | **not measured here**, no musl cross toolchain on this machine; CI's `Build` matrix is the instrument |
+
+             The MSRV answer is the one that mattered most, because a bump
+             would have been a decision above a `TODO/` item. There is none:
+             the graph resolves and checks on 1.88.
+
+             **`impit`'s own fingerprint reproduces the survey's claim, on a
+             platform the survey never tested.** Captured the same way:
+
+             ```
+             t13i1515h2_8daaf6152771_806a8c22fdea
+             ```
+
+             `8daaf6152771` is the published Chrome JA4 cipher hash, and the
+             extension list carries ALPS `0x44cd`, ECH `0xfe0d`, certificate
+             compression `0x001b` and the ML-DSA signature algorithms
+             `0x0904/5/6`.
+
+             **The survey's `h2` defect reproduces here too, twice.** `cargo`
+             prints, in the probe and again with the patch at this tree's own
+             workspace root:
+
+             ```
+             warning: patch `h2 v0.4.7 (https://github.com/apify/h2?rev=7f393a72...)` was not used in the crate graph
+             ```
+
+             apify's fork is `0.4.7`, `reqwest 0.13` resolves `0.4.19`, and a
+             `[patch]` that cannot satisfy the requirement is declined with a
+             **warning rather than an error**. Stock `h2` then encodes the
+             HEADERS frame with its own fixed pseudo-header order.
+
+Blocked:     **Three things adoption needs that are decisions rather than
+             work**, all measured on 2026-08-29 and none of them fatal.
+
+             - **`deny.toml` forbids a git source.** `unknown-git = "deny"` and
+               `allow-registry` names only crates.io, so the five apify git
+               dependencies fail the `deny` gate as the file stands. Vendoring
+               them under `vendor/`, which is what RULES.md section 6a requires
+               instead of a fork, removes the git sources and the question with
+               them.
+             - **`--cfg reqwest_unstable` has to be tree wide**, because
+               `impit` declares no `[features]` and reqwest's `http3` is
+               therefore unconditional. `.cargo/config.toml` sets **per target**
+               rustflags, and a `[build]` entry does not merge with a
+               `[target.*]` one, so the flag has to be added to all three
+               target blocks **and** to the three `RUSTFLAGS` blocks in
+               `.github/workflows/ci.yml`. That is exactly the shape of
+               [T-146](#t-146-ci-built-a-windows-binary-against-the-dynamic-c-runtime).
+             - **Two `reqwest` majors end up in the graph**, 0.12.28 and
+               0.13.4. `deny.toml` has `multiple-versions = "warn"`, so this
+               warns rather than fails, and it is a real size cost.
+
+             **The fork the survey recommends is forbidden here and the
+             sanctioned route is better.** `RESEARCH.md` section 9 says to fork
+             `apify/impit` and `apify/h2` into the operator's org and open a
+             pull request with the `h2` fix. RULES.md section 6a forbids every
+             part of that: `Azathothas/bit-cli` is the only repository an agent
+             may write to. The route this repository already uses for exactly
+             this problem is `vendor/` with a derived series under `patches/`
+             and a record in `patches/UPSTREAM.md`, whose `Upstream:` field is
+             where "a future apify release could retire this" is written down.
+
+Closed:      **Partial. The static tier ships and is the half that could not be
+             blocked.**
+
+             `crates/bit-cli-core/src/page.rs` is the extractor: one function
+             over an HTML string, so the rendered tier can change where the
+             HTML came from and nothing else. It is a forward-only tag scanner
+             rather than a tree builder, because "which hrefs are on this page"
+             never needs to know what nests inside what, and a scanner has no
+             recovery rules to get wrong on the markup real indexers serve.
+
+             **The parser choice is measured, not asserted.** Four candidates,
+             each given its own crate and resolved and checked on toolchain
+             1.88 on 2026-08-29:
+
+             | parser | packages added to the graph | MSRV 1.88 |
+             | --- | --- | --- |
+             | none, a hand-written scanner | **0** | ok |
+             | `tl` | **1** | ok |
+             | `lol_html` | **44** | ok |
+             | `scraper` | **57** | ok |
+
+             `lol_html` is what `RESEARCH.md` section 12 recommends, on the
+             grounds that `impit` already carries it. That argument only holds
+             once `impit` is in the graph, and it is a **rewriter**: pulling
+             anchor text out of it needs stateful handlers, where a scanner
+             reads the text between two tags directly. The scanner is 33 unit
+             tests and no new dependency, and every level of the proving ground
+             passes on it.
+
+             `source.rs` decides page from torrent by **attempt and fall back**:
+             the body is parsed as bencode first, and only when that fails is
+             it asked whether markup arrived. Deciding from `Content-Type`
+             first would get a mirror serving a real `.torrent` as `text/html`
+             wrong. A metainfo is a bencoded dictionary and begins `d`, so
+             nothing that parses as one is ever taken for a page. One hop and
+             never two: the torrent a page names is fetched with the plain
+             parser, so a page linking to a page is an error rather than a
+             crawl. That adds a fifth `source_kind`, `page`, for
+             [T-250](#t-250-nothing-reports-how-an-input-was-resolved) to
+             report.
+
+             `--page-select TEXT` is the selector the Approach asks for, under
+             a "Resolving a web page" heading flattened into the same nine
+             commands `SwarmSourceArgs` is, matched case insensitively as a
+             substring against both the resolved URL and the anchor text. A
+             page is still refused when it leaves more than one, because a
+             selector that matches two is not a selection.
+
+             **The proving ground is new and is the thing that makes the tier
+             falsifiable.** `scripts/make-page-fixture.ps1` emits six levels
+             and four acceptance cases, each with the correct extraction beside
+             it as JSON, carrying **two** lists: what the static tier must find
+             and what a browser must find.
+
+             `scripts/check-page-extract.ps1` serves them through
+             `loopback-fileserver` and compares. Run 2026-08-29:
+
+             ```
+             ok   L0-flat        level 0  4 link(s), in order, with their anchor text
+             ok   L1-structure   level 1  5 link(s), in order, with their anchor text
+             ok   L2-addressing  level 2  9 link(s), in order, with their anchor text
+             ok   L3-decoys      level 3  2 link(s), in order, with their anchor text
+             ok   L4-script      level 4  resolved the one link, info hash 0150ba15e8305dce993d0d76b7c567862a4c89bd
+             ok   L5-hostile     level 5  refused, and named --render
+             ok   one-torrent    level 0  resolved the one link, info hash 0150ba15e8305dce993d0d76b7c567862a4c89bd
+             ok   one-magnet     level 0  the single magnet reached the swarm resolver
+             ok   one-of-each    level 0  2 link(s), in order, with their anchor text
+             ok   two-of-each    level 0  4 link(s), in order, with their anchor text
+
+             check-page-extract: 10 case(s), 10 passed, 0 failed
+               links only a rendered tier reaches:
+                 L4-script      level 4  static 1  rendered 7  (+6)
+                 L5-hostile     level 5  static 0  rendered 2  (+2)
+             ```
+
+             **That last block is the argument for `--render` existing**, and
+             it is a number rather than an opinion: eight links on two pages
+             that no static tier can reach, and zero difference between the
+             tiers on levels 0 to 3, where a difference would be an extractor
+             defect.
+
+             **The first half of the Acceptance holds, run:**
+
+             ```
+             $ bit-cli info http://127.0.0.1:8099/one-torrent.html
+             name                 payload.bin
+             info hash            528e8fdd3dd50f4fc5a4c3363303406a7076f3b7
+             size                 4.00 KiB
+             $ echo $LASTEXITCODE
+             0
+             ```
+
+             ```
+             $ bit-cli info http://127.0.0.1:8099/two-of-each.html
+             error: http://127.0.0.1:8099/two-of-each.html is a web page with 4 torrent links, and nothing says which one to take. Name one of them directly, or narrow it with --page-select:
+               http://127.0.0.1:8099/files/first.torrent  (Example 24.04 Desktop)
+               http://127.0.0.1:8099/files/second.torrent  (Example 24.04 Server)
+               magnet:?xt=urn:btih:0102030405060708090a0b0c0d0e0f1011121314&dn=Short+One  (Example 24.04 Desktop magnet)
+               magnet:?xt=urn:btih:9e20e33071fae16fc950cd95e5fc6ec0059d9a63&dn=Example+Payload+24.04&...  (Example 24.04 Server magnet)
+             $ echo $LASTEXITCODE
+             4
+             ```
+
+             **The Acceptance's first sentence reads two ways and only one of
+             them agrees with the Approach.** "A page carrying one `.torrent`
+             link and one magnet link resolves" cannot mean one page carrying
+             both, because the Approach rules that a page yielding more than
+             one is refused. It is read as two pages, one link each, and both
+             are cases: `one-torrent` and `one-magnet`. The page carrying one
+             of each is a third case, `one-of-each`, and it resolves only with
+             `--page-select`.
+
+             **The oracle for the second half of the Acceptance is in the tree
+             and the golden is not yet.**
+             `crates/bit-cli-core/examples/loopback-tlsprobe/` is a `loopback-*`
+             fixture like the other three, with `test = true` so its
+             `ClientHello` parser, its HPACK decoder and its golden-manifest
+             reader are in `cargo test --workspace`. It reports JA3, JA4,
+             JA4_r, the Akamai HTTP/2 fingerprint and the HPACK-decoded header
+             order, takes `--expect-ja4`, `--expect-akamai` and
+             `--expect-file`, and writes a golden with `--write-golden`.
+             `rcgen` arrives with it as a **dev** dependency only, which is
+             what makes the throwaway certificate possible;
+             `about.toml` sets `ignore-dev-dependencies`, so it reaches no
+             released binary and no notice file.
+
+Left:        **Named precisely, because this entry is partial rather than
+             done.**
+
+             1. **The impersonating fetch tier.** Vendor `impit` and apify's
+                `h2` under `vendor/`, carry the `h2` version fix as a patch in
+                `patches/`, put both clients behind one `Fetcher` trait, and
+                take the three decisions in the Blocked section above. The
+                measurements that say it can be done are recorded here.
+             2. **The golden fingerprint**, which is the second half of this
+                entry's own Acceptance: capture with `loopback-tlsprobe`, store
+                it, and assert it in a check script. `--expect-file` and
+                `--write-golden` exist for it.
+             3. **`--render`**, with the browser resolver: an explicit
+                override, then platform defaults for Linux, macOS and Windows,
+                then an already-running instance on a debugging port, then a
+                typed "no browser" error naming every path searched. That last
+                case is the only part testable with no browser present, so it
+                is the part that has to work on every CI runner.
+             4. **`<link href>` is not read**, only `<a>` and `<area>`. An
+                indexer publishing `<link rel="alternate"
+                type="application/x-bittorrent">` is missed, and no page in the
+                fifteen measured does that.
+             5. **An indexer whose download links do not end `.torrent` is
+                missed entirely**, and one of the fifteen is exactly that:
+                `linuxtracker.org` publishes every torrent behind
+                `index.php?page=downloadcheck&id=<hex>`. Nothing about that URL
+                says it is a torrent until it is fetched. That is a real gap
+                and it is not the same gap as `--render`.
 
 ### T-245 Four commands refuse the URL download accepts
 

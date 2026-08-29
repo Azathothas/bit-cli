@@ -24,6 +24,12 @@ rule, so a 40-character hex filename in the working directory is still read as
 a hash. A Metalink URL is decided from the path only, so `?file=x.meta4` is a
 query naming a file and does not make the URL a Metalink.
 
+The one thing classification cannot decide by shape is whether an HTTP(S) URL
+names a `.torrent` or the **web page that links to one**, because the two are
+the same string. That is settled after the fetch, from the body, and
+["A URL that turns out to be a web page"](#a-url-that-turns-out-to-be-a-web-page)
+below is what happens then.
+
 The rules are in
 [`../../crates/bit-cli/src/source.rs`](../../crates/bit-cli/src/source.rs).
 
@@ -73,7 +79,8 @@ magnet or a bare info hash is resolved against the swarm it names.
 | --- | --- | --- |
 | local `.torrent` | yes | yes |
 | stdin | yes | yes |
-| HTTP(S) URL | yes, one `GET` | yes |
+| HTTP(S) URL naming a `.torrent` | yes, one `GET` | yes |
+| HTTP(S) URL naming a web page | yes, one `GET`, then one for the link it names | not yet |
 | Metalink, local or by URL | yes, after fetching the torrent it names | yes |
 | magnet or info hash | yes, after a swarm lookup | yes, after a swarm lookup |
 
@@ -192,13 +199,94 @@ no swarm, no tracker, no DHT. `--output` is the only thing on that command that
 needs the metadata behind the URI. In the other direction it turns a
 `.torrent` into a URI with no network at all.
 
-## What is not an input yet
+## A URL that turns out to be a web page
 
-**A web page.** A URL is assumed to name a `.torrent` itself. A page that
-*links* to one is fetched and handed to the bencode parser, which fails and
-names the content type it got. There is no HTML parsing anywhere in the tree.
-That is [T-244](../../TODO/cli-surface.md), and the design there is static
-extraction with a browser opt-in.
+A page and a `.torrent` are the same string until something reads the body, so
+they are not told apart by their shape. Classification puts both under "an
+HTTP(S) URL", the URL is fetched once, and what arrived decides:
+
+1. The body is parsed as a torrent. A metainfo is a bencoded dictionary and
+   begins `d`, so a real `.torrent` is read as one even when the mirror labels
+   it `text/html`.
+2. Only when that parse fails is the body asked whether it is markup, from its
+   first byte and its `Content-Type`.
+3. If it is, every `href` on an `<a>` or an `<area>` whose path ends
+   `.torrent`, and every `magnet:` URI, is collected with the anchor text
+   beside it.
+
+Relative links resolve against the document, and a `<base href>` wins over it
+where the page carries one.
+
+### One link resolves, and the run continues
+
+```bash
+bit-cli info http://127.0.0.1:8099/one-torrent.html
+```
+
+```text
+name                 payload.bin
+info hash            528e8fdd3dd50f4fc5a4c3363303406a7076f3b7
+size                 4.00 KiB
+```
+
+The torrent the page named is fetched and reported, exactly as if it had been
+named on the command line. This works on every command that reads a `SOURCE`.
+
+**One hop, never two.** The torrent a page names is fetched with the plain
+parser, so a page linking to a page is an error rather than a crawl.
+
+### Several links are named and refused
+
+```bash
+bit-cli info http://127.0.0.1:8099/two-of-each.html
+```
+
+```text
+error: http://127.0.0.1:8099/two-of-each.html is a web page with 4 torrent links, and nothing says which one to take. Name one of them directly, or narrow it with --page-select:
+  http://127.0.0.1:8099/files/first.torrent  (Example 24.04 Desktop)
+  http://127.0.0.1:8099/files/second.torrent  (Example 24.04 Server)
+  magnet:?xt=urn:btih:0102030405060708090a0b0c0d0e0f1011121314&dn=Short+One  (Example 24.04 Desktop magnet)
+  magnet:?xt=urn:btih:9e20e33071fae16fc950cd95e5fc6ec0059d9a63&dn=Example+Payload+24.04  (Example 24.04 Server magnet)
+```
+
+The exit code is 4. A page is not guessed at: every match is printed with its
+anchor text so the next command can name one. Under `--json` the same list is
+in the error's `context` as `page_links`, each entry carrying `url`, `text`,
+`kind` and `host`.
+
+`--page-select TEXT` narrows it. The text is matched case insensitively, as a
+substring, against both the resolved URL and the anchor text:
+
+```bash
+bit-cli info http://127.0.0.1:8099/one-of-each.html --page-select only.torrent
+```
+
+A selector that still leaves more than one link is refused the same way, because
+a selector that matches two is not a selection.
+
+### No link at all
+
+```bash
+bit-cli info http://127.0.0.1:8099/L5-hostile.html
+```
+
+```text
+error: http://127.0.0.1:8099/L5-hostile.html is a web page and no torrent link was found on it. If its links are built by script, `--render` reads the page after script has run; it needs a Chrome or Edge already installed and is off by default
+```
+
+A page whose links are built by script has none of them in the HTML the server
+sent. `--render` is the answer to that and it is not implemented yet: the
+message names it because that is where the work is going, and it says plainly
+that a browser has to be installed for it rather than implying one is.
+
+### What is not read
+
+- `<link rel="alternate">`, only `<a>` and `<area>`.
+- A download link whose URL does not end `.torrent`. An indexer publishing
+  every torrent behind `index.php?id=...` says nothing in the URL about what it
+  serves, and nothing here fetches a link to find out.
+- Anything inside `<script>`, `<style>`, `<template>`, `<noscript>` or an HTML
+  comment. A browser with script on does not render those either.
 
 ## Several sources in one invocation
 

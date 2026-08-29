@@ -21,6 +21,13 @@
 //! not opt-in, for the reason [T-245](../../TODO/cli-surface.md) closed on: a
 //! source kind one command accepts and four refuse is a defect rather than a
 //! safeguard. See `TODO/metainfo.md`, T-241.
+//!
+//! **One kind is not on that list because it has no shape of its own.** An
+//! HTTP(S) URL may name a `.torrent` or the **web page** that links to one,
+//! and the two are the same string. [`Kind::classify`] cannot tell them apart
+//! and does not try: both are [`Kind::Url`], and it is
+//! [`fetch_torrent_or_page`] that decides, after the fetch, from the body.
+//! See `TODO/cli-surface.md`, T-244.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -285,12 +292,12 @@ pub async fn resolve(
     env: &mut Env,
     user_agent: &str,
     deadline: Duration,
-    swarm: &SwarmResolve,
+    swarm: &SourceResolve,
 ) -> Result<Metainfo> {
     match kind {
         Kind::Magnet(magnet) => resolve_from_swarm(&magnet.to_uri(), swarm, deadline).await,
         Kind::InfoHash(hash) => resolve_from_swarm(&hash.hex(), swarm, deadline).await,
-        Kind::Url(url) => Ok(fetch_torrent(url, user_agent, deadline).await?.0),
+        Kind::Url(url) => fetch_torrent_or_page(url, user_agent, deadline, swarm).await,
         Kind::Metalink(path) => {
             let document = Metalink::read(path)?;
             Ok(resolve_metalink(&document, user_agent, deadline)
@@ -319,7 +326,7 @@ pub fn resolve_blocking(
     env: &mut Env,
     user_agent: &str,
     deadline: Duration,
-    swarm: &SwarmResolve,
+    swarm: &SourceResolve,
 ) -> Result<Metainfo> {
     if !kind.needs_network() {
         return load_local(kind, env);
@@ -352,34 +359,48 @@ pub fn resolve_blocking(
 /// the trackers the magnet itself names, which is the only way a magnet
 /// carrying nothing but `xt` can be read at all. See `TODO/metainfo.md`,
 /// T-241.
-#[derive(Debug, Clone)]
-pub struct SwarmResolve {
+#[derive(Debug, Clone, Default)]
+pub struct SourceResolve {
     /// Peers to ask before any are discovered.
     pub peers: Vec<std::net::SocketAddr>,
     pub enable_dht: bool,
     pub enable_lsd: bool,
     pub enable_trackers: bool,
+    /// `--page-select`. Which of a page's links to take when it offers more
+    /// than one. Absent, a page offering more than one is refused rather than
+    /// guessed at. See `TODO/cli-surface.md`, T-244.
+    pub page_select: Option<String>,
 }
 
-impl Default for SwarmResolve {
-    fn default() -> Self {
+impl SourceResolve {
+    /// A client's defaults: the DHT, local discovery and the magnet's own
+    /// trackers, and no page selector.
+    ///
+    /// Written out rather than derived, because three of the four booleans
+    /// default to **true** and `#[derive(Default)]` would make them false. A
+    /// `SourceResolve::default()` that silently disabled the DHT would make
+    /// every magnet in a test resolve from nowhere.
+    pub fn permissive() -> Self {
         Self {
             peers: Vec::new(),
             enable_dht: true,
             enable_lsd: true,
             enable_trackers: true,
+            page_select: None,
         }
     }
-}
 
-impl SwarmResolve {
     /// The flags as the command line gave them.
-    pub fn from_args(args: &crate::cli::SwarmSourceArgs) -> Result<Self> {
+    pub fn from_args(
+        swarm: &crate::cli::SwarmSourceArgs,
+        page: &crate::cli::PageSourceArgs,
+    ) -> Result<Self> {
         Ok(Self {
-            peers: crate::swarm::peer_addrs(&args.peers)?,
-            enable_dht: !args.no_dht,
-            enable_lsd: !args.no_lsd,
-            enable_trackers: !args.no_tracker,
+            peers: crate::swarm::peer_addrs(&swarm.peers)?,
+            enable_dht: !swarm.no_dht,
+            enable_lsd: !swarm.no_lsd,
+            enable_trackers: !swarm.no_tracker,
+            page_select: page.page_select.clone(),
         })
     }
 }
@@ -397,7 +418,7 @@ impl SwarmResolve {
 /// write, and the caller's working directory is not that place.
 async fn resolve_from_swarm(
     source: &str,
-    swarm: &SwarmResolve,
+    swarm: &SourceResolve,
     deadline: Duration,
 ) -> Result<Metainfo> {
     use bit_cli_core::engine::{AddOptions, Engine, EngineOptions};
@@ -460,12 +481,13 @@ pub fn resolve_source(
     global: &crate::cli::Global,
     user_agent: Option<&str>,
     swarm: &crate::cli::SwarmSourceArgs,
+    page: &crate::cli::PageSourceArgs,
 ) -> Result<Metainfo> {
     let agent = user_agent
         .map(str::to_string)
         .unwrap_or_else(bit_cli_core::webseed::fetch::default_user_agent);
     let timeout = crate::swarm::optional_duration(&global.timeout, "timeout")?;
-    let resolve = SwarmResolve::from_args(swarm)?;
+    let resolve = SourceResolve::from_args(swarm, page)?;
     let budget = match kind {
         // A swarm lookup is not a fetch. Finding a peer, handshaking and
         // pulling the metadata takes longer than a `GET` of the same bytes,
@@ -508,26 +530,142 @@ pub async fn fetch_torrent(
     deadline: Duration,
 ) -> Result<(Metainfo, Vec<u8>)> {
     let body = fetch_bytes(url, user_agent, MAX_TORRENT_BYTES, deadline).await?;
-    let meta = Metainfo::parse(&body.bytes).map_err(|e| {
-        // What arrived, not only where the parse gave up. A URL that serves a
-        // directory listing fails on byte 0 being `<`, and "the server sent
-        // text/html" is the sentence that tells a caller they pasted the page
-        // rather than the file. See `TODO/cli-surface.md`, T-245.
-        // `e` already begins "not a valid torrent", so this says what arrived
-        // and lets the parser say what was wrong with it. Saying both in one
-        // sentence made the message read "not a torrent: not a valid torrent".
-        let error = Error::source_resolution(match &body.content_type {
-            Some(kind) => format!("{url}: the server answered with {kind}: {e}"),
-            None => format!("{url}: {e}"),
-        })
-        .with("url", url.to_string())
-        .with("bytes", body.bytes.len());
-        match &body.content_type {
-            Some(kind) => error.with("content_type", kind.clone()),
-            None => error,
-        }
-    })?;
+    let meta = Metainfo::parse(&body.bytes).map_err(|e| not_a_torrent(url, &body, &e))?;
     Ok((meta, body.bytes))
+}
+
+/// What arrived, not only where the parse gave up.
+///
+/// A URL that serves a directory listing fails on byte 0 being `<`, and "the
+/// server answered with text/html" is the sentence that tells a caller they
+/// pasted the page rather than the file. See `TODO/cli-surface.md`, T-245.
+/// `e` already begins "not a valid torrent", so this says what arrived and
+/// lets the parser say what was wrong with it. Saying both in one sentence
+/// made the message read "not a torrent: not a valid torrent".
+fn not_a_torrent(url: &str, body: &Body, e: &Error) -> Error {
+    let error = Error::source_resolution(match &body.content_type {
+        Some(kind) => format!("{url}: the server answered with {kind}: {e}"),
+        None => format!("{url}: {e}"),
+    })
+    .with("url", url.to_string())
+    .with("bytes", body.bytes.len());
+    match &body.content_type {
+        Some(kind) => error.with("content_type", kind.clone()),
+        None => error,
+    }
+}
+
+/// Fetch a URL that may be a `.torrent` **or** the page that links to one.
+///
+/// The two are the same string until something reads the body, and the rule
+/// here is **attempt and fall back**: parse it as a torrent first, and only
+/// when that fails ask whether markup arrived. Deciding from `Content-Type`
+/// first would get a mirror that serves a real `.torrent` as `text/html`
+/// wrong, and that misconfiguration is common enough that the file server in
+/// `crates/bit-cli-core/examples/` has a switch for its cousin. A metainfo is
+/// a bencoded dictionary and begins `d`, so nothing that parses as one is ever
+/// mistaken for a page.
+///
+/// **One hop, never two.** The torrent a page names is fetched with
+/// [`fetch_torrent`], which does a plain parse, so a page linking to a page is
+/// an error rather than a crawl.
+///
+/// See `TODO/cli-surface.md`, T-244.
+async fn fetch_torrent_or_page(
+    url: &str,
+    user_agent: &str,
+    deadline: Duration,
+    resolve: &SourceResolve,
+) -> Result<Metainfo> {
+    let body = fetch_bytes(url, user_agent, MAX_TORRENT_BYTES, deadline).await?;
+    let parse_error = match Metainfo::parse(&body.bytes) {
+        Ok(meta) => return Ok(meta),
+        Err(e) => e,
+    };
+    if !bit_cli_core::page::looks_like_markup(&body.bytes, body.content_type.as_deref()) {
+        return Err(not_a_torrent(url, &body, &parse_error));
+    }
+    let html = String::from_utf8_lossy(&body.bytes);
+    let links = bit_cli_core::page::extract(&html, url);
+    match choose_from_page(url, &links, resolve.page_select.as_deref())? {
+        PageChoice::Torrent(chosen) => Ok(fetch_torrent(&chosen, user_agent, deadline).await?.0),
+        PageChoice::Magnet(uri) => resolve_from_swarm(&uri, resolve, deadline).await,
+    }
+}
+
+/// The one link a page offered, once a selector has been applied.
+enum PageChoice {
+    Torrent(String),
+    Magnet(String),
+}
+
+/// Pick the single source a page names, or say why that cannot be done.
+///
+/// A page yielding more than one is **reported and refused rather than
+/// guessed at**, which is the operator's ruling and the reason every match is
+/// named in the error with its anchor text: the caller has to be able to
+/// re-run with one of them.
+fn choose_from_page(
+    url: &str,
+    links: &[bit_cli_core::page::PageLink],
+    select: Option<&str>,
+) -> Result<PageChoice> {
+    let matched: Vec<&bit_cli_core::page::PageLink> = match select {
+        None => links.iter().collect(),
+        Some(needle) => {
+            let needle = needle.to_lowercase();
+            links
+                .iter()
+                .filter(|l| {
+                    l.url.to_lowercase().contains(&needle)
+                        || l.text.to_lowercase().contains(&needle)
+                })
+                .collect()
+        }
+    };
+
+    match matched.as_slice() {
+        [] if links.is_empty() => Err(Error::source_resolution(format!(
+            "{url} is a web page and no torrent link was found on it. If its links are built by script, `--render` reads the page after script has run; it needs a Chrome or Edge already installed and is off by default"
+        ))
+        .with("url", url.to_string())
+        .with("source_kind", "page")
+        .with("matches", 0)),
+        [] => Err(Error::source_resolution(format!(
+            "{url} is a web page with {} torrent link(s), and none of them match --page-select {}",
+            links.len(),
+            select.unwrap_or_default()
+        ))
+        .with("url", url.to_string())
+        .with("source_kind", "page")
+        .with("matches", 0)
+        .with("links_on_page", links.len())),
+        [one] => Ok(match one.kind {
+            bit_cli_core::page::LinkKind::Magnet => PageChoice::Magnet(one.url.clone()),
+            bit_cli_core::page::LinkKind::Torrent => PageChoice::Torrent(one.url.clone()),
+        }),
+        many => {
+            let listed = many
+                .iter()
+                .map(|l| match l.text.is_empty() {
+                    true => format!("  {}", l.url),
+                    false => format!("  {}  ({})", l.url, l.text),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            Err(Error::source_resolution(format!(
+                "{url} is a web page with {} torrent links, and nothing says which one to take. Name one of them directly, or narrow it with --page-select:\n{listed}",
+                many.len()
+            ))
+            .with("url", url.to_string())
+            .with("source_kind", "page")
+            .with("matches", many.len())
+            .with(
+                "page_links",
+                serde_json::to_value(many).unwrap_or(serde_json::Value::Null),
+            ))
+        }
+    }
 }
 
 /// A fetched body and the one header that says what it is.
@@ -1141,12 +1279,20 @@ mod tests {
         doc
     }
 
-    /// The other half of T-245's acceptance: a URL that serves something else
-    /// still fails, and says **what arrived** rather than only where the parse
-    /// stopped. A caller who pasted a directory listing reads "text/html" and
-    /// knows what they did; "unexpected byte `<`" needs them to know bencode.
+    /// A page carrying no torrent link is refused, and the refusal names
+    /// `--render` rather than the bencode parser's complaint.
+    ///
+    /// **This test held the opposite until 2026-08-29** and was inverted
+    /// rather than deleted, which is the rule in
+    /// [RULES.md](../../TODO/RULES.md) section 5: a case asserting a defect
+    /// becomes the case asserting the fix, and it is the entry closing that
+    /// pays for it. Under T-245 a page was the end of the road and the useful
+    /// thing to say was "the server answered with text/html". Under
+    /// [T-244](../../TODO/cli-surface.md) a page is an input, so the useful
+    /// thing to say is that it carried nothing to take and what reads a page
+    /// that builds its links in script.
     #[test]
-    fn a_url_that_serves_a_page_fails_and_names_what_arrived() {
+    fn a_page_with_no_torrent_link_is_refused_and_names_render() {
         use crate::test_support::{TorrentFixture, run_err};
 
         let fixture = TorrentFixture::multi_file();
@@ -1160,10 +1306,52 @@ mod tests {
         );
         assert!(err.contains(&url), "the URL is not in the message: {err}");
         assert!(
-            err.contains("the server answered with text/html"),
-            "the content type is not in the message: {err}"
+            err.contains("is a web page and no torrent link was found"),
+            "the page was not recognised as one: {err}"
         );
-        assert!(err.contains("not a valid torrent"), "{err}");
+        assert!(
+            err.contains("--render"),
+            "the refusal does not name what to try next: {err}"
+        );
+    }
+
+    /// A page carrying more than one torrent is refused, and every match is
+    /// named with its anchor text so the next command can take one.
+    ///
+    /// This is the operator's ruling in [T-244](../../TODO/cli-surface.md):
+    /// reported and refused rather than guessed at. Nothing is fetched, so the
+    /// one-shot server is enough to hold the whole case.
+    #[test]
+    fn a_page_with_several_torrents_is_refused_and_names_all_of_them() {
+        use crate::test_support::{TorrentFixture, run_err};
+
+        const MANY: &[u8] = b"<!doctype html><html><body>\
+            <a href=\"/a.torrent\">Disc one</a>\
+            <a href=/b.torrent>Disc two</a>\
+            <a href='magnet:?xt=urn:btih:0102030405060708090a0b0c0d0e0f1011121314'>By magnet</a>\
+            <a href=\"/notes.torrent.html\">Release notes</a>\
+            </body></html>";
+
+        let fixture = TorrentFixture::multi_file();
+        let port = answer_once(MANY, "text/html");
+        let url = format!("http://127.0.0.1:{port}/downloads/");
+
+        let err = run_err(
+            &["info", &url],
+            fixture.dir(),
+            bit_cli_core::ExitCode::SourceResolution,
+        );
+        assert!(err.contains("3 torrent links"), "{err}");
+        assert!(err.contains("--page-select"), "{err}");
+        assert!(err.contains("/a.torrent"), "{err}");
+        assert!(err.contains("(Disc one)"), "{err}");
+        // The unquoted href is read the same as the quoted one. kali.org
+        // serves its whole download page that way.
+        assert!(err.contains("/b.torrent"), "{err}");
+        assert!(err.contains("(Disc two)"), "{err}");
+        assert!(err.contains("urn:btih:0102030405"), "{err}");
+        // `.torrent.html` is a page about a torrent, not a torrent.
+        assert!(!err.contains("notes.torrent.html"), "{err}");
     }
 
     /// A server with no `Content-Type` still fails, and says the one thing it
@@ -1248,7 +1436,7 @@ mod tests {
             &mut env,
             "agent",
             Duration::from_secs(1),
-            &SwarmResolve::default(),
+            &SourceResolve::permissive(),
         )
         .unwrap_err();
         assert!(
@@ -1274,7 +1462,7 @@ mod tests {
             &mut env,
             "agent",
             Duration::from_secs(1),
-            &SwarmResolve::default(),
+            &SourceResolve::permissive(),
         )
         .unwrap();
         assert_eq!(meta.info_hash().hex(), fixture.info_hash);
@@ -1298,7 +1486,7 @@ mod tests {
             &mut env,
             "agent",
             Duration::from_secs(1),
-            &SwarmResolve::default(),
+            &SourceResolve::permissive(),
         )
         .unwrap_err();
         assert!(
@@ -1355,7 +1543,7 @@ mod tests {
             &mut env,
             "agent",
             Duration::from_millis(300),
-            &SwarmResolve::default(),
+            &SourceResolve::permissive(),
         )
         .unwrap_err();
         assert_eq!(err.code(), bit_cli_core::ExitCode::Timeout);

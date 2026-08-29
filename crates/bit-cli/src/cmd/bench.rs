@@ -2143,6 +2143,7 @@ fn resolve(
         global,
         web_seeds.web_seed_user_agent.as_deref(),
         &crate::cli::SwarmSourceArgs::default(),
+        &crate::cli::PageSourceArgs::default(),
     )?;
     let layout = meta.layout();
     let specs = webseed_args::collect(web_seeds, Some(&meta), None, env, webseed_args::no_network)?;

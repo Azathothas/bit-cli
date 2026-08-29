@@ -96,7 +96,7 @@ pub fn run(
     let (report, uri_only) = match &kind {
         Kind::Magnet(magnet) => (Report::from_magnet(magnet), false),
         _ => {
-            let meta = resolve_source(&kind, env, global, None, &args.swarm)?;
+            let meta = resolve_source(&kind, env, global, None, &args.swarm, &args.page)?;
             let report = Report::from_magnet(&Magnet::from_metainfo(&meta));
             resolved = Some(meta);
             (report, true)
@@ -106,7 +106,7 @@ pub fn run(
     if let Some(target) = &args.output {
         let meta = match resolved {
             Some(meta) => meta,
-            None => resolve_source(&kind, env, global, None, &args.swarm)?,
+            None => resolve_source(&kind, env, global, None, &args.swarm, &args.page)?,
         };
         let magnet = match &kind {
             Kind::Magnet(magnet) => Some(magnet.as_ref()),
