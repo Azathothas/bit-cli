@@ -116,6 +116,12 @@ pwsh -NoProfile -File scripts/gates.ps1
   A **second** workflow arrived, `Staleness`, which is a schedule and a
   `workflow_dispatch` and does not run on a push at all.
 
+  **The new job failed once and it was the job's own fault, not the code's.**
+  `dtolnay/rust-toolchain` installs a toolchain and nothing else, so a job that
+  runs clippy has to name `components: clippy`, and this one did not:
+  `cargo-clippy is not installed for the toolchain`. Every other clippy job in
+  the file already asked for it. Fixed in the same push as this line.
+
 ```bash
 gh run list --limit 1
 ```

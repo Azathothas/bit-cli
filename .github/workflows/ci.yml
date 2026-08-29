@@ -423,6 +423,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_GATE }}
+          # `components` is not optional: this action installs the toolchain
+          # and nothing else, so a job that runs clippy has to ask for it. This
+          # one did not and failed on `cargo-clippy is not installed`.
+          components: clippy
       - uses: Swatinem/rust-cache@v2.9.2
       # `--render` is off by default, so nothing else in this workflow builds
       # it. This job exists so it cannot rot: a `chromiumoxide` release that
