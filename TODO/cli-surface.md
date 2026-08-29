@@ -4511,14 +4511,53 @@ Closed:      **Partial. The static tier ships and is the half that could not be
              `about.toml` sets `ignore-dev-dependencies`, so it reaches no
              released binary and no notice file.
 
-Left:        **Named precisely, because this entry is partial rather than
-             done.**
+Ruled:       **Three decisions, 2026-08-29, after the measurements above and
+             recorded here so this entry stands on its own.**
 
-             1. **The impersonating fetch tier.** Vendor `impit` and apify's
-                `h2` under `vendor/`, carry the `h2` version fix as a patch in
-                `patches/`, put both clients behind one `Fetcher` trait, and
-                take the three decisions in the Blocked section above. The
+             1. **The impersonating client ships in the default build, on every
+                artifact.** Not a Cargo feature and not off by default. The
+                operator's reason: almost everything that fetches a remote URL
+                passes through this path, so a release binary that does not
+                impersonate is one the work never reached. The three costs in
+                the Blocked block are accepted rather than avoided.
+             2. **`--render` is a Cargo feature, off by default**, built by a
+                CI job so it cannot rot. 136 packages in every artifact for a
+                flag that is inert without an external browser is the wrong
+                trade. The browser resolver stays in the default build.
+             3. **The publishing foundation is schema and staleness detection
+                only.** Versioned JSON with a stable schema, and the job that
+                detects drift and **emits the replacement values as proof**.
+                Uploading it to a release is
+                [T-260](#t-260-a-release-publishes-binaries-and-nothing-a-program-can-consume),
+                filed for it; [T-261](trackers.md) is the tracker list that
+                is the second consumer that format has to fit.
+
+             **The staleness half is a first class requirement, not a
+             nicety.** The operator's words: this must not break in the future
+             if pages become stricter or browsers change fingerprints, and the
+             tools must detect that **in time and recommend fixes with proof
+             and new values**. A check that only says "your fingerprint
+             changed" is half a tool.
+
+Left:        **Named precisely, because this entry is partial rather than
+             done.** All six are the work of the one remaining session, and
+             the ruling above settles how each lands.
+
+             1. **The impersonating fetch tier**, in the default build under
+                ruling 1. Vendor `impit`, `h2`, `rustls`, `tower-http` and
+                `hyper-util` under `vendor/`, carry the `h2` version fix as a
+                patch in `patches/`, and put both clients behind one `Fetcher`
+                trait. The three costs in the Blocked block are accepted. The
                 measurements that say it can be done are recorded here.
+
+                The `h2` fix is a rebase and not a copy: apify's fork is
+                `0.4.7` against a requirement of `0.4.19`. While in there,
+                delete the `IMPIT_H2_PSEUDOHEADERS_ORDER` env var and thread
+                the order through as a field. `std::env::set_var` is unsafe in
+                Rust 2024, is UB beside another thread reading the
+                environment, and is process-global, so two clients with
+                different profiles would fight. This tree runs a multi-thread
+                `tokio` runtime.
              2. **The `ClientHello` itself**, which is the half of the
                 fingerprint no header set reaches: ten ciphers and ten
                 extensions against Chrome's fifteen, no GREASE, no ECH, no
@@ -5678,3 +5717,93 @@ Prove:       ```
              `HEADER` differs from the committed file and passes when they
              agree, with the hand-written tail exempt. Editing `HEADER` and not
              regenerating must turn the tree red.
+
+### T-260 A release publishes binaries and nothing a program can consume
+
+Source:      the operator's ruling of 2026-08-29, while ruling on T-244
+Category:    ci
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `.github/workflows/release.yml` builds three targets, attests
+             them, and creates the release with
+             `gh release create --notes-file CHANGELOG.md`. Three things follow
+             from that and all three are wrong for a reader and for a program.
+
+             **The release body is the whole changelog.** `CHANGELOG.md` grows
+             with every version, so the notes on `v0.3.0` will carry `v0.2.0`
+             and everything before it. Nothing selects the section for the tag
+             being released.
+
+             **The checksums are per artifact and there is no manifest.** The
+             build job writes `bit-cli-<target>.tar.xz.b3sum` beside each
+             archive, which is right, and there is no single file listing all
+             of them, so verifying a download means fetching a second asset per
+             artifact and no `b3sum -c` over one file is possible. The release
+             body names no checksum at all.
+
+             **Nothing but a binary is published.** `fingerprints/` carries
+             what this client puts on the wire, as versioned JSON with a
+             `schema` field, and it exists only in the source tree. A program
+             that wants it has to clone.
+Relevance:   The operator's stated direction is that this repository publishes
+             data as a service and not only a binary: the fingerprint and
+             cipher profiles now, and the merged, liveness-checked,
+             latency-ranked tracker list that a later entry adds. Every one of
+             those is a file some other tool wants by URL, and a GitHub release
+             asset is the cheapest durable URL there is.
+
+             It is also the half of [T-244](#t-244-a-web-page-is-not-a-source-and-nothing-extracts-a-link-from-one)
+             that makes its staleness detection worth anything to anybody
+             outside this tree. A drift report that only this repository can
+             read is a drift report for one consumer.
+Approach:    Three changes to `release.yml` and one to `scripts/release.ps1`,
+             none of them coupled.
+
+             **The release body is generated.** Take the section for the tag
+             out of `CHANGELOG.md`, append a checksum table, and pass that as
+             `--notes-file` instead of the whole file. `scripts/release.ps1`
+             already writes the section and knows where its heading is, so the
+             extraction belongs beside it and gets a `-Section <version>` mode
+             rather than a second parser in YAML.
+
+             **One manifest per release.** `B3SUMS` over every published asset,
+             built in the `publish` job after the artifacts are downloaded and
+             before the release is created, and published as an asset itself so
+             `b3sum -c B3SUMS` works against a directory of downloads. The
+             per-artifact `.b3sum` files stay: they are what somebody
+             downloading one archive wants.
+
+             **The data files are assets.** Everything under `fingerprints/`,
+             and whatever the tracker entry adds, uploaded with a stable name
+             so a consumer can fetch
+             `.../releases/latest/download/fingerprints.json` and never parse
+             HTML to find it. One file rather than the directory, assembled at
+             publish time, carrying the same `schema` field each source file
+             does so a consumer can branch on it.
+
+             **A published schema is a contract.** Say so in
+             `docs/schema.md` or a page it links, and give the assembled
+             document a `schema_version` that moves when a field changes
+             meaning. `bit-cli` already treats its own JSON that way and this
+             is the same promise to a different reader.
+Acceptance:  A manual `workflow_dispatch` run builds and uploads and creates no
+             release, which is the behaviour today and must not change. A run
+             on a `v*` tag produces a release whose body is that version's
+             changelog section and nothing else, plus a checksum table; a
+             `B3SUMS` asset that `b3sum -c` accepts against the other assets;
+             and a `fingerprints.json` asset that parses and carries a
+             `schema_version`.
+
+             Proved on a real tag in this repository, with the release
+             deleted afterwards if it was a rehearsal.
+Notes:       `gh release create --verify-tag` and the attestation step are
+             unchanged and neither is in scope. Decision 7.5 stands: no
+             crates.io credential and no token beyond the built-in
+             `GITHUB_TOKEN` appears anywhere in this repository.
+
+             The tracker list this entry publishes does not exist yet.
+             [T-261](trackers.md) is where it is specified, and this entry
+             does not wait for it: `fingerprints/` alone justifies the
+             publishing path and the tracker file drops into it later.

@@ -109,8 +109,13 @@ pwsh -NoProfile -File scripts/gates.ps1
 
 - **CI:** **twenty-three** jobs, one more than last session:
   `Page extraction and fingerprint` is new and runs both of this session's
-  acceptance scripts. Green at run **33237268599**, against commit `644f473`.
-  Two runs this session. The first, **33236102927** against `b18b834`, failed
+  acceptance scripts. Green at run **33237268599**, against commit `644f473`,
+  with all twenty-three green. Run **33238223893** against `74330ee` is the one
+  this session's last push started: it failed once on
+  `Create round trip (windows-latest)` and **passed on a rerun of that job
+  alone, on the same commit**, so it is a runner flake and not a regression.
+  The evidence is in the review section below.
+  Three runs this session. The first, **33236102927** against `b18b834`, failed
   on one job, `Third party notices`, because `THIRD_PARTY.md` still named
   `chacha20 0.10.1` after the lockfile moved to `0.10.2`; the review section
   below carries it.
@@ -121,9 +126,9 @@ gh run list --limit 1
 
 - **Soak:** nothing ran this session. The one entry it worked on is not about
   a long run.
-- **Entries:** 208 items. 28 open, 4 partial, 0 blocked, 165 done, 11 deferred
-  to Phase C. 165 of 197 workable done, 32 left.
-- **Tree:** 105 Rust files, 63,707 lines of code, 16,651 of comment,
+- **Entries:** 210 items. 30 open, 4 partial, 0 blocked, 165 done, 11 deferred
+  to Phase C. 165 of 199 workable done, 34 left.
+- **Tree:** 105 Rust files, 63,770 lines of code, 16,667 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
   `reference/HISTORY/`. Nothing was mined this session and nothing was read
@@ -290,6 +295,19 @@ said `0.10.2`. The version moved because `chacha20 0.10.1` was **yanked
 upstream during this session**: the `deny` gate passed at 04:28 and failed at
 05:12 on the same tree.
 
+**And CI flaked once, on a case that waits three minutes.** The `v1` interop
+case failed on `Create round trip (windows-latest)` at run **33238223893**,
+having uploaded **0 bytes to 0 peers** in 180 seconds, while the `private`
+case, which is the same shape with one flag different, passed in **3.1
+seconds** in the same run. A rerun of that job alone, on the same commit,
+passed. The same job passed at run **33237268599** on code that already carried
+every change this session made to the fetch path. It is a peer discovery race
+on the Windows runner and it is the [T-160](cli-surface.md),
+[T-162](webseed.md), [T-215](webseed.md) family: a case that waits on a
+duration rather than on a condition. Nothing was changed for it and no entry
+was opened, because one occurrence is not a measurement; a second should open
+one.
+
 **And one thing nothing caught but a restore.** A `[System.IO.File]::WriteAllText`
 with a **relative** path, from a script that had `Set-Location`d into `.tmp/`,
 overwrote this repository's root `Cargo.toml` with a throwaway probe manifest.
@@ -418,19 +436,25 @@ gh run list --limit 1
    "Open questions" before it is workable.** The entry's `Left:` list is six
    items and the first is the one that unblocks two others.
 
-7. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
+7. **[T-260](cli-surface.md), P2, `M`, and [T-261](trackers.md), P2, `M`**,
+   both filed this session at the operator's request. T-260 publishes what a
+   release already builds plus the data files a program wants by URL; T-261 is
+   the tracker list that is the second consumer of that format. Neither blocks
+   the other and T-260 does not wait for T-261.
+
+8. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
    so the two candidates left are on the read side and are named with their
    lines. Build the fixture first: a pair of real `librqbit_utp` streams in one
    process.
 
-8. **The three entries that were ruled on and are still work.**
+9. **The three entries that were ruled on and are still work.**
    [T-227](memory.md) is a throughput curve then a flag.
    [T-242](performance.md) is two sweeps from `scripts/bench-leech.ps1`.
    [T-234](peers.md) and [T-238](peers.md) are the two large ones and both need
    [T-239](peers.md) first.
 
-9. **Then the category pass, and `bep-coverage.md` is still first.**
+10. **Then the category pass, and `bep-coverage.md` is still first.**
    [T-101](bep-coverage.md) is open on a latency measurement loopback cannot
    produce, which [T-239](peers.md) is the prerequisite for.
    [T-102](bep-coverage.md) and [T-168](bep-coverage.md) are the untouched two,
@@ -444,38 +468,29 @@ to 29 for [T-234](peers.md); entries 30 to 37 for [T-238](peers.md) and
 
 ## Open questions for the operator
 
-**One, and it decides how much of [T-244](cli-surface.md) is left.**
+**None. All three were put to the operator at the end of this session and all
+three were ruled on.** The rulings are recorded here because the next session
+is the one that acts on them.
 
-**Does the impersonating client enter this tree, and at what price?** Every
-number needed to answer it was measured this session and is in the entry.
-`impit` is admissible: MSRV 1.88 passes, Windows static-links, and apify's
-`rustls` fork does not break the vendored `librqbit` trees. What adoption costs
-is three things, and none is a defect:
-
-- **Five upstream trees have to be vendored**, not forked. `deny.toml` sets
-  `unknown-git = "deny"`, so the five apify git dependencies cannot enter as
-  git sources, and [RULES.md](RULES.md) section 6a forbids the fork the survey
-  recommends by name. `vendor/` with a series under `patches/` is the route,
-  and it also carries the `h2` version fix that apify's own patch fails to
-  apply.
-- **`--cfg reqwest_unstable` becomes tree wide**, in all three
-  `.cargo/config.toml` target blocks **and** the three `RUSTFLAGS` blocks in
-  `ci.yml`, because `RUSTFLAGS` replaces rather than adds. That is the exact
-  shape of [T-146](cli-surface.md).
-- **Two `reqwest` majors end up in the graph.** A warning under
-  `multiple-versions`, and a real size cost.
-
-**The same ruling covers `--render`.** `chromiumoxide` is **136** packages and
-brings `reqwest` 0.13 as well; `headless_chrome` is 143. Both are MIT or
-Apache-2.0 and both check on 1.88. The question is whether either lands in
-every build or behind a Cargo feature. The survey's own escape hatch is a
-feature gate, and its review 5.3 warns the abstraction will leak, so it wants
-prototyping rather than planning.
-
-**A recommendation, since the entry is otherwise stalled on it:** vendor and
-feature-gate, with the default build unchanged and a CI job that builds the
-feature so it cannot rot. That keeps every release artifact exactly as it is
-today and puts the cost on whoever asks for it.
+1. **The impersonating client ships in the default build, on every artifact.**
+   Not a Cargo feature and not off by default. The reasoning the operator gave
+   is that almost everything that fetches a remote URL passes through this
+   path, so a release binary that does not impersonate is a release binary the
+   work did not reach. The costs are known and measured: five upstream trees
+   vendored under `vendor/`, `--cfg reqwest_unstable` in all three
+   `.cargo/config.toml` target blocks **and** the three `RUSTFLAGS` blocks in
+   `ci.yml`, and two `reqwest` majors in the graph.
+2. **`--render` is a Cargo feature, off by default**, with a CI job that builds
+   it so it cannot rot. 136 packages in every artifact for a flag that is inert
+   without an external browser is the wrong trade. The browser resolver stays
+   in the default build and stays tested everywhere, which is where it already
+   is.
+3. **The publishing foundation is schema and staleness detection only** in the
+   next session: versioned JSON with a stable schema, and the job that detects
+   drift and emits the replacement values as proof. Uploading it to a release
+   is [T-260](cli-surface.md), filed this session at the operator's request so
+   it is not lost, along with [T-261](trackers.md) for the tracker list that is
+   the second consumer that format has to fit.
 
 **Three things to be aware of rather than to decide.**
 

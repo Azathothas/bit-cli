@@ -953,3 +953,84 @@ cargo test -p bit-cli --lib cmd::trackers
 the per-tracker `timeout`, `connect_timeout`, `interval`, `enabled` and `key`,
 and the `[[peer]]` table after it. Nothing above touches any of that, and the
 Acceptance is unchanged.
+
+### T-261 There is no way to get a current tracker list, so every torrent carries whatever it was born with
+
+Source:      the operator's ruling of 2026-08-29, while ruling on T-244
+Category:    trackers
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     A torrent announces to the trackers in its own `announce` and
+             `announce-list`, and nothing else. Those were chosen by whoever
+             made the file, often years earlier, and a tracker that has moved,
+             died or started refusing is announced to on every run at the BEP
+             15 backoff until it gives up.
+
+             `bit-cli` can already add a tracker: `create --announce` writes
+             one and [T-251](#t-251-a-web-seed-has-twelve-knobs-of-its-own-and-a-tracker-has-none)
+             is giving a tracker per-instance knobs. What is missing is
+             **where the list comes from**. Every caller has to find one,
+             judge it, and paste it.
+Relevance:   It is the same shape as the web seed argument this whole tool is
+             built on: the file names sources, the file is not editable, and
+             the useful thing is attaching better sources at run time. A
+             tracker list is that for the swarm half.
+
+             It is also the second consumer the published-data path needs.
+             [T-260](cli-surface.md) publishes `fingerprints/` because
+             something has to be first; a tracker list is the file people
+             actually want by URL, and designing the publishing format against
+             one consumer is how it ends up fitting only that one.
+Approach:    Four stages, and each is separately useful, so they are separately
+             shippable.
+
+             **Fetch and merge.** Several published lists, named in the source
+             the way `scripts/check-page-fetch.ps1` names its pages rather than
+             discovered at run time, fetched over the source-document path that
+             [T-244](cli-surface.md) built, so they get the same client and
+             the same deadline as every other document fetch.
+
+             **Dedupe, and it is not string equality.** `udp://t.example:6969`
+             and `udp://t.example:6969/announce` are one tracker;
+             `http://` and `https://` on one host are one tracker offering two
+             transports. Normalise scheme, host, port and path before
+             comparing, and keep every form seen so the report can say what it
+             collapsed.
+
+             **Liveness and rank.** Announce or scrape each one and record
+             whether it answered, then rank. The operator's stated axes are
+             time to first response and time to a usable peer set, so a
+             tracker that answers quickly with nothing ranks below one that is
+             slower and useful. `scripts/check-announce.ps1` and the loopback
+             tracker are where the shape of that measurement already lives.
+
+             **Two outputs, and neither is a daemon.** Write the ranked list to
+             a file for another tool to read, and attach it to a torrent at run
+             time for this one. Attaching is the same argument as a web seed
+             scope: it must not rewrite the `.torrent`, which is decision 7.3's
+             territory and this repository's whole reason for existing.
+Acceptance:  Against `loopback-tracker` standing in for several trackers, with
+             one of them refusing and one of them slow: the merge collapses the
+             duplicate forms and says so, the ranking puts the healthy fast one
+             first and the refusing one last, and the written file round trips
+             into a run that announces to exactly those trackers in that order.
+             No case reaches the network.
+
+             One case does, separately and named: the real lists fetch and
+             parse. It is the same shape as
+             `scripts/check-metalink-real.ps1`, which is the worked example of
+             a check that is allowed the internet.
+Notes:       **Nothing here scrapes an index or a private tracker.** The lists
+             are the published, openly distributed ones, and a tracker that
+             needs an account is out of scope by construction: there is nowhere
+             to put a credential and decision 7.4 says there is no state file
+             to keep one in.
+
+             The liveness measurement announces under this client's real peer
+             id, which [T-236](peers.md) fixed, so a tracker's statistics
+             see `bit-cli` and not something it is pretending to be. That is
+             deliberate and it is the opposite of what
+             [T-244](cli-surface.md) does for a web page: a tracker is a
+             peer of this tool, and a page is a document served to whoever asks.

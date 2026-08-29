@@ -250,11 +250,13 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-257](cli-surface.md) | P2 | cli | **done** | Two documents answer to type progress, and the guard against that only covers documents *(session_start and session_end were being unioned too)* |
 | [T-258](cli-surface.md) | P2 | cli | **done** | A seeder re-sends every peer it has ever seen, every report interval *(1.6 percent of the stdout after, on the same workload)* |
 | [T-259](cli-surface.md) | P3 | cli | open | The schema's prose is generated and nothing compares it to what is committed |
+| [T-260](cli-surface.md) | P2 | ci | open | A release publishes binaries and nothing a program can consume |
+| [T-261](trackers.md) | P2 | trackers | open | There is no way to get a current tracker list, so every torrent carries whatever it was born with |
 
 ## Counts
 
-208 items: 197 to work through, and 11 deferred to Phase C.
-28 open, 4 partial, 0 blocked, 165 done.
+210 items: 199 to work through, and 11 deferred to Phase C.
+30 open, 4 partial, 0 blocked, 165 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -263,10 +265,10 @@ when a number here disagrees with them.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 2 | 0 | 0 | 70 | 72 |
-| P2 | 16 | 4 | 0 | 62 | 82 |
+| P2 | 18 | 4 | 0 | 62 | 84 |
 | P3 | 10 | 0 | 0 | 21 | 31 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **28** | **4** | **0** | **165** | **208** |
+| **All** | **30** | **4** | **0** | **165** | **210** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

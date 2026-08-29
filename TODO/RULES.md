@@ -639,11 +639,22 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   `git diff` shows nothing and a review cannot see it; `(?m)^...$` in .NET
   matches before the newline and leaves the return inside the capture, so a
   status cell reads as `done` plus a byte and matches nothing. It arrives from
-  this repository's own tooling, because `Set-Content` writes CRLF on Windows.
+  this repository's own tooling, because `Set-Content` writes CRLF on Windows,
+  and from any Python helper a session writes, because
+  `pathlib.Path.write_text` translates a newline to the platform ending.
   Measured on 2026-08-25, before the gate existed: 99 tracked files disagreed
   with `.gitattributes`, `TODO/create-seed.md` was **mixed**, and ten `.rs`
   files under `crates/` were CRLF. `gates.ps1 -Fix` is the whole fix and there
   is no manual step.
+
+  **It bites inside this repository's own scripts, not only at the gate.** On
+  2026-08-29 a Python helper rewrote `TODO/INDEX.md` with CRLF and
+  `scripts/set-status.ps1` then refused it with "INDEX.md has no P0 row in the
+  priority table": its `(?m)^\| P0 \| ... \|$` leaves the carriage return
+  between the last `|` and the line end, so the row matches nothing. A session
+  editing a tracked file from Python should write **bytes** with the ending
+  `.gitattributes` asks for, or run `scripts/check-eol.ps1 -Fix` before any
+  script reads the file back.
 - **A control byte goes in a source file as an escape, never as itself.** A raw
   NUL makes the whole file binary to `grep`, which then skips it and says so in
   a line nobody reads. Two got in and neither was noticed for a session:
