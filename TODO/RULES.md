@@ -808,7 +808,7 @@ upside is zero.
 ## 6b. A fingerprint is measured, never derived and never inherited
 
 The operator's ruling of 2026-08-29, given after [T-244](cli-surface.md) closed
-with the browser profile two majors behind stable. It governs everything this
+with the browser profile a major behind stable. It governs everything this
 repository claims to be on the wire.
 
 - **The measurement is the authority, not upstream.** `impit`'s fingerprint
@@ -837,12 +837,29 @@ repository claims to be on the wire.
   tell than being one version behind.
 
 **Why the last point is the one that bites.** An *almost* right fingerprint is
-more distinguishing than an honestly old one. A client announcing `Chrome/153`
-with 151's signature algorithms and an invented brand string is a combination
-that exists nowhere, and it would pass `scripts/check-fingerprint.ps1`, because
-that asserts against a golden this repository wrote. Only a capture from a real
+more distinguishing than an honestly old one. A client announcing a major it
+does not have the `ClientHello` for, with an invented brand string, is a
+combination that exists nowhere, and it would pass
+`scripts/check-fingerprint.ps1`, because that asserts against a golden this
+repository wrote. Only a capture from a real
 browser catches it, which is what `scripts/check-browser-fingerprint.ps1` is
 for.
+
+**Two rulings follow from this and were given with it.**
+
+- **The profile lives in `bit-cli-core`, not in the vendored tree.**
+  `crates/bit-cli-core/src/page.rs` holds the whole of it, ciphers,
+  extensions, extension order, HTTP/2 settings and headers, and constructs
+  `impit`'s `BrowserFingerprint` from that. One file is the truth, a staleness
+  recommendation has one file to target, and `vendor/impit` stays close to
+  upstream instead of carrying data this repository authored. It follows from
+  the first rule above: a starting point does not get to be the home of the
+  answer.
+- **The shipped profile claims Stable, and Beta is recorded beside it.**
+  A capture can reach Beta, Dev and Canary, and shipping one of those is the
+  same failure as shipping a version nobody runs yet. Beta is captured and
+  written down so the next bump is ready the day it ships, and it is not what
+  the client claims to be.
 
 **The second measurement is a container, not a wait for CI.**
 [`docs/containers.md`](../docs/containers.md) is the procedure: a throwaway WSL2

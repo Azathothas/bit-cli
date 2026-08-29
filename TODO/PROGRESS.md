@@ -209,17 +209,18 @@ push, because a browser shipping is not a defect in a commit.
 
 `scripts/check-browser-version.ps1` asks Google, Mozilla and Microsoft what
 stable is, every fetch trapped on its own, and prints the replacement
-`BROWSER_MAJOR`, `BROWSER_USER_AGENT` and `sec-ch-ua`. It says **Chrome 153**
-today against a profile claiming 151.
+`BROWSER_MAJOR`, `BROWSER_USER_AGENT` and `sec-ch-ua`. It says **Chrome 152**
+today against a profile claiming 151, and it said 153 until the endpoint it
+reads was corrected; the review section below carries that.
 
 `scripts/check-browser-fingerprint.ps1` drives the browser this machine has at
 the probe and prints the replacement `BROWSER_HEADERS` in the shape `page.rs`
 wants, naming the browser and version they came from. With no browser it exits
 **2** naming every path it looked at.
 
-**The profile was not bumped to 153**, and that is a decision: the TLS half is
-`impit`'s database, whose newest Chrome is 151, and claiming 153 over 151's
-`ClientHello` is a mismatch an origin can see.
+**The profile was not bumped**, and that is a decision: the TLS half is
+`impit`'s database, whose newest Chrome is 151, and claiming a version over
+another version's `ClientHello` is a mismatch an origin can see.
 
 ### `--render` ships, and it leaves nothing behind
 
@@ -298,6 +299,33 @@ is here in full below.
 
 **Review 5, the abuse read.** Below.
 
+**A sixth review, after the entry closed, and it found the worst defect of the
+session in this session's own tooling.**
+
+`scripts/check-browser-version.ps1` read
+`.../channels/stable/versions?pageSize=1`, which answers with the highest
+version **known** on the channel rather than the version being served. Chrome
+rolls out in stages, so for days that is a build almost nobody has. Measured:
+
+| | |
+| --- | --- |
+| what the check reported as stable | `153.0.8010.12` |
+| that build's rollout fraction | **0.005** |
+| what was at fraction 1 | `152.0.7977.65` |
+| Chrome for Testing's `Stable` | `152.0.7977.64` |
+
+So the check inflated the drift by a whole major, which is the **opposite** of
+the defect it was written to catch: chasing a build one user in two hundred has
+produces a correct fingerprint of a browser that does not exist. It reads the
+releases endpoint and the rollout fraction now, cross-checks against Chrome for
+Testing, and prints the highest published version and its fraction beside the
+answer so a reader can check the choice rather than take it.
+
+It was found by asking a question the entry had not asked: whether any other
+source offers a newer Chrome. Chrome for Testing answered with a different
+number, and two first-party endpoints disagreeing is a finding rather than an
+error.
+
 **Review 3, adversarial: what would make this the wrong implementation?**
 
 1. **Five vendored trees is a reconciliation cost that never ends.** True, and
@@ -307,8 +335,8 @@ is here in full below.
    `h2`, are the two whose behaviour this repository actually depends on.
 2. **The impersonation is a claim about a browser that keeps moving.** Also
    true, and it is why half this session is the staleness tooling rather than
-   the client. The profile is already two majors behind stable and the tool
-   said so on its first run.
+   the client. The profile is already a major behind stable and the tool said
+   so on its first run, once the endpoint it read was corrected.
 3. **The label rule reads a human-facing string to make a machine decision.**
    Conceded. It is bounded to a closed list of whole labels and a query
    requirement, measured at 74 true and 1 false over fifteen real pages, and a
@@ -411,7 +439,7 @@ entry recorded.
 ## A ruling arrived after the entry closed, and it is section 6b now
 
 **A fingerprint is measured, never derived and never inherited.** Given by the
-operator on 2026-08-29 once T-244 closed with the profile two majors behind
+operator on 2026-08-29 once T-244 closed with the profile a major behind
 stable. [RULES.md](RULES.md) section 6b carries it in full and
 [T-264](cli-surface.md) is the entry that makes it routine.
 
@@ -430,12 +458,15 @@ down.** Measured on this machine on 2026-08-29:
 | `debian:bookworm-slim` plus Google's own apt repository | **Chrome 152.0.7977.64** |
 | this host | Chrome 151.0.7922.76 |
 | `ubuntu-latest`, run 33251738663 | Chrome 151.0.7922.173 |
-| `versionhistory`, Windows stable | 153.0.8010.12 |
+| `versionhistory`, Windows stable, actually serving | 152.0.7977.65 |
+| Chrome for Testing, Stable | 152.0.7977.64 |
+| `versionhistory`, highest published, at fraction 0.005 | 153.0.8010.12 |
 
-So a container already reaches a newer browser than either machine that was
-available before, and Google's Linux apt channel is itself a major behind the
-Windows channel on the same day, which is a number the tooling has to carry
-rather than collapse.
+**So the container's Chrome 152 is current stable**, and the capture that
+closes the gap is available today rather than blocked on anything. The apparent
+disagreement between the apt channel and the Windows channel was the check
+reading the wrong endpoint, not the channels differing; the correction is
+below.
 
 **One piece needs code and the measurement says which.** WSL is in NAT mode on
 this host, so a distro cannot reach the Windows loopback and
@@ -457,8 +488,7 @@ rootfs tarball.
 
 ## The engine was not left as it was found, and not by this session
 
-Asked to look, and reported rather than acted on, because deleting 31 GB of
-somebody else's images is not a thing to do without being asked.
+Asked to look, reported, and then cleaned on the operator's authorisation.
 
 ```bash
 podman system df
@@ -477,89 +507,93 @@ attached to any container. The named images that survive, `localhost/archlinux`
 in five architectures and `ghcr.io/pkgforge-dev/archlinux:loong64`, look
 deliberate and were left alone.
 
-`podman system prune -a --volumes` would reclaim all of it. It is the
-operator's to run: some of those images take a long time to rebuild and no
-session should decide that for somebody else.
+`podman system prune -a --volumes` reclaimed **306.2 GB**, which is larger than
+the `df` figure above because `df` counts deduplicated image size and the prune
+counts every layer and blob it removed. The engine reports zero images, zero
+containers and zero volumes afterwards.
+
+It was not run until the operator authorised it: some of those images take a
+long time to rebuild and no session should decide that for somebody else.
 
 ## Start here next session
 
-**The shape of the work order is the operator's and it has not changed.** Not
-priority first. Clear small entries so the open count comes down, then take the
-bigger ones a **category at a time**. The counts are derived from the rows:
+**The operator allocated one more session to T-244 and it is the last one.**
+The ordinary work order is below it and resumes the session after. This is not
+a one-off in the [RULES.md](RULES.md) section 3 sense: the work order is here,
+in this file, where it belongs, and the kickoff prompt stays generic.
+
+**What "finish it for real" means**, and it is four entries, not a feeling:
+[T-262](cli-surface.md), [T-263](cli-surface.md) and [T-264](cli-surface.md)
+all close, and T-264's move takes the profile out of the vendored tree. Every
+one has an acceptance command already written and every one has its measurement
+already taken. Nothing in the four needs a decision: both that were open were
+ruled on and are in [RULES.md](RULES.md) section 6b.
 
 ```bash
 pwsh -NoProfile -File scripts/check-todo.ps1
 ```
 
-**This is an ordinary session's list again.** The two before it were one-offs
-whose work order came in the kickoff; that is over and this file is the work
-order.
-
 1. **Re-measure the baseline rather than trusting the one above**, which is
-   [RULES.md](RULES.md) section 1 step 5. Read the run this session's last push
-   started: the CI line above names it. This session touched `vendor/` heavily,
-   so run `scripts/vendor-status.ps1` too.
+   [RULES.md](RULES.md) section 1 step 5. This session touched `vendor/`
+   heavily, so `scripts/vendor-status.ps1` goes first.
 
 ```bash
 gh run list --limit 1
 ```
 
-2. **[T-259](cli-surface.md), P3, `S`.** Still the smallest thing open and the
-   cheapest to prove, and untouched for three sessions now: compare the non-row
-   lines of `docs/schema.md` for equality while keeping the row lines as
-   containment, with the hand-written tail `carry_across` preserves exempt. The
-   entry names both seams with their lines.
+2. **[T-264](cli-surface.md), P2, `M`, and it is the spine.** Four pieces and
+   three are already measured; the entry carries the numbers so none of it
+   needs re-deriving.
 
-3. **[T-250](cli-surface.md), P2.** Cheaper than it was: `source_kind` has a
-   `page` value and a page's links now carry a `matched` rule each, so "how it
-   was resolved" has more to say than when the entry was written. The error
-   path already reports `page_links`; the successful one still says nothing
-   about which link it took.
+   Do them in this order, because each makes the next testable: `--bind` on
+   `loopback-tlsprobe`, then the container capture in
+   `scripts/check-browser-fingerprint.ps1 -Container`, then **the move of the
+   whole profile into `crates/bit-cli-core/src/page.rs`**, then the bump from
+   what Chrome for Testing's Stable emitted.
 
-4. **[T-253](cli-surface.md), P2, `partial`.** Its blocker went two sessions
-   ago and nothing has been done with that: `rcgen` is a dev dependency and
-   `loopback-tlsprobe` now generates a certificate authority as well as a leaf,
-   so a loopback file server that speaks TLS has two worked examples to copy
-   rather than one.
+   The move is the part with the leverage and the part to do carefully: after
+   it, a bump edits one file this repository owns and `vendor/impit` carries no
+   data this repository authored.
 
-5. **[T-251](trackers.md), P2, `M`, `partial`.** Unchanged: a `[[tracker]]`
-   table in the file `--web-seed-config` reads, then the `[[peer]]` table after
-   it. `scripts/check-announce.ps1` is where the case goes.
+3. **[T-263](cli-surface.md), P3, `M`.** GREASE at both ends of the extension
+   list and a shuffled order, in the vendored `rustls` emulation module. Cheap
+   to verify because it moves no golden: JA4 and JA4_r both sort, so
+   `scripts/check-fingerprint.ps1` passes unchanged and `JA4_ro` is what shows
+   the fix landed.
 
-6. **[T-264](cli-surface.md), P2, `M`**, and it is the one the operator's
-   ruling of 2026-08-29 created: a browser installed in a throwaway container,
-   driven at `loopback-tlsprobe`, and the vendored fingerprint database bumped
-   from what it emitted. Three of its four pieces are already measured and the
-   entry carries the numbers; the one that needs code is `--bind` on the probe.
-   [`docs/containers.md`](../docs/containers.md) is the procedure and
-   [RULES.md](RULES.md) section 6b is the rule it serves.
+4. **[T-262](cli-surface.md), P3, `S`.** The PRIORITY payload in `h2`'s frame
+   encoder, which is the one field of four where the Akamai fingerprint still
+   differs from a real Chrome. Smallest of the three and the riskiest code:
+   `vendor/h2/src/frame/headers.rs:301` is a protocol library's frame writer.
+   `cargo test --manifest-path vendor/h2/Cargo.toml --workspace` is what holds
+   it.
 
-7. **[T-262](cli-surface.md) and [T-263](cli-surface.md), both P3**, both filed
-   this session out of what the fingerprint work measured, and both small. The
-   first is a PRIORITY payload in `h2`'s frame encoder; the second is GREASE
-   and a shuffled extension order in the vendored `rustls`. Neither moves JA4,
-   which is what makes them cheap to verify: the goldens do not change.
+5. **Then the ordinary list resumes**, in the shape the operator has kept
+   throughout: not priority first, clear the small entries so the open count
+   comes down, then take the bigger ones a category at a time.
 
-8. **[T-260](cli-surface.md), P2, `M`, and [T-261](trackers.md), P2, `M`.**
-   T-260 publishes what a release already builds plus the data files a program
-   wants by URL, and it has more to publish now than when it was filed:
-   `fingerprints/*.json`, and the two staleness reports, all three carrying a
-   `schema` field for exactly this. T-261 is the tracker list that is the
-   second consumer of that format. Neither blocks the other.
+   [T-259](cli-surface.md) P3 `S`, still the smallest thing open and untouched
+   for three sessions. [T-250](cli-surface.md) P2, which has more to report
+   than when it was filed now that a page's links carry a `matched` rule each.
+   [T-253](cli-surface.md) P2 `partial`, whose blocker went two sessions ago
+   and which now has two worked examples of `rcgen` to copy.
+   [T-251](trackers.md) P2 `partial`. Then [T-260](cli-surface.md) and
+   [T-261](trackers.md), the publishing pair, which have three schema-carrying
+   files to publish now rather than one.
 
-9. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
+6. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
    so the two candidates left are on the read side and are named with their
    lines. Build the fixture first: a pair of real `librqbit_utp` streams in one
    process.
 
-10. **The three entries that were ruled on and are still work.**
+7. **The three entries that were ruled on and are still work.**
    [T-227](memory.md) is a throughput curve then a flag.
    [T-242](performance.md) is two sweeps from `scripts/bench-leech.ps1`.
    [T-234](peers.md) and [T-238](peers.md) are the two large ones and both need
    [T-239](peers.md) first.
 
-11. **Then the category pass, and `bep-coverage.md` is still first.**
+8. **Then the category pass, and `bep-coverage.md` is still first.**
    [T-101](bep-coverage.md) is open on a latency measurement loopback cannot
    produce, which [T-239](peers.md) is the prerequisite for.
    [T-102](bep-coverage.md) and [T-168](bep-coverage.md) are the untouched two,
@@ -571,41 +605,40 @@ to 29 for [T-234](peers.md); entries 30 to 37 for [T-238](peers.md) and
 [T-239](peers.md); and `reference/README.md`'s "The 2026-08-24 trees" section.
 **All of it is a read.** Nothing was read from it this session.
 
+**A container is available and [`docs/containers.md`](../docs/containers.md) is
+the procedure.** It answers in seconds what CI answers in five minutes, and
+everything it creates is removed in the same run. `podman system df` before
+finishing is the number that says whether something stopped cleaning up.
+
 ## Open questions for the operator
 
-**None.** The three rulings of 2026-08-29 were all acted on and T-244 closed on
-them. Three things to be aware of rather than to decide.
+**None. Two were raised at the end of this session and both were ruled on**,
+and they are in [RULES.md](RULES.md) section 6b so the next session acts on
+them rather than re-deriving them.
 
-**The `--render` ruling was given a number that is wrong by a factor of nine.**
-Ruling 2 made it a Cargo feature because it cost 136 packages. Measured in this
-tree it costs **15**: `chromiumoxide`'s dependencies are almost all already
-here. The ruling was not reopened and `--render` is a feature. Whether it
-should be is now a decision on a different number.
+1. **The profile lives in `bit-cli-core`, not in the vendored tree.**
+   `page.rs` holds all of it and builds `impit`'s `BrowserFingerprint` from its
+   own values. One file is the truth, a staleness recommendation has one file
+   to target, and `vendor/impit` carries no data this repository authored.
+2. **The shipped profile claims Stable.** Beta is captured and recorded beside
+   it so the next bump is ready the day it ships, and it is not what the client
+   claims to be.
 
-**The browser profile is two majors behind stable**, and the tool that says so
-is new. `scripts/check-browser-version.ps1` reports Chrome 153 against a
-profile claiming 151, and now also reports that the vendored fingerprint
-database stops at 151 and caps its own recommendation there.
+**Three things to be aware of rather than to decide.**
 
-**It is not bumped, and the reason is a measurement rather than caution.**
-Across the three newest entries in that database the cipher list, key exchange
-groups, extension list and extension order are **identical** from 136 through
-151, so a hand-written 153 would probably get the `ClientHello` right. What it
-would certainly get wrong is the `sec-ch-ua` brand list: those three entries
-spell the fake brand `"Not.A/Brand"`, `"Not_A Brand"` and `"Not=A?Brand"` with
-the order flipped, because Chrome varies it per major on purpose. A client
-announcing `Chrome/153` with 151's signature algorithms and an invented brand
-string is a combination that exists nowhere, which is a **stronger** signal
-than being one version behind.
+**The container engine was cleaned, on the operator's authorisation.**
+`podman system df` reported 554 images at 31.35 GB with nothing in use, one
+exited container and five orphaned volumes, all from earlier sessions that did
+not clean up after themselves. `podman system prune -a --volumes` reported
+**306.2 GB** reclaimed, which is larger than the `df` figure because `df`
+counts deduplicated image size and the prune counts every layer and blob it
+removed. The engine reports zero of everything now.
 
-**CI cannot supply the capture either.** The `ubuntu-latest` image carries
-Chrome 151.0.7922.173, the same major as this machine. What unblocks a bump is
-a machine running 153, or `impit` shipping the entry, which
-`scripts/upstream-scan.ps1` will notice.
-
-**Twelve repositories in `TheDancingDeveloper-org`** redistribute Apache-2.0
-code under MIT with no licence file and no attribution. Nothing was said to
-anybody, by [RULES.md](RULES.md) section 6a. Unchanged.
+**Two asks were written down for whoever owns `wsl-ephemeral.ps1`**, in
+[T-264](cli-surface.md) under Notes. The useful one is `-Action HostAddress`:
+today a caller has to create a distro, read `/proc/net/route` and decode
+little-endian hex to find out how to talk to the host, and the tool already
+knows the networking mode. Neither ask blocks anything.
 
 **One dependabot pull request is still open**, number 6,
 `ci(deps): bump taiki-e/install-action from 2.86.3 to 2.86.5`. Not taken again,

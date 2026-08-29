@@ -4834,7 +4834,7 @@ Closed:      **Done, 2026-08-29.** Every item of the `Left:` list is closed or
              `scripts/check-browser-version.ps1` asks Google, Mozilla and
              Microsoft what stable is, with every fetch trapped on its own, and
              prints the replacement `BROWSER_MAJOR`, `BROWSER_USER_AGENT` and
-             `sec-ch-ua` when the profile is behind. It says **Chrome 153**
+             `sec-ch-ua` when the profile is behind. It says **Chrome 152**
              today against a profile claiming 151.
              `scripts/check-browser-fingerprint.ps1` drives the browser this
              machine has and prints the replacement `BROWSER_HEADERS` in the
@@ -4847,7 +4847,7 @@ Closed:      **Done, 2026-08-29.** Every item of the `Left:` list is closed or
              path it looked at, which is the case that has to work on every
              runner.
 
-             **The `BROWSER_MAJOR` was not bumped to 153**, and that is a
+             **The `BROWSER_MAJOR` was not bumped**, and that is a
              decision rather than an oversight. The TLS half of the profile is
              `impit`'s fingerprint database, whose newest Chrome is 151.
              Claiming 153 in the User-Agent over 151's `ClientHello` is a
@@ -6243,7 +6243,7 @@ Notes:       `JA4_ro` is what made this visible and it was added in the same
 
 ### T-264 The browser profile can only be refreshed on a machine that runs that browser
 
-Source:      the operator's ruling of 2026-08-29, after T-244 closed two majors
+Source:      the operator's ruling of 2026-08-29, after T-244 closed a major
              behind stable
 Category:    cli
 Priority:    P2
@@ -6253,7 +6253,7 @@ Status:      open
 Problem:     `crates/bit-cli-core/src/page.rs` pins the profile to Chrome 151
              and the TLS half of it comes from
              `vendor/impit/impit/src/fingerprint/database/chrome.rs`, whose
-             newest entry is also 151. Chrome stable is **153**.
+             newest entry is also 151. Chrome stable is **152**.
              `scripts/check-browser-version.ps1` reports the gap and refuses to
              recommend past the database, which is correct and is as far as it
              can go: it cannot produce a `ClientHello` from a version number.
@@ -6289,20 +6289,29 @@ Approach:    **A browser installed in a throwaway container, driven at
              Four pieces, and three of the four are already measured on this
              machine.
 
-             1. **The container.** `wsl-ephemeral.ps1` from
-                `Azathothas/ToolKit`, pinned by commit, creates a WSL2 distro
-                from an OCI image, runs a command and removes it.
-                [`docs/containers.md`](../docs/containers.md) is the procedure.
-                **Measured 2026-08-29**: `debian:bookworm-slim` plus Google's
-                own apt repository installs **Chrome 152.0.7977.64**, one major
-                newer than this host.
+             1. **Where the browser comes from, and Google publishes it
+                itself.** Three sources were compared rather than one
+                assumed, on 2026-08-29:
 
-                It is one major behind what `versionhistory` reports for
-                Windows stable, which is a finding in itself: Google's Linux
-                apt channel and the Windows channel are not the same version on
-                the same day, so the check's own idea of "stable" and what a
-                container can install are two different numbers and the report
-                has to carry both.
+                | source | what it gives | notes |
+                | --- | --- | --- |
+                | **Chrome for Testing** | an exact build per channel, with a download URL and a machine-readable index | Google's own, versioned, made for automation. `Stable` 152.0.7977.64, `Beta` 153.0.8010.12, `Dev` and `Canary` beyond. **This is the one to use.** |
+                | `debian:bookworm-slim` + Google's apt | 152.0.7977.64 | current stable, and proves the container path works |
+                | a third-party image, `selenium/standalone-chrome` or `mcr.microsoft.com/playwright` | a Chrome somebody else chose | reputable, but the version is theirs and lags |
+
+                **Chrome for Testing answers the question the entry was
+                filed on**: it is Google publishing Chrome, per channel,
+                addressable by version, so a capture is not limited to
+                whatever a distribution happens to package. It also reaches
+                **Beta, Dev and Canary**, which is how the profile gets ahead
+                of a release rather than behind it: capture Beta now and the
+                bump is ready the day it ships.
+
+                The container is still where it runs. Downloading a browser
+                onto the host is a system change nobody asked for; downloading
+                it into a distro that is destroyed afterwards is not.
+                [`docs/containers.md`](../docs/containers.md) is the
+                procedure.
 
              2. **A reachable probe, and this is the piece that needs code.**
                 WSL is in NAT mode on this host, so a distro cannot reach the
@@ -6317,20 +6326,49 @@ Approach:    **A browser installed in a throwaway container, driven at
                 not reachable from the LAN. `0.0.0.0` is not the answer and
                 should not be offered.
 
+                **`--bind` is worth having whatever the container tooling
+                does**, because it is this repository's own fixture and a
+                fixture that can only be reached from the machine it runs on
+                cannot be reached by anything else either. What the tooling
+                could remove is the **address lookup**, and that ask is
+                written down under Notes.
+
              3. **The capture.** `scripts/check-browser-fingerprint.ps1`
                 already drives a browser at the probe and already prints the
                 replacement values. What it needs is a `-Container` switch that
                 puts the browser in a distro rather than on the host, and a
                 `--path`-equivalent inside it.
 
-             4. **The bump.** The capture's output is written into
-                `page.rs` for the header half and into the vendored
-                `impit` database for the TLS and HTTP/2 halves, as a new
-                `chrome_<major>` module, with `patches/UPSTREAM.md` recording
-                that the entry is **ours and measured** rather than upstream's.
+             4. **The bump, and the operator ruled on where it lands.**
+                **The whole profile moves into `crates/bit-cli-core/src/page.rs`**:
+                the cipher list, the key exchange groups, the signature
+                algorithms, the extension list and its order, the HTTP/2
+                settings and the headers. `page.rs` then constructs `impit`'s
+                `BrowserFingerprint` from its own values, where today it takes
+                `chrome_151::fingerprint()` and overwrites the header half.
+
+                That is the change with the most leverage in this entry and it
+                is why the entry is `M` rather than `S`. After it, a bump edits
+                **one file** this repository owns, a staleness recommendation
+                names that file and nothing else, and `vendor/impit` carries no
+                data this repository authored. It follows directly from
+                [RULES.md](RULES.md) section 6b: a starting point does not get
+                to be the home of the answer.
+
+                The mapping is onto `impit`'s enums, `CipherSuite`,
+                `KeyExchangeGroup`, `SignatureAlgorithm` and `ExtensionType`,
+                which stay theirs. A value those enums cannot express is a
+                finding to record rather than a value to drop silently.
+
+                **Stable is what the profile claims.** A capture can reach
+                Beta, Dev and Canary; shipping one of those is the same failure
+                as shipping a version nobody runs yet. Beta is captured and
+                written down beside it so the next bump is ready the day it
+                ships.
+
                 `scripts/check-fingerprint.ps1 -Update` then rewrites the
-                goldens and `check-browser-fingerprint.ps1` verifies against
-                the browser again.
+                goldens and `check-browser-fingerprint.ps1 -Strict` verifies
+                against the browser again.
 Acceptance:  `pwsh scripts/check-browser-fingerprint.ps1 -Container` on a
              machine with podman and WSL2 reports a browser newer than
              `BROWSER_MAJOR`, prints the replacement, and leaves **no**
@@ -6342,13 +6380,40 @@ Acceptance:  `pwsh scripts/check-browser-fingerprint.ps1 -Container` on a
              machine with neither is not a failing build.
 
              After the bump, `pwsh scripts/check-browser-version.ps1` reports
-             the profile and the database at the same major, and
+             the profile at the same major as Stable, and
              `pwsh scripts/check-browser-fingerprint.ps1 -Strict` passes
              against a browser of that version.
+
+             **`vendor/impit` carries no fingerprint this repository authored**,
+             which `pwsh scripts/vendor-diff.ps1 -Check` proves by the series
+             for `impit` not gaining a patch to
+             `impit/src/fingerprint/database/chrome.rs`.
 Notes:       **The distro is removed in the same run that made it**, with
              `-Ephemeral` or an explicit `Remove`, and the acceptance checks
              that rather than trusting it. A session that leaves one behind has
              left a VHDX of a few hundred MiB on somebody's disk.
+
+             **What `wsl-ephemeral.ps1` could offer so this needs no
+             workaround**, written down because the operator asked what to
+             request of the agent that owns it. Two things, and the first is
+             most of the value:
+
+             - **`-Action HostAddress`**, printing the address a distro reaches
+               this host at, for the current networking mode. Today a caller
+               reads `/proc/net/route` inside a distro and decodes
+               little-endian hex, which means creating a distro to find out how
+               to talk to the host. The tool already knows the mode and can
+               answer without one. In mirrored mode the answer is `127.0.0.1`
+               and every caller's code stops branching.
+             - **`-PortForward <PORT>`**, or documentation saying plainly that
+               NAT mode requires binding a host service to the WSL adapter
+               address rather than to loopback. The trap is silent: a fixture
+               on `127.0.0.1` simply never receives a connection, and nothing
+               says why.
+
+             Neither is required for this entry. `--bind` plus reading the
+             gateway is enough, and it is written so that a tool which later
+             answers the first ask replaces four lines rather than a design.
 
              [T-262](#t-262-the-http-2-fingerprint-matches-a-real-chrome-in-three-fields-of-four)
              and [T-263](#t-263-the-extension-list-is-chromes-set-in-a-fixed-order-and-chrome-shuffles-it)

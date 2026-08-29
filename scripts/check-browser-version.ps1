@@ -10,13 +10,31 @@
 # against `BROWSER_MAJOR` in `crates/bit-cli-core/src/page.rs`, which is the
 # one number the profile is pinned to.
 #
-# Three sources, all first-party and all documented endpoints meant to be read
+# Four sources, all first-party and all documented endpoints meant to be read
 # by a program:
 #
-#   chrome    versionhistory.googleapis.com, the Chrome release API
+#   chrome    versionhistory.googleapis.com, the Chrome release API, read
+#             through its **releases** endpoint rather than its versions one
+#   chrome-for-testing
+#             googlechromelabs.github.io, Google's own per-channel index of the
+#             builds it publishes for automation. It is the cross-check, and
+#             the two disagreeing is a finding rather than an error.
 #   firefox   product-details.mozilla.org, the file Mozilla's own release
 #             tooling reads
 #   edge      edgeupdates.microsoft.com, the enterprise update feed
+#
+# ⚠ **The highest version number on the stable channel is not what stable
+# is.** Chrome rolls a release out in stages, and `.../versions?pageSize=1`
+# answers with the highest version **known**, which for days is a build
+# reaching a fraction of a percent of users. Measured 2026-08-29: that endpoint
+# said `153.0.8010.12` while the releases endpoint showed it at
+# `fraction 0.005` and `152.0.7977.65` at `fraction 1`, and Chrome for Testing
+# agreed that stable was 152.
+#
+# This check reported one major of drift that did not exist, which is the
+# opposite of the defect it was written to catch: chasing a build almost nobody
+# runs produces a correct fingerprint of a browser that does not exist. So it
+# reads the fraction and takes the version that is actually being served.
 #
 # **Every fetch is trapped on its own.** One dead endpoint degrades that field
 # and leaves the others intact, because a check that reports nothing when one
@@ -138,12 +156,55 @@ function Get-Json([string]$Url) {
     }
 }
 
+# What stable is actually serving, which is not the same as the highest
+# version it knows about.
+#
+# `fraction` is the share of users a release is being served to. A staged
+# rollout runs several at once, so the answer is the **highest version at full
+# rollout**, and only when there is none does the highest fraction win. A
+# release at 0.005 is a build 1 user in 200 has.
 function Get-Chrome {
-    $answer = Get-Json "https://versionhistory.googleapis.com/v1/chrome/platforms/win/channels/stable/versions?pageSize=1"
+    $url = "https://versionhistory.googleapis.com/v1/chrome/platforms/win/channels/stable/versions/all/releases" +
+    "?filter=endtime%3Dnone&order_by=version%20desc"
+    $answer = Get-Json $url
     if ($answer.error) { return @{ browser = 'chrome'; error = $answer.error } }
-    $version = $answer.value.versions[0].version
-    if (-not $version) { return @{ browser = 'chrome'; error = "the response carried no version" } }
-    @{ browser = 'chrome'; version = $version; major = [int]($version -split '\.')[0] }
+    $releases = @($answer.value.releases | Where-Object { $_.version })
+    if ($releases.Count -eq 0) { return @{ browser = 'chrome'; error = "the response carried no release" } }
+
+    $full = @($releases | Where-Object { $_.fraction -ge 1 })
+    $chosen = if ($full.Count -gt 0) {
+        ($full | Sort-Object { [version]$_.version } -Descending)[0]
+    } else {
+        ($releases | Sort-Object -Property fraction -Descending)[0]
+    }
+    $highest = ($releases | Sort-Object { [version]$_.version } -Descending)[0]
+
+    @{
+        browser        = 'chrome'
+        version        = $chosen.version
+        major          = [int]($chosen.version -split '\.')[0]
+        fraction       = $chosen.fraction
+        # What the naive endpoint would have said, kept so a reader can see
+        # the difference rather than take this on trust.
+        highest_known  = $highest.version
+        highest_fraction = $highest.fraction
+    }
+}
+
+# Google's own index of the builds it publishes for automation. A second
+# opinion on the same question from the same vendor: when it and the release
+# API disagree about stable, something is mid-rollout and the report says so.
+function Get-ChromeForTesting {
+    $answer = Get-Json "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json"
+    if ($answer.error) { return @{ browser = 'chrome-for-testing'; error = $answer.error } }
+    $version = $answer.value.channels.Stable.version
+    if (-not $version) { return @{ browser = 'chrome-for-testing'; error = "the index carried no Stable channel" } }
+    @{
+        browser = 'chrome-for-testing'
+        version = $version
+        major   = [int]($version -split '\.')[0]
+        beta    = $answer.value.channels.Beta.version
+    }
 }
 
 function Get-Firefox {
@@ -168,7 +229,7 @@ function Get-Edge {
     @{ browser = 'edge'; version = $version; major = [int]($version -split '\.')[0] }
 }
 
-$sources = @((Get-Chrome), (Get-Firefox), (Get-Edge))
+$sources = @((Get-Chrome), (Get-ChromeForTesting), (Get-Firefox), (Get-Edge))
 $reached = @($sources | Where-Object { -not $_.error })
 if ($reached.Count -eq 0) {
     $why = ($sources | ForEach-Object { "$($_.browser): $($_.error)" }) -join '; '
@@ -252,6 +313,14 @@ $report = [ordered]@{
             if ($_.error) { $row.error = $_.error } else {
                 $row.version = $_.version
                 $row.major = $_.major
+                # Only Chrome carries these, and they are the evidence for
+                # picking this version over the highest one known.
+                if ($null -ne $_.fraction) { $row.fraction = $_.fraction }
+                if ($_.highest_known) {
+                    $row.highest_known = $_.highest_known
+                    $row.highest_fraction = $_.highest_fraction
+                }
+                if ($_.beta) { $row.beta = $_.beta }
             }
             [pscustomobject]$row
         })
@@ -279,10 +348,16 @@ if ($Json) {
     }
     foreach ($s in $sources) {
         if ($s.error) {
-            Write-Host ("{0,-9} unreachable: {1}" -f $s.browser, $s.error)
+            Write-Host ("{0,-18} unreachable: {1}" -f $s.browser, $s.error)
         } else {
-            Write-Host ("{0,-9} {1}" -f $s.browser, $s.version)
+            Write-Host ("{0,-18} {1}" -f $s.browser, $s.version)
         }
+    }
+    # The version that is serving is not always the highest one published, and
+    # a reader who is told only the answer cannot check it.
+    if ($chrome -and -not $chrome.error -and $chrome.highest_known -ne $chrome.version) {
+        Write-Host ("{0,-18} {1} is published and is at fraction {2}, so it is not stable yet" -f `
+                "", $chrome.highest_known, $chrome.highest_fraction)
     }
     Write-Host ""
     Write-Host ("check-browser-version: {0}" -f $detail)

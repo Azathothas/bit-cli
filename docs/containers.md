@@ -1,7 +1,7 @@
 # Measuring in a throwaway container
 
 Some things this repository has to measure cannot be measured on the machine
-doing the measuring. A browser two majors newer than the installed one, a
+doing the measuring. A browser newer than the installed one, a
 filesystem this host does not have, a libc this host does not use: each needs a
 different machine, and waiting for CI to be that machine costs five minutes a
 question.
@@ -94,6 +94,30 @@ awk '$2 == "00000000" { print $3 }' /proc/net/route
 ```
 
 That is little-endian hex: `016017AC` is `172.23.96.1`.
+
+## Getting a browser into one
+
+Three ways, and the first is the one to reach for. The versions below are what
+they gave when this was written; read them again rather than trusting them.
+
+| source | version it gave | what it is |
+| --- | --- | --- |
+| **Chrome for Testing** | `Stable` 152.0.7977.64, `Beta` 153.0.8010.12, and `Dev` and `Canary` beyond | Google's own per-channel index of the builds it publishes for automation, with a download URL per platform |
+| `debian:bookworm-slim` plus Google's apt repository | 152.0.7977.64 | whatever the distribution channel is serving |
+| a third-party image | theirs | `selenium/standalone-chrome` and `mcr.microsoft.com/playwright` both ship a Chrome, and both pick the version |
+
+```bash
+curl -sS https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json
+```
+
+**Chrome for Testing is addressable by channel**, which is the property the
+other two do not have: it reaches Beta, Dev and Canary as well as Stable, so a
+profile can be captured **before** a version ships rather than after. A
+distribution package gives whatever it gives.
+
+**Download it into the distro, never onto the host.** Installing a browser on
+somebody's machine is a system change nobody asked for; installing it into a
+distro that is destroyed afterwards is not.
 
 ## Decommissioning, which is not optional
 
