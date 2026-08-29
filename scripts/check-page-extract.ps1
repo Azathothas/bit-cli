@@ -40,8 +40,12 @@ param(
     # Leave the fixture and the served directory in place afterwards.
     [switch]$Keep,
     [string]$Root = ".tmp/page-extract",
+    # Named -Build and not -Profile: `$PROFILE` is a PowerShell automatic
+    # variable holding the profile script's path, and a parameter of that name
+    # shadows it in a way that reads fine here and surprises the next reader.
+    # TODO/RULES.md section 5 has the general form of this trap.
     [ValidateSet("debug", "release")]
-    [string]$Profile = "release"
+    [string]$Build = "release"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,14 +56,14 @@ function Exit-With([int]$code, [string]$message) {
     exit $code
 }
 
-$exeDir = Join-Path $repo "target/$Profile"
+$exeDir = Join-Path $repo "target/$Build"
 $bit = Join-Path $exeDir "bit-cli.exe"
 if (-not (Test-Path $bit)) { $bit = Join-Path $exeDir "bit-cli" }
 $server = Join-Path $exeDir "examples/loopback-fileserver.exe"
 if (-not (Test-Path $server)) { $server = Join-Path $exeDir "examples/loopback-fileserver" }
 foreach ($p in @($bit, $server)) {
     if (-not (Test-Path $p)) {
-        Exit-With 2 "$p is missing; run: cargo build --$Profile --bins --examples"
+        Exit-With 2 "$p is missing; run: cargo build --$Build --bins --examples"
     }
 }
 

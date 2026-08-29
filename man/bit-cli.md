@@ -189,6 +189,7 @@ Effects: `read_only`.
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
+| `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
 
 ### `bit-cli files`
 
@@ -206,6 +207,7 @@ Effects: `read_only`.
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
+| `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
 
 ### `bit-cli tree`
 
@@ -223,6 +225,7 @@ Effects: `read_only`.
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
+| `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
 
 ### `bit-cli peers`
 
@@ -350,6 +353,7 @@ Effects: `read_only`.
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
+| `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
 
 ### `bit-cli webseed test`
 
@@ -404,6 +408,7 @@ Effects: `read_only`.
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
+| `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
 
 ### `bit-cli webseed probe`
 
@@ -457,6 +462,7 @@ Effects: `read_only`.
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
+| `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
 
 ### `bit-cli webseed fetch`
 
@@ -515,6 +521,7 @@ Effects: `idempotent`.
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
+| `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
 
 ### `bit-cli verify`
 
@@ -535,6 +542,7 @@ Effects: `read_only`.
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
+| `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
 
 ### `bit-cli create`
 
@@ -614,6 +622,7 @@ Effects: `read_only`.
 | `--no-lsd` | boolean |  | `false` | Disable local service discovery while resolving |
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
+| `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
 
 ### `bit-cli seed`
 

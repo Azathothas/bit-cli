@@ -40,6 +40,84 @@
 
 use url::Url;
 
+/// Which client `bit-cli` presents itself as when it fetches a source
+/// document.
+///
+/// An origin that fingerprints its callers sends a different page to a client
+/// it does not recognise, and a reader parsing that page is reading a page
+/// nobody else gets. So the fetch of a `.torrent` or of the page linking to
+/// one presents as a current Chrome by default. See `TODO/cli-surface.md`,
+/// T-244.
+///
+/// **This is the source document only.** A web seed is a mirror the caller
+/// configured, fetching payload bytes, and it keeps `bit-cli/<version>`:
+/// impersonating a browser at a mirror somebody pointed us at buys nothing and
+/// hides who is asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClientProfile {
+    /// A current Chrome's header set, in Chrome's order.
+    #[default]
+    Browser,
+    /// `bit-cli/<version>` and nothing else, which is what every other request
+    /// here sends.
+    Plain,
+}
+
+impl ClientProfile {
+    /// The name the command line uses and a report prints.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Browser => "browser",
+            Self::Plain => "plain",
+        }
+    }
+}
+
+/// The Chrome major this profile claims to be.
+///
+/// A profile pinned to a version nobody runs is a *correct* fingerprint of a
+/// browser that does not exist, which is its own tell. This is the one number
+/// to move when the profile is refreshed, and `scripts/check-fingerprint.ps1`
+/// records what was captured against it.
+pub const BROWSER_MAJOR: u32 = 151;
+
+/// The `User-Agent` the browser profile sends.
+pub const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
+
+/// Every header the browser profile sends beside `User-Agent`, in the order
+/// Chrome sends them for a top level navigation.
+///
+/// **Order is part of the fingerprint**, not a style choice: the HTTP/2 half
+/// of a client's identity includes the header sequence after the
+/// pseudo-headers, so a set with the right names in the wrong order is still
+/// distinguishable.
+///
+/// `Accept-Encoding` is deliberately **absent**. Chrome sends it, but the
+/// value has to agree with what this client can actually decode, and the HTTP
+/// client is what knows that. Setting it here by hand is how a caller ends up
+/// advertising `br` and then handing brotli to a bencode parser.
+pub const BROWSER_HEADERS: &[(&str, &str)] = &[
+    (
+        "sec-ch-ua",
+        "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not?A_Brand\";v=\"24\"",
+    ),
+    ("sec-ch-ua-mobile", "?0"),
+    ("sec-ch-ua-platform", "\"Windows\""),
+    ("upgrade-insecure-requests", "1"),
+    (
+        "accept",
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,\
+         image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    ),
+    ("sec-fetch-site", "none"),
+    ("sec-fetch-mode", "navigate"),
+    ("sec-fetch-user", "?1"),
+    ("sec-fetch-dest", "document"),
+    ("accept-language", "en-US,en;q=0.9"),
+    ("priority", "u=0, i"),
+];
+
 /// What kind of torrent link was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

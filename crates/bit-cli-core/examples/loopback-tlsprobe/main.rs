@@ -33,6 +33,17 @@
 //! three distinct JA3 hashes and one stable JA4 across six captures of the
 //! same binary.
 //!
+//! **`--plain` is how a client that verifies certificates is still read.**
+//! The certificate here is self signed with no CA behind it, so a client doing
+//! its job refuses it and the handshake never completes. That leaves the TLS
+//! capture intact, because the `ClientHello` is already on the wire, and it
+//! leaves the HTTP/2 capture empty. `--plain` drops TLS entirely and reads the
+//! request's header order off cleartext HTTP/1.1, which is the half of the
+//! HTTP fingerprint that does not need a handshake. Reaching the Akamai HTTP/2
+//! fingerprint of such a client needs the client to trust this certificate or
+//! to stop verifying, and neither is something to add to a shipping binary for
+//! a test.
+//!
 //! **Capture JA4 in `--raw` mode.** Terminating the handshake can change what
 //! a client offers: a client told to skip certificate verification may fall
 //! back to a different `signature_algorithms` list, and a JA4 read through
@@ -57,6 +68,7 @@ struct Args {
     port: u16,
     json: bool,
     raw: bool,
+    plain: bool,
     once: bool,
     expect_ja4: Option<String>,
     expect_ja3: Option<String>,
@@ -74,6 +86,7 @@ USAGE:
 OPTIONS:
     -p, --port <N>            listen port, 0 for one the OS picks (default 0)
         --raw                 do not terminate TLS, capture the ClientHello only
+        --plain               speak cleartext HTTP/1.1, capture the header order
         --json                one JSON object per connection on stdout
         --once                exit after the first connection
         --expect-ja4 <S>      assert the JA4 string, else exit 1
@@ -101,6 +114,7 @@ fn parse_args() -> Args {
         port: 0,
         json: false,
         raw: false,
+        plain: false,
         once: false,
         expect_ja4: None,
         expect_ja3: None,
@@ -124,6 +138,7 @@ fn parse_args() -> Args {
             }
             "--json" => a.json = true,
             "--raw" => a.raw = true,
+            "--plain" => a.plain = true,
             "--once" => a.once = true,
             "--expect-ja4" => a.expect_ja4 = Some(next_value(&argv, &mut i)),
             "--expect-ja3" => a.expect_ja3 = Some(next_value(&argv, &mut i)),
@@ -519,9 +534,45 @@ fn handle(tcp: TcpStream, cfg: Option<&Arc<rustls::ServerConfig>>, a: &Args) -> 
     Some(cap)
 }
 
+/// Read one cleartext HTTP/1.1 request and record its header order.
+///
+/// No TLS, so nothing has to be trusted or disabled. The capture carries no
+/// JA4, because there is no handshake to read one from.
+fn handle_plain(mut tcp: TcpStream) -> Option<Capture> {
+    tcp.set_read_timeout(Some(Duration::from_millis(2500)))
+        .ok()?;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while let Ok(n) = tcp.read(&mut chunk) {
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 1 << 16 {
+            break;
+        }
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let names: Vec<String> = text
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .filter_map(|l| l.split(':').next().map(|s| s.trim().to_ascii_lowercase()))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let _ = tcp.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+    Some(Capture {
+        ja4: String::new(),
+        ja4_r: String::new(),
+        ja3: String::new(),
+        akamai: None,
+        headers: names,
+    })
+}
+
 fn main() {
     let a = parse_args();
-    let cfg = if a.raw {
+    let cfg = if a.raw || a.plain {
         None
     } else {
         match tls_config() {
@@ -549,24 +600,40 @@ fn main() {
     };
 
     // One line on stdout before the first connection, the same contract the
-    // other loopback fixtures keep, so a script can read the port it got.
-    println!("https://127.0.0.1:{}", bound.port());
+    // other loopback fixtures keep, so a script can read the port it got. The
+    // scheme is the one a client should actually use, so a script never has to
+    // know which mode it started.
+    println!(
+        "{}://127.0.0.1:{}",
+        if a.plain { "http" } else { "https" },
+        bound.port()
+    );
     let _ = std::io::stdout().flush();
     eprintln!(
         "loopback-tlsprobe: listening on {bound} ({})",
-        if cfg.is_some() {
-            "TLS terminated, ALPN h2 and http/1.1"
-        } else {
-            "raw ClientHello only"
+        match (a.plain, cfg.is_some()) {
+            (true, _) => "cleartext HTTP/1.1, header order only",
+            (false, true) => "TLS terminated, ALPN h2 and http/1.1",
+            (false, false) => "raw ClientHello only",
         }
     );
 
     let mut all_ok = true;
     let mut wrote_golden = false;
     for stream in listener.incoming().flatten() {
-        let Some(cap) = handle(stream, cfg.as_ref(), &a) else {
+        let captured = match a.plain {
+            true => handle_plain(stream),
+            false => handle(stream, cfg.as_ref(), &a),
+        };
+        let Some(cap) = captured else {
             continue;
         };
+        if a.plain && !a.json {
+            eprintln!("  header order ({}):", cap.headers.len());
+            for (i, h) in cap.headers.iter().enumerate() {
+                eprintln!("    {:2}. {h}", i + 1);
+            }
+        }
         if a.json {
             println!("{}", cap.to_json());
             let _ = std::io::stdout().flush();

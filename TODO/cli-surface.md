@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2867` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2645` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2681` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2376` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2898` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2676` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2712` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2407` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2867` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2898` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -4043,8 +4043,9 @@ Source:      the operator's brief of 2026-08-24, measured the same day
 Category:    cli
 Priority:    P2
 Effort:      L
-Status:      partial, 2026-08-29: the static tier ships, the impersonating
-             fetch tier and `--render` do not
+Status:      partial, 2026-08-29: the static tier and both halves of the
+             Acceptance ship, the impersonating `ClientHello` and `--render` do
+             not
 
 Problem:     `source.rs:86` maps an `http://` or `https://` string to
              `Kind::Url`, documented at `source.rs:40` as "an HTTP(S) URL
@@ -4225,6 +4226,57 @@ Measured:    **Whether `impit` can enter this tree at all**, which the survey
              **warning rather than an error**. Stock `h2` then encodes the
              HEADERS frame with its own fixed pseudo-header order.
 
+Measured:    **How far the fingerprint moves without vendoring anything, and
+             exactly where it stops.** The header set is half of what an origin
+             reads and it costs nothing; the `ClientHello` is the other half
+             and it is `rustls`'s to decide.
+
+             `--page-client browser`, the default, sends a current Chrome's
+             header set. `reqwest` gained `http2` so ALPN offers `h2`, and the
+             four decompressions so the `Accept-Encoding` that implies is one
+             this client can decode. Captured either side of that change:
+
+             | | JA4 |
+             | --- | --- |
+             | before | `t13i1010h1_61a7ad8aa9b6_3fcd1a44f3e3` |
+             | after | `t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3` |
+             | Chrome, for comparison | `t13i1515h2_8daaf6152771_806a8c22fdea` |
+
+             **One character moved and that is the honest summary.** The `a`
+             segment's ALPN marker is `h2` now rather than `h1`. The cipher and
+             extension hashes did not move and will not: ten ciphers and ten
+             extensions is what `rustls` offers, against Chrome's fifteen and
+             fifteen, and no header set changes a `ClientHello`.
+
+             **The header set is Chrome's and the header order is not, and
+             `reqwest` cannot express one.** Measured off the wire, twice, with
+             the same result both times:
+
+             ```
+             accept, sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform,
+             upgrade-insecure-requests, sec-fetch-site, sec-fetch-mode,
+             sec-fetch-user, sec-fetch-dest, accept-language, priority,
+             user-agent, accept-encoding
+             ```
+
+             Chrome sends `sec-ch-ua` first, `user-agent` fifth and
+             `accept-encoding` eleventh. Two causes, both outside this tree:
+             `http::HeaderMap`'s iteration is not insertion order, so
+             `default_headers` cannot carry a sequence; and `reqwest` appends
+             `user-agent` and `accept-encoding` itself, after everything else.
+             It is **stable** across runs, which is what makes a golden worth
+             keeping, and it is wrong, which is another measured argument for
+             the vendored tier rather than a reason to stop.
+
+             **The Akamai HTTP/2 fingerprint of this client is not captured and
+             the reason is a good one.** It exists only after a handshake
+             completes and ALPN picks `h2`, and the probe's certificate is self
+             signed with no CA behind it, so `bit-cli` refuses it. Reaching it
+             would need a flag that stops verifying certificates, and that is
+             not a flag to add to a shipping binary for a test. `--plain` on
+             the probe reads the header order off cleartext HTTP/1.1 instead,
+             which needs no handshake and no exception.
+
 Blocked:     **Three things adoption needs that are decisions rather than
              work**, all measured on 2026-08-29 and none of them fatal.
 
@@ -4368,8 +4420,40 @@ Closed:      **Partial. The static tier ships and is the half that could not be
              of each is a third case, `one-of-each`, and it resolves only with
              `--page-select`.
 
-             **The oracle for the second half of the Acceptance is in the tree
-             and the golden is not yet.**
+             **The second half of the Acceptance holds, run.** The header set
+             and the TLS fingerprint are asserted against a recorded capture
+             rather than eyeballed:
+
+             ```
+             $ pwsh -NoProfile -File scripts/check-fingerprint.ps1
+             ok   browser  matches the golden
+                    JA4     t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3
+                    headers accept, sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform, upgrade-insecure-requests, sec-fetch-site, sec-fetch-mode, sec-fetch-user, sec-fetch-dest, accept-language, priority, user-agent, accept-encoding
+             ok   plain    matches the golden
+                    JA4     t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3
+                    headers accept, user-agent, accept-encoding
+
+             check-fingerprint: 2 profile(s), 0 failed
+             ```
+
+             The goldens are `fingerprints/bit-cli-browser.json` and
+             `fingerprints/bit-cli-plain.json`, and `fingerprints/` is a new
+             top level directory rather than a `bench/` file, because
+             `bench/*.json` is gitignored and force-added one run at a time
+             while a golden a check reads every run has to be tracked normally.
+             `-Update` is the only thing that rewrites one.
+
+             **JA4 is asserted and JA3 is not.** JA4 sorts before hashing and
+             survives a client that shuffles its extensions; JA3 preserves wire
+             order and flakes. JA3 is recorded in the golden for a reader and
+             never compared.
+
+             Both checks are a CI job, `Page extraction and fingerprint`, so a
+             `rustls` or `reqwest` upgrade that moves the `ClientHello` or the
+             header order fails a run rather than going unnoticed. That takes
+             CI from twenty-two jobs to twenty-three.
+
+             **The oracle behind it.**
              `crates/bit-cli-core/examples/loopback-tlsprobe/` is a `loopback-*`
              fixture like the other three, with `test = true` so its
              `ClientHello` parser, its HPACK decoder and its golden-manifest
@@ -4390,21 +4474,25 @@ Left:        **Named precisely, because this entry is partial rather than
                 `patches/`, put both clients behind one `Fetcher` trait, and
                 take the three decisions in the Blocked section above. The
                 measurements that say it can be done are recorded here.
-             2. **The golden fingerprint**, which is the second half of this
-                entry's own Acceptance: capture with `loopback-tlsprobe`, store
-                it, and assert it in a check script. `--expect-file` and
-                `--write-golden` exist for it.
-             3. **`--render`**, with the browser resolver: an explicit
+             2. **The `ClientHello` itself**, which is the half of the
+                fingerprint no header set reaches: ten ciphers and ten
+                extensions against Chrome's fifteen, no GREASE, no ECH, no
+                ALPS, no certificate compression and no post-quantum key share.
+                That is `rustls`'s to decide and it is what item 1 is for.
+             3. **Chrome's header order**, which `reqwest` cannot express.
+                Measured above; it needs a client that writes the header block
+                itself, which is again item 1.
+             4. **`--render`**, with the browser resolver: an explicit
                 override, then platform defaults for Linux, macOS and Windows,
                 then an already-running instance on a debugging port, then a
                 typed "no browser" error naming every path searched. That last
                 case is the only part testable with no browser present, so it
                 is the part that has to work on every CI runner.
-             4. **`<link href>` is not read**, only `<a>` and `<area>`. An
+             5. **`<link href>` is not read**, only `<a>` and `<area>`. An
                 indexer publishing `<link rel="alternate"
                 type="application/x-bittorrent">` is missed, and no page in the
                 fifteen measured does that.
-             5. **An indexer whose download links do not end `.torrent` is
+             6. **An indexer whose download links do not end `.torrent` is
                 missed entirely**, and one of the fifteen is exactly that:
                 `linuxtracker.org` publishes every torrent behind
                 `index.php?page=downloadcheck&id=<hex>`. Nothing about that URL

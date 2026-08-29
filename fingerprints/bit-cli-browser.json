@@ -1,0 +1,27 @@
+{
+  "schema": "fingerprint/1",
+  "captured": "2026-08-29T05:40:39.250Z",
+  "note": "Captured off the wire by loopback-tlsprobe. ja4 and ja4_r come from a --raw capture, headers from a --plain one. ja3 is recorded and never asserted, because it preserves wire order and flakes.",
+  "bit_cli": "bit-cli 0.2.0",
+  "fingerprint": {
+    "profile": "browser",
+    "ja4": "t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3",
+    "ja4_r": "t13i1010h2_00ff,1301,1302,1303,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0017,0023,002b,002d,0033_0503,0403,0807,0806,0805,0804,0601,0501,0401",
+    "ja3": "e22d72e4218faf8bd7a6224c69d36f40",
+    "headers": [
+      "accept",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile",
+      "sec-ch-ua-platform",
+      "upgrade-insecure-requests",
+      "sec-fetch-site",
+      "sec-fetch-mode",
+      "sec-fetch-user",
+      "sec-fetch-dest",
+      "accept-language",
+      "priority",
+      "user-agent",
+      "accept-encoding"
+    ]
+  }
+}

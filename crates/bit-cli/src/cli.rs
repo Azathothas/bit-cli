@@ -420,6 +420,37 @@ pub struct PageSourceArgs {
     /// selection.
     #[arg(long = "page-select", value_name = "TEXT")]
     pub page_select: Option<String>,
+
+    /// Which client to present as when fetching a source document.
+    ///
+    /// `browser` sends a current Chrome's header set in Chrome's order, which
+    /// is what an origin reads before it decides which page to serve.
+    /// `plain` sends `bit-cli/<version>` and nothing else. This is the source
+    /// document only: a web seed is a mirror you configured and always gets
+    /// `bit-cli`.
+    #[arg(
+        long = "page-client",
+        value_name = "PROFILE",
+        default_value = "browser"
+    )]
+    pub client: ClientProfileArg,
+}
+
+/// The `--page-client` values, mapped to the core's own enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum ClientProfileArg {
+    #[default]
+    Browser,
+    Plain,
+}
+
+impl From<ClientProfileArg> for bit_cli_core::page::ClientProfile {
+    fn from(value: ClientProfileArg) -> Self {
+        match value {
+            ClientProfileArg::Browser => Self::Browser,
+            ClientProfileArg::Plain => Self::Plain,
+        }
+    }
 }
 
 /// A source that may be a magnet, and the swarm flags that resolve one.

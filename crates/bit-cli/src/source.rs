@@ -290,25 +290,21 @@ pub fn load_local(kind: &Kind, env: &mut Env) -> Result<Metainfo> {
 pub async fn resolve(
     kind: &Kind,
     env: &mut Env,
-    user_agent: &str,
+    identity: &Identity,
     deadline: Duration,
     swarm: &SourceResolve,
 ) -> Result<Metainfo> {
     match kind {
         Kind::Magnet(magnet) => resolve_from_swarm(&magnet.to_uri(), swarm, deadline).await,
         Kind::InfoHash(hash) => resolve_from_swarm(&hash.hex(), swarm, deadline).await,
-        Kind::Url(url) => fetch_torrent_or_page(url, user_agent, deadline, swarm).await,
+        Kind::Url(url) => fetch_torrent_or_page(url, identity, deadline, swarm).await,
         Kind::Metalink(path) => {
             let document = Metalink::read(path)?;
-            Ok(resolve_metalink(&document, user_agent, deadline)
-                .await?
-                .meta)
+            Ok(resolve_metalink(&document, identity, deadline).await?.meta)
         }
         Kind::MetalinkUrl(url) => {
-            let document = fetch_metalink(url, user_agent, deadline).await?;
-            Ok(resolve_metalink(&document, user_agent, deadline)
-                .await?
-                .meta)
+            let document = fetch_metalink(url, identity, deadline).await?;
+            Ok(resolve_metalink(&document, identity, deadline).await?.meta)
         }
         _ => load_local(kind, env),
     }
@@ -324,7 +320,7 @@ pub async fn resolve(
 pub fn resolve_blocking(
     kind: &Kind,
     env: &mut Env,
-    user_agent: &str,
+    identity: &Identity,
     deadline: Duration,
     swarm: &SourceResolve,
 ) -> Result<Metainfo> {
@@ -343,13 +339,40 @@ pub fn resolve_blocking(
     // exactly that. A document fetch keeps the cheap one, because a `GET` is
     // one task.
     if matches!(kind, Kind::Magnet(_) | Kind::InfoHash(_)) {
-        return crate::swarm::runtime()?.block_on(resolve(kind, env, user_agent, deadline, swarm));
+        return crate::swarm::runtime()?.block_on(resolve(kind, env, identity, deadline, swarm));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| Error::generic(format!("cannot build a runtime to fetch the source: {e}")))?;
-    runtime.block_on(resolve(kind, env, user_agent, deadline, swarm))
+    runtime.block_on(resolve(kind, env, identity, deadline, swarm))
+}
+
+/// Who this client says it is when it fetches a source document.
+///
+/// Carried as one value rather than as a loose `&str`, because the User-Agent
+/// and the rest of the header set are one decision: a request sending Chrome's
+/// `sec-ch-ua` beside `bit-cli/0.2.0` is more distinctive than either alone.
+/// See `TODO/cli-surface.md`, T-244.
+#[derive(Debug, Clone)]
+pub struct Identity {
+    pub user_agent: String,
+    /// Whether the caller named the agent. A profile does not overwrite one
+    /// somebody passed on purpose.
+    pub user_agent_given: bool,
+    pub profile: bit_cli_core::page::ClientProfile,
+}
+
+impl Identity {
+    /// `bit-cli/<version>` and nothing else, which is what every request here
+    /// sent before T-244.
+    pub fn plain(user_agent: &str) -> Self {
+        Self {
+            user_agent: user_agent.to_string(),
+            user_agent_given: true,
+            profile: bit_cli_core::page::ClientProfile::Plain,
+        }
+    }
 }
 
 /// What resolving a magnet or a bare info hash is allowed to talk to.
@@ -483,9 +506,13 @@ pub fn resolve_source(
     swarm: &crate::cli::SwarmSourceArgs,
     page: &crate::cli::PageSourceArgs,
 ) -> Result<Metainfo> {
-    let agent = user_agent
-        .map(str::to_string)
-        .unwrap_or_else(bit_cli_core::webseed::fetch::default_user_agent);
+    let identity = Identity {
+        user_agent: user_agent
+            .map(str::to_string)
+            .unwrap_or_else(bit_cli_core::webseed::fetch::default_user_agent),
+        user_agent_given: user_agent.is_some(),
+        profile: page.client.into(),
+    };
     let timeout = crate::swarm::optional_duration(&global.timeout, "timeout")?;
     let resolve = SourceResolve::from_args(swarm, page)?;
     let budget = match kind {
@@ -496,7 +523,7 @@ pub fn resolve_source(
         Kind::Magnet(_) | Kind::InfoHash(_) => timeout.unwrap_or(RESOLVE_TIMEOUT),
         _ => deadline(timeout),
     };
-    resolve_blocking(kind, env, &agent, budget, &resolve)
+    resolve_blocking(kind, env, &identity, budget, &resolve)
 }
 
 /// The deadline for one document fetch, from `--timeout` when it was given.
@@ -526,10 +553,10 @@ const MAX_TORRENT_BYTES: usize = 16 * 1024 * 1024;
 /// downloads another is the worst kind of wrong answer.
 pub async fn fetch_torrent(
     url: &str,
-    user_agent: &str,
+    identity: &Identity,
     deadline: Duration,
 ) -> Result<(Metainfo, Vec<u8>)> {
-    let body = fetch_bytes(url, user_agent, MAX_TORRENT_BYTES, deadline).await?;
+    let body = fetch_bytes(url, identity, MAX_TORRENT_BYTES, deadline).await?;
     let meta = Metainfo::parse(&body.bytes).map_err(|e| not_a_torrent(url, &body, &e))?;
     Ok((meta, body.bytes))
 }
@@ -573,11 +600,11 @@ fn not_a_torrent(url: &str, body: &Body, e: &Error) -> Error {
 /// See `TODO/cli-surface.md`, T-244.
 async fn fetch_torrent_or_page(
     url: &str,
-    user_agent: &str,
+    identity: &Identity,
     deadline: Duration,
     resolve: &SourceResolve,
 ) -> Result<Metainfo> {
-    let body = fetch_bytes(url, user_agent, MAX_TORRENT_BYTES, deadline).await?;
+    let body = fetch_bytes(url, identity, MAX_TORRENT_BYTES, deadline).await?;
     let parse_error = match Metainfo::parse(&body.bytes) {
         Ok(meta) => return Ok(meta),
         Err(e) => e,
@@ -588,7 +615,7 @@ async fn fetch_torrent_or_page(
     let html = String::from_utf8_lossy(&body.bytes);
     let links = bit_cli_core::page::extract(&html, url);
     match choose_from_page(url, &links, resolve.page_select.as_deref())? {
-        PageChoice::Torrent(chosen) => Ok(fetch_torrent(&chosen, user_agent, deadline).await?.0),
+        PageChoice::Torrent(chosen) => Ok(fetch_torrent(&chosen, identity, deadline).await?.0),
         PageChoice::Magnet(uri) => resolve_from_swarm(&uri, resolve, deadline).await,
     }
 }
@@ -686,11 +713,11 @@ struct Body {
 /// full before anything checked it.
 async fn fetch_bytes(
     url: &str,
-    user_agent: &str,
+    identity: &Identity,
     max_bytes: usize,
     deadline: Duration,
 ) -> Result<Body> {
-    let client = reqwest_client(user_agent, deadline)?;
+    let client = reqwest_client(identity, deadline)?;
     let mut response = client
         .get(url)
         .send()
@@ -767,8 +794,12 @@ const MAX_METALINK_BYTES: usize = 1024 * 1024;
 /// A document with relative mirror URLs would need a base to resolve against,
 /// and `bit-cli` refuses those on both paths rather than resolving one kind
 /// and not the other. See `TODO/cli-surface.md`, T-154.
-pub async fn fetch_metalink(url: &str, user_agent: &str, deadline: Duration) -> Result<Metalink> {
-    let body = fetch_bytes(url, user_agent, MAX_METALINK_BYTES, deadline).await?;
+pub async fn fetch_metalink(
+    url: &str,
+    identity: &Identity,
+    deadline: Duration,
+) -> Result<Metalink> {
+    let body = fetch_bytes(url, identity, MAX_METALINK_BYTES, deadline).await?;
     Metalink::parse(&body.bytes).map_err(|e| Error::source_resolution(format!("{url}: {e}")))
 }
 
@@ -780,7 +811,7 @@ pub async fn fetch_metalink(url: &str, user_agent: &str, deadline: Duration) -> 
 /// preferred one was not the one used.
 pub async fn resolve_metalink(
     document: &Metalink,
-    user_agent: &str,
+    identity: &Identity,
     deadline: Duration,
 ) -> Result<ResolvedMetalink> {
     let file = document.single_file()?.clone();
@@ -801,7 +832,7 @@ pub async fn resolve_metalink(
     }
     let mut torrent_errors = Vec::new();
     for mirror in &torrents {
-        match fetch_torrent(&mirror.url, user_agent, deadline).await {
+        match fetch_torrent(&mirror.url, identity, deadline).await {
             Ok((meta, torrent_bytes)) => {
                 return Ok(ResolvedMetalink {
                     version: document.version.as_str(),
@@ -958,10 +989,44 @@ fn fetch_error(err: reqwest::Error, url: &str, what: &str, deadline: Duration) -
     Error::network(format!("{what} {url}: {err}"))
 }
 
-fn reqwest_client(user_agent: &str, deadline: Duration) -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .user_agent(user_agent)
-        .timeout(deadline)
+/// The client that fetches a source document.
+///
+/// Under [`ClientProfile::Browser`], which is the default, it sends a current
+/// Chrome's header set in Chrome's order. That is half of what an origin
+/// fingerprints and it is the half that costs nothing: the other half is the
+/// TLS `ClientHello` and the HTTP/2 SETTINGS frame, which `rustls` and `h2`
+/// decide rather than this. `crates/bit-cli-core/examples/loopback-tlsprobe`
+/// is what reads both off the wire, and `scripts/check-fingerprint.ps1`
+/// asserts them against a recorded capture. See `TODO/cli-surface.md`, T-244.
+///
+/// `user_agent` still wins where the caller set one explicitly. Somebody who
+/// passed `--web-seed-user-agent` meant it, and silently sending Chrome's
+/// instead would be the tool disagreeing with its own flag.
+fn reqwest_client(identity: &Identity, deadline: Duration) -> Result<reqwest::Client> {
+    use bit_cli_core::page::{BROWSER_HEADERS, BROWSER_USER_AGENT, ClientProfile};
+
+    let mut builder = reqwest::Client::builder().timeout(deadline);
+    match identity.profile {
+        ClientProfile::Plain => builder = builder.user_agent(&identity.user_agent),
+        ClientProfile::Browser => {
+            let mut headers = reqwest::header::HeaderMap::new();
+            for (name, value) in BROWSER_HEADERS {
+                let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                    .map_err(|e| Error::generic(format!("bad header name {name}: {e}")))?;
+                let value = reqwest::header::HeaderValue::from_str(value)
+                    .map_err(|e| Error::generic(format!("bad header value: {e}")))?;
+                headers.insert(name, value);
+            }
+            builder =
+                builder
+                    .default_headers(headers)
+                    .user_agent(match identity.user_agent_given {
+                        true => identity.user_agent.as_str(),
+                        false => BROWSER_USER_AGENT,
+                    });
+        }
+    }
+    builder
         .build()
         .map_err(|e| Error::network(format!("cannot build an HTTP client: {e}")))
 }
@@ -1434,7 +1499,7 @@ mod tests {
         let err = resolve_blocking(
             &kind,
             &mut env,
-            "agent",
+            &Identity::plain("agent"),
             Duration::from_secs(1),
             &SourceResolve::permissive(),
         )
@@ -1460,7 +1525,7 @@ mod tests {
         let meta = resolve_blocking(
             &kind,
             &mut env,
-            "agent",
+            &Identity::plain("agent"),
             Duration::from_secs(1),
             &SourceResolve::permissive(),
         )
@@ -1484,7 +1549,7 @@ mod tests {
         let err = resolve_blocking(
             &kind,
             &mut env,
-            "agent",
+            &Identity::plain("agent"),
             Duration::from_secs(1),
             &SourceResolve::permissive(),
         )
@@ -1541,7 +1606,7 @@ mod tests {
         let err = resolve_blocking(
             &kind,
             &mut env,
-            "agent",
+            &Identity::plain("agent"),
             Duration::from_millis(300),
             &SourceResolve::permissive(),
         )

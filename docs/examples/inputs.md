@@ -279,6 +279,33 @@ sent. `--render` is the answer to that and it is not implemented yet: the
 message names it because that is where the work is going, and it says plainly
 that a browser has to be installed for it rather than implying one is.
 
+### Which client the fetch presents as
+
+An origin that fingerprints its callers sends a different page to a client it
+does not recognise, so the fetch of a source document presents as a current
+Chrome by default: Chrome's header set, and ALPN offering HTTP/2.
+
+```bash
+bit-cli info https://host/downloads/ --page-client plain
+```
+
+`plain` sends `bit-cli/<version>` and nothing else, which is what every request
+here sent before. `--web-seed-user-agent` still wins over either where you set
+it, because a User-Agent you passed on purpose is one you meant.
+
+**This is the source document only.** A web seed is a mirror you configured and
+always gets `bit-cli`: presenting as a browser to a mirror somebody pointed the
+tool at buys nothing and hides who is asking.
+
+What the two profiles actually put on the wire is recorded under
+[`../../fingerprints/`](../../fingerprints/) and asserted on every CI run by
+[`../../scripts/check-fingerprint.ps1`](../../scripts/check-fingerprint.ps1),
+which reads it off the wire rather than out of the code.
+
+**The header set is Chrome's and the header order is not.** `reqwest` cannot
+express a header order, so the names are right and the sequence is not. It is
+recorded exactly as sent, so the gap is visible rather than claimed away.
+
 ### What is not read
 
 - `<link rel="alternate">`, only `<a>` and `<area>`.

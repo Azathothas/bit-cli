@@ -71,7 +71,12 @@ $TopLevel = @(
     '.gitattributes', '.gitignore',
     'CHANGELOG.md', 'Cargo.lock', 'Cargo.toml', 'LICENSE', 'README.md',
     'THIRD_PARTY.md', 'about.hbs', 'about.toml', 'deny.toml',
-    'TODO', 'bench', 'crates', 'docs', 'man', 'patches', 'scripts', 'vendor'
+    'TODO', 'bench', 'crates', 'docs', 'man', 'patches', 'scripts', 'vendor',
+    # What this client puts on the wire, captured off it rather than
+    # asserted. It is not `bench/`: those are runs, ignored by default and
+    # force-added one at a time, and a golden a check reads on every run
+    # has to be tracked normally. See `TODO/cli-surface.md`, T-244.
+    'fingerprints'
 )
 
 # What a file outside `vendor/` may be. Every one of these is text and every

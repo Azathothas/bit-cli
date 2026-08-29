@@ -50,7 +50,12 @@ rand = "0.10.2"
 # would be a second C build for a test fixture. See `TODO/cli-surface.md`,
 # T-244.
 rcgen = { version = "0.14.0", default-features = false, features = ["crypto", "ring"] }
-reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# `http2` so ALPN offers `h2`, and the four decompressions so the
+# `Accept-Encoding` the browser profile implies is one this client can
+# actually decode. A client advertising `br` and then handing brotli to a
+# bencode parser is worse than one that never claimed to be a browser.
+# See `TODO/cli-surface.md`, T-244.
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json", "stream", "http2", "gzip", "brotli", "deflate", "zstd"] }
 rustls = { version = "0.23.41", default-features = false, features = ["std", "tls12", "ring"] }
 rustls-pki-types = "1.14.1"
 serde = { version = "1.0.228", features = ["derive"] }

@@ -514,11 +514,19 @@ pub fn run(
     // fetch in every other command is, so one flag means one thing everywhere.
     // See `TODO/cli-surface.md`, T-245.
     let fetch_deadline = crate::source::deadline(stop.timeout);
-    let user_agent = args
-        .web_seeds
-        .web_seed_user_agent
-        .clone()
-        .unwrap_or_else(bit_cli_core::webseed::fetch::default_user_agent);
+    // The document fetch presents as a browser by default, the same as every
+    // other command's does, because a Metalink URL and a page URL are read by
+    // the same origins. `download` has no `--page-client` of its own, so it
+    // takes the default. See `TODO/cli-surface.md`, T-244.
+    let identity = crate::source::Identity {
+        user_agent: args
+            .web_seeds
+            .web_seed_user_agent
+            .clone()
+            .unwrap_or_else(bit_cli_core::webseed::fetch::default_user_agent),
+        user_agent_given: args.web_seeds.web_seed_user_agent.is_some(),
+        profile: bit_cli_core::page::ClientProfile::default(),
+    };
     let mut resolved: std::collections::HashMap<usize, ResolvedMetalink> =
         std::collections::HashMap::new();
     // A Metalink is either a path or a URL, and only where the document comes
@@ -543,11 +551,11 @@ pub fn run(
                 let document = match &from {
                     Document::Local(path) => Metalink::read(path)?,
                     Document::Remote(url) => {
-                        crate::source::fetch_metalink(url, &user_agent, fetch_deadline).await?
+                        crate::source::fetch_metalink(url, &identity, fetch_deadline).await?
                     }
                 };
                 let one =
-                    crate::source::resolve_metalink(&document, &user_agent, fetch_deadline).await?;
+                    crate::source::resolve_metalink(&document, &identity, fetch_deadline).await?;
                 renderer.event(
                     env,
                     "metalink_resolved",
@@ -590,7 +598,7 @@ pub fn run(
             meta.as_ref(),
             one.as_ref().map(|m| &m.file),
             env,
-            crate::source::list_fetcher(&runtime, &user_agent),
+            crate::source::list_fetcher(&runtime, &identity.user_agent),
         )?;
         // `--tracker-list-url` is fetched on the runtime this command already
         // built, rather than on one of its own. See `TODO/cli-surface.md`,
@@ -598,7 +606,7 @@ pub fn run(
         let trackers = setup.tracker_list(
             meta.as_ref(),
             env,
-            crate::source::list_fetcher(&runtime, &user_agent),
+            crate::source::list_fetcher(&runtime, &identity.user_agent),
         )?;
         let (torrent_bytes, metalink) = match one {
             None => (None, None),

@@ -390,3 +390,27 @@ jobs:
           echo "linux:   $linux"
           echo "windows: $windows"
           test "$linux" = "$windows"
+
+  page:
+    name: Page extraction and fingerprint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_GATE }}
+      - uses: Swatinem/rust-cache@v2.9.2
+      - run: cargo build --release --workspace --bins --examples --locked
+      # Six levels of page, each with the correct extraction recorded beside
+      # it. Everything binds 127.0.0.1 and the job never reaches the network.
+      # See TODO/cli-surface.md, T-244.
+      - name: Extraction against the proving ground
+        shell: pwsh
+        run: ./scripts/check-page-extract.ps1
+      # What this client actually puts on the wire, read off it by
+      # loopback-tlsprobe and compared against the golden under fingerprints/.
+      # A rustls or reqwest upgrade that changes the ClientHello or the header
+      # order is invisible from inside the process and fails here.
+      - name: The fingerprint against its golden
+        shell: pwsh
+        run: ./scripts/check-fingerprint.ps1
