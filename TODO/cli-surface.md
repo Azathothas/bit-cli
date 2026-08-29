@@ -4047,8 +4047,8 @@ Status:      partial, 2026-08-29: the static tier and both halves of the
              Acceptance ship, the impersonating `ClientHello` and `--render` do
              not
 
-Problem:     `source.rs:86` maps an `http://` or `https://` string to
-             `Kind::Url`, documented at `source.rs:40` as "an HTTP(S) URL
+Problem:     `source.rs:93` maps an `http://` or `https://` string to
+             `Kind::Url`, documented at `source.rs:47` as "an HTTP(S) URL
              pointing at a `.torrent`". A page that *links* to a torrent is
              classified the same way, fetched, and handed to the bencode
              parser, which fails on the first byte of the markup.
@@ -4111,12 +4111,20 @@ Notes:       [T-245](#t-245-four-commands-refuse-the-url-download-accepts) was
              rather than the second of two.
 
 Correction:  **Two citations in the Problem were eight lines stale and are
-             fixed above.** `source.rs:68` and `source.rs:32` became `:86` and
-             `:40` on 2026-08-25 when T-241 added to that file's module header.
-             `check-todo.ps1` did not catch it, and the reason is worth
+             fixed above, and then moved again inside this session.**
+             `source.rs:68` and `source.rs:32` became `:86` and `:40` on
+             2026-08-25 when T-241 added to that file's module header, and
+             `:93` and `:47` on 2026-08-29 when this entry's own work added
+             seven more lines to it.
+
+             `check-todo.ps1` catches neither, and the reason is worth
              recording: it checks a short-form citation's line only when the
              prose names a symbol occurring **exactly once** in the file, and
-             `Kind::Url` occurs four times in `source.rs`.
+             `Kind::Url` occurs four times in `source.rs`. **Five more
+             citations into the same file were stale by 14 to 29 lines** and
+             none of them was this session's doing; every one was read and
+             corrected against the line it names, which is what review 1 is
+             for and is the only thing that catches this class.
 
              **And the Problem's sentence was imprecise in a way that mattered
              to the design.** Line 86 does not map every `http(s)` string to
@@ -4276,6 +4284,43 @@ Measured:    **How far the fingerprint moves without vendoring anything, and
              not a flag to add to a shipping binary for a test. `--plain` on
              the probe reads the header order off cleartext HTTP/1.1 instead,
              which needs no handshake and no exception.
+
+Measured:    **What `--render` costs, and why the flag is not here yet.** The
+             resolver ships and the driver does not, because a flag that does
+             nothing does not ship.
+
+             `crates/bit-cli-core/src/browser.rs` is the part no CDP crate
+             solves: finding a browser somebody already installed. Explicit
+             path first, then an already-running instance, then platform
+             defaults for Linux, macOS and Windows, then a typed `NoBrowser`
+             naming **every path it looked at**. `exists` is a parameter rather
+             than a filesystem call, so the whole search is unit tested with no
+             browser present, which is the case that has to work on every CI
+             runner. **Fifteen** tests, and the two that matter most are the
+             ones where nothing is found and where a named path is not there.
+
+             The driver is a dependency decision rather than work, and the
+             numbers say why. Each crate given its own probe, resolved and
+             checked on toolchain 1.88 on 2026-08-29:
+
+             | crate | packages added | MSRV 1.88 | note |
+             | --- | --- | --- | --- |
+             | `chromiumoxide` 0.9.1 | **136** | ok | brings `reqwest` **0.13**, a second major beside this tree's 0.12 |
+             | `headless_chrome` 1.0 | **143** | ok | blocking API |
+
+             `RESEARCH.md` section 10 recommends `chromiumoxide` and the
+             licence is fine, MIT OR Apache-2.0. What it did not weigh is that
+             136 packages land in **every** build, including the majority that
+             never pass `--render`, and that one of them is a second `reqwest`
+             major. Its default features are worse still: they pull
+             `chromiumoxide_fetcher`, which exists to **download a browser**,
+             and the operator's ruling is "never bundled". Measured: with
+             default features on, the graph is 211 packages and does not even
+             compile without one of its `zip` features.
+
+             So `--render` wants the same shape the impersonating tier does, a
+             Cargo feature rather than an unconditional dependency, and that is
+             one decision covering both.
 
 Blocked:     **Three things adoption needs that are decisions rather than
              work**, all measured on 2026-08-29 and none of them fatal.
@@ -4482,12 +4527,14 @@ Left:        **Named precisely, because this entry is partial rather than
              3. **Chrome's header order**, which `reqwest` cannot express.
                 Measured above; it needs a client that writes the header block
                 itself, which is again item 1.
-             4. **`--render`**, with the browser resolver: an explicit
-                override, then platform defaults for Linux, macOS and Windows,
-                then an already-running instance on a debugging port, then a
-                typed "no browser" error naming every path searched. That last
-                case is the only part testable with no browser present, so it
-                is the part that has to work on every CI runner.
+             4. **`--render` itself.** The resolver is done and tested; what
+                is left is the CDP driver and the flag, and both wait on the
+                feature-gate decision above. Keep to `Page.navigate`,
+                `Runtime.evaluate` and `DOM.getDocument`, which have been
+                stable across Chrome majors for years, and hand the resulting
+                HTML to the same `extract` the static tier calls: if the
+                rendered tier changes anything but where the HTML came from, it
+                is wrong.
              5. **`<link href>` is not read**, only `<a>` and `<area>`. An
                 indexer publishing `<link rel="alternate"
                 type="application/x-bittorrent">` is missed, and no page in the
@@ -4520,7 +4567,7 @@ Problem:     `info`, `files`, `magnet` and `verify` all document their
 
              `bit-cli download` fetches the same URL and completes.
 
-             The refusal is `source.rs:189`, in `load_local`, which is what
+             The refusal is `source.rs:262`, in `load_local`, which is what
              every command that does not start an engine calls.
 Relevance:   Rule 0.10. The help text of four commands names an input those
              commands cannot take, and the error does not say "this command
@@ -4658,8 +4705,8 @@ Problem:     Three inputs produce a file error and two of them name the wrong
 
              `classify` tests for `http://` and `https://` and falls through
              to "treat it as a path" for everything else, so a URL of any other
-             scheme is a relative filename. `source.rs:68` is the test and
-             `source.rs:87` is the fall-through.
+             scheme is a relative filename. `source.rs:93` is the test and
+             `source.rs:116` is the fall-through.
 Relevance:   All three are the first thing a new caller does. `bit-cli info <dir>`
              is what somebody types when they mean `create`, and a wrong
              subcommand is what somebody types when they are guessing at the
@@ -4713,16 +4760,16 @@ Closed:      All three exit 2 now and each says what to do. Run against the
              **The message is this tree's rather than the operating system's,
              which is what makes it the same on Windows and on Linux.**
              `source::read_torrent_file` at
-             `crates/bit-cli/src/source.rs:203` tests `path.is_dir()` before
+             `crates/bit-cli/src/source.rs:218` tests `path.is_dir()` before
              the read, so neither `ERROR_ACCESS_DENIED` nor `EISDIR` is ever
              reached and there is no per-platform text to keep in step. **Nine**
              call sites read a caller-supplied `.torrent` path and all nine go
-             through it: `source.rs:228` inside `load_local`,
+             through it: `source.rs:242` inside `load_local`,
              `download.rs:545` and `:2909`, `seed.rs:162`, `trackers.rs:95`,
              `edit.rs:68`, and `bench.rs:107`, `:1115` and `:1362`.
 
              `Kind::classify` gained `foreign_scheme`
-             (`crates/bit-cli/src/source.rs:185`). Two things it deliberately
+             (`crates/bit-cli/src/source.rs:199`). Two things it deliberately
              does not do. A scheme of one character is not a scheme, because
              `C://Users/me/x.torrent` is a path and a drive letter; and only
              the `://` form is tested, so `urn:btih:<hash>` is still read as

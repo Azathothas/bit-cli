@@ -686,6 +686,18 @@ date -u +"%Y-%m-%dT%H:%M:%SZ"
   automatic variable that silently swallows a parameter of that name, and
   `-match` is case-insensitive so `'FAILED'` matches `"0 failed"`. Name locals
   so they cannot collide, and use `-cmatch` when case is the signal.
+- **`$PROFILE` is one of those automatic variables**, and a `param([string]$Profile)`
+  shadows it. It reads fine and works, which is what makes it worth naming:
+  `scripts/check-page-extract.ps1` had one for a day and it is `-Build` now.
+- **A relative path handed to a .NET method is not relative to `Set-Location`.**
+  `[System.IO.File]::WriteAllText("Cargo.toml", $text)` writes to the .NET
+  process's current directory, which PowerShell's `Set-Location` does not
+  change. On 2026-08-29 that overwrote this repository's root `Cargo.toml` with
+  a throwaway probe manifest from a script that had `Set-Location`d into
+  `.tmp/`. Nothing was lost, because the file was committed, and that is luck
+  rather than a safeguard. **Always pass an absolute path to `[System.IO.File]`
+  and `[System.IO.Directory]`**, or use `Set-Content`, which does follow the
+  session's location.
 - **`$PSNativeCommandUseErrorActionPreference` defaults to false from pwsh
   7.4**, so a native command writing to stderr does **not** terminate under
   `$ErrorActionPreference = 'Stop'`. The `Start-Process` pattern stays.

@@ -8,6 +8,7 @@
 
 pub mod alloc;
 pub mod bench;
+pub mod browser;
 pub mod config;
 pub mod digest;
 pub mod engine;
