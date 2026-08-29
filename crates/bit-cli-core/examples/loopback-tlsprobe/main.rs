@@ -33,16 +33,19 @@
 //! three distinct JA3 hashes and one stable JA4 across six captures of the
 //! same binary.
 //!
-//! **`--plain` is how a client that verifies certificates is still read.**
-//! The certificate here is self signed with no CA behind it, so a client doing
-//! its job refuses it and the handshake never completes. That leaves the TLS
-//! capture intact, because the `ClientHello` is already on the wire, and it
-//! leaves the HTTP/2 capture empty. `--plain` drops TLS entirely and reads the
-//! request's header order off cleartext HTTP/1.1, which is the half of the
-//! HTTP fingerprint that does not need a handshake. Reaching the Akamai HTTP/2
-//! fingerprint of such a client needs the client to trust this certificate or
-//! to stop verifying, and neither is something to add to a shipping binary for
-//! a test.
+//! **`--ca-out` is how a client that verifies certificates completes a
+//! handshake here.** The probe mints its own certificate authority, signs the
+//! leaf with it, and writes the authority to the path given. A client told to
+//! trust that one file then verifies the chain and connects, which is what the
+//! HTTP/2 half of a fingerprint needs: the Akamai fingerprint and the
+//! HPACK-decoded header order only exist after ALPN picks `h2`. Nothing is
+//! disabled to get there. `bit-cli` reads such a file from
+//! `BIT_CLI_EXTRA_CA_FILE`, which **adds** a root and never replaces the
+//! usual ones.
+//!
+//! **`--plain` reads the same header order off cleartext HTTP/1.1.** It needs
+//! no handshake and no certificate at all, so it is the capture that still
+//! works when a client cannot be told to trust anything.
 //!
 //! **Capture JA4 in `--raw` mode.** Terminating the handshake can change what
 //! a client offers: a client told to skip certificate verification may fall
@@ -69,6 +72,7 @@ struct Args {
     json: bool,
     raw: bool,
     plain: bool,
+    ca_out: Option<String>,
     once: bool,
     expect_ja4: Option<String>,
     expect_ja3: Option<String>,
@@ -87,6 +91,8 @@ OPTIONS:
     -p, --port <N>            listen port, 0 for one the OS picks (default 0)
         --raw                 do not terminate TLS, capture the ClientHello only
         --plain               speak cleartext HTTP/1.1, capture the header order
+        --ca-out <PATH>       write the generated CA certificate here, as PEM,
+                              so a verifying client can be told to trust it
         --json                one JSON object per connection on stdout
         --once                exit after the first connection
         --expect-ja4 <S>      assert the JA4 string, else exit 1
@@ -115,6 +121,7 @@ fn parse_args() -> Args {
         json: false,
         raw: false,
         plain: false,
+        ca_out: None,
         once: false,
         expect_ja4: None,
         expect_ja3: None,
@@ -139,6 +146,7 @@ fn parse_args() -> Args {
             "--json" => a.json = true,
             "--raw" => a.raw = true,
             "--plain" => a.plain = true,
+            "--ca-out" => a.ca_out = Some(next_value(&argv, &mut i)),
             "--once" => a.once = true,
             "--expect-ja4" => a.expect_ja4 = Some(next_value(&argv, &mut i)),
             "--expect-ja3" => a.expect_ja3 = Some(next_value(&argv, &mut i)),
@@ -159,24 +167,71 @@ fn parse_args() -> Args {
     a
 }
 
-/// A throwaway leaf certificate with no CA behind it.
+/// A throwaway certificate authority and one leaf signed by it.
 ///
-/// The certificate is camouflage so a handshake can complete, and nothing
-/// more: a client has to be pointed here with verification off. That is also
-/// why the JA4 read through this path is not the shipping JA4, and why
-/// `--raw` exists.
-fn tls_config() -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error>> {
-    let cert =
-        rcgen::generate_simple_self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])?;
-    let der = rustls::pki_types::CertificateDer::from(cert.cert.der().to_vec());
-    let key = rustls::pki_types::PrivateKeyDer::try_from(cert.signing_key.serialize_der())?;
+/// Both are generated per run and neither is written anywhere except the path
+/// `--ca-out` names. A client that trusts that one file verifies the chain
+/// normally: the point is to reach the HTTP/2 half of a fingerprint **without**
+/// anything on either side skipping verification, because a client that skips
+/// it can offer a different `signature_algorithms` list and the fingerprint
+/// read through that handshake is not the one it ships.
+///
+/// The leaf carries `localhost`, `127.0.0.1` and `::1`, which is every name a
+/// loopback fixture is reached by.
+fn tls_config(
+    ca_out: Option<&str>,
+) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error>> {
+    let mut ca_params = rcgen::CertificateParams::new(Vec::new())?;
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+    ca_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "loopback-tlsprobe throwaway CA");
+    ca_params.key_usages = vec![
+        rcgen::KeyUsagePurpose::KeyCertSign,
+        rcgen::KeyUsagePurpose::CrlSign,
+    ];
+    let ca = rcgen::CertifiedIssuer::self_signed(ca_params, rcgen::KeyPair::generate()?)?;
+
+    let mut leaf_params = rcgen::CertificateParams::new(vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+    ])?;
+    leaf_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "localhost");
+    leaf_params.use_authority_key_identifier_extension = true;
+    let leaf_key = rcgen::KeyPair::generate()?;
+    let leaf_cert = leaf_params.signed_by(&leaf_key, &ca)?;
+
+    if let Some(path) = ca_out {
+        // An absolute path, because a relative one handed to a .NET or std
+        // file API is relative to the process's own directory rather than to
+        // wherever a script thinks it is. See TODO/RULES.md section 5.
+        let absolute = std::path::absolute(path)?;
+        std::fs::write(&absolute, ca.pem())?;
+        eprintln!(
+            "loopback-tlsprobe: wrote the CA certificate to {}",
+            absolute.display()
+        );
+    }
+
+    // The leaf alone, without the CA behind it. That is what a server is
+    // supposed to send, and it is also what makes the client's extra-root
+    // path fire: Windows' own verifier only consults roots handed to it when
+    // the chain it built is partial, so sending the CA makes it build a
+    // complete chain to an authority nobody trusts and stop there.
+    let chain = vec![rustls::pki_types::CertificateDer::from(
+        leaf_cert.der().to_vec(),
+    )];
+    let key = rustls::pki_types::PrivateKeyDer::try_from(leaf_key.serialize_der())?;
 
     let mut cfg = rustls::ServerConfig::builder_with_provider(
         rustls::crypto::ring::default_provider().into(),
     )
     .with_safe_default_protocol_versions()?
     .with_no_client_auth()
-    .with_single_cert(vec![der], key)?;
+    .with_single_cert(chain, key)?;
     cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     Ok(Arc::new(cfg))
 }
@@ -575,7 +630,7 @@ fn main() {
     let cfg = if a.raw || a.plain {
         None
     } else {
-        match tls_config() {
+        match tls_config(a.ca_out.as_deref()) {
             Ok(c) => Some(c),
             Err(e) => {
                 eprintln!("loopback-tlsprobe: cannot build a TLS config ({e})");

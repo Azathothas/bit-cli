@@ -1627,3 +1627,408 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 ```bash
 pwsh -NoProfile -File scripts/check-announce.ps1
 ```
+
+---
+
+## h2: a client cannot choose the order its pseudo-headers are written in
+
+```
+Unblocks:    T-244, TODO/cli-surface.md, the `Left:` list item that says the
+             HTTP/2 half of a fingerprint is the one every survey gets wrong
+Files:       vendor/h2/src/ext.rs
+             vendor/h2/src/frame/headers.rs
+             vendor/h2/src/client.rs
+             vendor/h2/src/proto/streams/streams.rs
+             patches/h2/0002-src-client.rs.patch
+             patches/h2/0003-src-ext.rs.patch
+             patches/h2/0004-src-frame-headers.rs.patch
+             patches/h2/0006-src-proto-streams-streams.rs.patch
+Upstream:    ours. RFC 9113 section 8.3 leaves the order among the
+             pseudo-headers to the sender and this crate has always written one
+             fixed sequence, so a release could expose the choice on
+             `client::Builder` or on a request extension the way it exposes
+             `Protocol`. Nothing says it will.
+Added:       2026-08-29T09:20Z
+```
+
+`h2::ext::PseudoOrder` is a permutation of the six pseudo-header names, read
+off the request's extensions the same way `ext::Protocol` is, and carried down
+to the `Iter` that feeds the HPACK encoder. Absent, the order is the one this
+crate has always written, so a request that does not carry one produces
+byte-identical output.
+
+`PseudoOrder::parse` takes the `":method,:authority,:scheme,:path,:protocol,:status"`
+form and refuses a list that names something else, repeats a name or omits one.
+Omitting one would silently drop a pseudo-header from the frame, which is a
+malformed request rather than a different fingerprint.
+
+**Why it has to be here.** The order is decided where the HEADERS frame is
+encoded, which is this crate, and nothing above it can reach that. `hyper`
+passes a request's extensions through untouched and `reqwest` did not, which
+is the one-line patch beside this one.
+
+**Why it is a field and not an environment variable.** The prior art this was
+taken from, `apify/h2`, reads `IMPIT_H2_PSEUDOHEADERS_ORDER` on every header
+block it encodes. `std::env::set_var` is unsafe in Rust 2024, is undefined
+behaviour beside another thread reading the environment, and is process-global:
+two clients with different profiles in one process overwrite each other. This
+tree runs a multi-thread `tokio` runtime and has two profiles, `browser` and
+`plain`, whose whole point is that they look different on the wire.
+
+**One subtlety that cost a build.** `proto::streams::Streams::send_request`
+clears the request's extensions before the frame is built, which is why it
+already lifts `Protocol` out first. The order is lifted in the same place, and
+reading it later in `convert_send_message` finds an empty map.
+
+**How it was measured.** Off the wire, `loopback-tlsprobe` decoding the HPACK
+block of a real HTTP/2 request:
+
+| | pseudo-header order |
+| --- | --- |
+| before | `m,s,a,p` |
+| after | `m,a,s,p` |
+| Chrome | `m,a,s,p` |
+
+```bash
+pwsh -NoProfile -File scripts/check-fingerprint.ps1
+```
+
+---
+
+## h2: an HPACK story whose fixture is not vendored fails rather than skips
+
+```
+Unblocks:    nothing. It is the cost of not vendoring 59 MB of test vectors
+Files:       vendor/h2/src/hpack/test/fixture.rs
+             patches/h2/0005-src-hpack-test-fixture.rs.patch
+Upstream:    ours, and it would make no sense upstream: their fixtures are
+             always there.
+Added:       2026-08-29T09:20Z
+```
+
+`fixtures/` is 59 MB of h2spec and HPACK test vectors that upstream's own
+`Cargo.toml` already excludes from the published crate, and `vendor/upstream.json`
+excludes it here. Without this change every one of the 382 generated story
+tests fails on `File::open(...).unwrap()` and says nothing about why.
+
+`test_fixture` returns early when the file is not there, after printing which
+one it skipped.
+
+**How it was measured.**
+
+```bash
+cargo test --manifest-path vendor/h2/Cargo.toml --target-dir target/vendor-h2
+```
+
+382 failures before, 438 passing after.
+
+---
+
+## h2: the fuzz test crate cannot be built on Windows
+
+```
+Unblocks:    nothing. It is what makes `cargo test` on the vendored workspace
+             runnable at all on the machine this repository is developed on
+Files:       vendor/h2/Cargo.toml
+             patches/h2/0001-Cargo.toml.patch
+Upstream:    ours. `honggfuzz` says plainly that it does not support Windows,
+             so a release will not change this.
+Added:       2026-08-29T09:20Z
+```
+
+`tests/h2-fuzz` is a workspace member and depends on `honggfuzz`, whose build
+script exits with "honggfuzz-rs does not currently support Windows". The crate
+moves from `members` to `exclude`, which is what upstream `rustls` already does
+with its own fuzz crate. The directory stays in the tree.
+
+**How it was measured.**
+
+```bash
+cargo test --manifest-path vendor/h2/Cargo.toml --workspace --target-dir target/vendor-h2
+```
+
+A build failure before, 479 tests after.
+
+**One upstream flake found while measuring, and not ours.**
+`proto::streams::recv::tests::clear_recv_buffer_caps_capacity_before_overflow`
+fails about one run in one under `--workspace` and passes alone. It reproduces
+on a pristine 0.4.19 checkout carrying only this change and the fixture skip
+above, so it is upstream's and predates everything here. Nothing was done for
+it.
+
+---
+
+## impit: the pseudo-header order is exported to the whole process
+
+```
+Unblocks:    T-244, TODO/cli-surface.md
+Files:       vendor/impit/impit/src/impit.rs
+             patches/impit/0005-impit-src-impit.rs.patch
+Upstream:    ours. apify's own `h2` fork is what reads the variable, and this
+             repository does not carry that fork, so there is nothing for a
+             release to retire.
+Added:       2026-08-29T09:20Z
+```
+
+`Impit::new` set `IMPIT_H2_PSEUDOHEADERS_ORDER` from the fingerprint. It now
+parses the same list into an `h2::ext::PseudoOrder` once, keeps it on the
+client, and puts it on each request's extensions. A list that cannot be parsed
+is an error from `build()` rather than a panic inside the HTTP/2 encoder.
+
+The order reaches the request through `reqwest`'s two public conversions,
+`Request -> http::Request` and back, because `reqwest::Request::extensions_mut`
+is crate-private. Both conversions copy the extension map whole, so the
+per-request timeout set just above survives the round trip.
+
+**Why it has to be here.** See the `h2` section above for why a process-global
+is wrong for this tree specifically: two profiles, one process, a multi-thread
+runtime.
+
+---
+
+## impit: HTTP/3 costs an unstable `rustc` flag in six places
+
+```
+Unblocks:    T-244, and the T-146 shape its Blocked block warns about
+Files:       vendor/impit/impit/Cargo.toml
+             vendor/impit/impit/src/impit.rs
+             vendor/impit/impit/src/lib.rs
+             vendor/impit/impit/src/tls/mod.rs
+             the whole of impit's own http3 module, deleted
+             patches/impit/0002-impit-Cargo.toml.patch
+             patches/impit/0004-impit-src-http3.rs.patch
+             patches/impit/0005-impit-src-impit.rs.patch
+             patches/impit/0006-impit-src-lib.rs.patch
+             patches/impit/0008-impit-src-tls-mod.rs.patch
+Upstream:    ours. `reqwest` gates `http3` behind `--cfg reqwest_unstable` on
+             purpose, and a release of either could make it stable, at which
+             point this patch is worth reconsidering rather than deleting.
+Added:       2026-08-29T09:20Z
+```
+
+`reqwest`'s `http3` feature refuses to compile without `--cfg reqwest_unstable`.
+`.cargo/config.toml` sets rustflags **per target** and a `[build]` entry does
+not merge with a `[target.*]` one, so the flag would have to be added to all
+three target blocks **and** to the three `RUSTFLAGS` blocks in
+`.github/workflows/ci.yml`, where a workflow's `RUSTFLAGS` replaces the config
+rather than adding to it. That is exactly the shape of
+[T-146](../TODO/cli-surface.md), which cost a Windows binary built against the
+dynamic C runtime.
+
+So the feature goes, and with it `http3.rs`, the `H3Engine` that discovers
+HTTP/3 support through HTTPS DNS records, `with_http3`, and the
+`hickory-proto` and `hickory-resolver` dependencies it needed.
+`RequestOptions::http3_prior_knowledge` still exists and now always answers
+`Http3Disabled`, because a caller who set it meant it and a silent fall back to
+HTTP/2 would be worse.
+
+**What it is worth, measured.** `--cfg reqwest_unstable` in six places, gone,
+and four packages with it: `h3`, `h3-quinn`, `futures` and `futures-executor`.
+
+**What it costs.** `bit-cli` cannot fetch a source document over HTTP/3.
+Nothing measured says an origin serving a torrent page requires it, every
+HTTP/3 claim in the survey this work came from is unverified, and a client
+whose HTTP/3 fingerprint nothing in this tree can read is a claim rather than a
+capability.
+
+---
+
+## impit: a proxy tunnel error message needs a fork of hyper-util
+
+```
+Unblocks:    T-244, by removing an upstream from the list it needed
+Files:       vendor/impit/impit/src/errors.rs
+             patches/impit/0003-impit-src-errors.rs.patch
+Upstream:    ours. `hyper-util` took the wider `TunnelError` in its own time;
+             when a release carries `TunnelError::TunnelUnsuccessful(Option<u16>)`
+             this can go back.
+Added:       2026-08-29T09:20Z
+```
+
+`ImpitError::from` downcast a connect failure to
+`hyper_util::client::legacy::connect::proxy::TunnelError` to name a proxy
+CONNECT refusal and its status code. That type is only public in apify's fork
+of `hyper-util`, and the whole of that fork is one status code on one error
+message. The downcast goes; a connect failure is `ConnectError` with the
+transport's own text.
+
+**What it is worth.** One upstream tree not vendored. `bit-cli` configures no
+proxy on the source-document path, so nothing here could ever have read that
+message.
+
+---
+
+## impit: a charset detector brings an unmaintained crate and a whole HTML rewriter
+
+```
+Unblocks:    T-244, and the `deny` gate, which fails on the advisory
+Files:       vendor/impit/impit/Cargo.toml
+             vendor/impit/impit/src/lib.rs
+             the whole of impit's own response_parsing module, deleted
+             patches/impit/0002-impit-Cargo.toml.patch
+             patches/impit/0006-impit-src-lib.rs.patch
+             patches/impit/0007-impit-src-response_parsing-mod.rs.patch
+Upstream:    ours, and RUSTSEC-2021-0153 is the defect: `encoding` has had no
+             release since 2016 and the advisory names `encoding_rs` as the
+             replacement. A release that ports it retires this.
+Added:       2026-08-29T09:20Z
+```
+
+`impit::utils` exported a WHATWG charset detector: BOM sniffing, then a
+prescan of the first 1024 bytes for `<meta charset>` using `lol_html`. Nothing
+in `impit`'s own request path calls it; it exists for the Node and Python
+bindings, which this repository does not vendor. It is removed with its three
+dependencies.
+
+**What it is worth, measured.** `cargo deny check` fails on RUSTSEC-2021-0153
+with it and passes without. The whole graph goes from 470 packages to 446: the
+44 `lol_html` brings, plus `encoding` and `mime`.
+
+**Why not port it to `encoding_rs`.** Because the tier that parses a page is
+`crates/bit-cli-core/src/page.rs`, which has its own tag scanner and 33 tests,
+and T-244 already measured `lol_html` at 44 packages against a hand-written
+scanner at 0. A charset detector belongs beside the parser that needs it, not
+in the HTTP client.
+
+---
+
+## impit: a certificate a caller minted itself cannot be trusted
+
+```
+Unblocks:    T-244, the half of its acceptance that needs a completed handshake
+Files:       vendor/impit/impit/src/tls/mod.rs
+             vendor/impit/impit/src/impit.rs
+             patches/impit/0005-impit-src-impit.rs.patch
+             patches/impit/0008-impit-src-tls-mod.rs.patch
+Upstream:    ours. `rustls-platform-verifier` already takes extra roots and
+             `impit` passes it the `webpki` set; surfacing the caller's is a
+             small thing a release could do.
+Added:       2026-08-29T09:20Z
+```
+
+`TlsConfigBuilder` and `ImpitBuilder` take `with_extra_roots`, a list of DER
+certificate authorities handed to `Verifier::new_with_extra_roots` **in
+addition to** the bundled `webpki` roots. Nothing is replaced and nothing is
+disabled: a certificate still has to verify against some root.
+
+The provider-and-verifier cache is keyed on the fingerprint alone, so a client
+carrying extra roots neither reads from it nor writes to it.
+
+**Why it has to be here.** The HTTP/2 half of a fingerprint only exists after a
+handshake completes, and `scripts/check-fingerprint.ps1` drives `bit-cli` at a
+loopback probe whose certificate it mints per run. The alternative is a flag
+that stops verifying certificates, which is not something to put in a shipping
+binary for a test, and it would also be measuring the wrong client: one told to
+skip verification can offer a different `signature_algorithms` list.
+
+**How it is reached.** `BIT_CLI_EXTRA_CA_FILE`, read by
+`bit_cli_core::fetch`. An environment variable rather than a flag for the same
+reason `SSL_CERT_FILE` is one.
+
+---
+
+## reqwest: a request's extensions never reach hyper
+
+```
+Unblocks:    T-244. Without it the `h2` patch above is set on a request that
+             never carries it
+Files:       vendor/reqwest/src/async_impl/client.rs
+             patches/reqwest/0001-src-async_impl-client.rs.patch
+Upstream:    ours. `hyper` documents request extensions as a way to reach the
+             connection, and dropping them is arguably a defect rather than a
+             design, so a release could take the same line.
+Added:       2026-08-29T09:20Z
+```
+
+`Client::execute_request` takes the request apart, uses the extension map for
+its own per-request settings, builds a `hyper::Request` from the method, URI,
+version and headers, and drops the extensions. Anything a caller put in one is
+therefore invisible to `hyper` and to `h2`. One line copies them across.
+
+**How it was measured.** With the line, the pseudo-header order set by `impit`
+reaches the wire; without it, `h2` sees `None` and writes its own order. Both
+were captured off the wire before the line was written.
+
+---
+
+## reqwest: two HTTP/2 settings hyper takes and reqwest does not offer
+
+```
+Unblocks:    T-244, the SETTINGS field of the Akamai HTTP/2 fingerprint
+Files:       vendor/reqwest/src/async_impl/client.rs
+             patches/reqwest/0001-src-async_impl-client.rs.patch
+Upstream:    ours for the second; the first is a plain gap that a release could
+             close, since `hyper-util` has taken the method already.
+Added:       2026-08-29T09:20Z
+```
+
+`ClientBuilder::http2_header_table_size` forwards to the `hyper-util` builder
+method of the same name, which upstream took in hyperium/hyper-util#274.
+`ClientBuilder::http2_omit_max_frame_size` asks for `SETTINGS_MAX_FRAME_SIZE`
+to be left out of the SETTINGS frame: `hyper` announces the protocol's own
+default, 16384, on every connection, and a peer that receives no such setting
+uses that same default, so the connection carries exactly what it carried
+before.
+
+**Why a fingerprint cares about a setting that changes nothing.** The first
+field of an Akamai HTTP/2 fingerprint is the SETTINGS list, in order, and a
+client that announces one setting more than the browser it claims to be is
+distinguishable on that alone.
+
+**How it was measured**, off the wire, at each step:
+
+| | Akamai fingerprint |
+| --- | --- |
+| before | `2:0;4:6291456;5:16384;6:262144\|15663105\|0\|m,s,a,p` |
+| pseudo-header order patched | `2:0;4:6291456;5:16384;6:262144\|15663105\|0\|m,a,s,p` |
+| max frame size omitted | `2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` |
+| header table size announced | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` |
+| Chrome, for comparison | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` |
+
+---
+
+## rustls: the workspace lists eleven members this repository does not vendor
+
+```
+Unblocks:    nothing. It is what makes the vendored tree loadable at all
+Files:       vendor/rustls/Cargo.toml
+             patches/rustls/0001-Cargo.toml.patch
+Upstream:    ours, and it would make no sense upstream: their members are all
+             there.
+Added:       2026-08-29T09:20Z
+```
+
+`vendor/upstream.json` vendors the `rustls` crate and `rustls-test` and leaves
+out the other eleven workspace members, which are a documentation site, a
+provider test suite, benchmark harnesses that need valgrind and OpenSSL, and
+example binaries. Cargo loads the workspace root when it loads the crate, so
+`members` and `default-members` have to name what is there.
+
+**Why `rustls-test` stays** although nothing builds it: `rustls`'s own
+`[dev-dependencies]` names it by path, and dropping it would mean patching a
+second manifest to run no tests.
+
+**Nothing else in `apify/rustls` is patched.** The fingerprint emulation is
+theirs and is used as it is.
+
+---
+
+## hyper-util: nothing
+
+```
+Unblocks:    T-244, by carrying one method a release has not shipped yet
+Files:       none
+Upstream:    n/a. The tree is upstream's, unchanged, at a commit past 0.1.20.
+Added:       2026-08-29T09:20Z
+```
+
+`vendor/hyper-util` is vendored and **not patched**. It is here for one method
+that upstream took after 0.1.20 shipped, `Builder::http2_header_table_size`,
+without which a client cannot announce `SETTINGS_HEADER_TABLE_SIZE` and its
+Akamai fingerprint differs from any browser's. `vendor/upstream.json` records
+the commit and the reason; the next release that carries the method makes the
+pin an ordinary one rather than a reason.
+
+It is **not** apify's fork of the same repository. That fork's own change is a
+status code on a proxy tunnel error, which nothing here reads, and taking it
+would have meant carrying somebody else's patch to get upstream's.

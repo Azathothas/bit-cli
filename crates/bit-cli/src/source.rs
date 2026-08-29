@@ -350,30 +350,10 @@ pub fn resolve_blocking(
 
 /// Who this client says it is when it fetches a source document.
 ///
-/// Carried as one value rather than as a loose `&str`, because the User-Agent
-/// and the rest of the header set are one decision: a request sending Chrome's
-/// `sec-ch-ua` beside `bit-cli/0.2.0` is more distinctive than either alone.
-/// See `TODO/cli-surface.md`, T-244.
-#[derive(Debug, Clone)]
-pub struct Identity {
-    pub user_agent: String,
-    /// Whether the caller named the agent. A profile does not overwrite one
-    /// somebody passed on purpose.
-    pub user_agent_given: bool,
-    pub profile: bit_cli_core::page::ClientProfile,
-}
-
-impl Identity {
-    /// `bit-cli/<version>` and nothing else, which is what every request here
-    /// sent before T-244.
-    pub fn plain(user_agent: &str) -> Self {
-        Self {
-            user_agent: user_agent.to_string(),
-            user_agent_given: true,
-            profile: bit_cli_core::page::ClientProfile::Plain,
-        }
-    }
-}
+/// Lives in `bit_cli_core::fetch` beside the two clients that read it, and is
+/// re-exported here because every caller in this crate already says
+/// `crate::source::Identity`. See `TODO/cli-surface.md`, T-244.
+pub use bit_cli_core::fetch::Identity;
 
 /// What resolving a magnet or a bare info hash is allowed to talk to.
 ///
@@ -717,42 +697,45 @@ async fn fetch_bytes(
     max_bytes: usize,
     deadline: Duration,
 ) -> Result<Body> {
-    let client = reqwest_client(identity, deadline)?;
-    let mut response = client
-        .get(url)
-        .send()
+    let fetcher = bit_cli_core::fetch::fetcher_for(identity, deadline).map_err(source_error)?;
+    let response = fetcher
+        .get(bit_cli_core::fetch::FetchRequest {
+            url,
+            max_bytes,
+            deadline,
+        })
         .await
-        .map_err(|e| fetch_error(e, url, "cannot fetch", deadline))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(Error::source_resolution(format!("{url}: {status}"))
-            .with("url", url.to_string())
-            .with("http_status", status.as_u16()));
-    }
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    let mut body: Vec<u8> = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| fetch_error(e, url, "cannot read the body of", deadline))?
-    {
-        body.extend_from_slice(&chunk);
-        if body.len() > max_bytes {
-            return Err(Error::source_resolution(format!(
-                "{url} answered with more than {max_bytes} bytes, which is larger than any document a source can be"
-            ))
-            .with("url", url.to_string())
-            .with("max_bytes", max_bytes));
-        }
-    }
+        .map_err(source_error)?;
     Ok(Body {
-        bytes: body,
-        content_type,
+        bytes: response.body,
+        content_type: response.content_type,
     })
+}
+
+/// Turn a fetch failure into the error the exit code is derived from.
+///
+/// The mapping is the whole point of [`bit_cli_core::fetch::FetchError`] being
+/// structural: a deadline that fired exits 9 and names the flag that sets it,
+/// a status exits 4 and carries the number, and a body past its ceiling is a
+/// source problem rather than a network one. See `TODO/cli-surface.md`,
+/// T-244 and T-245.
+fn source_error(err: bit_cli_core::fetch::FetchError) -> Error {
+    use bit_cli_core::fetch::FetchError;
+    let text = err.to_string();
+    match err {
+        FetchError::Timeout { url, deadline } => Error::timeout(text).with("url", url).with(
+            "timeout_ms",
+            u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX),
+        ),
+        FetchError::Status { url, status } => Error::source_resolution(text)
+            .with("url", url)
+            .with("http_status", status),
+        FetchError::TooLarge { url, max_bytes } => Error::source_resolution(text)
+            .with("url", url)
+            .with("max_bytes", max_bytes),
+        FetchError::Build(_) => Error::generic(text),
+        FetchError::Network { url, .. } => Error::network(text).with("url", url),
+    }
 }
 
 /// A Metalink read, and the `.torrent` it names fetched.
@@ -909,45 +892,24 @@ pub async fn fetch_list(url: &str, user_agent: &str) -> Result<String> {
         .with("url", url.to_string()));
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent(user_agent)
-        .timeout(FETCH_TIMEOUT)
-        .build()
-        .map_err(|e| Error::network(format!("cannot build an HTTP client: {e}")))?;
-    let response = client
-        .get(url)
-        .send()
+    // A list is not a source document, so it goes through the **plain**
+    // fetcher whatever `--page-client` says. A tracker list or a web seed
+    // list is a file the caller pointed at, and impersonating a browser to
+    // fetch one buys nothing and hides who is asking. The cap bounds what is
+    // held in memory rather than only what is returned, which the fetcher
+    // does by reading in chunks.
+    let identity = Identity::plain(user_agent);
+    let fetcher = bit_cli_core::fetch::fetcher_for(&identity, FETCH_TIMEOUT).map_err(list_error)?;
+    let response = fetcher
+        .get(bit_cli_core::fetch::FetchRequest {
+            url,
+            max_bytes: MAX_LIST_BYTES,
+            deadline: FETCH_TIMEOUT,
+        })
         .await
-        .map_err(|e| Error::network(format!("cannot fetch {url}: {e}")))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(Error::network(format!("{url}: {status}"))
-            .with("url", url.to_string())
-            .with("http_status", status.as_u16()));
-    }
+        .map_err(list_error)?;
 
-    // Read in chunks rather than calling `bytes()`, so the cap bounds what is
-    // held in memory rather than only what is returned. A server declaring a
-    // small `Content-Length` and sending more would otherwise be read in full
-    // before anything checked it.
-    let mut response = response;
-    let mut body: Vec<u8> = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| Error::network(format!("cannot read the body of {url}: {e}")))?
-    {
-        body.extend_from_slice(&chunk);
-        if body.len() > MAX_LIST_BYTES {
-            return Err(Error::network(format!(
-                "{url} answered with more than {MAX_LIST_BYTES} bytes, which is not a list"
-            ))
-            .with("url", url.to_string())
-            .with("max_bytes", MAX_LIST_BYTES));
-        }
-    }
-
-    String::from_utf8(body).map_err(|_| {
+    String::from_utf8(response.body).map_err(|_| {
         Error::network(format!("{url} answered with bytes that are not UTF-8 text"))
             .with("url", url.to_string())
     })
@@ -966,69 +928,31 @@ pub fn list_fetcher<'a>(
     move |url: &str| runtime.block_on(fetch_list(url, user_agent))
 }
 
-/// Turn a `reqwest` failure into an error that says whether the deadline ended
-/// it.
+/// A fetch failure while reading a **list**, which is a network error and not
+/// a source resolution one.
 ///
-/// A body that runs out of time comes back as "error decoding response body",
-/// which is true of the transport and says nothing about the flag the caller
-/// set. A run that gave up because its deadline fired exits 9 and names the
-/// deadline, which is the number a caller can change. See
-/// `TODO/cli-surface.md`, T-245.
-fn fetch_error(err: reqwest::Error, url: &str, what: &str, deadline: Duration) -> Error {
-    if err.is_timeout() {
-        return Error::timeout(format!(
-            "{url}: no answer within {}ms, which is what --timeout allows",
-            deadline.as_millis()
+/// Separate from [`source_error`] on purpose: a tracker list that answers 404
+/// has always been `Error::network` here, and moving it would move an exit
+/// code that scripts already branch on. See `TODO/cli-surface.md`, T-183.
+fn list_error(err: bit_cli_core::fetch::FetchError) -> Error {
+    use bit_cli_core::fetch::FetchError;
+    let text = err.to_string();
+    match err {
+        FetchError::Status { url, status } => Error::network(text)
+            .with("url", url)
+            .with("http_status", status),
+        FetchError::TooLarge { url, .. } => Error::network(format!(
+            "{url} answered with more than {MAX_LIST_BYTES} bytes, which is not a list"
         ))
-        .with("url", url.to_string())
-        .with(
+        .with("url", url)
+        .with("max_bytes", MAX_LIST_BYTES),
+        FetchError::Timeout { url, deadline } => Error::timeout(text).with("url", url).with(
             "timeout_ms",
             u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX),
-        );
+        ),
+        FetchError::Build(_) => Error::network(text),
+        FetchError::Network { url, .. } => Error::network(text).with("url", url),
     }
-    Error::network(format!("{what} {url}: {err}"))
-}
-
-/// The client that fetches a source document.
-///
-/// Under [`ClientProfile::Browser`], which is the default, it sends a current
-/// Chrome's header set in Chrome's order. That is half of what an origin
-/// fingerprints and it is the half that costs nothing: the other half is the
-/// TLS `ClientHello` and the HTTP/2 SETTINGS frame, which `rustls` and `h2`
-/// decide rather than this. `crates/bit-cli-core/examples/loopback-tlsprobe`
-/// is what reads both off the wire, and `scripts/check-fingerprint.ps1`
-/// asserts them against a recorded capture. See `TODO/cli-surface.md`, T-244.
-///
-/// `user_agent` still wins where the caller set one explicitly. Somebody who
-/// passed `--web-seed-user-agent` meant it, and silently sending Chrome's
-/// instead would be the tool disagreeing with its own flag.
-fn reqwest_client(identity: &Identity, deadline: Duration) -> Result<reqwest::Client> {
-    use bit_cli_core::page::{BROWSER_HEADERS, BROWSER_USER_AGENT, ClientProfile};
-
-    let mut builder = reqwest::Client::builder().timeout(deadline);
-    match identity.profile {
-        ClientProfile::Plain => builder = builder.user_agent(&identity.user_agent),
-        ClientProfile::Browser => {
-            let mut headers = reqwest::header::HeaderMap::new();
-            for (name, value) in BROWSER_HEADERS {
-                let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                    .map_err(|e| Error::generic(format!("bad header name {name}: {e}")))?;
-                let value = reqwest::header::HeaderValue::from_str(value)
-                    .map_err(|e| Error::generic(format!("bad header value: {e}")))?;
-                headers.insert(name, value);
-            }
-            builder =
-                builder
-                    .default_headers(headers)
-                    .user_agent(match identity.user_agent_given {
-                        true => identity.user_agent.as_str(),
-                        false => BROWSER_USER_AGENT,
-                    });
-        }
-    }
-    builder
-        .build()
-        .map_err(|e| Error::network(format!("cannot build an HTTP client: {e}")))
 }
 
 #[cfg(test)]

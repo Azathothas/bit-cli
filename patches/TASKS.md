@@ -17,9 +17,15 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**14 entries: 13 done, 0 partial, 0 blocked, 1 open.** Every one of them was
-held up by a seam `librqbit` does not expose. **No open P0 is left in the
-record, and nothing in the record is blocked.**
+**15 entries: 13 done, 1 partial, 0 blocked, 1 open.** Every one of them was
+held up by a seam somebody else's crate does not expose. **No open P0 is left
+in the record, and nothing in the record is blocked.**
+
+**Five of the eight vendored trees are not `librqbit`'s**, and that is new as
+of 2026-08-29. [T-244](../TODO/cli-surface.md) needed a TLS `ClientHello` and
+an HTTP/2 SETTINGS frame that a published `rustls` and a published `h2` will
+not produce, so `rustls`, `h2`, `impit`, `reqwest` and `hyper-util` are
+vendored beside them. The section below is what each one is for.
 
 | entry | priority | status | what it is waiting for |
 | --- | --- | --- | --- |
@@ -37,6 +43,7 @@ record, and nothing in the record is blocked.**
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 | [T-025](../TODO/peers.md) | P3 | **done** | one `pub use`, and the filter had no name |
 | [T-256](../TODO/trackers.md) | P1 | **done** | a private announce loop that recomputed its event |
+| [T-244](../TODO/cli-surface.md) | P2 | partial | a `ClientHello`, a SETTINGS frame and a pseudo-header order |
 
 One is not done: [T-102](../TODO/bep-coverage.md), BEP 55, and it is no longer
 waiting on a seam. The seam that blocked it is the one
@@ -380,6 +387,43 @@ in, so it was exactly the case that took the wrong path.
 Then [T-100](../TODO/bep-coverage.md), [T-167](../TODO/bep-coverage.md) and
 [T-102](../TODO/bep-coverage.md). Each entry names its seam with a line number
 and none of them needs re-deriving.
+
+## 6. T-244, and the five trees that are not librqbit's
+
+`TODO/cli-surface.md` T-244 ships a client that presents itself as a current
+Chrome when it fetches a source document, by the operator's ruling of
+2026-08-29. Every part of that presentation is decided below `reqwest`, and
+none of it is reachable from a published crate.
+
+| tree | what it is for | patched |
+| --- | --- | --- |
+| `rustls`, apify's fork | the `ClientHello`: fifteen ciphers, fifteen extensions, GREASE, ECH, ALPS, certificate compression, ML-DSA signature algorithms | the workspace member list only |
+| `h2`, upstream at `v0.4.19` | the pseudo-header order, as a request extension rather than an environment variable | four files |
+| `impit` | the fingerprint database and the client that drives it | HTTP/3, a charset detector, a proxy error downcast, and the environment variable, all removed; extra roots added |
+| `reqwest`, the 0.13 line | a request's extensions reaching `hyper`, and two HTTP/2 settings `hyper` takes and it does not offer | one file |
+| `hyper-util` | one method upstream took after 0.1.20 shipped | **nothing** |
+
+**`apify/h2` is not what is vendored, and that is a decision.** Its fork is
+`0.4.7` against the `0.4.19` every requirement in this graph asks for, so
+cargo declines the `[patch]` with a warning and the fork never runs. Vendoring
+it and bumping the version would leave a recorded base that does not describe
+the tree, which `README.md` says makes the next merge wrong in a way nothing
+detects. The tree here is upstream `0.4.19` and the ordering is our own patch.
+
+**`apify/tower-http` and `apify/hyper-util` are not vendored either**, and both
+were measured rather than assumed. apify's `tower-http` comments out the two
+lines that strip `Content-Encoding` and `Content-Length` after decompressing,
+which would make every response this client reads claim an encoding it no
+longer has. apify's `hyper-util` adds a status code to a proxy tunnel error
+that nothing here reads. `impit` compiles against the published versions of
+both once one downcast is removed.
+
+**What it is worth, measured.** JA4 moved from
+`t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3` to
+`t13i1515h2_8daaf6152771_806a8c22fdea`, which is Chrome's published cipher and
+extension hash, and the Akamai HTTP/2 fingerprint from nothing at all to
+`1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p`, which is Chrome's.
+`scripts/check-fingerprint.ps1` asserts both against a golden on every push.
 
 ## Returning to ordinary work
 

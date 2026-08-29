@@ -1,0 +1,35 @@
+[package]
+name = "impit"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytes = "1"
+futures-core = "0.3"
+log = "0.4.22"
+# No `http3`: reqwest gates it behind `--cfg reqwest_unstable`, which would
+# have to be added to all three .cargo/config.toml target blocks and all
+# three RUSTFLAGS blocks in ci.yml, where a workflow RUSTFLAGS replaces the
+# config rather than adding to it. That is the shape of T-146. See
+# patches/UPSTREAM.md.
+reqwest = { version="0.13.1", features = ["json", "gzip", "brotli", "zstd", "deflate", "cookies", "stream", "socks"] }
+rustls = { version="0.23.36", features=["impit"] }
+thiserror = "2.0.12"
+url = "2.5.2"
+# `h2` for the pseudo-header order type and `http` for the request round
+# trip that carries it. Both are already in the graph under `reqwest`.
+h2 = "0.4.19"
+http = "1"
+rustls-platform-verifier = "0.6"
+webpki-root-certs = "1.0.5"
+hyper-util = "0.1.18"
+hyper = "1.7.0"
+rand = "0.9"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+futures-util = "0.3"
+tokio = { version = "1.40.0", features = ["full"] }

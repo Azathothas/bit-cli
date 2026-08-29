@@ -85,26 +85,55 @@ pub const BROWSER_MAJOR: u32 = 151;
 pub const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
      AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
 
-/// Every header the browser profile sends beside `User-Agent`, in the order
-/// Chrome sends them for a top level navigation.
+/// `SETTINGS_HEADER_TABLE_SIZE`, which a current Chrome announces and `hyper`
+/// does not.
+///
+/// The HTTP/2 half of a fingerprint is the SETTINGS frame, the connection
+/// WINDOW_UPDATE, any PRIORITY frames and the pseudo-header order, read
+/// together. Chrome sends settings 1, 2, 4 and 6 and no others.
+pub const BROWSER_H2_HEADER_TABLE_SIZE: u32 = 65_536;
+
+/// Whether to leave `SETTINGS_MAX_FRAME_SIZE` out of the SETTINGS frame.
+///
+/// `hyper` announces the protocol's own default, 16384, on every connection,
+/// and Chrome announces nothing. A peer that receives no
+/// `SETTINGS_MAX_FRAME_SIZE` uses the same default, so the connection carries
+/// exactly what it carried before; only the fingerprint changes.
+pub const BROWSER_H2_OMIT_MAX_FRAME_SIZE: bool = true;
+
+/// Every header the browser profile sends, in the order Chrome sends them for
+/// a top level navigation.
 ///
 /// **Order is part of the fingerprint**, not a style choice: the HTTP/2 half
 /// of a client's identity includes the header sequence after the
 /// pseudo-headers, so a set with the right names in the wrong order is still
-/// distinguishable.
+/// distinguishable. `http::HeaderMap` iterates in neither insertion nor
+/// alphabetical order, so the sequence is carried to the wire separately, by
+/// the vendored `h2`. See `crates/bit-cli-core/src/fetch.rs` and
+/// `patches/UPSTREAM.md`.
 ///
-/// `Accept-Encoding` is deliberately **absent**. Chrome sends it, but the
-/// value has to agree with what this client can actually decode, and the HTTP
-/// client is what knows that. Setting it here by hand is how a caller ends up
-/// advertising `br` and then handing brotli to a bencode parser.
+/// `user-agent` and `accept-encoding` are here rather than left to the HTTP
+/// client, because a client that appends them writes them last and Chrome
+/// does not. The `accept-encoding` value has to agree with what this client
+/// can actually decode: `gzip`, `deflate`, `br` and `zstd` are the four the
+/// fetcher's decompression is built with, which is why those four and no
+/// others. A client advertising an encoding it cannot decode hands brotli to
+/// a bencode parser.
+///
+/// **This is the file a staleness check rewrites.**
+/// `scripts/check-browser-version.ps1` compares [`BROWSER_MAJOR`] against what
+/// Chrome, Firefox and Edge have actually shipped, and
+/// `scripts/capture-browser-fingerprint.ps1` emits a replacement for this list
+/// from a real browser driven at `loopback-tlsprobe`.
 pub const BROWSER_HEADERS: &[(&str, &str)] = &[
     (
         "sec-ch-ua",
-        "\"Chromium\";v=\"151\", \"Google Chrome\";v=\"151\", \"Not?A_Brand\";v=\"24\"",
+        "\"Not=A?Brand\";v=\"99\", \"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\"",
     ),
     ("sec-ch-ua-mobile", "?0"),
     ("sec-ch-ua-platform", "\"Windows\""),
     ("upgrade-insecure-requests", "1"),
+    ("user-agent", BROWSER_USER_AGENT),
     (
         "accept",
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,\
@@ -114,6 +143,7 @@ pub const BROWSER_HEADERS: &[(&str, &str)] = &[
     ("sec-fetch-mode", "navigate"),
     ("sec-fetch-user", "?1"),
     ("sec-fetch-dest", "document"),
+    ("accept-encoding", "gzip, deflate, br, zstd"),
     ("accept-language", "en-US,en;q=0.9"),
     ("priority", "u=0, i"),
 ];

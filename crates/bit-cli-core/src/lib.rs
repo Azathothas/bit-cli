@@ -16,6 +16,7 @@ pub mod equivalence;
 pub mod error;
 pub mod exit;
 pub mod fast_set;
+pub mod fetch;
 pub mod layout;
 pub mod listener;
 pub mod metalink;

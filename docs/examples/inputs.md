@@ -283,7 +283,15 @@ that a browser has to be installed for it rather than implying one is.
 
 An origin that fingerprints its callers sends a different page to a client it
 does not recognise, so the fetch of a source document presents as a current
-Chrome by default: Chrome's header set, and ALPN offering HTTP/2.
+Chrome by default, and it does so at every layer an origin reads:
+
+| what an origin reads | what `bit-cli` sends |
+| --- | --- |
+| TLS `ClientHello`, as JA4 | `t13i1515h2_8daaf6152771_806a8c22fdea` |
+| HTTP/2 SETTINGS, WINDOW_UPDATE, PRIORITY and pseudo-header order, as an Akamai fingerprint | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` |
+| the header set, in order | Chrome's, `user-agent` fifth and `accept-encoding` eleventh |
+
+Both strings are Chrome 151's own.
 
 ```bash
 bit-cli info https://host/downloads/ --page-client plain
@@ -294,17 +302,36 @@ here sent before. `--web-seed-user-agent` still wins over either where you set
 it, because a User-Agent you passed on purpose is one you meant.
 
 **This is the source document only.** A web seed is a mirror you configured and
-always gets `bit-cli`: presenting as a browser to a mirror somebody pointed the
-tool at buys nothing and hides who is asking.
+always gets `bit-cli`, and so does a tracker announce, a peer handshake and a
+tracker or web seed list fetched by URL: presenting as a browser to a mirror
+somebody pointed the tool at buys nothing and hides who is asking.
 
 What the two profiles actually put on the wire is recorded under
 [`../../fingerprints/`](../../fingerprints/) and asserted on every CI run by
 [`../../scripts/check-fingerprint.ps1`](../../scripts/check-fingerprint.ps1),
 which reads it off the wire rather than out of the code.
 
-**The header set is Chrome's and the header order is not.** `reqwest` cannot
-express a header order, so the names are right and the sequence is not. It is
-recorded exactly as sent, so the gap is visible rather than claimed away.
+**Nothing here defeats a bot check.** One `GET` is sent, there is no retry and
+no second request, and a challenge or a refusal is an error carrying the
+status. Looking like a browser to a log and solving a challenge are different
+things, and only the first is here.
+
+### Trusting a certificate authority the usual roots do not carry
+
+`BIT_CLI_EXTRA_CA_FILE` names a PEM bundle of certificate authorities that a
+source-document fetch trusts **in addition to** the platform's roots and the
+bundled ones. Nothing is replaced, verification is not weakened, and a
+certificate still has to chain to some root. A run that reads the file logs a
+warning naming it.
+
+```bash
+BIT_CLI_EXTRA_CA_FILE=/path/to/ca.pem bit-cli info https://internal.example/downloads/
+```
+
+It is an environment variable rather than a flag for the same reason
+`SSL_CERT_FILE` is one: it is a decision about the whole process rather than
+about one run. There is no flag anywhere in `bit-cli` that stops verifying
+certificates, and there is not going to be one.
 
 ### What is not read
 

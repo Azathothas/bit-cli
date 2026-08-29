@@ -19,7 +19,9 @@ model and it is the thing no other client has.
 
 It is built on `librqbit`, which it **vendors** under `vendor/` rather than
 depending on the published crates, so anything blocking this repository can be
-fixed here rather than described as somebody else's problem.
+fixed here rather than described as somebody else's problem. Seven other trees
+are vendored beside it for the same reason; [`vendoring.md`](vendoring.md) says
+which and why.
 
 ## The reading order
 
@@ -42,7 +44,7 @@ fixed here rather than described as somebody else's problem.
 | `crates/bit-cli/` | the binary: argument parsing, the commands, the reports |
 | `crates/bit-cli-core/` | the library: web seed fetching, the bridge, storage, metainfo, encryption |
 | `crates/bit-cli-core/examples/` | loopback fixtures the acceptance scripts drive: a tracker, a file server, a churn generator, and a TLS and HTTP/2 fingerprint oracle |
-| `vendor/` | the vendored `librqbit` trees. **Changeable here**, and a change is recorded in `patches/` |
+| `vendor/` | eight vendored upstreams: the `librqbit` trees, and the five the impersonating HTTP client needs. **Changeable here**, and a change is recorded in `patches/` |
 | `patches/` | the patch series derived from `vendor/`, plus `UPSTREAM.md`, which is the record Apache-2.0 asks for |
 | `TODO/` | the authoritative record: one file per category, plus `INDEX.md`, `PROGRESS.md` and `RULES.md` |
 | `docs/` | what the tool does, written for a reader using it |

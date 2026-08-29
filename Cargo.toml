@@ -34,6 +34,13 @@ encoding_rs = "0.8"
 globset = "0.4.19"
 hdrhistogram = { version = "7.5.5", default-features = false }
 ignore = "0.4.24"
+# The impersonating client. A path dependency rather than a
+# `[patch.crates-io]` entry, because the `impit` on crates.io is an
+# unrelated placeholder somebody registered under the name and patching it
+# would claim a lineage this tree does not have. The tree is under
+# `vendor/impit`, pinned in `vendor/upstream.json`, and what we changed is
+# in `patches/UPSTREAM.md`. See `TODO/cli-surface.md`, T-244.
+impit = { path = "vendor/impit/impit", version = "0.1.0" }
 librqbit = { version = "9.0.1", default-features = false, features = ["rust-tls", "http-api-client"] }
 librqbit-bencode = "9.0.1"
 librqbit-core = { version = "9.0.1", default-features = false }
@@ -49,7 +56,7 @@ rand = "0.10.2"
 # because `ring` is already under `rustls` here and a second crypto provider
 # would be a second C build for a test fixture. See `TODO/cli-surface.md`,
 # T-244.
-rcgen = { version = "0.14.0", default-features = false, features = ["crypto", "ring"] }
+rcgen = { version = "0.14.0", default-features = false, features = ["crypto", "ring", "pem"] }
 # `http2` so ALPN offers `h2`, and the four decompressions so the
 # `Accept-Encoding` the browser profile implies is one this client can
 # actually decode. A client advertising `br` and then handing brotli to a
@@ -99,6 +106,24 @@ librqbit-tracker-comms = { path = "vendor/rqbit/crates/tracker_comms" }
 librqbit-upnp = { path = "vendor/rqbit/crates/upnp" }
 librqbit-utp = { path = "vendor/librqbit-utp" }
 librqbit-dualstack-sockets = { path = "vendor/librqbit-dualstack-sockets" }
+
+# The three trees the impersonating client needs, vendored for the same reason
+# and reached the same way. `rustls` because the `ClientHello` is its to
+# decide and no header set reaches it; `h2` because the HTTP/2 pseudo-header
+# order is the half of a fingerprint every survey gets wrong; `impit` is the
+# client that drives both, and it is a path dependency rather than a patch
+# because the `impit` on crates.io is an unrelated placeholder crate that
+# somebody registered under the name. See TODO/cli-surface.md, T-244.
+rustls = { path = "vendor/rustls/rustls" }
+h2 = { path = "vendor/h2" }
+# The 0.13 line only. This repository's own crates ask for 0.12 and cargo goes
+# on resolving that from the registry, because one [patch] entry supplies one
+# version. What it carries is one line: a request's extensions reaching hyper,
+# without which nothing a caller sets on a request reaches `h2`.
+reqwest = { path = "vendor/reqwest" }
+# For one method that upstream took after 0.1.20 shipped and that nothing else
+# can reach: announcing SETTINGS_HEADER_TABLE_SIZE.
+hyper-util = { path = "vendor/hyper-util" }
 
 [profile.release]
 opt-level = 3

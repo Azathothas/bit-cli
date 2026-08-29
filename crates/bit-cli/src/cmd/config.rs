@@ -58,7 +58,18 @@ impl Report {
 /// `BIT_CLI_TARGET` is set by the build script and is in the environment of
 /// anything `cargo` runs, so before it was reserved every run under
 /// `cargo test` failed. `BIT_CLI_UPDATE_FLAGS` is read by the short-flag test.
-const NOT_SETTINGS: &[&str] = &["BIT_CLI_TARGET", "BIT_CLI_UPDATE_FLAGS"];
+///
+/// `BIT_CLI_EXTRA_CA_FILE` names a PEM bundle of certificate authorities the
+/// source-document fetcher trusts **in addition to** the usual roots. It is
+/// not a setting because it is an operator's trust decision about the whole
+/// process rather than a per-run option, which is the same reason
+/// `SSL_CERT_FILE` is an environment variable everywhere else. See
+/// `bit_cli_core::fetch::EXTRA_CA_FILE_ENV` and `TODO/cli-surface.md`, T-244.
+const NOT_SETTINGS: &[&str] = &[
+    "BIT_CLI_TARGET",
+    "BIT_CLI_UPDATE_FLAGS",
+    bit_cli_core::fetch::EXTRA_CA_FILE_ENV,
+];
 
 /// Every `BIT_CLI_*` name that is not a setting, so a run does not refuse one
 /// of its own variables as a misspelt setting.

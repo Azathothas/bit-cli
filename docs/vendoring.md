@@ -46,7 +46,7 @@ Vendoring is what makes that rule affordable rather than aspirational.
 
 ## What is vendored
 
-Three upstreams and thirteen crates, pinned in
+Eight upstreams and eighteen crates, pinned in
 [`vendor/upstream.json`](../vendor/upstream.json).
 
 | upstream | crates | pinned by |
@@ -54,17 +54,53 @@ Three upstreams and thirteen crates, pinned in
 | `ikatson/rqbit` | eleven, `librqbit` and its siblings | the `v9.0.1` tag |
 | `ikatson/librqbit-utp` | `librqbit-utp` | a commit |
 | `ikatson/librqbit-dualstack-sockets` | `librqbit-dualstack-sockets` | a commit |
+| `apify/rustls` | `rustls` | a commit |
+| `hyperium/h2` | `h2` | the `v0.4.19` tag |
+| `apify/impit` | `impit` | a commit |
+| `seanmonstar/reqwest` | `reqwest`, the 0.13 line only | the `v0.13.4` tag |
+| `hyperium/hyper-util` | `hyper-util` | a commit |
 
-The last two are pinned by commit because neither repository tags the 0.7.0
-this tree builds against: `librqbit-utp`'s newest tag is `v0.4.0` and
+The `librqbit` siblings are pinned by commit because neither repository tags
+the 0.7.0 this tree builds against: `librqbit-utp`'s newest tag is `v0.4.0` and
 `librqbit-dualstack-sockets` has no tags at all. Both commits are the default
 branch head whose `Cargo.toml` reads 0.7.0.
+
+### The five that are not `librqbit`
+
+They are here for one capability, and it is
+[T-244](../TODO/cli-surface.md): fetching a source document as a client an
+origin recognises. Every part of that is decided below `reqwest` and none of it
+is reachable from a published crate.
+
+- **`rustls`** is apify's fork, which adds a fingerprint emulation module to
+  the client handshake. It is what produces fifteen ciphers and fifteen
+  extensions where stock `rustls` produces ten and ten, with GREASE, ECH, ALPS,
+  certificate compression and the ML-DSA signature algorithms. Only its
+  workspace member list is patched here.
+- **`h2`** is upstream's own `v0.4.19`, not apify's fork of it. The fork is
+  `0.4.7` against the `0.4.19` this graph resolves, so cargo declines a
+  `[patch]` at that version with a warning and the fork never runs. The
+  pseudo-header order is carried here as a request extension.
+- **`impit`** is the client that drives the other two, and carries the
+  fingerprint database. HTTP/3, a charset detector, a proxy error downcast and
+  a process-global environment variable are removed from it.
+- **`reqwest`**, the 0.13 line only, because a request's extensions never
+  reached `hyper` and two HTTP/2 settings `hyper` takes were not offered. This
+  repository's own crates ask for 0.12 and cargo goes on resolving that from
+  the registry: one `[patch]` entry supplies one version.
+- **`hyper-util`** is vendored **unchanged**, for one method upstream took
+  after 0.1.20 shipped.
+
+`patches/UPSTREAM.md` has a section per change with what it is worth,
+measured.
 
 ## How it is wired
 
 `[patch.crates-io]` in the root `Cargo.toml`, not path dependencies.
 
-Only four of the thirteen are named directly. The other nine arrive
+Only four of the eighteen are named directly, and `impit` is a path dependency
+rather than a patch, because the `impit` on crates.io is an unrelated
+placeholder somebody registered under the name. The other nine arrive
 transitively, and a path dependency redirects the edge it is written on and
 nothing else, so cargo would resolve `librqbit-core` twice: once from
 `vendor/`, once from crates.io. Two copies of a crate are two sets of types
@@ -113,7 +149,12 @@ the second entry in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
   vendoring and 113.4 s on the first run after it, which is the cold build of
   all thirteen. Warm they take 65.9 s. The cost is paid again whenever a
   vendored file changes, which is what a patch does.
-- **3.5 MB in the repository**, 389 files.
+- **9.1 MB in the repository**, 824 tracked files. The `librqbit` trees are
+  3.4 MB and 390 of them; the five [T-244](../TODO/cli-surface.md) added are
+  5.7 MB and 434.
+- **1.25 MiB of binary.** Measured on `x86_64-pc-windows-msvc` either side of
+  those five: 20.13 MiB before, 21.38 MiB after, and 26 more packages in the
+  graph.
 - **Upstream stops being visible.** Nobody sees a release note for a dependency
   that no longer has a version to update. `scripts/upstream-scan.ps1` is the
   answer to that and it is meant to be run on every version bump.

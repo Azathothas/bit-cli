@@ -82,6 +82,150 @@
       "crates": {
         "librqbit-dualstack-sockets": "."
       }
+    },
+    {
+      "name": "rustls",
+      "repository": "https://github.com/apify/rustls",
+      "directory": "vendor/rustls",
+      "ref": "23b2c17427c095b768e22ccf0dadb97266860cf1",
+      "base": "23b2c17427c095b768e22ccf0dadb97266860cf1",
+      "vendored_at": "2026-08-29T00:00:00Z",
+      "ref_reason": "Pinned by commit. apify's fork carries no tag of its own for this work: its newest merge is upstream's v/0.23.43 and the two commits after it are the fingerprint emulation. The commit is the head of its impit-main branch and its Cargo.toml reads 0.23.43, which is the version this tree already resolves, so the [patch] applies rather than being declined.",
+      "exclude": [
+        ".git",
+        ".github",
+        "website",
+        "rustls-provider-test",
+        "fuzz",
+        "test-ca",
+        "bogo",
+        "audit",
+        "admin",
+        "ci-bench",
+        "openssl-tests",
+        "connect-tests",
+        "rustls-bench",
+        "rustls-fuzzing-provider",
+        "rustls-post-quantum",
+        "provider-example",
+        "examples"
+      ],
+      "exclude_reason": {
+        "website": "3.0 MB of a documentation site. Nothing builds it and nothing here reads it.",
+        "rustls-provider-test": "5.7 MB of integration tests for third-party crypto providers. This tree uses the two providers rustls ships with.",
+        "fuzz": "cargo-fuzz targets, which need a nightly toolchain. Upstream's own workspace already excludes them from members.",
+        "test-ca": "542 KB of generated test certificates for the workspace members this tree does not vendor.",
+        "bogo": "The BoringSSL test-suite shim, which needs BoGo itself.",
+        "audit": "Third-party audit reports about upstream's own releases. Data about upstream's process, not source.",
+        "admin": "Upstream's release and coverage tooling.",
+        "ci-bench": "A benchmark harness that needs valgrind.",
+        "openssl-tests": "Interop tests that need OpenSSL on the machine.",
+        "connect-tests": "Tests that reach the public internet.",
+        "rustls-bench": "A benchmarking binary.",
+        "rustls-fuzzing-provider": "A crypto provider that exists to be fuzzed.",
+        "rustls-post-quantum": "A shim crate that is empty since 0.23.22; the feature it wrapped is in rustls itself.",
+        "provider-example": "An example of writing a crypto provider.",
+        "examples": "Upstream's example binaries, which pull clap, env_logger and mio.",
+        ".github": "Upstream's own CI, which runs against upstream's repository and cannot run here."
+      },
+      "crates": {
+        "rustls": "rustls"
+      },
+      "not_patched": {
+        "rustls-test": "Kept because rustls's own dev-dependencies name it by path, and dropping it would mean patching a manifest to run no tests. Not depended on by anything this tree builds."
+      }
+    },
+    {
+      "name": "h2",
+      "repository": "https://github.com/hyperium/h2",
+      "directory": "vendor/h2",
+      "ref": "v0.4.19",
+      "base": "d57d1b852fec9dda6d42d3454502006d52104da8",
+      "vendored_at": "2026-08-29T00:00:00Z",
+      "ref_reason": "Upstream's own tag for the version this tree already resolves. NOT apify/h2, and that is a decision rather than an oversight: apify's fork is 0.4.7, twelve releases behind the 0.4.19 every requirement in this graph asks for, so a [patch] at apify's version is declined with a warning and the fork never runs. The tree here is upstream 0.4.19 and the pseudo-header ordering is carried as our own patch, so the recorded base describes the tree and the next reconciliation is a real three-way merge. See patches/UPSTREAM.md.",
+      "exclude": [
+        ".git",
+        ".github",
+        "fixtures",
+        "ci"
+      ],
+      "exclude_reason": {
+        "fixtures": "59 MB of h2spec and HPACK test vectors, read at run time by tests this repository does not run. Upstream's own Cargo.toml excludes the same path from the published crate.",
+        "ci": "Shell scripts that fetch and run h2spec.",
+        ".github": "Upstream's own CI, which runs against upstream's repository and cannot run here."
+      },
+      "crates": {
+        "h2": "."
+      }
+    },
+    {
+      "name": "impit",
+      "repository": "https://github.com/apify/impit",
+      "directory": "vendor/impit",
+      "ref": "4fd6c31",
+      "base": "4fd6c3167c55d9d059a3e5872846e0b5c0a31e3b",
+      "vendored_at": "2026-08-29T00:00:00Z",
+      "ref_reason": "Pinned by commit. The repository publishes releases for its Node and Python bindings rather than for the Rust crate, and the Rust crate's version has read 0.1.0 since the first commit, so no tag names the tree this depends on.",
+      "exclude": [
+        ".git",
+        ".github",
+        "impit-node",
+        "impit-python"
+      ],
+      "exclude_reason": {
+        "impit-node": "The napi binding, which needs Node and a build script that links against it.",
+        "impit-python": "The pyo3 binding, which needs a Python development install.",
+        ".github": "Upstream's own CI, which runs against upstream's repository and cannot run here."
+      },
+      "crates": {
+        "impit": "impit"
+      }
+    },
+    {
+      "name": "reqwest",
+      "repository": "https://github.com/seanmonstar/reqwest",
+      "directory": "vendor/reqwest",
+      "ref": "v0.13.4",
+      "base": "11489b34eda6d32b15ad4033e62beba2ee401350",
+      "vendored_at": "2026-08-29T00:00:00Z",
+      "ref_reason": "Upstream's own tag for the version this tree already resolves. Only the 0.13 line is vendored: this repository's own crates ask for 0.12 and cargo keeps resolving that from the registry, because one [patch] entry supplies one version.",
+      "exclude": [
+        ".git",
+        ".github",
+        "examples",
+        "tests"
+      ],
+      "exclude_reason": {
+        "examples": "318 KB of example binaries that pull tokio's full feature set and a dozen crates this tree does not otherwise have.",
+        "tests": "264 KB of integration tests that stand up real servers on real ports. Not run here, and a fixture that binds a port is the wrong thing to have in a vendored tree.",
+        ".github": "Upstream's own CI, which runs against upstream's repository and cannot run here."
+      },
+      "crates": {
+        "reqwest": "."
+      }
+    },
+    {
+      "name": "hyper-util",
+      "repository": "https://github.com/hyperium/hyper-util",
+      "directory": "vendor/hyper-util",
+      "ref": "8ae9e8b1e338a5b7d35155a0dc3708cfd94bcae2",
+      "base": "8ae9e8b1e338a5b7d35155a0dc3708cfd94bcae2",
+      "vendored_at": "2026-08-29T00:00:00Z",
+      "ref_reason": "Pinned by commit rather than by a release, because the one thing this tree needs from it is not in one yet: `Builder::http2_header_table_size`, which upstream took in #274 after 0.1.20 shipped. Without it a client cannot announce SETTINGS_HEADER_TABLE_SIZE, which a current Chrome does and which is one of the four fields of an Akamai HTTP/2 fingerprint. The Cargo.toml at this commit still reads 0.1.20, so the [patch] applies to every requirement the graph has. NOT apify's fork of the same repository: its own change is a status code on a proxy tunnel error, which nothing here reads.",
+      "exclude": [
+        ".git",
+        ".github",
+        "examples",
+        "tests"
+      ],
+      "exclude_reason": {
+        "examples": "Example binaries that stand up servers and clients on real ports.",
+        "tests": "Integration tests that bind ports. Not run here.",
+        ".github": "Upstream's own CI, which runs against upstream's repository and cannot run here."
+      },
+      "crates": {
+        "hyper-util": "."
+      }
     }
   ]
 }

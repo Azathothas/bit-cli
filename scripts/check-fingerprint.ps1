@@ -11,23 +11,26 @@
 # the wire, and compares it against a golden committed under `fingerprints/`.
 # Nothing here touches the network.
 #
-# Two captures, because they need opposite things:
+# Three captures, because they need different things:
 #
 #   raw         no handshake is completed, so nothing has to be disabled to
 #               reach it. This is where JA4 is read, and it is the JA4 that
 #               ships: a client told to skip certificate verification can fall
 #               back to a different `signature_algorithms` list, and the JA4
 #               read through that handshake is not the one an origin sees.
-#   plain       cleartext HTTP/1.1, which is where the header order is read.
+#   plain       cleartext HTTP/1.1, which is where the header order of a
+#               client that will not complete a handshake is still readable.
+#   tls         a real handshake, ALPN picking `h2`. This is where the Akamai
+#               HTTP/2 fingerprint and the HPACK-decoded header order are
+#               read, and neither exists before it.
 #
-# **The Akamai HTTP/2 fingerprint of this client is not captured here, and the
-# reason is a good one.** It only exists after a TLS handshake completes and
-# ALPN picks `h2`, and the probe's certificate is self signed with no CA behind
-# it, so `bit-cli` refuses it. Reaching it would need `bit-cli` to stop
-# verifying certificates, and a flag that does that is not worth adding to a
-# shipping binary for a test. The probe reads the Akamai fingerprint of a
-# client that will accept the certificate, which is how it was used to measure
-# the impersonating candidate in T-244.
+# **Nothing here weakens certificate verification, and that is the point.** The
+# probe mints its own certificate authority per run, signs the leaf with it and
+# writes the authority to a file; the run under test is given that file through
+# `BIT_CLI_EXTRA_CA_FILE`, which **adds** a root to the usual ones. The chain
+# is verified normally. A client told to skip verification is a different
+# client on the wire, so a fingerprint read through one would be a fingerprint
+# of something that never ships.
 #
 # **JA4 is asserted and JA3 is not.** JA4 sorts ciphers and extensions before
 # hashing, so it survives a client that shuffles its extension order; JA3
@@ -92,6 +95,14 @@ function Get-Capture([string]$profileName, [string]$Mode) {
     $probeArgs = @('--once', '--json', '--port', '0')
     if ($Mode -eq 'raw') { $probeArgs += '--raw' }
     if ($Mode -eq 'plain') { $probeArgs += '--plain' }
+    # The `tls` capture is the only one that completes a handshake, so it is
+    # the only one that needs a certificate the run under test will accept.
+    $caFile = $null
+    if ($Mode -eq 'tls') {
+        $caFile = Join-Path $scratch "$tag-ca.pem"
+        if (Test-Path $caFile) { Remove-Item -Force $caFile }
+        $probeArgs += @('--ca-out', $caFile)
+    }
 
     $p = Start-Process -FilePath $probe -ArgumentList $probeArgs -PassThru -NoNewWindow `
         -RedirectStandardOutput $out -RedirectStandardError $err
@@ -116,8 +127,18 @@ function Get-Capture([string]$profileName, [string]$Mode) {
     # either of those matters, which is the whole point.
     $runOut = Join-Path $scratch "$tag-run.txt"
     $argv = @('info', "$url/one.torrent", '--page-client', $profileName, '--timeout', '10s')
-    Start-Process -FilePath $bit -ArgumentList $argv -NoNewWindow -Wait `
-        -RedirectStandardOutput $runOut -RedirectStandardError "$runOut.err" | Out-Null
+    $hadCa = $env:BIT_CLI_EXTRA_CA_FILE
+    if ($caFile) { $env:BIT_CLI_EXTRA_CA_FILE = $caFile }
+    try {
+        Start-Process -FilePath $bit -ArgumentList $argv -NoNewWindow -Wait `
+            -RedirectStandardOutput $runOut -RedirectStandardError "$runOut.err" | Out-Null
+    } finally {
+        if ($null -eq $hadCa) {
+            Remove-Item Env:BIT_CLI_EXTRA_CA_FILE -ErrorAction SilentlyContinue
+        } else {
+            $env:BIT_CLI_EXTRA_CA_FILE = $hadCa
+        }
+    }
 
     $p.WaitForExit(10000) | Out-Null
     if (-not $p.HasExited) { $p | Stop-Process -Force -ErrorAction SilentlyContinue }
@@ -137,20 +158,26 @@ $results = @()
 foreach ($name in $profiles) {
     $raw = Get-Capture $name 'raw'
     $plain = Get-Capture $name 'plain'
+    $tls = Get-Capture $name 'tls'
     if ($raw.error) { Exit-With 2 "$name raw capture: $($raw.error)" }
     if ($plain.error) { Exit-With 2 "$name plain capture: $($plain.error)" }
+    if ($tls.error) { Exit-With 2 "$name tls capture: $($tls.error)" }
 
     $observed = [ordered]@{
-        profile = $name
+        profile    = $name
         # From the raw capture, which is the one that ships.
-        ja4     = $raw.capture.ja4
-        ja4_r   = $raw.capture.ja4_r
+        ja4        = $raw.capture.ja4
+        ja4_r      = $raw.capture.ja4_r
         # Recorded for a reader and never compared: JA3 preserves wire order.
-        ja3     = $raw.capture.ja3
+        ja3        = $raw.capture.ja3
         # From the cleartext capture. `Host` is dropped: it carries the port
         # the probe happened to bind, so keeping it would make the golden
         # depend on a free port.
-        headers = @($plain.capture.headers | Where-Object { $_ -ne 'host' })
+        headers    = @($plain.capture.headers | Where-Object { $_ -ne 'host' })
+        # From the handshake capture, and neither exists without one. The
+        # Akamai string is SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_HEADER_ORDER.
+        akamai     = $tls.capture.akamai
+        h2_headers = @($tls.capture.headers)
     }
 
     $goldenPath = Join-Path $goldenRoot "bit-cli-$name.json"
@@ -166,9 +193,9 @@ foreach ($name in $profiles) {
 
     if ($Update) {
         $doc = [ordered]@{
-            schema      = "fingerprint/1"
+            schema      = "fingerprint/2"
             captured    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
-            note        = "Captured off the wire by loopback-tlsprobe. ja4 and ja4_r come from a --raw capture, headers from a --plain one. ja3 is recorded and never asserted, because it preserves wire order and flakes."
+            note        = "Captured off the wire by loopback-tlsprobe. ja4 and ja4_r come from a --raw capture, headers from a --plain one, akamai and h2_headers from a real handshake the probe's own CA makes verifiable. ja3 is recorded and never asserted, because it preserves wire order and flakes."
             bit_cli     = (& $bit --version 2>$null | Select-Object -First 1)
             fingerprint = $observed
         }
@@ -189,6 +216,13 @@ foreach ($name in $profiles) {
         $wantHeaders = @($want.headers)
         if (($wantHeaders -join '|') -cne ($observed.headers -join '|')) {
             $problems += "header order want [$($wantHeaders -join ', ')] got [$($observed.headers -join ', ')]"
+        }
+        if ($want.akamai -cne $observed.akamai) {
+            $problems += "akamai want '$($want.akamai)' got '$($observed.akamai)'"
+        }
+        $wantH2 = @($want.h2_headers)
+        if (($wantH2 -join '|') -cne ($observed.h2_headers -join '|')) {
+            $problems += "http/2 header order want [$($wantH2 -join ', ')] got [$($observed.h2_headers -join ', ')]"
         }
         $row.problems = $problems
         $row.pass = $problems.Count -eq 0

@@ -76,22 +76,35 @@ it, and it says so in its own first paragraph.
 
 ## State
 
-- **Last session:** 2026-08-29T04:24:07Z, unattended, and a **one-off**: the
-  kickoff carried its own work order rather than taking this file's, per
-  [RULES.md](RULES.md) section 3. The whole session was
-  [T-244](cli-surface.md), the only `L` open in `cli-surface.md`. The ordinary
-  work order resumes under "Start here next session" below.
+- **Last session:** 2026-08-29T07:05:02Z, unattended, and a **one-off** for the
+  second time running: the kickoff carried its own work order rather than
+  taking this file's, per [RULES.md](RULES.md) section 3. The whole session is
+  [T-244](cli-surface.md), which it closes. The ordinary work order resumes
+  under "Start here next session" below.
   The duration is not restated here: `scripts/session-report.ps1` derives it
   from the instant above, and a duration written down twice is a number two
   documents disagree about.
 
   **The plan was written before starting**, per [RULES.md](RULES.md) section 1
-  step 4, and it was the kickoff's eight tasks in its order. **It held for the
-  first four and then the operator changed it mid-session**: the premise
-  measurement came back saying no page needed impersonation, and the ruling was
-  that the sample is too narrow to act on and the browser-shaped fetch is to be
-  built rather than carried as a contingency. Everything after task 4 was
-  re-ordered around that.
+  step 4, and it is the kickoff's eight tasks in its order, with the vendoring
+  first because everything else in the session sits on it:
+
+  1. Vendor the upstream trees the impersonating client needs, under `vendor/`,
+     with the `h2` pseudo-header order carried as a patch rather than an
+     environment variable.
+  2. Put both clients behind one fetcher and ship the impersonating one by
+     default, with a web seed still identifying itself honestly.
+  3. Capture and assert the Akamai HTTP/2 fingerprint, with no flag that
+     weakens certificate verification.
+  4. Make staleness detectable: version tracking, ground truth capture, a
+     recommendation carrying the replacement values, and a scheduled CI job.
+  5. `--render` behind a Cargo feature, driving the rendered tier of the
+     proving ground.
+  6. Close the two extraction gaps the entry names, `<link href>` and an
+     indexer whose links do not end `.torrent`.
+  7. Harder proving ground levels, L6 and L7.
+  8. The tooling backlog, if the above lands.
+
 - **Tests:** 1,425 passing, 0 failing, up from 1,370. Plus **153** in the
   vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
   do not run. `vendor/` did not move this session.
@@ -136,9 +149,10 @@ gh run list --limit 1
   this operator's own prior work under `.tmp/`, and by the kickoff's own
   instruction it does not enter `reference/`, `RESEARCH.md` or
   `reference-map.md`.
-- **Vendored:** rqbit `v9.0.1`, both siblings pinned by commit, **32 patches**
-  across twenty-two sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
-  Unchanged: nothing under `vendor/` moved.
+- **Vendored:** **eight upstreams** now, five of them added this session:
+  `rustls`, `h2`, `impit`, `reqwest` and `hyper-util` beside `rqbit` and its
+  two siblings. **48 patches** across thirty-four sections in
+  [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
 - **Version:** `bit-cli` 0.2.0, unchanged.
 
 ## What the last session did

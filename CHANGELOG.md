@@ -8,6 +8,53 @@ driven from the git tag.
 
 Since `1b0117e3fe77`.
 
+### The client that fetches a source document is a browser, off the wire
+
+`bit-cli` fetches a `.torrent`, a Metalink or a web page presenting as Chrome
+151, and that now goes all the way down. Measured against a loopback
+fingerprint oracle, before and after:
+
+| | JA4 | Akamai HTTP/2 |
+| --- | --- | --- |
+| before | `t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3` | not reachable |
+| after | `t13i1515h2_8daaf6152771_806a8c22fdea` | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` |
+| Chrome 151 | `t13i1515h2_8daaf6152771_806a8c22fdea` | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` |
+
+Ten ciphers and ten extensions became fifteen and fifteen, with GREASE, ECH,
+ALPS, certificate compression and the ML-DSA signature algorithms. The header
+set is sent in Chrome's order, `user-agent` and `accept-encoding` in Chrome's
+positions rather than appended last. `--page-client plain` still sends
+`bit-cli/<version>` and nothing else.
+
+**A web seed is unaffected and still identifies itself honestly.** So is a
+tracker announce, a peer handshake and a tracker or web seed list fetched by
+URL. The impersonation is confined to the one document a caller named.
+
+It costs five more vendored upstreams, `rustls`, `h2`, `impit`, `reqwest` and
+`hyper-util`, 26 more packages in the graph and 1.25 MiB of binary.
+`docs/vendoring.md` says why each is there and `patches/UPSTREAM.md` says what
+changed in it.
+
+### `BIT_CLI_EXTRA_CA_FILE` adds a certificate authority
+
+A PEM bundle named by that variable is trusted **in addition to** the platform
+and bundled roots when a source document is fetched. Nothing is replaced and
+verification is not weakened: a certificate still has to chain to some root. It
+is used by `scripts/check-fingerprint.ps1`, which has to complete a real
+handshake against a certificate it minted itself in order to read this client's
+HTTP/2 fingerprint at all.
+
+It logs a warning naming the file and the number of roots whenever it is read.
+
+### `bit-cli` does not speak HTTP/3, and did not before either
+
+The impersonating client's upstream carries an HTTP/3 path behind an unstable
+`reqwest` feature. It is removed rather than carried: enabling it needs
+`--cfg reqwest_unstable` in six places across `.cargo/config.toml` and the CI
+workflow, where a workflow's `RUSTFLAGS` replaces the config rather than adding
+to it, and nothing in this tree can read an HTTP/3 fingerprint to check that it
+is right.
+
 ### A UDP announce carries the same three events an HTTP one does
 
 `bit-cli` sends `started` once, `completed` once when a download finishes, and
@@ -257,6 +304,11 @@ The binary is built from these trees, not from crates.io. See
 - `rqbit` at `v9.0.1`, commit `a499d2f243d1`, from https://github.com/ikatson/rqbit
 - `librqbit-utp` at `c26f57b2debbe35ed0ace1ad419de529f7a5bf95`, commit `c26f57b2debb`, from https://github.com/ikatson/librqbit-utp
 - `librqbit-dualstack-sockets` at `e2f221ca745c25c7790abb593ed260ce5a499fa1`, commit `e2f221ca745c`, from https://github.com/ikatson/librqbit-dualstack-sockets
+- `rustls` at `23b2c17427c095b768e22ccf0dadb97266860cf1`, commit `23b2c17427c0`, from https://github.com/apify/rustls
+- `h2` at `v0.4.19`, commit `d57d1b852fec`, from https://github.com/hyperium/h2
+- `impit` at `4fd6c31`, commit `4fd6c3167c55`, from https://github.com/apify/impit
+- `reqwest` at `v0.13.4`, commit `11489b34eda6`, from https://github.com/seanmonstar/reqwest
+- `hyper-util` at `8ae9e8b1e338a5b7d35155a0dc3708cfd94bcae2`, commit `8ae9e8b1e338`, from https://github.com/hyperium/hyper-util
 
 ## 0.1.0, unreleased
 
