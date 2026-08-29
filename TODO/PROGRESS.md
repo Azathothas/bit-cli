@@ -345,6 +345,10 @@ Re-run here on the whole tree rather than on a probe:
   passes, no VCRUNTIME or UCRT import.
 - **Both musl targets build.** CI's `Build` matrix at run **33245679142**,
   which is the one question the entry left to CI.
+- **The profile holds on a second platform.** The `Staleness` workflow's first
+  run, **33251738663**, drove `ubuntu-latest`'s Chrome 151.0.7922.173 and read
+  the **same JA4 and the same Akamai fingerprint** as this machine's Windows
+  Chrome 151.0.7922.76. Two platforms, two patch releases, one fingerprint.
 - **The Akamai fingerprint is not profile-invariant**, which the survey said it
   was. `impit`'s own database disagrees with itself: `chrome_151`'s connection
   window is 15,728,640 and `chrome_125`'s is 15,663,105, in
@@ -499,10 +503,23 @@ should be is now a decision on a different number.
 
 **The browser profile is two majors behind stable**, and the tool that says so
 is new. `scripts/check-browser-version.ps1` reports Chrome 153 against a
-profile claiming 151. It is not bumped because the TLS half is `impit`'s
-fingerprint database, whose newest Chrome is 151, and a User-Agent that
-disagrees with the `ClientHello` under it is a worse tell than being one
-version behind. What unblocks it is `impit` shipping a newer profile, which
+profile claiming 151, and now also reports that the vendored fingerprint
+database stops at 151 and caps its own recommendation there.
+
+**It is not bumped, and the reason is a measurement rather than caution.**
+Across the three newest entries in that database the cipher list, key exchange
+groups, extension list and extension order are **identical** from 136 through
+151, so a hand-written 153 would probably get the `ClientHello` right. What it
+would certainly get wrong is the `sec-ch-ua` brand list: those three entries
+spell the fake brand `"Not.A/Brand"`, `"Not_A Brand"` and `"Not=A?Brand"` with
+the order flipped, because Chrome varies it per major on purpose. A client
+announcing `Chrome/153` with 151's signature algorithms and an invented brand
+string is a combination that exists nowhere, which is a **stronger** signal
+than being one version behind.
+
+**CI cannot supply the capture either.** The `ubuntu-latest` image carries
+Chrome 151.0.7922.173, the same major as this machine. What unblocks a bump is
+a machine running 153, or `impit` shipping the entry, which
 `scripts/upstream-scan.ps1` will notice.
 
 **Twelve repositories in `TheDancingDeveloper-org`** redistribute Apache-2.0

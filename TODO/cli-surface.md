@@ -4676,6 +4676,28 @@ Measured:    **What the client puts on the wire now, against a real Chrome
              and `SETTINGS_HEADER_TABLE_SIZE` needed a `hyper-util` method
              that is not in a release. `patches/UPSTREAM.md` has the table.
 
+Measured:    **The same profile, verified against a second Chrome on a second
+             platform.** The `Staleness` workflow ran on 2026-08-29, run
+             **33251738663**, on `ubuntu-latest`:
+
+             ```
+             browser  /usr/bin/google-chrome
+             version  Google Chrome 151.0.7922.173
+               JA4     browser t13i1515h2_8daaf6152771_806a8c22fdea
+               akamai  browser 1:65536;2:0;4:6291456;6:262144|15663105|1:1:0:255|m,a,s,p
+             ```
+
+             Linux, a different patch release, and the **same JA4 and the same
+             Akamai fingerprint** as the Windows Chrome 151 this profile was
+             checked against and as `bit-cli` itself. A fingerprint that held
+             on one machine could have been a property of that machine; two
+             platforms and two patch releases say it is a property of the
+             browser.
+
+             It also answers a question that was open: CI cannot supply a
+             newer capture, because the runner image carries the same major
+             this machine does.
+
 Measured:    **A difference JA4 cannot see, found by the tool added to look
              for it.** `JA4_ro` keeps the wire order where JA4 and JA4_r sort,
              and the two clients diverge there:
