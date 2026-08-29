@@ -522,12 +522,13 @@ The ordinary work order is below it and resumes the session after. This is not
 a one-off in the [RULES.md](RULES.md) section 3 sense: the work order is here,
 in this file, where it belongs, and the kickoff prompt stays generic.
 
-**What "finish it for real" means**, and it is four entries, not a feeling:
-[T-262](cli-surface.md), [T-263](cli-surface.md) and [T-264](cli-surface.md)
-all close, and T-264's move takes the profile out of the vendored tree. Every
-one has an acceptance command already written and every one has its measurement
-already taken. Nothing in the four needs a decision: both that were open were
-ruled on and are in [RULES.md](RULES.md) section 6b.
+**What "finish it for real" means**, and it is three entries rather than a
+feeling: [T-262](cli-surface.md), [T-263](cli-surface.md) and
+[T-264](cli-surface.md) all close, and T-264's move takes the profile out of
+the vendored tree. Every one has an acceptance command already written and
+every one has its measurement already taken. **Nothing in the three needs a
+decision**: both that were open were ruled on and are in
+[RULES.md](RULES.md) section 6b.
 
 ```bash
 pwsh -NoProfile -File scripts/check-todo.ps1
