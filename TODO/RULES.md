@@ -805,6 +805,51 @@ session that made it. The measured outcome of the alternative is that the work
 is closed as machine-generated noise, so the downside is unbounded and the
 upside is zero.
 
+## 6b. A fingerprint is measured, never derived and never inherited
+
+The operator's ruling of 2026-08-29, given after [T-244](cli-surface.md) closed
+with the browser profile two majors behind stable. It governs everything this
+repository claims to be on the wire.
+
+- **The measurement is the authority, not upstream.** `impit`'s fingerprint
+  database is vendored and is a starting point, not a source of truth. It has
+  already been wrong here: it carries no `SETTINGS_HEADER_TABLE_SIZE` at all,
+  its `initial_connection_window_size` is the window rather than the increment,
+  and a survey claimed its Akamai fingerprint was profile-invariant when its own
+  entries disagree with each other. `scripts/upstream-scan.ps1` says when a
+  release appears. What says whether it is **right** is a capture.
+- **A derivable value is still not an acceptable value.** Chrome computes its
+  `sec-ch-ua` brand list from the major version by an algorithm in Chromium's
+  own source, so it could be ported. It is refused anyway: this repository
+  cannot vendor Chromium, would be that port's only consumer, and a
+  reimplementation that drifts is a profile that is wrong in a way nothing here
+  would notice. The same argument retires any other "we can work it out"
+  shortcut before it is proposed.
+- **So the profile moves only behind a capture.** A bump to
+  `BROWSER_MAJOR`, to `BROWSER_HEADERS`, or to the vendored fingerprint database
+  is written from what a browser of that version actually emitted, read off the
+  wire by `crates/bit-cli-core/examples/loopback-tlsprobe/`.
+  [T-264](cli-surface.md) is the entry that makes that routine.
+- **A version number is not a fingerprint.** `scripts/check-browser-version.ps1`
+  reports drift and recommends the two strings a version number does determine.
+  It refuses to recommend past what the vendored database can produce a
+  handshake for, because a User-Agent over the wrong `ClientHello` is a stronger
+  tell than being one version behind.
+
+**Why the last point is the one that bites.** An *almost* right fingerprint is
+more distinguishing than an honestly old one. A client announcing `Chrome/153`
+with 151's signature algorithms and an invented brand string is a combination
+that exists nowhere, and it would pass `scripts/check-fingerprint.ps1`, because
+that asserts against a golden this repository wrote. Only a capture from a real
+browser catches it, which is what `scripts/check-browser-fingerprint.ps1` is
+for.
+
+**The second measurement is a container, not a wait for CI.**
+[`docs/containers.md`](../docs/containers.md) is the procedure: a throwaway WSL2
+distro carries a browser this host does not have, answers in about thirty
+seconds where CI takes five minutes, and is removed in the same run that made
+it. It is a second instrument beside CI and replaces neither it nor the golden.
+
 ## 7. The corpus
 
 `reference/` holds **thirty-nine** upstream BitTorrent implementations indexed

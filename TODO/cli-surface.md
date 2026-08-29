@@ -6240,3 +6240,118 @@ Notes:       `JA4_ro` is what made this visible and it was added in the same
              session, for exactly this: JA4 and JA4_r sort, so they say two
              clients are the same when their wire order says otherwise. It is
              recorded and never asserted, for the same reason JA3 is not.
+
+### T-264 The browser profile can only be refreshed on a machine that runs that browser
+
+Source:      the operator's ruling of 2026-08-29, after T-244 closed two majors
+             behind stable
+Category:    cli
+Priority:    P2
+Effort:      M
+Status:      open
+
+Problem:     `crates/bit-cli-core/src/page.rs` pins the profile to Chrome 151
+             and the TLS half of it comes from
+             `vendor/impit/impit/src/fingerprint/database/chrome.rs`, whose
+             newest entry is also 151. Chrome stable is **153**.
+             `scripts/check-browser-version.ps1` reports the gap and refuses to
+             recommend past the database, which is correct and is as far as it
+             can go: it cannot produce a `ClientHello` from a version number.
+
+             **Refreshing the profile needs a machine running the browser**,
+             and there is no such machine. This host has Chrome 151.0.7922.76.
+             The `ubuntu-latest` runner has 151.0.7922.173, measured in run
+             33251738663, so CI cannot supply it either.
+Relevance:   The operator's ruling, and it settles two things.
+
+             **Upstream is not the authority; the measurement is.** `impit`'s
+             database has already been found wrong here: it carries no
+             `SETTINGS_HEADER_TABLE_SIZE` at all, its
+             `initial_connection_window_size` is the window rather than the
+             increment, and its Akamai fingerprint was claimed by the survey to
+             be profile-invariant when its own entries disagree with each
+             other. `scripts/upstream-scan.ps1` says when a release appears;
+             what says whether it is right is a capture.
+
+             **A derivable value is still not an acceptable value.** Chrome
+             computes its `sec-ch-ua` brand list from the major version by an
+             algorithm in Chromium's own source, so it is derivable in
+             principle. It is refused on principle anyway: `bit-cli` cannot
+             vendor Chromium, would be that port's only consumer, and a
+             reimplementation that drifts is a profile that is wrong in a way
+             nothing here would notice. Everything the profile claims is
+             measured off a browser or it does not ship.
+Approach:    **A browser installed in a throwaway container, driven at
+             `loopback-tlsprobe`, and destroyed.** Nothing is installed on the
+             host, and the container is a second measurement beside CI rather
+             than a replacement for it.
+
+             Four pieces, and three of the four are already measured on this
+             machine.
+
+             1. **The container.** `wsl-ephemeral.ps1` from
+                `Azathothas/ToolKit`, pinned by commit, creates a WSL2 distro
+                from an OCI image, runs a command and removes it.
+                [`docs/containers.md`](../docs/containers.md) is the procedure.
+                **Measured 2026-08-29**: `debian:bookworm-slim` plus Google's
+                own apt repository installs **Chrome 152.0.7977.64**, one major
+                newer than this host.
+
+                It is one major behind what `versionhistory` reports for
+                Windows stable, which is a finding in itself: Google's Linux
+                apt channel and the Windows channel are not the same version on
+                the same day, so the check's own idea of "stable" and what a
+                container can install are two different numbers and the report
+                has to carry both.
+
+             2. **A reachable probe, and this is the piece that needs code.**
+                WSL is in NAT mode on this host, so a distro cannot reach the
+                Windows loopback and `loopback-tlsprobe` binds `127.0.0.1`
+                only. **Measured**: the distro reaches the host at the WSL
+                adapter address, `172.23.96.1`, and a listener bound there
+                accepts the connection.
+
+                So the probe takes `--bind <ADDR>`, defaulting to `127.0.0.1`
+                and changed by nothing but this. The capture binds it to the
+                WSL adapter address, which is a Hyper-V internal network and is
+                not reachable from the LAN. `0.0.0.0` is not the answer and
+                should not be offered.
+
+             3. **The capture.** `scripts/check-browser-fingerprint.ps1`
+                already drives a browser at the probe and already prints the
+                replacement values. What it needs is a `-Container` switch that
+                puts the browser in a distro rather than on the host, and a
+                `--path`-equivalent inside it.
+
+             4. **The bump.** The capture's output is written into
+                `page.rs` for the header half and into the vendored
+                `impit` database for the TLS and HTTP/2 halves, as a new
+                `chrome_<major>` module, with `patches/UPSTREAM.md` recording
+                that the entry is **ours and measured** rather than upstream's.
+                `scripts/check-fingerprint.ps1 -Update` then rewrites the
+                goldens and `check-browser-fingerprint.ps1` verifies against
+                the browser again.
+Acceptance:  `pwsh scripts/check-browser-fingerprint.ps1 -Container` on a
+             machine with podman and WSL2 reports a browser newer than
+             `BROWSER_MAJOR`, prints the replacement, and leaves **no**
+             registered distro and no orphaned rootfs tarball behind:
+             `wsl-ephemeral.ps1 -Action List` says `(none)` afterwards.
+
+             With no container engine it exits **2** and says which piece is
+             missing, the same way the host path exits 2 with no browser. A
+             machine with neither is not a failing build.
+
+             After the bump, `pwsh scripts/check-browser-version.ps1` reports
+             the profile and the database at the same major, and
+             `pwsh scripts/check-browser-fingerprint.ps1 -Strict` passes
+             against a browser of that version.
+Notes:       **The distro is removed in the same run that made it**, with
+             `-Ephemeral` or an explicit `Remove`, and the acceptance checks
+             that rather than trusting it. A session that leaves one behind has
+             left a VHDX of a few hundred MiB on somebody's disk.
+
+             [T-262](#t-262-the-http-2-fingerprint-matches-a-real-chrome-in-three-fields-of-four)
+             and [T-263](#t-263-the-extension-list-is-chromes-set-in-a-fixed-order-and-chrome-shuffles-it)
+             are the two differences a capture of Chrome 151 already found.
+             Both are edits to the vendored `rustls` and `h2` rather than to
+             the fingerprint database, and neither is blocked by this entry.

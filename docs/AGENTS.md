@@ -70,6 +70,7 @@ session reaches for most:
 | what is the flag for X | `man/bit-cli.json`. Never grep the source, never page `--help`, never guess |
 | what has a run done, measured | `pwsh -NoProfile -File scripts/session-report.ps1 -Since <ISO>` |
 | is the browser this tree impersonates still current | `pwsh -NoProfile -File scripts/check-browser-version.ps1`, and `scripts/check-browser-fingerprint.ps1` against a real one. Both emit the replacement values |
+| I need a machine this one is not: another libc, a newer browser, a filesystem that is not here | a throwaway WSL2 distro. [`containers.md`](containers.md) is the procedure, and decommissioning is part of it |
 | commit and push | `pwsh -NoProfile -File scripts/git-sync.ps1`. Nothing else |
 
 **Reach for the purpose-built tool before the general one.** A general tool
@@ -180,3 +181,7 @@ it, and say so in `PROGRESS.md` under open questions for the operator.
   mine, survey or investigate somebody else's repository.
 - [`task-authoring.md`](task-authoring.md), when the work is to turn a rough
   idea into a filed entry.
+- [`containers.md`](containers.md), when a question needs a machine this one is
+  not. **Everything it creates is removed in the same run**, and the machine is
+  shared: `podman system df` before finishing is the one number that says
+  whether something stopped cleaning up after itself.

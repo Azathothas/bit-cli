@@ -137,8 +137,8 @@ gh run list --limit 1
 
 - **Soak:** nothing ran this session. The entry it worked on is not about a
   long run.
-- **Entries:** 212 items. 32 open, 3 partial, 0 blocked, 166 done, 11 deferred
-  to Phase C. 166 of 201 workable done, 35 left.
+- **Entries:** 213 items. 33 open, 3 partial, 0 blocked, 166 done, 11 deferred
+  to Phase C. 166 of 202 workable done, 36 left.
 - **Tree:** 108 Rust files, 65,082 lines of code, 17,216 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
@@ -408,6 +408,79 @@ entry recorded.
   `bit-cli` never calls it and there is no flag that would.
   `BIT_CLI_EXTRA_CA_FILE` **adds** a root and is the deliberate alternative.
 
+## A ruling arrived after the entry closed, and it is section 6b now
+
+**A fingerprint is measured, never derived and never inherited.** Given by the
+operator on 2026-08-29 once T-244 closed with the profile two majors behind
+stable. [RULES.md](RULES.md) section 6b carries it in full and
+[T-264](cli-surface.md) is the entry that makes it routine.
+
+Three parts, and each one closes a shortcut before somebody reaches for it.
+`impit`'s fingerprint database is a starting point and not an authority, and it
+has already been wrong here. A value Chromium computes from a version number is
+still not one this repository may compute, because it cannot vendor Chromium
+and would be the only consumer of a port that drifts. And the profile therefore
+moves only behind a capture from a browser of that version.
+
+**The second instrument is a container, and it was used before it was written
+down.** Measured on this machine on 2026-08-29:
+
+| | |
+| --- | --- |
+| `debian:bookworm-slim` plus Google's own apt repository | **Chrome 152.0.7977.64** |
+| this host | Chrome 151.0.7922.76 |
+| `ubuntu-latest`, run 33251738663 | Chrome 151.0.7922.173 |
+| `versionhistory`, Windows stable | 153.0.8010.12 |
+
+So a container already reaches a newer browser than either machine that was
+available before, and Google's Linux apt channel is itself a major behind the
+Windows channel on the same day, which is a number the tooling has to carry
+rather than collapse.
+
+**One piece needs code and the measurement says which.** WSL is in NAT mode on
+this host, so a distro cannot reach the Windows loopback and
+`loopback-tlsprobe` binds `127.0.0.1` only. The distro **does** reach the host
+at the WSL adapter address, `172.23.96.1`, and a listener bound there accepted
+the connection. So the probe takes a `--bind` that defaults to loopback, and
+the capture binds it to that address, which is a Hyper-V internal network and
+is not the LAN. That is T-264's second piece.
+
+[`docs/containers.md`](../docs/containers.md) is the procedure, including the
+traps: pin a commit rather than a branch, pass a command as base64 because
+PowerShell parses text before the distro sees it, `/bin/sh` is dash and has no
+`/dev/tcp`, and a rootfs costs several times its own size as a virtual disk.
+
+**Everything this session created in a container was removed in the same
+session.** One distro, `eph-bitcli-chrome`, and
+`wsl-ephemeral.ps1 -Action List` reports `(none)` afterwards with no orphaned
+rootfs tarball.
+
+## The engine was not left as it was found, and not by this session
+
+Asked to look, and reported rather than acted on, because deleting 31 GB of
+somebody else's images is not a thing to do without being asked.
+
+```bash
+podman system df
+```
+
+| | total | active | size | reclaimable |
+| --- | --- | --- | --- | --- |
+| images | 554 | 1 | 31.35 GB | **31.35 GB, 100 percent** |
+| containers | 1 | 0 | 5.08 GB | 5.08 GB |
+| local volumes | 5 | 0 | 18.78 MB | 18.78 MB |
+
+Nothing is in use. There are **21 dangling images**, one exited container
+called `pmarch` from about nineteen hours before this session, and five
+orphaned volumes: `xwork`, `fwd`, `dlopen-exp2` and two hash-named ones, none
+attached to any container. The named images that survive, `localhost/archlinux`
+in five architectures and `ghcr.io/pkgforge-dev/archlinux:loong64`, look
+deliberate and were left alone.
+
+`podman system prune -a --volumes` would reclaim all of it. It is the
+operator's to run: some of those images take a long time to rebuild and no
+session should decide that for somebody else.
+
 ## Start here next session
 
 **The shape of the work order is the operator's and it has not changed.** Not
@@ -453,32 +526,40 @@ gh run list --limit 1
    table in the file `--web-seed-config` reads, then the `[[peer]]` table after
    it. `scripts/check-announce.ps1` is where the case goes.
 
-6. **[T-262](cli-surface.md) and [T-263](cli-surface.md), both P3**, both filed
+6. **[T-264](cli-surface.md), P2, `M`**, and it is the one the operator's
+   ruling of 2026-08-29 created: a browser installed in a throwaway container,
+   driven at `loopback-tlsprobe`, and the vendored fingerprint database bumped
+   from what it emitted. Three of its four pieces are already measured and the
+   entry carries the numbers; the one that needs code is `--bind` on the probe.
+   [`docs/containers.md`](../docs/containers.md) is the procedure and
+   [RULES.md](RULES.md) section 6b is the rule it serves.
+
+7. **[T-262](cli-surface.md) and [T-263](cli-surface.md), both P3**, both filed
    this session out of what the fingerprint work measured, and both small. The
    first is a PRIORITY payload in `h2`'s frame encoder; the second is GREASE
    and a shuffled extension order in the vendored `rustls`. Neither moves JA4,
    which is what makes them cheap to verify: the goldens do not change.
 
-7. **[T-260](cli-surface.md), P2, `M`, and [T-261](trackers.md), P2, `M`.**
+8. **[T-260](cli-surface.md), P2, `M`, and [T-261](trackers.md), P2, `M`.**
    T-260 publishes what a release already builds plus the data files a program
    wants by URL, and it has more to publish now than when it was filed:
    `fingerprints/*.json`, and the two staleness reports, all three carrying a
    `schema` field for exactly this. T-261 is the tracker list that is the
    second consumer of that format. Neither blocks the other.
 
-8. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
+9. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
    so the two candidates left are on the read side and are named with their
    lines. Build the fixture first: a pair of real `librqbit_utp` streams in one
    process.
 
-9. **The three entries that were ruled on and are still work.**
+10. **The three entries that were ruled on and are still work.**
    [T-227](memory.md) is a throughput curve then a flag.
    [T-242](performance.md) is two sweeps from `scripts/bench-leech.ps1`.
    [T-234](peers.md) and [T-238](peers.md) are the two large ones and both need
    [T-239](peers.md) first.
 
-10. **Then the category pass, and `bep-coverage.md` is still first.**
+11. **Then the category pass, and `bep-coverage.md` is still first.**
    [T-101](bep-coverage.md) is open on a latency measurement loopback cannot
    produce, which [T-239](peers.md) is the prerequisite for.
    [T-102](bep-coverage.md) and [T-168](bep-coverage.md) are the untouched two,
