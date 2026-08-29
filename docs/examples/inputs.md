@@ -252,7 +252,16 @@ error: http://127.0.0.1:8099/two-of-each.html is a web page with 4 torrent links
 The exit code is 4. A page is not guessed at: every match is printed with its
 anchor text so the next command can name one. Under `--json` the same list is
 in the error's `context` as `page_links`, each entry carrying `url`, `text`,
-`kind` and `host`.
+`kind`, `host` and `matched`.
+
+`matched` says which of three rules took the link, because they are not equally
+strong and a caller choosing between candidates is entitled to know:
+
+| `matched` | what it means |
+| --- | --- |
+| `extension` | the path ends `.torrent`, or the URI is a magnet |
+| `type` | the element declares `type="application/x-bittorrent"` |
+| `label` | the link is labelled as a torrent and its URL carries an identifier |
 
 `--page-select TEXT` narrows it. The text is matched case insensitively, as a
 substring, against both the resolved URL and the anchor text:
@@ -275,9 +284,53 @@ error: http://127.0.0.1:8099/L5-hostile.html is a web page and no torrent link w
 ```
 
 A page whose links are built by script has none of them in the HTML the server
-sent. `--render` is the answer to that and it is not implemented yet: the
-message names it because that is where the work is going, and it says plainly
-that a browser has to be installed for it rather than implying one is.
+sent.
+
+### Reading the page after its script has run
+
+```bash
+bit-cli info http://127.0.0.1:8099/L5-hostile.html --render
+```
+
+`--render` drives a Chrome or Edge that is **already installed**, over the
+DevTools protocol, and extracts from the DOM afterwards. It never installs a
+browser and never bundles one. `--browser-path` names one directly and
+`--browser-port` attaches to one already listening for the protocol; with
+neither, it looks on `PATH` and then in the platform's usual places, and says
+which paths it looked at when there is nothing there.
+
+**It needs a build with the `render` feature**, which the released binaries do
+not carry:
+
+```bash
+cargo build --release --features render
+```
+
+Without one the flag is refused with a message naming the feature, rather than
+silently reading the page unrendered.
+
+What it is worth, over the proving ground
+[`../../scripts/make-page-fixture.ps1`](../../scripts/make-page-fixture.ps1)
+builds:
+
+| level | static | rendered |
+| --- | --- | --- |
+| L4, links built in script | 1 | 7 |
+| L5, shadow DOM and an iframe | 0 | 2 |
+| L6, a `data-` attribute a script reads | 3 | 4 |
+| L7, links assembled from split strings | 0 | 2 |
+
+Levels 0 to 3 find exactly the same links in both tiers, and
+[`../../scripts/check-page-extract.ps1`](../../scripts/check-page-extract.ps1)
+fails if they ever do not: `--render` may change where the HTML came from and
+nothing else.
+
+**It loads a page, it does not use one.** A link that appears only after a
+click or a scroll is found by neither tier, and that is deliberate: a tier that
+clicked things would be a tier that submits forms. A challenge page is refused
+in both tiers, never solved. And the browser is closed on every path out,
+including the one where the deadline fires, which the same script checks by
+counting.
 
 ### Which client the fetch presents as
 
@@ -333,12 +386,30 @@ It is an environment variable rather than a flag for the same reason
 about one run. There is no flag anywhere in `bit-cli` that stops verifying
 certificates, and there is not going to be one.
 
-### What is not read
+### What is read, and what is not
 
-- `<link rel="alternate">`, only `<a>` and `<area>`.
-- A download link whose URL does not end `.torrent`. An indexer publishing
-  every torrent behind `index.php?id=...` says nothing in the URL about what it
-  serves, and nothing here fetches a link to find out.
+`<a>`, `<area>` and `<link>` carry hrefs and all three are read. A link is
+taken for a torrent when its path ends `.torrent`, when it declares
+`type="application/x-bittorrent"`, or when it is **labelled** as a torrent and
+its URL carries a non-empty query value.
+
+The label is the anchor text, or the element's `title`, or the `alt` or `title`
+of an image it wraps. That last fallback is not hypothetical: a public index
+publishes every torrent as `index.php?page=downloadcheck&id=<hex>` wrapping an
+icon, with no anchor text at all. The label rule finds 75 links on that page where an extension rule
+finds none, and changes nothing on the other fourteen pages
+[`../../scripts/check-page-fetch.ps1`](../../scripts/check-page-fetch.ps1)
+fetches.
+
+Not read:
+
+- A link whose URL says nothing and whose label says nothing. Deciding would
+  mean fetching each candidate to see what comes back, which turns one page
+  into one request per link, and the one-hop rule is what stops a page becoming
+  a crawl.
+- A label naming a **section** rather than a file. A bare `Torrents` pointing
+  at a listing is a navigation link, and a torrent label over a path with no
+  identifier is not taken either.
 - Anything inside `<script>`, `<style>`, `<template>`, `<noscript>` or an HTML
   comment. A browser with script on does not render those either.
 

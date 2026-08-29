@@ -139,8 +139,8 @@ gh run list --limit 1
 
 - **Soak:** nothing ran this session. The one entry it worked on is not about
   a long run.
-- **Entries:** 210 items. 30 open, 4 partial, 0 blocked, 165 done, 11 deferred
-  to Phase C. 165 of 199 workable done, 34 left.
+- **Entries:** 211 items. 31 open, 4 partial, 0 blocked, 165 done, 11 deferred
+  to Phase C. 165 of 200 workable done, 35 left.
 - **Tree:** 105 Rust files, 63,770 lines of code, 16,667 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus

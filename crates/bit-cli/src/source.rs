@@ -373,6 +373,11 @@ pub struct SourceResolve {
     /// than one. Absent, a page offering more than one is refused rather than
     /// guessed at. See `TODO/cli-surface.md`, T-244.
     pub page_select: Option<String>,
+    /// `--render`. Read the page after its script has run, through an
+    /// installed browser, rather than out of the HTML the server sent.
+    pub render: bool,
+    /// `--browser-path` and `--browser-port`, which is where `--render` looks.
+    pub browser: bit_cli_core::browser::Search,
 }
 
 impl SourceResolve {
@@ -390,6 +395,8 @@ impl SourceResolve {
             enable_lsd: true,
             enable_trackers: true,
             page_select: None,
+            render: false,
+            browser: bit_cli_core::browser::Search::default(),
         }
     }
 
@@ -404,7 +411,41 @@ impl SourceResolve {
             enable_lsd: !swarm.no_lsd,
             enable_trackers: !swarm.no_tracker,
             page_select: page.page_select.clone(),
+            render: page.render,
+            browser: bit_cli_core::browser::Search {
+                explicit: page.browser_path.clone(),
+                attach: match &page.browser_port {
+                    None => None,
+                    Some(text) => Some(parse_browser_port(text)?),
+                },
+                extra: Vec::new(),
+            },
         })
+    }
+}
+
+/// `--browser-port`, as `HOST:PORT` or as a bare `PORT`.
+///
+/// A bare port means loopback, because a DevTools port is a debugging seam
+/// that should not be listening anywhere else, and defaulting it to loopback
+/// is one fewer thing to type for the case that is not a mistake.
+fn parse_browser_port(text: &str) -> Result<(String, u16)> {
+    let bad = || {
+        Error::usage(format!(
+            "--browser-port {text} is not a port or a HOST:PORT"
+        ))
+        .with("value", text.to_string())
+    };
+    match text.rsplit_once(':') {
+        None => Ok(("127.0.0.1".to_string(), text.parse().map_err(|_| bad())?)),
+        Some((host, port)) => {
+            let port: u16 = port.parse().map_err(|_| bad())?;
+            let host = host.trim_matches(['[', ']']);
+            match host.is_empty() {
+                true => Ok(("127.0.0.1".to_string(), port)),
+                false => Ok((host.to_string(), port)),
+            }
+        }
     }
 }
 
@@ -592,12 +633,68 @@ async fn fetch_torrent_or_page(
     if !bit_cli_core::page::looks_like_markup(&body.bytes, body.content_type.as_deref()) {
         return Err(not_a_torrent(url, &body, &parse_error));
     }
-    let html = String::from_utf8_lossy(&body.bytes);
+    // The static tier reads what the server sent. `--render` replaces that one
+    // string with the DOM after script has run, and changes nothing else:
+    // `extract` is the same function over an HTML string either way, which is
+    // what keeps the two tiers from disagreeing about a page for a reason that
+    // is not the page. See `TODO/cli-surface.md`, T-244.
+    let html = match resolve.render {
+        false => String::from_utf8_lossy(&body.bytes).into_owned(),
+        true => render_page(url, resolve, deadline).await?,
+    };
     let links = bit_cli_core::page::extract(&html, url);
     match choose_from_page(url, &links, resolve.page_select.as_deref())? {
         PageChoice::Torrent(chosen) => Ok(fetch_torrent(&chosen, identity, deadline).await?.0),
         PageChoice::Magnet(uri) => resolve_from_swarm(&uri, resolve, deadline).await,
     }
+}
+
+/// Read a page through an installed browser, after its script has run.
+///
+/// Two failures and they are different things, so they say different things: a
+/// binary built without the `render` feature, and a machine with no browser on
+/// it. The second names every path it looked at, because "no browser found"
+/// tells somebody with Chrome installed nothing at all.
+async fn render_page(url: &str, resolve: &SourceResolve, deadline: Duration) -> Result<String> {
+    use bit_cli_core::browser;
+
+    if !bit_cli_core::render::is_built() {
+        return Err(
+            Error::usage(bit_cli_core::render::RenderError::NotBuilt.to_string())
+                .with("url", url.to_string())
+                .with("source_kind", "page"),
+        );
+    }
+
+    let platform = browser::Platform::host();
+    let mut candidates = browser::path_candidates(
+        &std::env::var("PATH").unwrap_or_default(),
+        match cfg!(windows) {
+            true => ';',
+            false => ':',
+        },
+    );
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        candidates.extend(browser::home_paths(platform, std::path::Path::new(&home)));
+    }
+    candidates.extend(browser::default_paths(platform));
+
+    let found = browser::resolve(&resolve.browser, &candidates, |p| p.is_file()).map_err(|e| {
+        Error::source_resolution(e.to_string())
+            .with("url", url.to_string())
+            .with("source_kind", "page")
+    })?;
+
+    bit_cli_core::render::render(&found, url, deadline)
+        .await
+        .map_err(|e| {
+            let base = match e {
+                bit_cli_core::render::RenderError::Timeout { .. } => Error::timeout(e.to_string()),
+                _ => Error::source_resolution(e.to_string()),
+            };
+            base.with("url", url.to_string())
+                .with("source_kind", "page")
+        })
 }
 
 /// The one link a page offered, once a selector has been applied.

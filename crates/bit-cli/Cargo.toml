@@ -27,6 +27,11 @@ dht = ["bit-cli-core/dht"]
 pex = ["bit-cli-core/pex"]
 lsd = ["bit-cli-core/lsd"]
 upnp = ["bit-cli-core/upnp"]
+# `--render` drives an installed browser over the DevTools protocol. Off by
+# default by the operator's ruling, and built by a CI job so it cannot rot.
+# The flag exists in every build; without this it is refused with a message
+# naming the feature. See `TODO/cli-surface.md`, T-244.
+render = ["bit-cli-core/render"]
 
 [dependencies]
 bit-cli-core.workspace = true

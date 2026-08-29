@@ -25,6 +25,13 @@
 #   L5  hostile     shadow DOM, an iframe carrying the only link, a click
 #                   handler with no href, and a page that renders nothing at
 #                   all without script
+#   L6  hidden      a link behind a query parameter with no extension whose
+#                   only label is an image's alt, a <link rel="alternate">
+#                   advertisement, a data-* attribute a script reads, and the
+#                   three shapes a looser rule would wrongly take
+#   L7  unfriendly  links assembled from split strings, one built two frames
+#                   later, one that needs a click and one that needs a scroll,
+#                   plus a challenge interstitial that must be **refused**
 #
 # Each expectation carries **two** lists. `static` is what the static tier must
 # find and `rendered` is what a browser must find. They are identical for L0 to
@@ -55,7 +62,7 @@ param(
     # URL are built against this.
     [string]$BaseUrl = "http://127.0.0.1:8099",
     # One level only. Omitted, every level and every acceptance case.
-    [ValidateRange(-1, 5)]
+    [ValidateRange(-1, 7)]
     [int]$Level = -1,
     [int]$Seed = 20260829,
     [string]$Root = ".tmp/page-fixture",
@@ -290,14 +297,22 @@ fetch('links.json').then(function (r) { return r.json(); }).then(function (d) {
     $static = @(
         (New-Expect "$BaseUrl/files/in-source.torrent" "Present in the source" "torrent")
     )
+    # The order is **measured** and not predicted. Six of these links are put
+    # in the document by script, and where each lands is the browser's
+    # decision rather than the order the script that made it appears in. The
+    # first version of this list was written by reading the markup top to
+    # bottom and it was wrong in two places: `document.write` after the parser
+    # has passed the point ends up last, and a clone of a `<template>` lands
+    # where its container is rather than where the template is. Chrome 151,
+    # 2026-08-29, through `--render`.
     $rendered = @(
         (New-Expect "$BaseUrl/files/in-source.torrent" "Present in the source" "torrent")
-        (New-Expect "$BaseUrl/files/document-write.torrent" "Written by document.write" "torrent")
         (New-Expect "$BaseUrl/files/inner-html.torrent" "Assigned to innerHTML" "torrent")
         (New-Expect "$BaseUrl/files/on-ready.torrent" "Built on DOMContentLoaded" "torrent")
-        (New-Expect "$BaseUrl/files/from-template.torrent" "Cloned from a template" "torrent")
         (New-Expect "$BaseUrl/files/after-timeout.torrent" "Built after a timeout" "torrent")
         (New-Expect "$BaseUrl/files/from-fetch.torrent" "Built from a fetch response" "torrent")
+        (New-Expect "$BaseUrl/files/from-template.torrent" "Cloned from a template" "torrent")
+        (New-Expect "$BaseUrl/files/document-write.torrent" "Written by document.write" "torrent")
     )
     return @{
         name     = "L4-script"; level = 4; html = $html; static = $static; rendered = $rendered
@@ -344,6 +359,139 @@ document.getElementById('go').addEventListener('click', function () {
         name     = "L5-hostile"; level = 5; html = $html; static = @(); rendered = $rendered
         sidecars = @{ "frame.html" = $frame }
         notes    = "the iframe's link is in a second document, which neither tier reads from the parent; the button has no href and is a link in neither"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# L6 hidden addressing: the link is there and nothing about the URL says so
+# ---------------------------------------------------------------------------
+#
+# Every shape here was measured on a real page rather than imagined.
+# `linuxtracker.org`, one of the fifteen `scripts/check-page-fetch.ps1`
+# fetches, publishes every torrent behind `index.php?page=downloadcheck&id=`
+# with **no anchor text at all**: the link wraps an icon and the label is the
+# image's `alt`. That page yields nothing to an extension rule.
+function Build-L6 {
+    $hex = "1608515a36c7e233742c42daf54d39f05a5f9aeb"
+    $html = @"
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>L6 hidden addressing</title>
+<link rel="alternate" type="application/x-bittorrent" href="/feed/latest?rel=24.04" title="Latest release">
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<h1>Downloads</h1>
+<p><a href="/files/plain.torrent">Example 24.04 Desktop</a></p>
+<p><a class="lasttor" href="index.php?page=downloadcheck&amp;id=$hex"><img src="images/torrent.gif" border="0" alt="Download Torrent" title="Download Torrent" /></a></p>
+<p><a href="index.php?page=torrents">Torrents</a></p>
+<p><a href="/browse">Download torrent</a></p>
+<p><a href="/get?ref=">Download torrent</a></p>
+<p><a href="/opaque?id=99">Mirror three</a></p>
+<div id="late" data-href="/files/from-data.torrent" data-text="Read out of a data attribute"></div>
+<script>
+var slot = document.getElementById('late');
+slot.innerHTML = '<a href="' + slot.dataset.href + '">' + slot.dataset.text + '</a>';
+</script>
+</body></html>
+"@
+    # Three of the six anchors and one of the two `<link>`s are torrents, and
+    # each is taken by a different rule. The three that are not are the ones a
+    # loose rule would take: a navigation link with the same label shape, a
+    # torrent label over a path with no identifier, and an opaque link with an
+    # identifier and no label.
+    $static = @(
+        (New-Expect "$BaseUrl/feed/latest?rel=24.04" "Latest release" "torrent")
+        (New-Expect "$BaseUrl/files/plain.torrent" "Example 24.04 Desktop" "torrent")
+        (New-Expect "$BaseUrl/index.php?page=downloadcheck&id=$hex" "Download Torrent" "torrent")
+    )
+    $rendered = @(
+        (New-Expect "$BaseUrl/feed/latest?rel=24.04" "Latest release" "torrent")
+        (New-Expect "$BaseUrl/files/plain.torrent" "Example 24.04 Desktop" "torrent")
+        (New-Expect "$BaseUrl/index.php?page=downloadcheck&id=$hex" "Download Torrent" "torrent")
+        (New-Expect "$BaseUrl/files/from-data.torrent" "Read out of a data attribute" "torrent")
+    )
+    return @{
+        name     = "L6-hidden"; level = 6; html = $html; static = $static; rendered = $rendered
+        notes    = "the data-* link needs a browser; the navigation link, the labelled path with no identifier and the opaque identifier with no label are the three a looser rule would wrongly take"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# L7 unfriendly: a page that does not want to be read by a program
+# ---------------------------------------------------------------------------
+function Build-L7 {
+    $html = @"
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>L7 unfriendly</title></head>
+<body>
+<div id="assembled"></div>
+<div id="deferred"></div>
+<button id="reveal" data-href="/files/behind-a-click.torrent">Show the download</button>
+<div id="onscroll"></div>
+<script>
+var a = ['/fi', 'les/', 'assem', 'bled.', 'torr', 'ent'];
+document.getElementById('assembled').innerHTML =
+  '<a href="' + a.join('') + '">Assembled from pieces</a>';
+requestAnimationFrame(function () {
+  setTimeout(function () {
+    document.getElementById('deferred').innerHTML =
+      '<a href="/files/two-frames-later.torrent">Two frames later</a>';
+  }, 120);
+});
+document.getElementById('reveal').addEventListener('click', function () {
+  document.body.insertAdjacentHTML('beforeend',
+    '<a href="' + this.dataset.href + '">Only after a click</a>');
+});
+window.addEventListener('scroll', function () {
+  document.getElementById('onscroll').innerHTML =
+    '<a href="/files/after-a-scroll.torrent">Only after a scroll</a>';
+});
+</script>
+</body></html>
+"@
+    # Nothing static: every link is built by script. The click and the scroll
+    # are expected from **neither** tier, and that is the point of having
+    # them: `--render` loads a page, it does not use it. A tier that clicked
+    # things would be a tier that submits forms.
+    $rendered = @(
+        (New-Expect "$BaseUrl/files/assembled.torrent" "Assembled from pieces" "torrent")
+        (New-Expect "$BaseUrl/files/two-frames-later.torrent" "Two frames later" "torrent")
+    )
+    return @{
+        name     = "L7-unfriendly"; level = 7; html = $html; static = @(); rendered = $rendered
+        notes    = "the click and the scroll links are expected from neither tier: rendering loads a page, it does not drive one"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# L7's other half: a challenge, which is refused and never solved
+# ---------------------------------------------------------------------------
+function Build-L7Challenge {
+    $html = @"
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Just a moment...</title>
+<meta http-equiv="refresh" content="4;url=/L7-challenge.html">
+</head>
+<body>
+<div class="cf-browser-verification">
+<h1>Checking your browser before accessing this site</h1>
+<p id="cf-spinner-please-wait">This process is automatic. Your browser will redirect to your requested content shortly.</p>
+<form id="challenge-form" action="/cdn-cgi/l/chk_jschl" method="POST">
+<input type="hidden" name="r" value="0f2c9f0e2b" />
+<input type="hidden" name="jschl_vc" value="7a1c0b1a" />
+</form>
+<a href="/files/definitely-not-a-torrent.html">Continue</a>
+</div>
+<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>
+</body></html>
+"@
+    # Nothing from either tier, and that is the expected answer. The page
+    # carries no torrent link, so `bit-cli` refuses it and says so. Nothing
+    # here is solved, submitted or retried: the form is present precisely so
+    # that a future change which starts posting one fails this case.
+    return @{
+        name     = "L7-challenge"; level = 7; html = $html; static = @(); rendered = @()
+        notes    = "a challenge is refused rather than solved: no form is posted, no meta refresh is followed, and nothing is retried"
     }
 }
 
@@ -413,6 +561,9 @@ $builders = @(
     @{ level = 3; build = { Build-L3 } }
     @{ level = 4; build = { Build-L4 } }
     @{ level = 5; build = { Build-L5 } }
+    @{ level = 6; build = { Build-L6 } }
+    @{ level = 7; build = { Build-L7 } }
+    @{ level = 7; build = { Build-L7Challenge } }
 )
 
 foreach ($b in $builders) {

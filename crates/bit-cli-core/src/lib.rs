@@ -25,6 +25,7 @@ pub mod page;
 pub mod paths;
 pub mod peer_id;
 pub mod piece_order;
+pub mod render;
 pub mod resume;
 pub mod span;
 pub mod storage;

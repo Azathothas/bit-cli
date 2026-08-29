@@ -50,6 +50,10 @@ pub struct H2Fingerprint {
     pub priorities: Vec<(u32, u8, u32, u8)>, // stream, exclusive, dep, weight
     pub pseudo_order: Vec<String>,
     pub headers: Vec<String>,
+    /// The regular header fields with their values, in order, and only when
+    /// the caller passed `--header-values`. Empty otherwise, which is the
+    /// shipping case.
+    pub header_pairs: Vec<(String, String)>,
     pub saw_headers: bool,
 }
 
@@ -89,16 +93,26 @@ fn hpack_str(b: &[u8], p: &mut usize) -> Option<String> {
     }
 }
 
-/// Decode just the header *names*, in order. Values are skipped — this is a
-/// fingerprint tool, and header values are the one part that carries the
-/// caller's actual data.
-fn decode_header_names(block: &[u8]) -> Vec<String> {
-    let mut names = Vec::new();
+/// Decode the header *names*, in order, and their values only when the caller
+/// asked for them.
+///
+/// **Names by default and values never by accident.** A header value is the
+/// one part of a request that carries the caller's own data, and a fingerprint
+/// needs the names and the sequence. `values` is set only by
+/// `--header-values`, which exists for one case: a browser this repository
+/// launched itself, into a throwaway profile, at a loopback port, so that the
+/// header set it sends can be written back into `page.rs` as a replacement.
+/// `cookie` and `authorization` are dropped even then, because a class of
+/// mistake that cannot happen is better than one that has not happened yet.
+fn decode_header_names(block: &[u8], values: bool) -> Vec<(String, Option<String>)> {
+    let mut names: Vec<(String, Option<String>)> = Vec::new();
     let mut p = 0usize;
     while p < block.len() {
         let first = block[p];
+        let mut value: Option<String> = None;
         let name = if first & 0x80 != 0 {
-            // Indexed header field.
+            // Indexed header field. Name and value both come from the table,
+            // and this tool does not track the dynamic one.
             match hpack_int(block, &mut p, 7) {
                 Some(i) if i >= 1 && (i as usize) <= STATIC_TABLE.len() => {
                     STATIC_TABLE[i as usize - 1].to_string()
@@ -134,19 +148,24 @@ fn decode_header_names(block: &[u8]) -> Vec<String> {
             } else {
                 format!("<dynamic:{idx}>")
             };
-            // Skip the value to reach the next field.
-            if hpack_str(block, &mut p).is_none() {
-                return names;
+            // The value has to be read either way, to reach the next
+            // field. Whether it is kept is the caller's decision.
+            let v = match hpack_str(block, &mut p) {
+                Some(v) => v,
+                None => return names,
+            };
+            if values && !matches!(n.as_str(), "cookie" | "authorization") {
+                value = Some(v);
             }
             n
         };
-        names.push(name);
+        names.push((name, value));
     }
     names
 }
 
 /// Parse everything the client sent after the connection preface.
-pub fn parse(buf: &[u8]) -> H2Fingerprint {
+pub fn parse(buf: &[u8], want_values: bool) -> H2Fingerprint {
     let mut fp = H2Fingerprint::default();
     let mut p = if buf.starts_with(PREFACE) {
         PREFACE.len()
@@ -208,9 +227,14 @@ pub fn parse(buf: &[u8]) -> H2Fingerprint {
                     let pad = b[0] as usize;
                     b = b.get(1..b.len().saturating_sub(pad)).unwrap_or(&[]);
                 }
-                for n in decode_header_names(b) {
+                for (n, v) in decode_header_names(b, want_values) {
                     if n.starts_with(':') {
                         fp.pseudo_order.push(n.clone());
+                    }
+                    if let Some(v) = v
+                        && !n.starts_with(':')
+                    {
+                        fp.header_pairs.push((n.clone(), v));
                     }
                     fp.headers.push(n);
                 }

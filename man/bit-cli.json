@@ -683,6 +683,25 @@
           "name": "--page-client",
           "type": "string",
           "value_name": "PROFILE"
+        },
+        {
+          "default": "false",
+          "description": "Read the page after its script has run, through an installed browser",
+          "name": "--render",
+          "type": "boolean"
+        },
+        {
+          "description": "The browser `--render` drives, when it is not where this looks",
+          "name": "--browser-path",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Attach to a browser already listening for the DevTools protocol",
+          "name": "--browser-port",
+          "type": "string",
+          "value_name": "HOST:PORT"
         }
       ],
       "description": "Parse a torrent, magnet, or metalink and print its metadata",
@@ -752,6 +771,25 @@
           "name": "--page-client",
           "type": "string",
           "value_name": "PROFILE"
+        },
+        {
+          "default": "false",
+          "description": "Read the page after its script has run, through an installed browser",
+          "name": "--render",
+          "type": "boolean"
+        },
+        {
+          "description": "The browser `--render` drives, when it is not where this looks",
+          "name": "--browser-path",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Attach to a browser already listening for the DevTools protocol",
+          "name": "--browser-port",
+          "type": "string",
+          "value_name": "HOST:PORT"
         }
       ],
       "description": "List files with index, path, size, and priority",
@@ -820,6 +858,25 @@
           "name": "--page-client",
           "type": "string",
           "value_name": "PROFILE"
+        },
+        {
+          "default": "false",
+          "description": "Read the page after its script has run, through an installed browser",
+          "name": "--render",
+          "type": "boolean"
+        },
+        {
+          "description": "The browser `--render` drives, when it is not where this looks",
+          "name": "--browser-path",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Attach to a browser already listening for the DevTools protocol",
+          "name": "--browser-port",
+          "type": "string",
+          "value_name": "HOST:PORT"
         }
       ],
       "description": "Print the torrent's directory structure, rolled up",
@@ -1471,6 +1528,25 @@
           "name": "--page-client",
           "type": "string",
           "value_name": "PROFILE"
+        },
+        {
+          "default": "false",
+          "description": "Read the page after its script has run, through an installed browser",
+          "name": "--render",
+          "type": "boolean"
+        },
+        {
+          "description": "The browser `--render` drives, when it is not where this looks",
+          "name": "--browser-path",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Attach to a browser already listening for the DevTools protocol",
+          "name": "--browser-port",
+          "type": "string",
+          "value_name": "HOST:PORT"
         }
       ],
       "description": "Resolve every binding and print the exact URL each file maps to. No network",
@@ -1786,6 +1862,25 @@
           "name": "--page-client",
           "type": "string",
           "value_name": "PROFILE"
+        },
+        {
+          "default": "false",
+          "description": "Read the page after its script has run, through an installed browser",
+          "name": "--render",
+          "type": "boolean"
+        },
+        {
+          "description": "The browser `--render` drives, when it is not where this looks",
+          "name": "--browser-path",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Attach to a browser already listening for the DevTools protocol",
+          "name": "--browser-port",
+          "type": "string",
+          "value_name": "HOST:PORT"
         }
       ],
       "description": "Probe each source: range support, size, redirects, TLS, latency",
@@ -2096,6 +2191,25 @@
           "name": "--page-client",
           "type": "string",
           "value_name": "PROFILE"
+        },
+        {
+          "default": "false",
+          "description": "Read the page after its script has run, through an installed browser",
+          "name": "--render",
+          "type": "boolean"
+        },
+        {
+          "description": "The browser `--render` drives, when it is not where this looks",
+          "name": "--browser-path",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Attach to a browser already listening for the DevTools protocol",
+          "name": "--browser-port",
+          "type": "string",
+          "value_name": "HOST:PORT"
         }
       ],
       "description": "Measure ranged-GET latency and throughput as concurrency scales",
@@ -2434,6 +2548,25 @@
           "name": "--page-client",
           "type": "string",
           "value_name": "PROFILE"
+        },
+        {
+          "default": "false",
+          "description": "Read the page after its script has run, through an installed browser",
+          "name": "--render",
+          "type": "boolean"
+        },
+        {
+          "description": "The browser `--render` drives, when it is not where this looks",
+          "name": "--browser-path",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Attach to a browser already listening for the DevTools protocol",
+          "name": "--browser-port",
+          "type": "string",
+          "value_name": "HOST:PORT"
         }
       ],
       "description": "Fetch one range from one source and verify it against the torrent",
@@ -2522,6 +2655,25 @@
           "name": "--page-client",
           "type": "string",
           "value_name": "PROFILE"
+        },
+        {
+          "default": "false",
+          "description": "Read the page after its script has run, through an installed browser",
+          "name": "--render",
+          "type": "boolean"
+        },
+        {
+          "description": "The browser `--render` drives, when it is not where this looks",
+          "name": "--browser-path",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Attach to a browser already listening for the DevTools protocol",
+          "name": "--browser-port",
+          "type": "string",
+          "value_name": "HOST:PORT"
         }
       ],
       "description": "Hash-check existing data against the torrent",
@@ -2884,6 +3036,25 @@
           "name": "--page-client",
           "type": "string",
           "value_name": "PROFILE"
+        },
+        {
+          "default": "false",
+          "description": "Read the page after its script has run, through an installed browser",
+          "name": "--render",
+          "type": "boolean"
+        },
+        {
+          "description": "The browser `--render` drives, when it is not where this looks",
+          "name": "--browser-path",
+          "type": "string",
+          "value_hint": "path",
+          "value_name": "PATH"
+        },
+        {
+          "description": "Attach to a browser already listening for the DevTools protocol",
+          "name": "--browser-port",
+          "type": "string",
+          "value_name": "HOST:PORT"
         }
       ],
       "description": "Convert a torrent to a magnet URI, or resolve a magnet to metadata",

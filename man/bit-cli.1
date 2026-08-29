@@ -657,7 +657,7 @@ Emit a progress event this often
 .SH NAME
 bit\-cli\-info \- Parse a torrent, magnet, or metalink and print its metadata
 .SH SYNOPSIS
-\fBbit\-cli\-info\fR [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-info\fR [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-\-render\fR] [\fB\-\-browser\-path\fR] [\fB\-\-browser\-port\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Parse a torrent, magnet, or metalink and print its metadata
 .SH OPTIONS
@@ -705,13 +705,30 @@ browser
 .IP \(bu 2
 plain
 .RE
+.TP
+\fB\-\-render\fR
+Read the page after its script has run, through an installed browser.
+
+A page that builds its links in script has none of them in the HTML the server sent. This drives a Chrome or Edge that is **already installed**, over the DevTools protocol, and extracts from the DOM afterwards. It never installs a browser and never bundles one.
+
+It needs a build with the `render` feature: `cargo build \-\-release \-\-features render`. Without one the flag is refused with a message saying so rather than silently reading the page unrendered.
+.TP
+\fB\-\-browser\-path\fR \fI<PATH>\fR
+The browser `\-\-render` drives, when it is not where this looks.
+
+Absent, an already\-running instance on `\-\-browser\-port` is tried, then the executables on `PATH`, then the platform\*(Aqs usual locations. A path given here is tried first and alone: naming one and getting a different browser is the tool ignoring its own instruction.
+.TP
+\fB\-\-browser\-port\fR \fI<HOST:PORT>\fR
+Attach to a browser already listening for the DevTools protocol.
+
+`HOST:PORT`, or just `PORT` for `127.0.0.1`. Attaching to a browser that is already up is cheaper than starting a second one.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-files 1  "bit-cli-files " 
 .SH NAME
 bit\-cli\-files \- List files with index, path, size, and priority
 .SH SYNOPSIS
-\fBbit\-cli\-files\fR [\fB\-\-sort\fR] [\fB\-\-against\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-files\fR [\fB\-\-sort\fR] [\fB\-\-against\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-\-render\fR] [\fB\-\-browser\-path\fR] [\fB\-\-browser\-port\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 List files with index, path, size, and priority
 .SH OPTIONS
@@ -767,13 +784,30 @@ browser
 .IP \(bu 2
 plain
 .RE
+.TP
+\fB\-\-render\fR
+Read the page after its script has run, through an installed browser.
+
+A page that builds its links in script has none of them in the HTML the server sent. This drives a Chrome or Edge that is **already installed**, over the DevTools protocol, and extracts from the DOM afterwards. It never installs a browser and never bundles one.
+
+It needs a build with the `render` feature: `cargo build \-\-release \-\-features render`. Without one the flag is refused with a message saying so rather than silently reading the page unrendered.
+.TP
+\fB\-\-browser\-path\fR \fI<PATH>\fR
+The browser `\-\-render` drives, when it is not where this looks.
+
+Absent, an already\-running instance on `\-\-browser\-port` is tried, then the executables on `PATH`, then the platform\*(Aqs usual locations. A path given here is tried first and alone: naming one and getting a different browser is the tool ignoring its own instruction.
+.TP
+\fB\-\-browser\-port\fR \fI<HOST:PORT>\fR
+Attach to a browser already listening for the DevTools protocol.
+
+`HOST:PORT`, or just `PORT` for `127.0.0.1`. Attaching to a browser that is already up is cheaper than starting a second one.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-tree 1  "bit-cli-tree " 
 .SH NAME
 bit\-cli\-tree \- Print the torrent\*(Aqs directory structure, rolled up
 .SH SYNOPSIS
-\fBbit\-cli\-tree\fR [\fB\-\-depth\fR] [\fB\-\-no\-sizes\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-tree\fR [\fB\-\-depth\fR] [\fB\-\-no\-sizes\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-\-render\fR] [\fB\-\-browser\-path\fR] [\fB\-\-browser\-port\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Print the torrent\*(Aqs directory structure, rolled up
 .SH OPTIONS
@@ -829,6 +863,23 @@ browser
 .IP \(bu 2
 plain
 .RE
+.TP
+\fB\-\-render\fR
+Read the page after its script has run, through an installed browser.
+
+A page that builds its links in script has none of them in the HTML the server sent. This drives a Chrome or Edge that is **already installed**, over the DevTools protocol, and extracts from the DOM afterwards. It never installs a browser and never bundles one.
+
+It needs a build with the `render` feature: `cargo build \-\-release \-\-features render`. Without one the flag is refused with a message saying so rather than silently reading the page unrendered.
+.TP
+\fB\-\-browser\-path\fR \fI<PATH>\fR
+The browser `\-\-render` drives, when it is not where this looks.
+
+Absent, an already\-running instance on `\-\-browser\-port` is tried, then the executables on `PATH`, then the platform\*(Aqs usual locations. A path given here is tried first and alone: naming one and getting a different browser is the tool ignoring its own instruction.
+.TP
+\fB\-\-browser\-port\fR \fI<HOST:PORT>\fR
+Attach to a browser already listening for the DevTools protocol.
+
+`HOST:PORT`, or just `PORT` for `127.0.0.1`. Attaching to a browser that is already up is cheaper than starting a second one.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-peers 1  "bit-cli-peers " 
@@ -1119,7 +1170,7 @@ Print this message or the help of the given subcommand(s)
 .SH NAME
 bit\-cli\-verify \- Hash\-check existing data against the torrent
 .SH SYNOPSIS
-\fBbit\-cli\-verify\fR [\fB\-\-data\fR] [\fB\-\-per\-piece\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-verify\fR [\fB\-\-data\fR] [\fB\-\-per\-piece\fR] [\fB\-\-select\-file\fR] [\fB\-\-exclude\-file\fR] [\fB\-O\fR|\fB\-\-index\-out\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-\-render\fR] [\fB\-\-browser\-path\fR] [\fB\-\-browser\-port\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Hash\-check existing data against the torrent
 .SH OPTIONS
@@ -1186,6 +1237,23 @@ browser
 .IP \(bu 2
 plain
 .RE
+.TP
+\fB\-\-render\fR
+Read the page after its script has run, through an installed browser.
+
+A page that builds its links in script has none of them in the HTML the server sent. This drives a Chrome or Edge that is **already installed**, over the DevTools protocol, and extracts from the DOM afterwards. It never installs a browser and never bundles one.
+
+It needs a build with the `render` feature: `cargo build \-\-release \-\-features render`. Without one the flag is refused with a message saying so rather than silently reading the page unrendered.
+.TP
+\fB\-\-browser\-path\fR \fI<PATH>\fR
+The browser `\-\-render` drives, when it is not where this looks.
+
+Absent, an already\-running instance on `\-\-browser\-port` is tried, then the executables on `PATH`, then the platform\*(Aqs usual locations. A path given here is tried first and alone: naming one and getting a different browser is the tool ignoring its own instruction.
+.TP
+\fB\-\-browser\-port\fR \fI<HOST:PORT>\fR
+Attach to a browser already listening for the DevTools protocol.
+
+`HOST:PORT`, or just `PORT` for `127.0.0.1`. Attaching to a browser that is already up is cheaper than starting a second one.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-create 1  "bit-cli-create " 
@@ -1362,7 +1430,7 @@ The torrent to read
 .SH NAME
 bit\-cli\-magnet \- Convert a torrent to a magnet URI, or resolve a magnet to metadata
 .SH SYNOPSIS
-\fBbit\-cli\-magnet\fR [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-force\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBbit\-cli\-magnet\fR [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-force\fR] [\fB\-\-peer\fR] [\fB\-\-no\-dht\fR] [\fB\-\-no\-lsd\fR] [\fB\-\-no\-tracker\fR] [\fB\-\-page\-select\fR] [\fB\-\-page\-client\fR] [\fB\-\-render\fR] [\fB\-\-browser\-path\fR] [\fB\-\-browser\-port\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
 .SH DESCRIPTION
 Convert a torrent to a magnet URI, or resolve a magnet to metadata
 .SH OPTIONS
@@ -1418,6 +1486,23 @@ browser
 .IP \(bu 2
 plain
 .RE
+.TP
+\fB\-\-render\fR
+Read the page after its script has run, through an installed browser.
+
+A page that builds its links in script has none of them in the HTML the server sent. This drives a Chrome or Edge that is **already installed**, over the DevTools protocol, and extracts from the DOM afterwards. It never installs a browser and never bundles one.
+
+It needs a build with the `render` feature: `cargo build \-\-release \-\-features render`. Without one the flag is refused with a message saying so rather than silently reading the page unrendered.
+.TP
+\fB\-\-browser\-path\fR \fI<PATH>\fR
+The browser `\-\-render` drives, when it is not where this looks.
+
+Absent, an already\-running instance on `\-\-browser\-port` is tried, then the executables on `PATH`, then the platform\*(Aqs usual locations. A path given here is tried first and alone: naming one and getting a different browser is the tool ignoring its own instruction.
+.TP
+\fB\-\-browser\-port\fR \fI<HOST:PORT>\fR
+Attach to a browser already listening for the DevTools protocol.
+
+`HOST:PORT`, or just `PORT` for `127.0.0.1`. Attaching to a browser that is already up is cheaper than starting a second one.
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH bit-cli-seed 1  "bit-cli-seed " 

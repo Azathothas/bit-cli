@@ -190,6 +190,9 @@ Effects: `read_only`.
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 | `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
+| `--render` | boolean |  | `false` | Read the page after its script has run, through an installed browser |
+| `--browser-path <PATH>` | string |  |  | The browser `--render` drives, when it is not where this looks |
+| `--browser-port <HOST:PORT>` | string |  |  | Attach to a browser already listening for the DevTools protocol |
 
 ### `bit-cli files`
 
@@ -208,6 +211,9 @@ Effects: `read_only`.
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 | `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
+| `--render` | boolean |  | `false` | Read the page after its script has run, through an installed browser |
+| `--browser-path <PATH>` | string |  |  | The browser `--render` drives, when it is not where this looks |
+| `--browser-port <HOST:PORT>` | string |  |  | Attach to a browser already listening for the DevTools protocol |
 
 ### `bit-cli tree`
 
@@ -226,6 +232,9 @@ Effects: `read_only`.
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 | `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
+| `--render` | boolean |  | `false` | Read the page after its script has run, through an installed browser |
+| `--browser-path <PATH>` | string |  |  | The browser `--render` drives, when it is not where this looks |
+| `--browser-port <HOST:PORT>` | string |  |  | Attach to a browser already listening for the DevTools protocol |
 
 ### `bit-cli peers`
 
@@ -354,6 +363,9 @@ Effects: `read_only`.
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 | `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
+| `--render` | boolean |  | `false` | Read the page after its script has run, through an installed browser |
+| `--browser-path <PATH>` | string |  |  | The browser `--render` drives, when it is not where this looks |
+| `--browser-port <HOST:PORT>` | string |  |  | Attach to a browser already listening for the DevTools protocol |
 
 ### `bit-cli webseed test`
 
@@ -409,6 +421,9 @@ Effects: `read_only`.
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 | `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
+| `--render` | boolean |  | `false` | Read the page after its script has run, through an installed browser |
+| `--browser-path <PATH>` | string |  |  | The browser `--render` drives, when it is not where this looks |
+| `--browser-port <HOST:PORT>` | string |  |  | Attach to a browser already listening for the DevTools protocol |
 
 ### `bit-cli webseed probe`
 
@@ -463,6 +478,9 @@ Effects: `read_only`.
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 | `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
+| `--render` | boolean |  | `false` | Read the page after its script has run, through an installed browser |
+| `--browser-path <PATH>` | string |  |  | The browser `--render` drives, when it is not where this looks |
+| `--browser-port <HOST:PORT>` | string |  |  | Attach to a browser already listening for the DevTools protocol |
 
 ### `bit-cli webseed fetch`
 
@@ -522,6 +540,9 @@ Effects: `idempotent`.
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 | `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
+| `--render` | boolean |  | `false` | Read the page after its script has run, through an installed browser |
+| `--browser-path <PATH>` | string |  |  | The browser `--render` drives, when it is not where this looks |
+| `--browser-port <HOST:PORT>` | string |  |  | Attach to a browser already listening for the DevTools protocol |
 
 ### `bit-cli verify`
 
@@ -543,6 +564,9 @@ Effects: `read_only`.
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 | `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
+| `--render` | boolean |  | `false` | Read the page after its script has run, through an installed browser |
+| `--browser-path <PATH>` | string |  |  | The browser `--render` drives, when it is not where this looks |
+| `--browser-port <HOST:PORT>` | string |  |  | Attach to a browser already listening for the DevTools protocol |
 
 ### `bit-cli create`
 
@@ -623,6 +647,9 @@ Effects: `read_only`.
 | `--no-tracker` | boolean |  | `false` | Do not announce to the magnet's trackers while resolving |
 | `--page-select <TEXT>` | string |  |  | Take the one link on a page whose URL or text contains TEXT |
 | `--page-client <PROFILE>` | string | `browser`, `plain` | `browser` | Which client to present as when fetching a source document |
+| `--render` | boolean |  | `false` | Read the page after its script has run, through an installed browser |
+| `--browser-path <PATH>` | string |  |  | The browser `--render` drives, when it is not where this looks |
+| `--browser-port <HOST:PORT>` | string |  |  | Attach to a browser already listening for the DevTools protocol |
 
 ### `bit-cli seed`
 

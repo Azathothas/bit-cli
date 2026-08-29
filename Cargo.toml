@@ -22,6 +22,13 @@ bit-cli-core = { path = "crates/bit-cli-core", version = "0.2.0" }
 
 anyhow = "1.0.103"
 bytes = "1.11.1"
+# The CDP driver behind `--render`, and it is optional on purpose: the
+# operator's ruling of 2026-08-29 is that it is a Cargo feature, off by
+# default, because packages in every artifact for a flag that is inert
+# without an external browser is the wrong trade. `default-features = false`
+# drops `chromiumoxide_fetcher`, which exists to **download** a browser, and
+# the ruling is "never bundled". See `TODO/cli-surface.md`, T-244.
+chromiumoxide = { version = "0.9.1", default-features = false }
 chrono = { version = "0.4.44", default-features = false, features = ["std", "clock"] }
 clap = { version = "4.6.1", features = ["derive", "env", "wrap_help", "string"] }
 clap_complete = "4.6.1"
@@ -31,6 +38,8 @@ clap_mangen = "0.3.3"
 # a report and the run it describes cannot disagree. See `TODO/bep-coverage.md`,
 # T-103. Already in the graph through `librqbit-core`.
 encoding_rs = "0.8"
+# The `Handler` a CDP session needs driven, and nothing else.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 globset = "0.4.19"
 hdrhistogram = { version = "7.5.5", default-features = false }
 ignore = "0.4.24"

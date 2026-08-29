@@ -681,10 +681,10 @@ platforms:
 
 | Test | Where | What fails it |
 | --- | --- | --- |
-| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2898` | a short flag with no row in `docs/flags.md` |
-| `no_short_flag_is_defined_twice` | `cli.rs:2676` | one letter used twice in one command |
-| `short_flags_never_contradict_aria2` | `cli.rs:2712` | an `aria2` letter reassigned to a different concept |
-| `short_flags_keep_their_aria2_meanings` | `cli.rs:2407` | `-V` no longer meaning `--check-integrity` |
+| `every_short_flag_is_documented_in_the_flags_table` | `cli.rs:2927` | a short flag with no row in `docs/flags.md` |
+| `no_short_flag_is_defined_twice` | `cli.rs:2705` | one letter used twice in one command |
+| `short_flags_never_contradict_aria2` | `cli.rs:2741` | an `aria2` letter reassigned to a different concept |
+| `short_flags_keep_their_aria2_meanings` | `cli.rs:2436` | `-V` no longer meaning `--check-integrity` |
 
 ```
 $ cargo test -p bit-cli --lib short_flag
@@ -2033,7 +2033,7 @@ Acceptance:  Two parts, and the first is what stops this recurring.
              so a fifth cannot be added silently. The exception list is the
              deliverable: it is short, it is reviewed, and it makes the
              warning above mechanical rather than remembered.
-             `cli.rs:2898` `every_short_flag_is_documented_in_the_flags_table`
+             `cli.rs:2927` `every_short_flag_is_documented_in_the_flags_table`
              is the model: it already walks the tree and fails with the exact
              fix to apply.
 
@@ -5807,3 +5807,76 @@ Notes:       `gh release create --verify-tag` and the attestation step are
              [T-261](trackers.md) is where it is specified, and this entry
              does not wait for it: `fingerprints/` alone justifies the
              publishing path and the tracker file drops into it later.
+
+### T-262 The HTTP/2 fingerprint matches a real Chrome in three fields of four
+
+Source:      measured 2026-08-29 by `scripts/check-browser-fingerprint.ps1`,
+             while closing T-244
+Category:    cli
+Priority:    P3
+Effort:      S
+Status:      open
+
+Problem:     An Akamai HTTP/2 fingerprint is four fields:
+             `SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_HEADER_ORDER`. Captured
+             off the wire against `loopback-tlsprobe`, `bit-cli` and a real
+             Chrome 151 on the same machine agree on three of them and differ
+             on the third:
+
+             ```
+             chrome   1:65536;2:0;4:6291456;6:262144|15663105|1:1:0:255|m,a,s,p
+             bit-cli  1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p
+             ```
+
+             Chrome opens stream 1 with priority information: exclusive, no
+             dependency, weight 255. `h2` writes none, and `bit-cli`'s
+             fingerprint carries `0` where a browser carries `1:1:0:255`. It is
+             the one field of the four that a client comparing the two can
+             still tell apart.
+Relevance:   [T-244](#t-244-a-web-page-is-not-a-source-and-nothing-extracts-a-link-from-one)
+             ships a client whose reason for existing is that an origin
+             fingerprinting its callers cannot tell it from a browser. Three
+             fields of four is most of the way and it is not all of it.
+
+             It is P3 rather than P2 because the fields that carry the most
+             signal are the ones that already match. Priority was deprecated
+             in RFC 9113 section 5.3.1, which says a sender SHOULD NOT send
+             the PRIORITY frame at all, so a server reading it is reading
+             something the current specification tells clients not to emit.
+Approach:    The mechanism is the one T-244 already built and proved.
+             `vendor/h2/src/ext.rs` carries `PseudoOrder` as a request
+             extension; `vendor/h2/src/proto/streams/streams.rs:271` lifts it
+             out before the extension map is cleared and hands it to
+             `Peer::convert_send_message`. A `StreamPriority` extension takes
+             the same three steps.
+
+             What is **not** already there is the encoding.
+             `vendor/h2/src/frame/headers.rs:301`, `Headers::encode`, writes
+             the frame head and the header block and never writes a priority
+             payload: `stream_dep` is parsed on receive and dropped on send.
+             Emitting it means setting the PRIORITY flag in the head, writing
+             the five byte dependency block ahead of the HPACK block, and
+             getting the length right in both the head and any CONTINUATION
+             that follows.
+
+             That is a change to a protocol library's frame writer, which is
+             the part of `h2` with the least margin for being wrong, and it is
+             why this is filed rather than done in the session that found it.
+
+             The alternative shape, a standalone PRIORITY frame on the
+             connection before the HEADERS, is what Chrome actually sends and
+             is a different seam: it is a connection-level write rather than
+             part of converting one request.
+Acceptance:  `pwsh scripts/check-browser-fingerprint.ps1 -Strict` exits 0 on a
+             machine with Chrome installed, where it exits 1 today naming
+             `akamai`. The `known` row for `akamai` in that script is deleted
+             in the same change, which is the other half of the rule about a
+             check that measures an open defect.
+
+             `cargo test --manifest-path vendor/h2/Cargo.toml --workspace
+             --target-dir target/vendor-h2` still passes: the frame writer is
+             what this touches and h2's own tests are what cover it.
+Notes:       The check already records this and does not judge it, following
+             `scripts/check-close-wait.ps1`'s pattern, so nothing goes red
+             while it is open. `patches/UPSTREAM.md` gets a section when it
+             closes.

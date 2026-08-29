@@ -13,11 +13,24 @@
 //!
 //! # What counts as a match
 //!
-//! An `href` on an `<a>` or an `<area>` whose **path** ends `.torrent`, or one
-//! that begins `magnet:`. The path is what decides, so `?download=1` after the
-//! extension does not make the link something else and `.torrent.html` is not
-//! a match. Comparison is case insensitive, because `.TORRENT` is served in
-//! the wild.
+//! An `href` on an `<a>`, an `<area>` or a `<link>`, judged three ways. The
+//! first is the common case and the other two exist because a real indexer
+//! measured on 2026-08-29 has neither.
+//!
+//! 1. **The path ends `.torrent`**, or the href begins `magnet:`. The path is
+//!    what decides, so `?download=1` after the extension does not make the
+//!    link something else and `.torrent.html` is not a match. Comparison is
+//!    case insensitive, because `.TORRENT` is served in the wild.
+//! 2. **The element declares `type="application/x-bittorrent"`.** That is the
+//!    publisher saying what is behind the link, which is better evidence than
+//!    an extension, and it is how `<link rel="alternate">` advertises one.
+//! 3. **The link's label says it is a torrent** and its href carries a
+//!    non-empty query value. The label is the anchor text, or the anchor's
+//!    `title`, or the `alt` or `title` of an image it wraps.
+//!
+//! The third is the narrow rule that reaches an indexer serving torrents from
+//! a script endpoint, and every part of it was measured rather than guessed.
+//! See [`TORRENT_LABELS`].
 //!
 //! # What is skipped, and why each one
 //!
@@ -168,18 +181,83 @@ impl LinkKind {
     }
 }
 
+/// Why a link was taken for a torrent.
+///
+/// Reported per link, because the three are not equally strong and a caller
+/// reading a refusal is entitled to know which one it was. A `label` match is
+/// the tool reading a human-facing string, and somebody choosing between four
+/// candidates should see that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchedBy {
+    /// The path ends `.torrent`, or the URI is a magnet.
+    Extension,
+    /// `type="application/x-bittorrent"` on the element.
+    Type,
+    /// The link's label says so, and its href carries an identifier.
+    Label,
+}
+
+impl MatchedBy {
+    /// A stable machine-readable name, used in reports.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Extension => "extension",
+            Self::Type => "type",
+            Self::Label => "label",
+        }
+    }
+}
+
 /// One torrent a page links to.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PageLink {
     /// Absolute, resolved against the document and any `<base href>`.
     pub url: String,
-    /// The anchor text beside it, whitespace collapsed. May be empty: a link
-    /// wrapping only an image has no text and is still a link.
+    /// The label beside it, whitespace collapsed: the anchor text, or the
+    /// element's `title`, or the `alt` or `title` of an image it wraps. May be
+    /// empty: a link wrapping an unlabelled image has none and is still a
+    /// link.
     pub text: String,
     pub kind: LinkKind,
     /// The host the link points at, absent for a magnet, which names no host.
     pub host: Option<String>,
+    /// Which of the three rules took it.
+    pub matched: MatchedBy,
 }
+
+/// The MIME type a torrent is served as, and the one `type=` value that means
+/// a link is one.
+pub const TORRENT_MEDIA_TYPE: &str = "application/x-bittorrent";
+
+/// Labels a link carries when its href does not say it is a torrent.
+///
+/// **A closed list of whole labels, not a substring search**, and every part
+/// of it is measured. Over the fifteen real pages
+/// `scripts/check-page-fetch.ps1` fetches, this list plus the requirement that
+/// the href carry a non-empty query value finds **74** torrent links that no
+/// extension rule reaches, on the one page that publishes them that way, and
+/// **one** false positive, which is that page's own empty template link.
+/// Nothing on the other fourteen pages matches.
+///
+/// **A bare `torrents` is deliberately not here.** It was, and it matched the
+/// navigation link to an index's own torrent listing on two of the fifteen
+/// pages. A label that names a section is not a label that names a file.
+///
+/// The query requirement is the other half. An indexer serving a torrent from
+/// a script endpoint passes an identifier; a navigation link does not.
+pub const TORRENT_LABELS: &[&str] = &[
+    "torrent",
+    ".torrent",
+    "torrent file",
+    "torrent link",
+    "torrent download",
+    "download torrent",
+    "download the torrent",
+    "download .torrent",
+    "get torrent",
+    "dl torrent",
+];
 
 /// [`extract_links`] for a caller holding the URL as text.
 ///
@@ -205,11 +283,13 @@ pub fn extract_links(html: &str, document_url: &Url) -> Vec<PageLink> {
 
     let mut out: Vec<PageLink> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
-    for (href, text) in anchors(html) {
-        let Some(url) = resolve(&base, &href) else {
+    for candidate in anchors(html) {
+        let Some(url) = resolve(&base, &candidate.href) else {
             continue;
         };
-        let Some(kind) = classify(&url) else { continue };
+        let Some((kind, matched)) = classify(&url, &candidate) else {
+            continue;
+        };
         let as_string = url.to_string();
         if seen.iter().any(|s| s == &as_string) {
             continue;
@@ -217,9 +297,10 @@ pub fn extract_links(html: &str, document_url: &Url) -> Vec<PageLink> {
         seen.push(as_string.clone());
         out.push(PageLink {
             url: as_string,
-            text,
+            text: candidate.label,
             kind,
             host: url.host_str().map(str::to_string),
+            matched,
         });
     }
     out
@@ -281,34 +362,87 @@ fn base_href(html: &str) -> Option<String> {
 }
 
 /// Every `<a href>` and `<area href>` in the document, with the anchor's text.
-fn anchors(html: &str) -> Vec<(String, String)> {
+/// One href the scanner found, with everything that decides what it is.
+struct Candidate {
+    href: String,
+    /// The anchor text, or the element's `title`, or a wrapped image's `alt`
+    /// or `title`, whichever is the first non-empty one.
+    label: String,
+    /// The element's `type` attribute, lowercased.
+    declared_type: Option<String>,
+}
+
+fn anchors(html: &str) -> Vec<Candidate> {
     let mut out = Vec::new();
     let mut cursor = Cursor::new(html);
     while let Some(tag) = cursor.next_tag() {
-        if tag.closing || tag.self_closing {
+        if tag.closing {
             continue;
         }
         match tag.name.as_str() {
             // Raw-text and inert elements. Their contents are not rendered, so
             // a link inside one is not a link on the page.
-            "script" | "style" | "noscript" | "template" => {
+            "script" | "style" | "noscript" | "template" if !tag.self_closing => {
                 cursor.skip_to_close(&tag.name);
             }
-            "a" | "area" => {
+            "a" | "area" | "link" => {
                 let Some(href) = tag.attr("href") else {
                     continue;
                 };
-                let text = match tag.name.as_str() {
-                    // `<area>` is void and has no text. Its label is `alt`.
-                    "area" => tag.attr("alt").unwrap_or_default(),
-                    _ => cursor.text_until_close("a"),
+                // `<area>` and `<link>` are void: they have no content, so
+                // their label is an attribute. An `<a>` has text, and when it
+                // has none, an image it wraps usually carries one.
+                let (text, image_label) = match (tag.name.as_str(), tag.self_closing) {
+                    ("a", false) => cursor.content_until_close("a"),
+                    _ => (String::new(), None),
                 };
-                out.push((decode_entities(href.trim()), collapse(&text)));
+                let label = [
+                    collapse(&text),
+                    image_label.map(|l| collapse(&l)).unwrap_or_default(),
+                    tag.attr("alt").map(|a| collapse(&a)).unwrap_or_default(),
+                    tag.attr("title").map(|t| collapse(&t)).unwrap_or_default(),
+                ]
+                .into_iter()
+                .find(|candidate| !candidate.is_empty())
+                .unwrap_or_default();
+                out.push(Candidate {
+                    href: decode_entities(href.trim()),
+                    label,
+                    declared_type: tag.attr("type").map(|t| t.trim().to_ascii_lowercase()),
+                });
             }
             _ => {}
         }
     }
     out
+}
+
+/// Is this label one that says the link behind it is a torrent?
+///
+/// Punctuation is dropped and whitespace collapsed before the comparison, so
+/// `Download Torrent!` and `download torrent` are the same label, and the
+/// result has to be one of [`TORRENT_LABELS`] **whole**.
+fn label_says_torrent(label: &str) -> bool {
+    let mut normalised = String::with_capacity(label.len());
+    for c in label.chars() {
+        match c {
+            c if c.is_ascii_alphanumeric() || c == '.' => {
+                normalised.extend(c.to_lowercase());
+            }
+            _ => normalised.push(' '),
+        }
+    }
+    let normalised = collapse(&normalised);
+    TORRENT_LABELS.contains(&normalised.as_str())
+}
+
+/// Does this URL carry a non-empty query value?
+///
+/// The other half of the label rule. An indexer serving a torrent from a
+/// script endpoint passes an identifier; a navigation link to the same script
+/// does not, and that difference is what keeps `Torrent` in a menu out.
+fn carries_identifier(url: &Url) -> bool {
+    url.query_pairs().any(|(_, value)| !value.trim().is_empty())
 }
 
 /// Resolve one href against the document's base.
@@ -328,17 +462,31 @@ fn resolve(base: &Url, href: &str) -> Option<Url> {
 }
 
 /// A resolved URL's kind, or `None` when it is not a torrent link at all.
-fn classify(url: &Url) -> Option<LinkKind> {
+fn classify(url: &Url, candidate: &Candidate) -> Option<(LinkKind, MatchedBy)> {
     match url.scheme() {
-        "magnet" => Some(LinkKind::Magnet),
+        "magnet" => Some((LinkKind::Magnet, MatchedBy::Extension)),
         "http" | "https" => {
             // Percent escapes are decoded before the extension is read, so
             // `/x%2Etorrent` is the same link as `/x.torrent`. The URL itself
             // is left exactly as it will be fetched.
             let path = percent_decode(url.path());
-            path.to_ascii_lowercase()
-                .ends_with(".torrent")
-                .then_some(LinkKind::Torrent)
+            if path.to_ascii_lowercase().ends_with(".torrent") {
+                return Some((LinkKind::Torrent, MatchedBy::Extension));
+            }
+            // A declared type is the publisher saying what is behind the
+            // link, which is stronger than an extension and is how a
+            // `<link rel="alternate">` advertises one.
+            if candidate
+                .declared_type
+                .as_deref()
+                .is_some_and(|t| t.split(';').next().unwrap_or("").trim() == TORRENT_MEDIA_TYPE)
+            {
+                return Some((LinkKind::Torrent, MatchedBy::Type));
+            }
+            if label_says_torrent(&candidate.label) && carries_identifier(url) {
+                return Some((LinkKind::Torrent, MatchedBy::Label));
+            }
+            None
         }
         _ => None,
     }
@@ -628,11 +776,19 @@ impl<'a> Cursor<'a> {
 
     /// The text of the element that has just been opened, up to its close tag.
     ///
-    /// Nested markup is dropped and its text kept, which is what a reader sees:
-    /// `<a href=x><b>Ubuntu</b> 24.04</a>` reads as `Ubuntu 24.04`.
-    fn text_until_close(&mut self, name: &str) -> String {
+    /// The text of the element that has just been opened, and the label of the
+    /// first image inside it.
+    ///
+    /// The second half exists because a real indexer's torrent links wrap an
+    /// icon and have **no text at all**: measured on 2026-08-29,
+    /// `linuxtracker.org` writes
+    /// `<a href="index.php?..."><img alt="Download Torrent"></a>`. Reading the
+    /// text alone finds an empty string there, which is what the first design
+    /// of this would have done.
+    fn content_until_close(&mut self, name: &str) -> (String, Option<String>) {
         let needle = format!("</{name}");
         let mut text = String::new();
+        let mut image: Option<String> = None;
         loop {
             let rest = &self.s[self.i..];
             if rest.is_empty() {
@@ -650,8 +806,16 @@ impl<'a> Cursor<'a> {
                     // Some other tag. Step over it and keep its text.
                     if rest.starts_with("<!--") {
                         self.i += rest.find("-->").map_or(rest.len(), |n| n + 3);
-                    } else {
-                        let _ = self.next_tag();
+                    } else if let Some(inner) = self.next_tag()
+                        && image.is_none()
+                        && inner.name == "img"
+                        && !inner.closing
+                    {
+                        image = inner
+                            .attr("alt")
+                            .or_else(|| inner.attr("title"))
+                            .map(|l| decode_entities(&l))
+                            .filter(|l| !l.trim().is_empty());
                     }
                 }
                 (_, Some(n)) => {
@@ -669,7 +833,7 @@ impl<'a> Cursor<'a> {
                 break;
             }
         }
-        decode_entities(&text)
+        (decode_entities(&text), image)
     }
 }
 
@@ -689,6 +853,127 @@ mod tests {
         links.iter().map(|l| l.url.as_str()).collect()
     }
 
+    #[test]
+    fn a_link_rel_alternate_advertising_a_torrent_is_read() {
+        let html = r#"
+            <head><link rel="alternate" type="application/x-bittorrent"
+                        href="/feed/latest" title="Latest release"></head>
+            <body><p>nothing here</p></body>
+        "#;
+        let links = extract_links(html, &doc("https://host.example/"));
+        assert_eq!(urls(&links), vec!["https://host.example/feed/latest"]);
+        assert_eq!(links[0].matched, MatchedBy::Type);
+        assert_eq!(links[0].text, "Latest release");
+    }
+
+    #[test]
+    fn a_stylesheet_link_is_not_a_torrent() {
+        let html = r#"<link rel="stylesheet" href="/site.css">"#;
+        assert!(extract_links(html, &doc("https://host.example/")).is_empty());
+    }
+
+    #[test]
+    fn an_anchor_declaring_the_torrent_type_is_read_without_an_extension() {
+        let html = r#"<a href="/dl?id=7" type="application/x-bittorrent">Get it</a>"#;
+        let links = extract_links(html, &doc("https://host.example/"));
+        assert_eq!(urls(&links), vec!["https://host.example/dl?id=7"]);
+        assert_eq!(links[0].matched, MatchedBy::Type);
+    }
+
+    /// The shape `linuxtracker.org` actually publishes, measured 2026-08-29:
+    /// no extension, no anchor text, and the label on a wrapped image.
+    #[test]
+    fn an_indexer_link_with_no_extension_and_no_text_is_read_from_its_image() {
+        let html = r#"
+            <a class="lasttor" href="index.php?page=downloadcheck&amp;id=1608515a36c7e233742c42daf54d39f05a5f9aeb">
+              <img src='images/torrent.gif' border='0' alt='Download Torrent' title='Download Torrent' />
+            </a>
+        "#;
+        let links = extract_links(html, &doc("https://tracker.example/"));
+        assert_eq!(
+            urls(&links),
+            vec![
+                "https://tracker.example/index.php?page=downloadcheck&id=1608515a36c7e233742c42daf54d39f05a5f9aeb"
+            ]
+        );
+        assert_eq!(links[0].matched, MatchedBy::Label);
+        assert_eq!(links[0].text, "Download Torrent");
+    }
+
+    /// The false positive the first version of the label rule had, on two of
+    /// the fifteen measured pages: a navigation link to a listing.
+    #[test]
+    fn a_navigation_link_labelled_torrents_is_not_a_torrent() {
+        let html = r#"
+            <a href="index.php?page=torrents">Torrents</a>
+            <a href="/torrents">Torrents</a>
+            <a href="/">torrents</a>
+        "#;
+        assert!(extract_links(html, &doc("https://tracker.example/")).is_empty());
+    }
+
+    /// A label alone is not enough: the href has to carry an identifier, which
+    /// is what an endpoint serving one torrent has and a menu entry does not.
+    #[test]
+    fn a_torrent_label_on_a_bare_path_is_not_a_torrent() {
+        let html = r#"<a href="/downloads">Download torrent</a>"#;
+        assert!(extract_links(html, &doc("https://host.example/")).is_empty());
+    }
+
+    #[test]
+    fn every_query_value_being_empty_is_not_an_identifier() {
+        let html = r#"<a href="/download.php?id=&f=">Download Torrent</a>"#;
+        assert!(extract_links(html, &doc("https://tracker.example/")).is_empty());
+    }
+
+    /// The one false positive the label rule has on the fifteen measured
+    /// pages, written down rather than argued away.
+    ///
+    /// `linuxtracker.org` carries a template link with its `id` unset and a
+    /// second parameter that is not. The rule takes it, so a page that offers
+    /// 74 real torrents offers 75 candidates and one of them is not a
+    /// torrent. It is refused and listed like the others, so the cost is one
+    /// extra line in a list a person is already reading, and the alternative
+    /// is a second request per candidate.
+    #[test]
+    fn a_template_link_with_one_set_parameter_is_a_known_false_positive() {
+        let html = r#"<a href="/download.php?id=&f=.torrent">Download Torrent</a>"#;
+        let links = extract_links(html, &doc("https://tracker.example/"));
+        assert_eq!(links.len(), 1, "the rule takes it, and that is measured");
+        assert_eq!(links[0].matched, MatchedBy::Label);
+    }
+
+    #[test]
+    fn a_label_is_matched_whole_and_not_as_a_substring() {
+        let html = r#"
+            <a href="/a?id=1">Everything about torrents explained</a>
+            <a href="/b?id=2">Torrent!</a>
+        "#;
+        let links = extract_links(html, &doc("https://host.example/"));
+        assert_eq!(urls(&links), vec!["https://host.example/b?id=2"]);
+    }
+
+    #[test]
+    fn an_extension_match_is_reported_as_one() {
+        let html = r#"<a href="/x.torrent">whatever</a>"#;
+        let links = extract_links(html, &doc("https://host.example/"));
+        assert_eq!(links[0].matched, MatchedBy::Extension);
+    }
+
+    #[test]
+    fn an_anchor_title_labels_a_link_that_has_no_text_and_no_image() {
+        let html = r#"<a href="/get?id=9" title="Download torrent"></a>"#;
+        let links = extract_links(html, &doc("https://host.example/"));
+        assert_eq!(urls(&links), vec!["https://host.example/get?id=9"]);
+        assert_eq!(links[0].matched, MatchedBy::Label);
+    }
+
+    #[test]
+    fn a_link_inside_a_script_is_still_skipped() {
+        let html =
+            r#"<script><link rel="alternate" type="application/x-bittorrent" href="/x"></script>"#;
+        assert!(extract_links(html, &doc("https://host.example/")).is_empty());
+    }
     #[test]
     fn an_absolute_and_a_root_relative_href_are_both_found() {
         let html = r#"

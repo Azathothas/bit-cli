@@ -73,6 +73,7 @@ struct Args {
     raw: bool,
     plain: bool,
     ca_out: Option<String>,
+    header_values: bool,
     once: bool,
     expect_ja4: Option<String>,
     expect_ja3: Option<String>,
@@ -93,6 +94,8 @@ OPTIONS:
         --plain               speak cleartext HTTP/1.1, capture the header order
         --ca-out <PATH>       write the generated CA certificate here, as PEM,
                               so a verifying client can be told to trust it
+        --header-values       record header values as well as names. Only for
+                              a browser this repository launched itself
         --json                one JSON object per connection on stdout
         --once                exit after the first connection
         --expect-ja4 <S>      assert the JA4 string, else exit 1
@@ -122,6 +125,7 @@ fn parse_args() -> Args {
         raw: false,
         plain: false,
         ca_out: None,
+        header_values: false,
         once: false,
         expect_ja4: None,
         expect_ja3: None,
@@ -147,6 +151,7 @@ fn parse_args() -> Args {
             "--raw" => a.raw = true,
             "--plain" => a.plain = true,
             "--ca-out" => a.ca_out = Some(next_value(&argv, &mut i)),
+            "--header-values" => a.header_values = true,
             "--once" => a.once = true,
             "--expect-ja4" => a.expect_ja4 = Some(next_value(&argv, &mut i)),
             "--expect-ja3" => a.expect_ja3 = Some(next_value(&argv, &mut i)),
@@ -268,6 +273,9 @@ struct Capture {
     ja3: String,
     akamai: Option<String>,
     headers: Vec<String>,
+    /// Header values beside their names, and only under `--header-values`.
+    /// Empty is the shipping case and the default.
+    header_pairs: Vec<(String, String)>,
 }
 
 impl Capture {
@@ -282,6 +290,25 @@ impl Capture {
                 .map(|s| format!("\"{}\"", esc(s)))
                 .unwrap_or_else(|| "null".into()),
             jarr(&self.headers),
+        )
+    }
+
+    /// The same object with the header values beside the names.
+    ///
+    /// A second method rather than a field in `to_json`, so the shipping
+    /// shape cannot grow values by accident: a caller has to ask.
+    fn to_json_with_values(&self) -> String {
+        let pairs = self
+            .header_pairs
+            .iter()
+            .map(|(n, v)| format!("[\"{}\",\"{}\"]", esc(n), esc(v)))
+            .collect::<Vec<_>>()
+            .join(",");
+        let base = self.to_json();
+        format!(
+            "{},\"header_pairs\":[{}]}}",
+            base.trim_end_matches('}'),
+            pairs
         )
     }
 }
@@ -358,6 +385,7 @@ fn describe(
             .map(|h| h.headers.clone())
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| http1.to_vec()),
+        header_pairs: h2.map(|h| h.header_pairs.clone()).unwrap_or_default(),
     }
 }
 
@@ -495,7 +523,7 @@ fn read_h2_flight(stream: &mut impl Read) -> Vec<u8> {
             Ok(0) => break,
             Ok(n) => {
                 buf.extend_from_slice(&chunk[..n]);
-                if h2fp::parse(&buf).saw_headers || buf.len() > 1 << 20 {
+                if h2fp::parse(&buf, false).saw_headers || buf.len() > 1 << 20 {
                     break;
                 }
             }
@@ -551,7 +579,7 @@ fn handle(tcp: TcpStream, cfg: Option<&Arc<rustls::ServerConfig>>, a: &Args) -> 
         let _ = tls.write_all(&[0, 0, 0, 0x4, 0, 0, 0, 0, 0]);
         let _ = tls.flush();
         let buf = read_h2_flight(&mut tls);
-        let fp = h2fp::parse(&buf);
+        let fp = h2fp::parse(&buf, a.header_values);
         let cap = describe(&ch, Some(&fp), &[]);
         if !a.json {
             print_human(&ch, Some(&fp), &cap);
@@ -622,6 +650,7 @@ fn handle_plain(mut tcp: TcpStream) -> Option<Capture> {
         ja3: String::new(),
         akamai: None,
         headers: names,
+        header_pairs: Vec::new(),
     })
 }
 
@@ -690,7 +719,13 @@ fn main() {
             }
         }
         if a.json {
-            println!("{}", cap.to_json());
+            println!(
+                "{}",
+                match a.header_values {
+                    true => cap.to_json_with_values(),
+                    false => cap.to_json(),
+                }
+            );
             let _ = std::io::stdout().flush();
         }
         if let Some(path) = &a.write_golden
@@ -765,6 +800,7 @@ mod tests {
             ja3: "cd08e31494f9531f560d64c695473da9".into(),
             akamai: Some("1:65536;2:0|15663105|0|m,a,s,p".into()),
             headers: vec![":method".into(), ":authority".into()],
+            header_pairs: Vec::new(),
         };
         let text = cap.to_json();
         assert_eq!(
@@ -786,10 +822,33 @@ mod tests {
             ja3: "e".into(),
             akamai: None,
             headers: Vec::new(),
+            header_pairs: Vec::new(),
         };
         let text = cap.to_json();
         assert!(text.contains("\"akamai\":null"), "{text}");
         assert_eq!(golden_field(&text, "akamai"), None);
+    }
+
+    #[test]
+    fn header_values_are_absent_from_the_shipping_shape() {
+        let cap = Capture {
+            ja4: "a".into(),
+            ja4_r: "b".into(),
+            ja3: "c".into(),
+            akamai: None,
+            headers: vec!["user-agent".into()],
+            header_pairs: vec![("user-agent".into(), "Mozilla/5.0".into())],
+        };
+        // The default shape carries names and never values, whatever the
+        // capture happens to hold. Asking is what produces them.
+        let plain = cap.to_json();
+        assert!(!plain.contains("header_pairs"), "{plain}");
+        assert!(!plain.contains("Mozilla"), "{plain}");
+
+        let asked = cap.to_json_with_values();
+        assert!(asked.contains("\"header_pairs\""), "{asked}");
+        assert!(asked.contains("Mozilla/5.0"), "{asked}");
+        assert_eq!(golden_headers(&asked), Some(cap.headers.clone()));
     }
 
     #[test]
@@ -800,6 +859,7 @@ mod tests {
             ja3: "c".into(),
             akamai: None,
             headers: vec!["x\"y".into()],
+            header_pairs: Vec::new(),
         };
         let text = cap.to_json();
         assert!(text.contains("x\\\"y"), "the quote is not escaped: {text}");

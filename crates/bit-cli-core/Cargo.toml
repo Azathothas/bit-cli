@@ -23,13 +23,19 @@ dht = []
 pex = []
 lsd = []
 upnp = []
+# `--render`: drive an already-installed Chrome or Edge over the DevTools
+# protocol and extract from the DOM after script has run. Off by default and
+# built by a CI job so it cannot rot. See `TODO/cli-surface.md`, T-244.
+render = ["dep:chromiumoxide", "dep:futures-util"]
 
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
+chromiumoxide = { workspace = true, optional = true }
 chrono.workspace = true
 encoding_rs.workspace = true
+futures-util = { workspace = true, optional = true }
 globset.workspace = true
 hdrhistogram.workspace = true
 ignore.workspace = true

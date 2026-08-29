@@ -69,6 +69,7 @@ session reaches for most:
 | a file came out with the wrong line endings | nothing: `gates.ps1 -Fix` normalises them. `scripts/check-eol.ps1 -Fix` is the same step on its own |
 | what is the flag for X | `man/bit-cli.json`. Never grep the source, never page `--help`, never guess |
 | what has a run done, measured | `pwsh -NoProfile -File scripts/session-report.ps1 -Since <ISO>` |
+| is the browser this tree impersonates still current | `pwsh -NoProfile -File scripts/check-browser-version.ps1`, and `scripts/check-browser-fingerprint.ps1` against a real one. Both emit the replacement values |
 | commit and push | `pwsh -NoProfile -File scripts/git-sync.ps1`. Nothing else |
 
 **Reach for the purpose-built tool before the general one.** A general tool

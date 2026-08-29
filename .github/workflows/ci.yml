@@ -414,3 +414,26 @@ jobs:
       - name: The fingerprint against its golden
         shell: pwsh
         run: ./scripts/check-fingerprint.ps1
+
+  render:
+    name: The rendered tier
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_GATE }}
+      - uses: Swatinem/rust-cache@v2.9.2
+      # `--render` is off by default, so nothing else in this workflow builds
+      # it. This job exists so it cannot rot: a `chromiumoxide` release that
+      # moves an API, or a Chrome that changes what `Page.navigate` does, is
+      # invisible everywhere else.
+      - run: cargo build --release --workspace --bins --examples --locked --features render
+      - run: cargo clippy --workspace --all-targets --locked --features render -- -D warnings
+      - run: cargo test --workspace --locked --features render
+      # The runner image ships Chrome. With none the rendered tier is skipped
+      # with a printed reason and this exits 0, which is the same path every
+      # other job takes and is why it is safe to run everywhere.
+      - name: Both tiers over the proving ground
+        shell: pwsh
+        run: ./scripts/check-page-extract.ps1

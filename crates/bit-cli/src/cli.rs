@@ -434,6 +434,35 @@ pub struct PageSourceArgs {
         default_value = "browser"
     )]
     pub client: ClientProfileArg,
+
+    /// Read the page after its script has run, through an installed browser.
+    ///
+    /// A page that builds its links in script has none of them in the HTML the
+    /// server sent. This drives a Chrome or Edge that is **already
+    /// installed**, over the DevTools protocol, and extracts from the DOM
+    /// afterwards. It never installs a browser and never bundles one.
+    ///
+    /// It needs a build with the `render` feature: `cargo build --release
+    /// --features render`. Without one the flag is refused with a message
+    /// saying so rather than silently reading the page unrendered.
+    #[arg(long = "render")]
+    pub render: bool,
+
+    /// The browser `--render` drives, when it is not where this looks.
+    ///
+    /// Absent, an already-running instance on `--browser-port` is tried, then
+    /// the executables on `PATH`, then the platform's usual locations. A path
+    /// given here is tried first and alone: naming one and getting a different
+    /// browser is the tool ignoring its own instruction.
+    #[arg(long = "browser-path", value_name = "PATH")]
+    pub browser_path: Option<std::path::PathBuf>,
+
+    /// Attach to a browser already listening for the DevTools protocol.
+    ///
+    /// `HOST:PORT`, or just `PORT` for `127.0.0.1`. Attaching to a browser
+    /// that is already up is cheaper than starting a second one.
+    #[arg(long = "browser-port", value_name = "HOST:PORT")]
+    pub browser_port: Option<String>,
 }
 
 /// The `--page-client` values, mapped to the core's own enum.
