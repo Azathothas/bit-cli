@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**15 entries: 13 done, 1 partial, 0 blocked, 1 open.** Every one of them was
+**15 entries: 14 done, 0 partial, 0 blocked, 1 open.** Every one of them was
 held up by a seam somebody else's crate does not expose. **No open P0 is left
 in the record, and nothing in the record is blocked.**
 
@@ -43,7 +43,7 @@ vendored beside them. The section below is what each one is for.
 | [T-102](../TODO/bep-coverage.md) | P3 | open | `PeerConnectionHandler`, for BEP 55 |
 | [T-025](../TODO/peers.md) | P3 | **done** | one `pub use`, and the filter had no name |
 | [T-256](../TODO/trackers.md) | P1 | **done** | a private announce loop that recomputed its event |
-| [T-244](../TODO/cli-surface.md) | P2 | partial | a `ClientHello`, a SETTINGS frame and a pseudo-header order |
+| [T-244](../TODO/cli-surface.md) | P2 | **done** | a `ClientHello`, a SETTINGS frame and a pseudo-header order |
 
 One is not done: [T-102](../TODO/bep-coverage.md), BEP 55, and it is no longer
 waiting on a seam. The seam that blocked it is the one
@@ -388,7 +388,7 @@ Then [T-100](../TODO/bep-coverage.md), [T-167](../TODO/bep-coverage.md) and
 [T-102](../TODO/bep-coverage.md). Each entry names its seam with a line number
 and none of them needs re-deriving.
 
-## 6. T-244, and the five trees that are not librqbit's
+## 6. DONE. T-244, and the five trees that are not librqbit's
 
 `TODO/cli-surface.md` T-244 ships a client that presents itself as a current
 Chrome when it fetches a source document, by the operator's ruling of

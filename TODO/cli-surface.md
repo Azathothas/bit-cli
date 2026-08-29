@@ -4043,9 +4043,9 @@ Source:      the operator's brief of 2026-08-24, measured the same day
 Category:    cli
 Priority:    P2
 Effort:      L
-Status:      partial, 2026-08-29: the static tier and both halves of the
-             Acceptance ship, the impersonating `ClientHello` and `--render` do
-             not
+Status:      **done**, 2026-08-29: both tiers ship, the client's JA4 is
+             Chrome's own, and staleness is detected and recommended against
+             with proof
 
 Problem:     `source.rs:93` maps an `http://` or `https://` string to
              `Kind::Url`, documented at `source.rs:47` as "an HTTP(S) URL
@@ -4539,51 +4539,307 @@ Ruled:       **Three decisions, 2026-08-29, after the measurements above and
              and new values**. A check that only says "your fingerprint
              changed" is half a tool.
 
-Left:        **Named precisely, because this entry is partial rather than
-             done.** All six are the work of the one remaining session, and
-             the ruling above settles how each lands.
+Correction:  **The `--render` driver costs 15 packages in this tree, not 136,
+             and the ruling that made it a feature was given the larger
+             number.** The 136 was measured in a standalone probe with an
+             empty graph. Measured here, against the graph this tree already
+             has:
 
-             1. **The impersonating fetch tier**, in the default build under
-                ruling 1. Vendor `impit`, `h2`, `rustls`, `tower-http` and
-                `hyper-util` under `vendor/`, carry the `h2` version fix as a
-                patch in `patches/`, and put both clients behind one `Fetcher`
-                trait. The three costs in the Blocked block are accepted. The
-                measurements that say it can be done are recorded here.
+             ```bash
+             cargo tree -e normal --prefix none -p bit-cli | sort -u | wc -l
+             cargo tree -e normal --prefix none -p bit-cli --features render | sort -u | wc -l
+             ```
 
-                The `h2` fix is a rebase and not a copy: apify's fork is
-                `0.4.7` against a requirement of `0.4.19`. While in there,
-                delete the `IMPIT_H2_PSEUDOHEADERS_ORDER` env var and thread
-                the order through as a field. `std::env::set_var` is unsafe in
-                Rust 2024, is UB beside another thread reading the
-                environment, and is process-global, so two clients with
-                different profiles would fight. This tree runs a multi-thread
-                `tokio` runtime.
-             2. **The `ClientHello` itself**, which is the half of the
-                fingerprint no header set reaches: ten ciphers and ten
-                extensions against Chrome's fifteen, no GREASE, no ECH, no
-                ALPS, no certificate compression and no post-quantum key share.
-                That is `rustls`'s to decide and it is what item 1 is for.
-             3. **Chrome's header order**, which `reqwest` cannot express.
-                Measured above; it needs a client that writes the header block
-                itself, which is again item 1.
-             4. **`--render` itself.** The resolver is done and tested; what
-                is left is the CDP driver and the flag, and both wait on the
-                feature-gate decision above. Keep to `Page.navigate`,
-                `Runtime.evaluate` and `DOM.getDocument`, which have been
-                stable across Chrome majors for years, and hand the resulting
-                HTML to the same `extract` the static tier calls: if the
-                rendered tier changes anything but where the HTML came from, it
-                is wrong.
-             5. **`<link href>` is not read**, only `<a>` and `<area>`. An
-                indexer publishing `<link rel="alternate"
-                type="application/x-bittorrent">` is missed, and no page in the
-                fifteen measured does that.
-             6. **An indexer whose download links do not end `.torrent` is
-                missed entirely**, and one of the fifteen is exactly that:
-                `linuxtracker.org` publishes every torrent behind
-                `index.php?page=downloadcheck&id=<hex>`. Nothing about that URL
-                says it is a torrent until it is fetched. That is a real gap
-                and it is not the same gap as `--render`.
+             327 against 342. `chromiumoxide`'s dependencies are almost all
+             already here: `reqwest 0.13`, `tokio`, `serde`, `futures` and
+             `tracing` arrive with `librqbit` and with the impersonating
+             client. `default-features = false` is what keeps
+             `chromiumoxide_fetcher`, which exists to **download** a browser,
+             out of it.
+
+             **Ruling 2 was not reopened and `--render` is a feature.** The
+             ruling is the operator's and this is the number it was given
+             wrong, recorded so it can be revisited rather than rediscovered.
+
+Correction:  **Three of the five apify forks the survey named are not
+             vendored, and each one is a measurement rather than a
+             preference.** The Blocked block above says five upstreams. It is
+             five, and two of them are different ones.
+
+             **`apify/h2` is not vendored and `hyperium/h2` at `v0.4.19` is.**
+             The fork is `0.4.7` against the `0.4.19` every requirement in
+             this graph asks for, which is the defect this entry already
+             recorded; what it did not follow through was that vendoring the
+             fork and bumping its version would leave `vendor/upstream.json`
+             recording a base that does not describe the tree.
+             `patches/README.md` says that makes the next merge wrong in a way
+             nothing detects. So the tree is upstream `0.4.19` and the
+             pseudo-header ordering is our own patch, credited to apify's
+             change in `patches/UPSTREAM.md`.
+
+             **`apify/tower-http` is not vendored.** Its whole change is two
+             commented-out lines that stop `Content-Encoding` and
+             `Content-Length` being removed after a response is decompressed,
+             so every response would claim an encoding it no longer has and a
+             length it never had. `impit` compiles against the published
+             `tower-http` unchanged.
+
+             **`apify/hyper-util` is not vendored, and `hyperium/hyper-util`
+             is.** apify's change adds a status code to a proxy tunnel error,
+             which needs one downcast in `impit/src/errors.rs` and which
+             nothing here reads: `bit-cli` configures no proxy on this path.
+             Removing the downcast is twelve lines. What **is** vendored is
+             upstream at a commit past 0.1.20, unpatched, for one method
+             upstream took after that release, `http2_header_table_size`.
+
+             **A fifth tree arrived that the entry did not name:
+             `seanmonstar/reqwest`, the 0.13 line.** It is the reason the
+             others work at all, and the diagnosis is below.
+
+Correction:  **`--cfg reqwest_unstable` is not needed anywhere, and the
+             Blocked block's second cost is not paid.** It was going to be
+             paid for `impit`'s `reqwest` feature list, which carries `http3`.
+             The feature is removed from the vendored tree instead. The
+             reasoning is the entry's own: adding the flag means all three
+             `.cargo/config.toml` target blocks **and** the three `RUSTFLAGS`
+             blocks in `ci.yml`, where a workflow's `RUSTFLAGS` replaces the
+             config rather than adding to it, which is exactly
+             [T-146](#t-146-ci-built-a-windows-binary-against-the-dynamic-c-runtime).
+             Carrying that forever to ship an HTTP/3 path nothing in this tree
+             can read a fingerprint from is the wrong trade. `patches/UPSTREAM.md`
+             has the section.
+
+Correction:  **The Blocked block's third cost was already paid before this
+             work started.** It says two `reqwest` majors end up in the graph.
+             They were already there: `librqbit` depends on `reqwest 0.13` for
+             its tracker and UPnP clients and this repository's own crates ask
+             for 0.12.
+
+             ```bash
+             cargo tree -i reqwest@0.13.4 --workspace
+             ```
+
+Correction:  **`http::HeaderMap` was not why the header order was wrong, and
+             the entry recorded the wrong cause.** The previous session
+             measured Chrome's header set arriving in the wrong sequence and
+             named two causes: that `HeaderMap`'s iteration is not insertion
+             order, and that `reqwest` appends `user-agent` and
+             `accept-encoding` itself.
+
+             Only the second is load bearing. Measured off the wire twice, on
+             a thirteen header set: with `user-agent` and `accept-encoding`
+             **in** the map at Chrome's positions, the order on the wire is
+             Chrome's exactly, and `HeaderMap` iterated in insertion order both
+             times. `http`'s own documentation calls that order arbitrary, so
+             it is a coincidence to rely on rather than a contract, and the
+             golden in CI is what catches it moving.
+
+             That measurement retired a patch this session had already
+             written. An `h2::ext::HeaderOrder` request extension, threaded the
+             same way `PseudoOrder` is, produced a **byte-identical** capture.
+             `TODO/RULES.md` section 5 says a flag that does not move a number
+             does not ship, so it was removed rather than kept as insurance.
+
+Correction:  **The last `Left:` item proposed matching the anchor text, and
+             the page it was written about has none.** `linuxtracker.org`
+             publishes every torrent as
+             `<a href="index.php?page=downloadcheck&id=<hex>"><img
+             alt="Download Torrent"></a>`: no extension, and **no anchor text
+             at all**. The label is on the image. Fetched once, robots
+             honoured, by `scripts/check-page-fetch.ps1`.
+
+Measured:    **What the client puts on the wire now, against a real Chrome
+             151 on the same machine on the same day.** Captured with
+             `loopback-tlsprobe`, three ways: `--raw` for the `ClientHello`,
+             `--plain` for the cleartext header order, and a completed
+             handshake for the HTTP/2 half.
+
+             | | before | after | Chrome 151 |
+             | --- | --- | --- | --- |
+             | JA4 | `t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3` | `t13i1515h2_8daaf6152771_806a8c22fdea` | `t13i1515h2_8daaf6152771_806a8c22fdea` |
+             | Akamai | not reachable | `1:65536;2:0;4:6291456;6:262144\\|15663105\\|0\\|m,a,s,p` | `1:65536;2:0;4:6291456;6:262144\\|15663105\\|1:1:0:255\\|m,a,s,p` |
+             | header order | `accept` first, `user-agent` twelfth | Chrome's | Chrome's |
+
+             **The JA4 reached Chrome's exactly**, cipher hash and extension
+             hash both, which is what the entry asked for and did not assume.
+             Fifteen ciphers and fifteen extensions where there were ten and
+             ten, carrying ALPS `0x44cd`, ECH `0xfe0d`, certificate
+             compression `0x001b`, the SCT extension `0x0012` and the ML-DSA
+             signature algorithms `0x0904/5/6`.
+
+             **The Akamai fingerprint differs in one field of four**, the
+             PRIORITY one, and that is [T-262](#t-262-the-http-2-fingerprint-matches-a-real-chrome-in-three-fields-of-four).
+
+             The header order took four steps to reach and each was measured:
+             the pseudo-header order needed `h2` patched, reaching `h2` needed
+             `reqwest` patched, `SETTINGS_MAX_FRAME_SIZE` needed leaving out,
+             and `SETTINGS_HEADER_TABLE_SIZE` needed a `hyper-util` method
+             that is not in a release. `patches/UPSTREAM.md` has the table.
+
+Measured:    **A difference JA4 cannot see, found by the tool added to look
+             for it.** `JA4_ro` keeps the wire order where JA4 and JA4_r sort,
+             and the two clients diverge there:
+
+             ```
+             chrome   ciphers 4a4a,1301,1302,1303,c02b,c02f,c02c,c030,cca9,cca8,c013,c014,009c,009d,002f,0035
+             bit-cli  ciphers 0a0a,1301,1302,1303,c02b,c02f,c02c,c030,cca9,cca8,c013,c014,009c,009d,002f,0035
+             chrome   exts    6a6a,0005,0033,000a,44cd,0023,002d,ff01,001b,000d,000b,0017,fe0d,002b,0012,0010,4a4a
+             bit-cli  exts    ff01,000b,44cd,0017,0023,000d,0005,000a,0010,0012,0033,002d,002b,001b,fe0d
+             ```
+
+             **The cipher list is Chrome's, value for value and in Chrome's
+             order**, GREASE included and only the GREASE value itself
+             differing, which is what a browser varies per connection. The
+             extension list is Chrome's **set** in a fixed order, with no
+             GREASE at either end. That is
+             [T-263](#t-263-the-extension-list-is-chromes-set-in-a-fixed-order-and-chrome-shuffles-it),
+             and `tlsfp.rs` asserts the absence so the entry closes when it
+             starts failing.
+
+Measured:    **What it costs, on the artifacts.** Measured either side, on
+             `x86_64-pc-windows-msvc`, with a build of `HEAD` before the
+             change for the binary size.
+
+             | | before | after |
+             | --- | --- | --- |
+             | packages in the graph | 420 | 446 |
+             | binary | 20.13 MiB | 21.38 MiB |
+             | vendored source | 3.4 MB, 390 files | 9.1 MB, 824 files |
+             | `--cfg reqwest_unstable` | n/a | **not needed** |
+
+             `scripts/check-static.ps1` passes on the Windows binary and CI's
+             `Build` matrix passed on both musl targets, which is the answer
+             to the one question this entry left to CI.
+
+Measured:    **Two extraction gaps closed, against the pages the measurement
+             already fetched.** `scripts/check-page-fetch.ps1 -Extract` runs
+             the shipping extractor over each saved body through
+             `loopback-fileserver`, so no second request reaches anybody, and
+             records what each rule found. Committed as
+             `bench/page-extract-20260829.json`.
+
+             | page | links | by extension | by label |
+             | --- | --- | --- | --- |
+             | `kali` | 113 | 113 | 0 |
+             | `linuxtracker` | **75** | 0 | **75** |
+             | `webtorrent-free` | 10 | 10 | 0 |
+             | `ubuntu-alt` | 8 | 8 | 0 |
+             | `debian-cdimage` | 3 | 3 | 0 |
+             | the other ten | 0 or 1 | unchanged | 0 |
+
+             linuxtracker went from **0** to **75**, and nothing else moved.
+             One of the 75 is a false positive, that page's own template link
+             with its id unset and a second parameter that is not, and it is
+             written down in a test rather than argued away.
+
+Closed:      **Done, 2026-08-29.** Every item of the `Left:` list is closed or
+             carried as a filed entry with a measured reason.
+
+             1. **The impersonating fetch tier ships in the default build.**
+                `crates/bit-cli-core/src/fetch.rs` is one `Fetcher` trait over
+                one `GET` with a ceiling and a deadline, and two clients behind
+                it. `bit_cli_core::fetch::Identity` chooses. Five upstreams are
+                vendored, the `h2` ordering is a request extension rather than
+                `IMPIT_H2_PSEUDOHEADERS_ORDER`, and the corrections above say
+                which trees and why.
+
+                **A web seed is unaffected**, and so is a tracker announce, a
+                peer handshake and a list fetched by `--tracker-list-url` or
+                `--web-seed-list-url`: the list fetcher goes through the
+                **plain** client whatever `--page-client` says, and there is a
+                test.
+
+                `--page-client` did **not** gain a third value. The only
+                candidate was the old behaviour, Chrome's header set over
+                this tree's own `ClientHello`, and that is not a client
+                anybody is: it would be a third fingerprint belonging to
+                nothing, which is the opposite of what this entry is for.
+             2. **The `ClientHello`.** Measured above. It is Chrome's.
+             3. **Chrome's header order.** Measured above. It is Chrome's, and
+                the correction says what actually caused the old one.
+             4. **`--render` ships**, behind a Cargo feature, off by default,
+                built and run by a CI job named `The rendered tier`. The flag
+                exists in **every** build and a binary without the feature
+                refuses it by name: a manual, an error message and a command
+                surface that change shape between two binaries of the same
+                version is worse than a flag that says why it cannot run.
+
+                The driver navigates, waits for the document to stop changing
+                rather than for a guessed duration, and composes one HTML
+                string out of the document and any open shadow roots. That
+                string goes to the same `page::extract` the static tier calls.
+                **No browser is left running on any path out**, including the
+                deadline, and `check-page-extract.ps1` counts browser
+                processes either side of the rendered tier to prove it.
+             5. **`<link href>` is read**, and `type="application/x-bittorrent"`
+                with it, which is what a `<link rel="alternate">` actually
+                carries.
+             6. **An indexer whose links do not end `.torrent` is read**, by
+                the label rule, and the correction above says why matching the
+                anchor text alone would not have worked.
+
+             **The decision on item 6, and the two options it refused.**
+             Following a candidate to read its `Content-Type` was refused: it
+             turns one page into one request per link, and the one-hop rule is
+             what stops a page becoming a crawl. A per-host rule was refused as
+             a maintenance burden with no end. What ships uses only what the
+             page already says about itself, costs no request, and was
+             measured on fifteen real pages before it was written down.
+
+             **The proving ground has L6 and L7**, and both tiers run over all
+             thirteen cases:
+
+             ```
+             check-page-extract: 26 case(s) over static and rendered, 26 passed, 0 failed
+               links only a rendered tier reaches:
+                 L4-script      level 4  static 1  rendered 7  (+6)
+                 L5-hostile     level 5  static 0  rendered 2  (+2)
+                 L6-hidden      level 6  static 3  rendered 4  (+1)
+                 L7-unfriendly  level 7  static 0  rendered 2  (+2)
+               no browser was left running: 15 before, 15 after
+             ```
+
+             L6 carries the shape linuxtracker publishes and the three shapes a
+             looser rule would wrongly take. L7 carries links assembled from
+             split strings, one built two frames later, one behind a click and
+             one behind a scroll, and a **challenge** page with a real-looking
+             `cf-browser-verification` form and a meta refresh. The challenge
+             case's expected answer is a refusal in both tiers, and the form is
+             there so that a change which starts posting one fails.
+
+             **Staleness is detectable and it recommends with proof**, which
+             was the operator's first-class requirement.
+             `scripts/check-browser-version.ps1` asks Google, Mozilla and
+             Microsoft what stable is, with every fetch trapped on its own, and
+             prints the replacement `BROWSER_MAJOR`, `BROWSER_USER_AGENT` and
+             `sec-ch-ua` when the profile is behind. It says **Chrome 153**
+             today against a profile claiming 151.
+             `scripts/check-browser-fingerprint.ps1` drives the browser this
+             machine has and prints the replacement `BROWSER_HEADERS` in the
+             shape `page.rs` wants. Both write versioned JSON with a `schema`
+             field, per ruling 3, and both run on a schedule in
+             `.github/workflows/staleness.yml` rather than on a push: a browser
+             shipping is not a defect in a commit.
+
+             With no browser the fingerprint check exits **2** naming every
+             path it looked at, which is the case that has to work on every
+             runner.
+
+             **The `BROWSER_MAJOR` was not bumped to 153**, and that is a
+             decision rather than an oversight. The TLS half of the profile is
+             `impit`'s fingerprint database, whose newest Chrome is 151.
+             Claiming 153 in the User-Agent over 151's `ClientHello` is a
+             mismatch an origin can see, and it is a worse lie than being
+             consistently one browser. The check reports the drift and the next
+             session acts on it with a database that has moved.
+Left:        **Nothing.** Two residuals are filed with their own entries and
+             their own acceptance:
+             [T-262](#t-262-the-http-2-fingerprint-matches-a-real-chrome-in-three-fields-of-four),
+             the PRIORITY field of the Akamai fingerprint, and
+             [T-263](#t-263-the-extension-list-is-chromes-set-in-a-fixed-order-and-chrome-shuffles-it),
+             GREASE and the extension order. Both are P3, both are measured,
+             and both are invisible to the fingerprint that is actually
+             published and compared.
 
 ### T-245 Four commands refuse the URL download accepts
 
@@ -5845,7 +6101,7 @@ Relevance:   [T-244](#t-244-a-web-page-is-not-a-source-and-nothing-extracts-a-li
              something the current specification tells clients not to emit.
 Approach:    The mechanism is the one T-244 already built and proved.
              `vendor/h2/src/ext.rs` carries `PseudoOrder` as a request
-             extension; `vendor/h2/src/proto/streams/streams.rs:271` lifts it
+             extension; `vendor/h2/src/proto/streams/streams.rs:276` lifts it
              out before the extension map is cleared and hands it to
              `Peer::convert_send_message`. A `StreamPriority` extension takes
              the same three steps.
@@ -5880,3 +6136,85 @@ Notes:       The check already records this and does not judge it, following
              `scripts/check-close-wait.ps1`'s pattern, so nothing goes red
              while it is open. `patches/UPSTREAM.md` gets a section when it
              closes.
+
+### T-263 The extension list is Chrome's set in a fixed order, and Chrome shuffles it
+
+Source:      measured 2026-08-29 with `loopback-tlsprobe --raw --hello-out`,
+             while closing T-244
+Category:    cli
+Priority:    P3
+Effort:      M
+Status:      open
+
+Problem:     `bit-cli`'s browser profile and a real Chrome 151 on the same
+             machine produce the **same JA4**,
+             `t13i1515h2_8daaf6152771_806a8c22fdea`. They do not put the same
+             bytes on the wire, and JA4 cannot see the difference because it
+             sorts both lists and strips GREASE before hashing.
+
+             The cipher list is Chrome's exactly, in Chrome's order, GREASE
+             included. The extension list is not:
+
+             ```
+             chrome   6a6a,0005,0033,000a,44cd,0023,002d,ff01,001b,000d,000b,0017,fe0d,002b,0012,0010,4a4a
+             bit-cli  ff01,000b,44cd,0017,0023,000d,0005,000a,0010,0012,0033,002d,002b,001b,fe0d
+             ```
+
+             Two differences, and both are visible to anything that reads the
+             raw hello rather than a hash:
+
+             - **Chrome sends GREASE at both ends of its extension list** and
+               `bit-cli` sends none. Chrome sends it in the cipher list too,
+               and there `bit-cli` does.
+             - **Chrome's order is shuffled per connection** and `bit-cli`'s
+               is fixed. Chrome has shuffled its extensions since 110; the
+               shuffle is why JA4 sorts at all.
+Relevance:   [T-244](#t-244-a-web-page-is-not-a-source-and-nothing-extracts-a-link-from-one)
+             ships a client whose reason for existing is that an origin
+             fingerprinting its callers cannot tell it from a browser. An
+             origin comparing JA4 cannot. One comparing the raw hello can, and
+             a client whose extension order never changes is more
+             distinguishable than one that shuffles, not less: the fixed
+             sequence is itself the signal.
+
+             It is P3 because the fingerprint that is actually published,
+             compared and sold as a service is JA4, and that one matches
+             exactly. This is the layer below it.
+Approach:    The extension list and its order are apify's `rustls` fork's, in
+             `vendor/rustls/rustls/src/crypto/emulation/mod.rs`, which builds
+             the `ClientHello` from a `TlsFingerprint`. Two changes, and the
+             second is the harder one.
+
+             **GREASE at both ends** is a value from the sixteen the
+             specification reserves, chosen per connection, added first and
+             last. RFC 8701 is the specification and it exists precisely so a
+             server tolerates them.
+
+             **A shuffled order** means the fingerprint carries a list and the
+             handshake permutes it per connection, keeping the two extensions
+             the specification pins: `pre_shared_key` must be last, and this
+             tree does not send one.
+
+             `scripts/check-fingerprint.ps1` asserts JA4 and JA4_r, both of
+             which sort, so neither moves when this lands. Nothing in the
+             goldens has to change, which is the argument for doing it: the
+             assertion that would catch a mistake is already there and already
+             insensitive to the fix.
+Acceptance:  `loopback-tlsprobe --raw` reports a `JA4_ro` whose extension
+             segment differs between two consecutive captures of `bit-cli`,
+             where it is identical today, and whose first and last extension
+             are GREASE.
+
+             `pwsh scripts/check-fingerprint.ps1` still passes with the
+             goldens unchanged, which is what says the sorted forms did not
+             move.
+
+             The `!browser.extensions.iter().any(is_grease)` assertion in
+             `crates/bit-cli-core/examples/loopback-tlsprobe/tlsfp.rs` is
+             inverted rather than deleted, the way
+             `scripts/check-listener.ps1`'s cases were when
+             [T-020](peers.md) closed.
+Notes:       `JA4_ro` is what made this visible and it was added in the same
+             session, for exactly this: JA4 and JA4_r sort, so they say two
+             clients are the same when their wire order says otherwise. It is
+             recorded and never asserted, for the same reason JA3 is not.

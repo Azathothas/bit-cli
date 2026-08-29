@@ -32,6 +32,13 @@
 #   index        public torrent indexes that publish a browsable page with no
 #                account, all of them carrying freely redistributable content
 #
+# **`-Extract` runs the shipping extractor over each body it saved**, through
+# `loopback-fileserver` so no second request reaches anybody, and records the
+# link inventory per page: how many links, and which of the three rules took
+# each. That is what turns this from "was the page served" into "and is there
+# anything on it we can read", and it is the only place where the extractor
+# meets markup nobody in this repository wrote.
+#
 # Usage:
 #   pwsh scripts/check-page-fetch.ps1
 #   pwsh scripts/check-page-fetch.ps1 -Json -Out bench/page-fetch.json
@@ -62,7 +69,11 @@ param(
     # Per-request deadline in seconds.
     [int]$TimeoutSeconds = 30,
     # Where bodies are written for the classifier to read.
-    [string]$Root = ".tmp/page-fetch"
+    [string]$Root = ".tmp/page-fetch",
+    # Run the shipping extractor over the saved bodies and record what it found.
+    [switch]$Extract,
+    [ValidateSet("debug", "release")]
+    [string]$Build = "release"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -362,8 +373,98 @@ if ($errored -eq $results.Count -and $results.Count -gt 0) {
 $judged = $MaxBlocked -ge 0
 $pass = (-not $judged) -or ($blocked -le $MaxBlocked)
 
+# ---------------------------------------------------------------------------
+# What the shipping extractor makes of the bodies that were saved
+# ---------------------------------------------------------------------------
+#
+# Through `loopback-fileserver` and `bit-cli` itself, so this is the extractor
+# that ships rather than a second implementation of it in PowerShell. The
+# counting above is a regex and is deliberately kept: it answers "is there
+# something on this page at all", and a disagreement between the two is worth
+# seeing.
+#
+# No request leaves this machine. The bodies were fetched once, above.
+$extraction = $null
+if ($Extract) {
+    $exeDir = Join-Path $repo "target/$Build"
+    $bit = Join-Path $exeDir "bit-cli.exe"
+    if (-not (Test-Path $bit)) { $bit = Join-Path $exeDir "bit-cli" }
+    $fileServer = Join-Path $exeDir "examples/loopback-fileserver.exe"
+    if (-not (Test-Path $fileServer)) { $fileServer = Join-Path $exeDir "examples/loopback-fileserver" }
+    if (-not (Test-Path $bit) -or -not (Test-Path $fileServer)) {
+        Write-Host "  -Extract needs a build: cargo build --$Build --bins --examples"
+    } else {
+        $serverOut = Join-Path $outRoot "server.txt"
+        $server = Start-Process -FilePath $fileServer -PassThru -NoNewWindow `
+            -ArgumentList @('--root', $outRoot, '--port', '0') `
+            -RedirectStandardOutput $serverOut -RedirectStandardError (Join-Path $outRoot "server.err")
+        $base = $null
+        for ($i = 0; $i -lt 100; $i++) {
+            Start-Sleep -Milliseconds 100
+            $first = Get-Content $serverOut -TotalCount 1 -ErrorAction SilentlyContinue
+            if ($first) { $base = "$first".Trim().TrimEnd('/'); break }
+            if ($server.HasExited) { break }
+        }
+        if (-not $base) {
+            Write-Host "  -Extract could not start the file server"
+            if (-not $server.HasExited) { $server | Stop-Process -Force -ErrorAction SilentlyContinue }
+        } else {
+            $rows = @()
+            try {
+                foreach ($row in $results) {
+                    $bodyFile = Join-Path $outRoot "$($row.id).html"
+                    if (-not (Test-Path $bodyFile)) { continue }
+                    $runOut = Join-Path $outRoot "$($row.id).extract.json"
+                    Start-Process -FilePath $bit -NoNewWindow -Wait `
+                        -ArgumentList @('info', "$base/$($row.id).html", '--json', '--timeout', '20s') `
+                        -RedirectStandardOutput $runOut -RedirectStandardError "$runOut.err" | Out-Null
+                    $links = @()
+                    $single = $false
+                    try {
+                        $doc = Get-Content -Raw $runOut | ConvertFrom-Json
+                        # `@($null)` is a one-element array in PowerShell, so a
+                        # page with no links would count as one without this.
+                        $links = @($doc.context.page_links | Where-Object { $_ })
+                        # A page with exactly **one** link is not refused: it
+                        # resolves, and the link never appears in a list. The
+                        # run then reports on the torrent behind it, so the
+                        # page's own URL is not what the context names.
+                        if ($links.Count -eq 0 -and $doc.context.url -and
+                            $doc.context.url -ne "$base/$($row.id).html") {
+                            $single = $true
+                        }
+                    } catch { }
+                    $byRule = @{}
+                    foreach ($link in $links) {
+                        $rule = if ($link.matched) { $link.matched } else { "unknown" }
+                        $byRule[$rule] = 1 + [int]$byRule[$rule]
+                    }
+                    $rows += [pscustomobject][ordered]@{
+                        id        = $row.id
+                        links     = if ($single) { 1 } else { $links.Count }
+                        single    = $single
+                        extension = [int]$byRule['extension']
+                        type      = [int]$byRule['type']
+                        label     = [int]$byRule['label']
+                    }
+                }
+            } finally {
+                if (-not $server.HasExited) { $server | Stop-Process -Force -ErrorAction SilentlyContinue }
+            }
+            $extraction = $rows
+            Write-Host ""
+            Write-Host "  what the extractor found, by rule:"
+            foreach ($r in $rows) {
+                $how = if ($r.single) { "  (one link, resolved rather than listed)" } else { "" }
+                Write-Host ("    {0,-18} {1,4} link(s)   extension {2,3}  type {3,3}  label {4,3}{5}" -f `
+                        $r.id, $r.links, $r.extension, $r.type, $r.label, $how)
+            }
+        }
+    }
+}
+
 $report = [ordered]@{
-    schema      = "page-fetch/1"
+    schema      = "page-fetch/2"
     generated   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
     user_agent  = $agent
     pages       = $results.Count
@@ -374,6 +475,7 @@ $report = [ordered]@{
     judged      = $judged
     max_blocked = if ($judged) { $MaxBlocked } else { $null }
     pass        = $pass
+    extraction  = $extraction
     results     = $results
 }
 

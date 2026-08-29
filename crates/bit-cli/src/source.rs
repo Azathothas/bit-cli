@@ -1058,6 +1058,39 @@ mod tests {
 
     const HEX: &str = "0102030405060708090a0b0c0d0e0f1011121314";
 
+    /// A list is not a source document, so it is fetched by the **plain**
+    /// client whatever `--page-client` says. `--tracker-list-url` and
+    /// `--web-seed-list-url` point at a file the caller chose, and presenting
+    /// as a browser to fetch one buys nothing and hides who is asking.
+    ///
+    /// The construction is asserted rather than the wire, because the wire is
+    /// `scripts/check-fingerprint.ps1`'s job and this is the seam that decides
+    /// which client it reaches. See `TODO/cli-surface.md`, T-244.
+    #[test]
+    fn a_list_is_fetched_by_the_plain_client() {
+        let identity = Identity::plain("bit-cli/test");
+        assert_eq!(
+            identity.profile,
+            bit_cli_core::page::ClientProfile::Plain,
+            "Identity::plain is what fetch_list builds"
+        );
+        assert!(identity.user_agent_given);
+        let fetcher = bit_cli_core::fetch::fetcher_for(&identity, Duration::from_secs(1))
+            .expect("a plain fetcher builds");
+        assert_eq!(fetcher.profile(), bit_cli_core::page::ClientProfile::Plain);
+    }
+
+    /// And a source document is fetched by the impersonating one, by default,
+    /// which is the operator's ruling and the other half of the same seam.
+    #[test]
+    fn a_source_document_is_fetched_by_the_browser_client_by_default() {
+        let page = crate::cli::PageSourceArgs::default();
+        assert_eq!(
+            bit_cli_core::page::ClientProfile::from(page.client),
+            bit_cli_core::page::ClientProfile::Browser
+        );
+    }
+
     fn env() -> Env {
         Env::test(&[], "/work").0
     }

@@ -234,7 +234,7 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-241](metainfo.md) | P2 | metainfo | **done** | A resolved magnet keeps the payload and loses the metainfo *(nine commands take a magnet now, not one)* |
 | [T-242](performance.md) | P2 | performance | open | The request depth is a constant, and the run sits at 40 percent of it |
 | [T-243](phase-c.md) | n/a | phase-c | deferred | A user interface, and which of the two kinds decision 7.4 permits |
-| [T-244](cli-surface.md) | P2 | cli | partial | A web page is not a source, and nothing extracts a link from one |
+| [T-244](cli-surface.md) | P2 | cli | **done** | A web page is not a source, and nothing extracts a link from one |
 | [T-245](cli-surface.md) | P1 | cli | **done** | Four commands refuse the URL download accepts *(nine of them, and a metalink too)* |
 | [T-246](cli-surface.md) | P2 | cli | **done** | Three inputs report a file error and two of them name the wrong cause *(all three exit 2 now, where no source input could)* |
 | [T-247](cli-surface.md) | P2 | cli | **done** | A dry run over a URL prints zero for a count it never took |
@@ -253,11 +253,12 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-260](cli-surface.md) | P2 | ci | open | A release publishes binaries and nothing a program can consume |
 | [T-261](trackers.md) | P2 | trackers | open | There is no way to get a current tracker list, so every torrent carries whatever it was born with |
 | [T-262](cli-surface.md) | P3 | cli | open | The HTTP/2 fingerprint matches a real Chrome in three fields of four |
+| [T-263](cli-surface.md) | P3 | cli | open | The extension list is Chrome's set in a fixed order, and Chrome shuffles it |
 
 ## Counts
 
-211 items: 200 to work through, and 11 deferred to Phase C.
-31 open, 4 partial, 0 blocked, 165 done.
+212 items: 201 to work through, and 11 deferred to Phase C.
+32 open, 3 partial, 0 blocked, 166 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -266,10 +267,10 @@ when a number here disagrees with them.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 2 | 0 | 0 | 70 | 72 |
-| P2 | 18 | 4 | 0 | 62 | 84 |
-| P3 | 11 | 0 | 0 | 21 | 32 |
+| P2 | 18 | 3 | 0 | 63 | 84 |
+| P3 | 12 | 0 | 0 | 21 | 33 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **31** | **4** | **0** | **165** | **211** |
+| **All** | **32** | **3** | **0** | **166** | **212** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

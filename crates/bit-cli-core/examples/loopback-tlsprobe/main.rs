@@ -74,6 +74,7 @@ struct Args {
     plain: bool,
     ca_out: Option<String>,
     header_values: bool,
+    hello_out: Option<String>,
     once: bool,
     expect_ja4: Option<String>,
     expect_ja3: Option<String>,
@@ -96,6 +97,8 @@ OPTIONS:
                               so a verifying client can be told to trust it
         --header-values       record header values as well as names. Only for
                               a browser this repository launched itself
+        --hello-out <PATH>    write the raw ClientHello here, as one hex line,
+                              which is how a parser test vector is recorded
         --json                one JSON object per connection on stdout
         --once                exit after the first connection
         --expect-ja4 <S>      assert the JA4 string, else exit 1
@@ -126,6 +129,7 @@ fn parse_args() -> Args {
         plain: false,
         ca_out: None,
         header_values: false,
+        hello_out: None,
         once: false,
         expect_ja4: None,
         expect_ja3: None,
@@ -152,6 +156,7 @@ fn parse_args() -> Args {
             "--plain" => a.plain = true,
             "--ca-out" => a.ca_out = Some(next_value(&argv, &mut i)),
             "--header-values" => a.header_values = true,
+            "--hello-out" => a.hello_out = Some(next_value(&argv, &mut i)),
             "--once" => a.once = true,
             "--expect-ja4" => a.expect_ja4 = Some(next_value(&argv, &mut i)),
             "--expect-ja3" => a.expect_ja3 = Some(next_value(&argv, &mut i)),
@@ -395,6 +400,10 @@ fn print_human(ch: &tlsfp::ClientHello, h2: Option<&h2fp::H2Fingerprint>, cap: &
     eprintln!("{}", "=".repeat(72));
     eprintln!("  JA4      {}", cap.ja4);
     eprintln!("  JA4_r    {}", cap.ja4_r);
+    // Never asserted, for the same reason JA3 is not: it keeps the wire order
+    // and so it moves when nothing is wrong. It is what to read when a JA4_r
+    // matches and the capture still looks unlike the client it claims to be.
+    eprintln!("  JA4_ro   {}  (wire order, diagnostic only)", ch.ja4_ro());
     eprintln!("  JA3      {}  (GREASE filtered)", cap.ja3);
     eprintln!("  JA3 raw  {ja3_raw}  (unfiltered, per the original spec)");
     eprintln!("  JA3 str  {ja3_str}");
@@ -543,6 +552,20 @@ fn handle(tcp: TcpStream, cfg: Option<&Arc<rustls::ServerConfig>>, a: &Args) -> 
     let mut peek = vec![0u8; 16384];
     let n = tcp.peek(&mut peek).ok()?;
     peek.truncate(n);
+
+    // Written before the parse, so a hello this parser gets **wrong** is
+    // still recorded. A test vector that only exists for the inputs already
+    // handled is a test vector that proves nothing.
+    if let Some(path) = &a.hello_out {
+        let hex: String = peek.iter().map(|b| format!("{b:02x}")).collect();
+        match std::path::absolute(path).and_then(|p| std::fs::write(&p, hex + "\n").map(|_| p)) {
+            Ok(p) => eprintln!(
+                "loopback-tlsprobe: wrote the ClientHello to {}",
+                p.display()
+            ),
+            Err(e) => eprintln!("loopback-tlsprobe: cannot write {path}: {e}"),
+        }
+    }
 
     let ch = match tlsfp::parse(&peek) {
         Some(ch) => ch,

@@ -78,39 +78,25 @@ it, and it says so in its own first paragraph.
 
 - **Last session:** 2026-08-29T07:05:02Z, unattended, and a **one-off** for the
   second time running: the kickoff carried its own work order rather than
-  taking this file's, per [RULES.md](RULES.md) section 3. The whole session is
-  [T-244](cli-surface.md), which it closes. The ordinary work order resumes
-  under "Start here next session" below.
+  taking this file's, per [RULES.md](RULES.md) section 3. The whole session was
+  [T-244](cli-surface.md), which **closed done**. The ordinary work order
+  resumes under "Start here next session" below and this file's shape goes back
+  to normal with it.
   The duration is not restated here: `scripts/session-report.ps1` derives it
   from the instant above, and a duration written down twice is a number two
   documents disagree about.
 
   **The plan was written before starting**, per [RULES.md](RULES.md) section 1
-  step 4, and it is the kickoff's eight tasks in its order, with the vendoring
-  first because everything else in the session sits on it:
-
-  1. Vendor the upstream trees the impersonating client needs, under `vendor/`,
-     with the `h2` pseudo-header order carried as a patch rather than an
-     environment variable.
-  2. Put both clients behind one fetcher and ship the impersonating one by
-     default, with a web seed still identifying itself honestly.
-  3. Capture and assert the Akamai HTTP/2 fingerprint, with no flag that
-     weakens certificate verification.
-  4. Make staleness detectable: version tracking, ground truth capture, a
-     recommendation carrying the replacement values, and a scheduled CI job.
-  5. `--render` behind a Cargo feature, driving the rendered tier of the
-     proving ground.
-  6. Close the two extraction gaps the entry names, `<link href>` and an
-     indexer whose links do not end `.torrent`.
-  7. Harder proving ground levels, L6 and L7.
-  8. The tooling backlog, if the above lands.
-
-- **Tests:** 1,425 passing, 0 failing, up from 1,370. Plus **153** in the
-  vendored `rqbit` tree and **76** in `librqbit-utp`, which the workspace gates
-  do not run. `vendor/` did not move this session.
+  step 4, and it held: the kickoff's eight tasks in its order, vendoring first
+  because everything else sat on it. The operator interrupted twice, both times
+  about the same defect and both times correctly; the review section says what
+  it was.
+- **Tests:** 1,462 passing, 0 failing, up from 1,425. Plus **479** in the
+  vendored `h2` tree and **153** in `rqbit` and **76** in `librqbit-utp`, none
+  of which the workspace gates run.
 
 ```bash
-cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rqbit
+cargo test --manifest-path vendor/h2/Cargo.toml --workspace --target-dir target/vendor-h2
 ```
 
 - **Gates:** clean, on rustc 1.98.0. A default run prints **ten**: `text`,
@@ -120,291 +106,288 @@ cargo test --manifest-path vendor/rqbit/Cargo.toml --target-dir target/vendor-rq
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-three** jobs, one more than last session:
-  `Page extraction and fingerprint` is new and runs both of this session's
-  acceptance scripts. Green at run **33237268599**, against commit `644f473`,
-  with all twenty-three green. Run **33238223893** against `74330ee` is the one
-  this session's last push started: it failed once on
-  `Create round trip (windows-latest)` and **passed on a rerun of that job
-  alone, on the same commit**, so it is a runner flake and not a regression.
-  The evidence is in the review section below.
-  Three runs this session. The first, **33236102927** against `b18b834`, failed
-  on one job, `Third party notices`, because `THIRD_PARTY.md` still named
-  `chacha20 0.10.1` after the lockfile moved to `0.10.2`; the review section
-  below carries it.
+- **CI:** **twenty-four** jobs, one more than last session: `The rendered tier`
+  is new and builds `--features render`, lints it, tests it and drives both
+  tiers of the proving ground. Green at run **33245679142** against commit
+  `b6151ea`, with every job passing including all three release targets, which
+  is what answers the one question T-244 had left to CI: the vendored trees
+  build on both musl targets. Run **33249228182** against `c979227` is the one
+  the second push started.
+  A **second** workflow arrived, `Staleness`, which is a schedule and a
+  `workflow_dispatch` and does not run on a push at all.
 
 ```bash
 gh run list --limit 1
 ```
 
-- **Soak:** nothing ran this session. The one entry it worked on is not about
-  a long run.
-- **Entries:** 211 items. 31 open, 4 partial, 0 blocked, 165 done, 11 deferred
-  to Phase C. 165 of 200 workable done, 35 left.
-- **Tree:** 105 Rust files, 63,770 lines of code, 16,667 of comment,
+- **Soak:** nothing ran this session. The entry it worked on is not about a
+  long run.
+- **Entries:** 212 items. 32 open, 3 partial, 0 blocked, 166 done, 11 deferred
+  to Phase C. 166 of 201 workable done, 35 left.
+- **Tree:** 108 Rust files, 65,082 lines of code, 17,216 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
   `reference/HISTORY/`. Nothing was mined this session and nothing was read
-  from it. The research this session worked from is **not** part of it: it was
-  this operator's own prior work under `.tmp/`, and by the kickoff's own
-  instruction it does not enter `reference/`, `RESEARCH.md` or
-  `reference-map.md`.
-- **Vendored:** **eight upstreams** now, five of them added this session:
-  `rustls`, `h2`, `impit`, `reqwest` and `hyper-util` beside `rqbit` and its
-  two siblings. **48 patches** across thirty-four sections in
-  [`patches/UPSTREAM.md`](../patches/UPSTREAM.md).
+  from it.
+- **Vendored:** **eight upstreams** now, five added this session: `rustls`,
+  `h2`, `impit`, `reqwest` and `hyper-util` beside `rqbit` and its two
+  siblings. **48 patches** across thirty-four sections in
+  [`patches/UPSTREAM.md`](../patches/UPSTREAM.md). 9.1 MB and 824 tracked
+  files, from 3.4 MB and 390.
 - **Version:** `bit-cli` 0.2.0, unchanged.
 
 ## What the last session did
 
-**One entry advanced, open to partial, and it is the largest thing in
-`cli-surface.md` by effort.** Two pushes, two new acceptance scripts, one new
-generator, one new loopback fixture, one new library module for extraction and
-one for finding a browser.
+**One entry closed, and it is the largest thing `cli-surface.md` had.** Two
+pushes, five upstreams vendored, one new library module, two new acceptance
+scripts, one new example, one new workflow and two new entries filed out of
+what the work measured.
 
-### [T-244](cli-surface.md), P2, `L`: a web page is a source now
+### [T-244](cli-surface.md), P2, `L`: the fetch is a browser, off the wire
 
-**The static tier ships.** `crates/bit-cli-core/src/page.rs` extracts every
-`href` whose path ends `.torrent` and every `magnet:` URI, with the anchor text
-beside each, resolved against the document and any `<base href>`. One function
-over an HTML string, so the rendered tier can change where the HTML came from
-and nothing else.
+**The JA4 reached Chrome's exactly**, which is what the entry asked for and did
+not assume. Measured with the oracle already in the tree, and beside a real
+Chrome 151 driven at the same probe on the same machine:
 
-One link resolves and the run continues. Several are named with their anchor
-text and refused, per the operator's ruling that a page is reported rather than
-guessed at. Zero names `--render` without implying a browser is installed.
-`--page-select` narrows it. All nine commands that read a source get it,
-through the one door `resolve_source` already was.
-
-**A page is told from a `.torrent` by attempt and fall back**: the body is
-parsed as bencode first and only asked whether it is markup when that fails. A
-metainfo begins `d`, so a mirror serving a real torrent as `text/html` is still
-read correctly. One hop and never two.
-
-**The parser choice is measured**, four candidates each resolved and checked on
-toolchain 1.88: a hand-written scanner adds **0** packages, `tl` 1, `lol_html`
-**44**, `scraper` **57**.
-
-### The proving ground, which is what makes the tier falsifiable
-
-`scripts/make-page-fixture.ps1` emits six levels of escalating difficulty and
-four acceptance cases, each with the correct extraction beside it as JSON,
-carrying **two** lists: what the static tier must find and what a browser must.
-`scripts/check-page-extract.ps1` serves them through `loopback-fileserver` and
-compares. **Ten of ten pass**, and the number that justifies `--render` is
-
-| level | static | rendered | only rendered |
+| | before | after | Chrome 151 |
 | --- | --- | --- | --- |
-| L4 script | 1 | 7 | **+6** |
-| L5 hostile | 0 | 2 | **+2** |
+| JA4 | `t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3` | `t13i1515h2_8daaf6152771_806a8c22fdea` | **the same** |
+| Akamai | not reachable at all | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` | same but for `1:1:0:255` |
+| header order | `accept` first | Chrome's | **the same** |
 
-with **zero** difference on levels 0 to 3, where a difference would be an
-extractor defect rather than a property of the page.
+Ten ciphers and ten extensions became fifteen and fifteen, with ALPS, ECH,
+certificate compression, SCT and the ML-DSA signature algorithms. The cipher
+list is Chrome's value for value **in Chrome's order**, GREASE included.
 
-### Both halves of the entry's own Acceptance hold, run
+**Reading the HTTP/2 half needed a completed handshake and no weakened
+verification.** `loopback-tlsprobe` mints its own certificate authority per
+run and writes it to `--ca-out`; `BIT_CLI_EXTRA_CA_FILE` adds that one root to
+the platform's. Nothing anywhere stops verifying a certificate.
 
-A page with one link resolves under `bit-cli info`, exit 0. A page with two of
-each exits 4 naming all four with their anchor text. And the header set and the
-TLS fingerprint are asserted against a recorded capture rather than eyeballed:
-`fingerprints/bit-cli-browser.json` and `fingerprints/bit-cli-plain.json`,
-checked by `scripts/check-fingerprint.ps1`, in CI.
+### Five upstreams, and three the survey named that are not among them
 
-### What the measurements said, including the two that disproved a premise
+`apify/rustls` for the `ClientHello`, `hyperium/h2` at `v0.4.19` for the
+pseudo-header order, `apify/impit` for the fingerprint database and the client,
+`seanmonstar/reqwest`'s 0.13 line for one line, and `hyperium/hyper-util`
+**unpatched** for one method a release has not carried.
 
-**Every page a plain client asked for was served.** `scripts/check-page-fetch.ps1`
-fetched fifteen named pages, robots.txt honoured, one `GET` each: **15 served,
-0 blocked**. Committed as `bench/page-fetch-20260829.json`. **The operator ruled
-that this does not retire the impersonating tier**, and the reason is sound:
-fifteen friendly distribution pages are not the population, and two of them sit
-behind Cloudflare already.
+Three of the survey's five are not vendored and each is a measurement.
+`apify/h2` is `0.4.7` against the `0.4.19` this graph resolves, so a `[patch]`
+at that version is declined and the fork never runs; vendoring it would record
+a base that does not describe the tree. `apify/tower-http` comments out the two
+lines that strip `Content-Encoding` and `Content-Length` after decompressing.
+`apify/hyper-util` adds a status code to a proxy tunnel error nothing here
+reads.
 
-**An off-host link is a match, and the work order called it a decoy.**
-`kali.org` serves its download page from `www.kali.org` and all **113** of its
-torrent links sit on `cdimage.kali.org`. A same-host rule returns nothing there.
+**Two of the three accepted costs were not paid.** `--cfg reqwest_unstable`
+is needed nowhere, because HTTP/3 is removed from the vendored `impit` rather
+than carried: the flag would have gone in all three `.cargo/config.toml` target
+blocks and all three `RUSTFLAGS` blocks in `ci.yml`, which is
+[T-146](cli-surface.md)'s shape. And two `reqwest` majors were already in the
+graph before any of this, through `librqbit`.
 
-**An unquoted `href` is not exotic, and the first count missed 113 links.** The
-first run of the fetch measurement used a quoted-only pattern and reported
-**0** torrent links on that same page. All three HTML5 framings are read now.
+### Staleness is detected, and the fix is recommended with proof
 
-### What this client actually looks like on the wire
+The operator's first-class requirement. Two checks, both writing versioned JSON
+with a `schema` field per ruling 3, both on a weekly schedule rather than on a
+push, because a browser shipping is not a defect in a commit.
 
-Captured with the oracle this session put in the tree, off the wire rather than
-out of the code:
+`scripts/check-browser-version.ps1` asks Google, Mozilla and Microsoft what
+stable is, every fetch trapped on its own, and prints the replacement
+`BROWSER_MAJOR`, `BROWSER_USER_AGENT` and `sec-ch-ua`. It says **Chrome 153**
+today against a profile claiming 151.
 
-| | JA4 |
-| --- | --- |
-| before | `t13i1010h1_61a7ad8aa9b6_3fcd1a44f3e3` |
-| after | `t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3` |
-| Chrome | `t13i1515h2_8daaf6152771_806a8c22fdea` |
+`scripts/check-browser-fingerprint.ps1` drives the browser this machine has at
+the probe and prints the replacement `BROWSER_HEADERS` in the shape `page.rs`
+wants, naming the browser and version they came from. With no browser it exits
+**2** naming every path it looked at.
 
-**One character moved and that is the honest summary.** `reqwest` gained
-`http2` so ALPN offers `h2`. Ten ciphers and ten extensions is what `rustls`
-offers against Chrome's fifteen, and no header set changes a `ClientHello`.
-The header **set** is Chrome's; the **order** is not, and `reqwest` cannot
-express one.
+**The profile was not bumped to 153**, and that is a decision: the TLS half is
+`impit`'s database, whose newest Chrome is 151, and claiming 153 over 151's
+`ClientHello` is a mismatch an origin can see.
 
-### Whether `impit` can enter this tree, which the survey could not know
+### `--render` ships, and it leaves nothing behind
 
-| question | answer |
-| --- | --- |
-| MSRV 1.88 | **passes**, 289 packages |
-| `x86_64-pc-windows-msvc` with `+crt-static` | **builds**, 8.59 MiB |
-| `scripts/check-static.ps1` on it | **passes** |
-| apify's `rustls` fork at this workspace root | **the whole workspace checks**, vendored `librqbit` included |
-| the musl targets | not measurable here, CI is the instrument |
+Behind a Cargo feature, off by default, built and run by a CI job. The flag is
+in **every** build and a binary without the feature refuses it by name. The
+driver navigates, waits for the document to **stop changing** rather than for a
+guessed duration, and composes one HTML string out of the document and any open
+shadow roots, which the same `extract` reads.
 
-The MSRV answer is the one that mattered: a bump would have been a decision
-above a `TODO/` item, and there is none. The survey's `h2` patch defect
-reproduced twice, independently, on a platform the survey never tested.
+```
+check-page-extract: 26 case(s) over static and rendered, 26 passed, 0 failed
+  links only a rendered tier reaches:
+    L4-script      level 4  static 1  rendered 7  (+6)
+    L5-hostile     level 5  static 0  rendered 2  (+2)
+    L6-hidden      level 6  static 3  rendered 4  (+1)
+    L7-unfriendly  level 7  static 0  rendered 2  (+2)
+  no browser was left running: 15 before, 15 after
+```
 
-### The tooling that moved out of `.tmp/` and into the tree
+### Both extraction gaps, and the one the entry described wrongly
 
-- **`crates/bit-cli-core/examples/loopback-tlsprobe/`**, the oracle, as a
-  `loopback-*` fixture like the other three, with `test = true` so its
-  `ClientHello` parser and HPACK decoder are in `cargo test --workspace`. It
-  gained `--plain` and a golden-manifest reader here.
-- **`crates/bit-cli-core/src/browser.rs`**, the resolver `--render` needs and
-  no CDP crate provides, unit tested fifteen ways with no browser present.
-- **`fpsync.py` was not ported and `ja3.py` was not copied.** The first is
-  answered by `check-fingerprint.ps1`, which asserts against what a browser
-  emits rather than against a version number; the second is superseded and its
-  JA4 is wrong. The probes under `probes/` stayed throwaway and their
-  measurements are in the entry.
+A link is a torrent now when its path ends `.torrent`, when it declares
+`type="application/x-bittorrent"`, or when its **label** says so and its URL
+carries an identifier. The label is the anchor text, then the element's
+`title`, then a wrapped image's `alt`.
 
-### What the reviews found
-
-**Review 1, every claim against the code it cites.** Four things.
-
-- **Two citations in T-244's own Problem were eight lines stale**, `source.rs:68`
-  and `:32`, and are `:86` and `:40`. `check-todo.ps1` could not catch them: it
-  checks a short citation's line only when the prose names a symbol occurring
-  exactly once, and `Kind::Url` occurs four times.
-- **The Problem's sentence was imprecise in a way that mattered.** Line 86 does
-  not map every `http(s)` string to `Kind::Url`: it reads the extension off the
-  **path** and returns `Kind::MetalinkUrl` for a metalink. A page arrives as
-  `Kind::Url` because it is not a metalink, not because nothing looks.
-- **Fourteen citations drifted twice**, seven each time, as `cli.rs` grew by 48
-  and then 31 lines. The `record` gate caught both.
-- **The Acceptance's first sentence reads two ways** and only one agrees with
-  the Approach. "One `.torrent` link and one magnet link" cannot mean one page
-  carrying both, because the Approach refuses a page yielding more than one. It
-  is read as two pages and both are cases, with a third for the page carrying
-  one of each.
-
-**Review 2, a cold read.** The classifier in `check-page-fetch.ps1` reported
-two pages blocked that were both served in full, because Cloudflare injects
-`/cdn-cgi/challenge-platform/` into pages it serves **normally**. Challenge
-markers and advisory markers are separate lists now, and the corrected count is
-15 of 15.
-
-**Review 3, adversarial.** Under "In progress" below, in full.
-
-**Review 4, the research's own claims re-verified.** Under "In progress".
-
-**Review 5, the abuse read.** Under "In progress".
-
-**Review 6 was CI's, and it paid again.** `Third party notices` went red on the
-first push because `THIRD_PARTY.md` named `chacha20 0.10.1` while `Cargo.lock`
-said `0.10.2`. The version moved because `chacha20 0.10.1` was **yanked
-upstream during this session**: the `deny` gate passed at 04:28 and failed at
-05:12 on the same tree.
-
-**And CI flaked once, on a case that waits three minutes.** The `v1` interop
-case failed on `Create round trip (windows-latest)` at run **33238223893**,
-having uploaded **0 bytes to 0 peers** in 180 seconds, while the `private`
-case, which is the same shape with one flag different, passed in **3.1
-seconds** in the same run. A rerun of that job alone, on the same commit,
-passed. The same job passed at run **33237268599** on code that already carried
-every change this session made to the fetch path. It is a peer discovery race
-on the Windows runner and it is the [T-160](cli-surface.md),
-[T-162](webseed.md), [T-215](webseed.md) family: a case that waits on a
-duration rather than on a condition. Nothing was changed for it and no entry
-was opened, because one occurrence is not a measurement; a second should open
-one.
-
-**And one thing nothing caught but a restore.** A `[System.IO.File]::WriteAllText`
-with a **relative** path, from a script that had `Set-Location`d into `.tmp/`,
-overwrote this repository's root `Cargo.toml` with a throwaway probe manifest.
-.NET's current directory is not PowerShell's. Nothing was lost because the file
-was committed, which is luck rather than a safeguard, and
-[RULES.md](RULES.md) section 5 carries the rule now.
+That last fallback is the whole finding. The entry proposed matching the anchor
+text; `linuxtracker.org`'s torrent links **have no anchor text**, only an icon
+whose `alt` is `Download Torrent`. Over the fifteen pages already fetched, run
+through the shipping extractor and committed as
+`bench/page-extract-20260829.json`: **75 links on that page where there were
+0**, one of them a false positive, and nothing changed on the other fourteen.
 
 ## In progress
 
-- **[T-244](cli-surface.md) is `partial`** and the entry names what is left
-  precisely, in six numbered items. The two large ones are the impersonating
-  `ClientHello`, which needs `impit` vendored, and `--render`'s driver. Both
-  wait on one operator decision, below.
+**Nothing.** [T-244](cli-surface.md) closed and its two residuals are filed
+with their own acceptance: [T-262](cli-surface.md), the PRIORITY field of the
+Akamai fingerprint, and [T-263](cli-surface.md), GREASE and the extension
+order. Both are P3 and both are invisible to JA4.
+
+**Review 1, every claim against the code it cites.** Four things.
+
+- **One citation into a vendored tree was five lines out.**
+  `streams.rs:271` names `Protocol`'s removal and the pseudo-header order is
+  lifted at `:276`. Corrected by reading the line.
+- **Seven citations into `cli.rs` drifted by 29 lines**, four in
+  `cli-surface.md` and two in `performance.md`, as `--render`,
+  `--browser-path` and `--browser-port` were added above them. The `record`
+  gate caught every one.
+- **A claim had no test behind it.** "The list fetcher goes through the plain
+  client, and there is a test" was written before there was one. There are two
+  now, in `crates/bit-cli/src/source.rs`.
+- **Two of `impit`'s defaults are load bearing and nothing named them.** The
+  abuse read rests on `vanilla_fallback` and `cookie_store` both defaulting
+  off. They are written into `patches/UPSTREAM.md` with their lines, so a
+  reconciliation that moves them is noticed.
+
+**Review 2, a cold read.** Two numbers that were wrong.
+
+- **`--render` costs 15 packages here and the entry said 136 in three
+  places.** The 136 was a standalone probe with an empty graph;
+  `chromiumoxide`'s dependencies are almost all already here. **Ruling 2 was
+  not reopened** and `--render` is still a feature. The number is corrected in
+  the entry so the operator can revisit rather than rediscover.
+- **`http::HeaderMap` was not why the header order was wrong.** The previous
+  session named two causes and only one is real: `reqwest` appends
+  `user-agent` and `accept-encoding` itself. With both in the map at Chrome's
+  positions the wire order is Chrome's, and `HeaderMap` iterated in insertion
+  order both times it was measured. That retired a patch this session had
+  already written and proved changed nothing.
+
+**Review 3, adversarial.** Under "In progress" is the wrong place for it, so it
+is here in full below.
+
+**Review 4, the inherited claims.** Below.
+
+**Review 5, the abuse read.** Below.
 
 **Review 3, adversarial: what would make this the wrong implementation?**
 
-1. **A tag scanner is not a parser and a real indexer may break it.** Conceded
-   in part. It has no tree, so a page relying on implied end tags or on
-   mis-nesting recovery could yield a different anchor text. Every level of the
-   proving ground and all fifteen fetched pages parse correctly, and the URLs,
-   which are what get fetched, come from attributes rather than from structure.
-   The risk is confined to anchor **text**.
-2. **The proving ground is mine, so it cannot surprise me.** This is the
-   strongest objection and it is why the fifteen real pages exist beside it.
-   One of them found something the proving ground did not generate: an
-   unquoted `href`. Another still is not covered, item 6 below.
-3. **What the proving ground does not generate that a real indexer does.**
-   `linuxtracker.org` publishes every torrent behind
-   `index.php?page=downloadcheck&id=<hex>`, so nothing in the URL says it is a
-   torrent. That is a real gap, it is in the entry, and it is **not** the same
-   gap as `--render`: no amount of script execution makes that URL end
-   `.torrent`.
-4. **`<noscript>` is skipped, and that is a choice that could be wrong.** A
-   browser with script on does not render it, so skipping it is what keeps the
-   two tiers agreeing. A page whose only torrent link is in `<noscript>` yields
-   nothing from either tier. Nothing measured says such a page exists.
-5. **The browser profile makes `bit-cli` lie about what it is, by default.**
-   True, and it is the operator's ruling. It is confined to the source document
-   fetch: a web seed still says `bit-cli`, because impersonating at a mirror
-   somebody configured buys nothing and hides who is asking.
-6. **The fingerprint golden could be a golden of the wrong thing.** It was
-   captured on Windows and asserted on Linux by CI on the first run, so it is
-   at least platform-independent. It is not a browser's fingerprint and the
-   entry says so in the same breath as recording it.
+1. **Five vendored trees is a reconciliation cost that never ends.** True, and
+   it is the strongest objection. What answers it in part is that two of them
+   carry **one line and no lines**: `reqwest` is a single statement and
+   `hyper-util` is unpatched. The two that carry real patches, `impit` and
+   `h2`, are the two whose behaviour this repository actually depends on.
+2. **The impersonation is a claim about a browser that keeps moving.** Also
+   true, and it is why half this session is the staleness tooling rather than
+   the client. The profile is already two majors behind stable and the tool
+   said so on its first run.
+3. **The label rule reads a human-facing string to make a machine decision.**
+   Conceded. It is bounded to a closed list of whole labels and a query
+   requirement, measured at 74 true and 1 false over fifteen real pages, and a
+   false positive costs one line in a list a person is already reading rather
+   than a wrong download. The alternative, fetching each candidate, turns one
+   page into one request per link.
+4. **What the proving ground still does not generate.** A page behind a login,
+   a page whose links are in a JSON API the page fetches and renders into a
+   framework component, and an indexer that paginates. The first is out of
+   scope by construction. The second is L4's `from-fetch` case in miniature
+   and would be found. The third is not: `bit-cli` reads one page and does not
+   follow a next link, by the one-hop rule.
+5. **What was asserted about an origin never fetched.** Nothing new. The
+   fifteen pages were fetched once each, robots honoured, and the only new
+   fetch this session was the three `index` group pages, to read
+   `linuxtracker.org`'s actual markup rather than guess at it. That guess would
+   have been wrong.
+6. **What breaks when apify moves.** `rustls` is the tree that matters: its
+   emulation module is where the `ClientHello` comes from, and a release that
+   restructures it is a real reconciliation. `scripts/vendor-status.ps1` and
+   `scripts/upstream-scan.ps1` are what notice. `impit`'s patches are larger in
+   line count and smaller in risk, because they are removals.
+7. **A driven Chrome is not a stealthy Chrome.** Unchanged and still fine:
+   `--render` exists for pages that build links in script, and a challenge is
+   refused in both tiers.
 
 **Review 4, the research's claims, re-verified and still asserted.**
 
-Re-run here, and all three held: `impit` static-links with `+crt-static` and
-passes `check-static.ps1`; its JA4 is `t13i1515h2_8daaf6152771_806a8c22fdea`
-with the Chrome cipher hash; and the `h2` patch is declined with a **warning**
-rather than an error, reproduced twice.
+Re-run here on the whole tree rather than on a probe:
 
-**Still asserted and never tested here**, inherited from the survey: `wreq` and
-`koon` failing to static-link, the BoringSSL classification of the four
-candidates that were never built, every star count, HTTP/3 and QUIC entirely,
-`impit`'s Akamai HTTP/2 fingerprint being profile-invariant, and every claim
-about macOS. `impit`'s musl builds are unverified anywhere, including here.
+- **MSRV 1.88 passes**, with everything vendored **and** with
+  `--features render`. `cargo +1.88 check --workspace --locked`.
+- **`x86_64-pc-windows-msvc` with `+crt-static`**: `scripts/check-static.ps1`
+  passes, no VCRUNTIME or UCRT import.
+- **Both musl targets build.** CI's `Build` matrix at run **33245679142**,
+  which is the one question the entry left to CI.
+- **The Akamai fingerprint is not profile-invariant**, which the survey said it
+  was. `impit`'s own database disagrees with itself: `chrome_151`'s connection
+  window is 15,728,640 and `chrome_125`'s is 15,663,105, in
+  `vendor/impit/impit/src/fingerprint/database/chrome.rs`. Read rather than
+  measured on the wire, and said so.
 
-**Review 5, the abuse read, which is specific to this entry.**
+**Still asserted and never tested here**, inherited from the survey and named
+so the next session knows: `wreq` and `koon` failing to static-link, the
+BoringSSL classification of the four candidates that were never built, every
+star count, and every claim about macOS. HTTP/3 and QUIC are unverified and are
+now deliberately **not shipped**, which is the honest resolution of that one.
 
-- **A CAPTCHA is a refusal in the code and not only in the docs.** There is no
-  retry, no backoff and no second request anywhere on the page path: one `GET`,
-  and a non-success status is an error carrying the status. The only second
-  fetch is the torrent a page named, and it is a different URL.
-- **Nothing retries past a bot check**, because nothing retries at all here.
-- **Nothing logs a credential or a cookie.** No cookie jar is built and
-  `Set-Cookie` is never read: `reqwest`'s `cookies` feature is not enabled and
-  the word appears in `crates/bit-cli/src/` in exactly two places, both the web
-  seed report's **redaction** list, `cmd/webseed.rs:580` and `cli.rs:1459`. The
-  fingerprint capture records header **names** only, by construction:
-  `h2fp.rs:92` says so and skips every value, and the cleartext path takes
-  `split(':').next()`.
-- **`--render` cannot leave a browser running because it does not exist yet.**
-  When it does, that is the first thing to test.
+One inherited belief is partly resolved: this tree already carried `aws-lc-rs`,
+which is AWS's fork of BoringSSL, through `rustls` and
+`librqbit-sha1-wrapper`, and `scripts/setup-nasm.ps1` exists because of it. The
+"two TLS stacks" objection to a BoringSSL client was therefore weaker than the
+entry recorded.
+
+**Review 5, the abuse read, and the bar is higher than it was.**
+
+- **A CAPTCHA is a refusal in the code.** One `GET`, no retry, no backoff, no
+  second request, and the trait that says so is `bit_cli_core::fetch::Fetcher`.
+  `impit`'s `vanilla_fallback` is the one path that could produce a second
+  request and it defaults off and is never turned on; the default is cited in
+  `patches/UPSTREAM.md`. L7's challenge case in the proving ground carries a
+  real-looking verification form and its expected answer is a refusal in both
+  tiers, so a change that starts posting one fails a check.
+- **Nothing retries past a bot check**, because nothing retries at all.
+- **Nothing logs a credential or a cookie**, and this session added the one
+  thing that could. `--header-values` on the probe records header **values**,
+  and it is used by exactly one script, against a browser that script launched
+  itself into a throwaway profile at a loopback port having visited nothing.
+  `cookie` and `authorization` are dropped even there, and the default shape
+  carries names only, which a test asserts. No cookie jar exists on either
+  client: `cookie_store` defaults to `None` and nothing sets it.
+- **`--render` leaves no browser running when the command fails.** Measured on
+  the timeout path, which is the one that would leak, and asserted every run:
+  `check-page-extract.ps1` counts browser processes either side of the rendered
+  tier and fails if the count grew.
+- **A web seed still identifies itself honestly**, and so does a tracker
+  announce, a peer handshake and a list fetched by URL. Two tests hold the
+  seam.
 - **The fetching honoured `robots.txt` and stayed to one request per page.**
-  `check-page-fetch.ps1` reads `robots.txt` per host, applies longest-match
-  with Allow winning a tie, records a disallowed path as skipped without
-  fetching it, and pauses between requests. Nothing was crawled and no page was
-  fetched twice.
-- **What this makes easier that it should not.** The header set makes `bit-cli`
-  look like a browser to a log. That is the ruled design and its blast radius
-  is one `GET` of a document the caller already named. It does not defeat a
-  challenge, does not solve one, and does not retry into one.
+  Three pages were fetched this session, through
+  `scripts/check-page-fetch.ps1`, which reads `robots.txt` per host and pauses
+  between requests. The extraction inventory over all fifteen was run from
+  **disk**, through a loopback file server, so no second request reached
+  anybody.
+- **What this makes easier that it should not.** The client now looks like
+  Chrome to a log at every layer an origin reads, by default. Its blast radius
+  is one `GET` of a document the caller named. It does not defeat a challenge,
+  does not solve one, does not retry into one, and the one new capability that
+  could be misused, reading header values, is confined to a browser this
+  repository started itself.
+- **One thing to keep an eye on.** `impit` exposes
+  `with_ignore_tls_errors`, which sets `danger_accept_invalid_certs`.
+  `bit-cli` never calls it and there is no flag that would.
+  `BIT_CLI_EXTRA_CA_FILE` **adds** a root and is the deliberate alternative.
 
 ## Start here next session
 
@@ -416,45 +399,53 @@ bigger ones a **category at a time**. The counts are derived from the rows:
 pwsh -NoProfile -File scripts/check-todo.ps1
 ```
 
+**This is an ordinary session's list again.** The two before it were one-offs
+whose work order came in the kickoff; that is over and this file is the work
+order.
+
 1. **Re-measure the baseline rather than trusting the one above**, which is
    [RULES.md](RULES.md) section 1 step 5. Read the run this session's last push
-   started: the CI line above names it.
+   started: the CI line above names it. This session touched `vendor/` heavily,
+   so run `scripts/vendor-status.ps1` too.
 
 ```bash
 gh run list --limit 1
 ```
 
 2. **[T-259](cli-surface.md), P3, `S`.** Still the smallest thing open and the
-   cheapest to prove, and untouched for two sessions: compare the non-row lines
-   of `docs/schema.md` for equality while keeping the row lines as containment,
-   with the hand-written tail `carry_across` preserves exempt. The entry names
-   both seams with their lines.
+   cheapest to prove, and untouched for three sessions now: compare the non-row
+   lines of `docs/schema.md` for equality while keeping the row lines as
+   containment, with the hand-written tail `carry_across` preserves exempt. The
+   entry names both seams with their lines.
 
-3. **[T-250](cli-surface.md), P2.** Cheaper again: `source_kind` gained a
-   **sixth** value this session, `page`, and the resolution of a page to the
-   link it named is exactly the "how it was resolved" this entry is about. The
-   error path already carries `page_links`; what is missing is the successful
-   one saying which link it took.
+3. **[T-250](cli-surface.md), P2.** Cheaper than it was: `source_kind` has a
+   `page` value and a page's links now carry a `matched` rule each, so "how it
+   was resolved" has more to say than when the entry was written. The error
+   path already reports `page_links`; the successful one still says nothing
+   about which link it took.
 
-4. **[T-253](cli-surface.md), P2, `partial`, and its blocker dissolved this
-   session.** It needed a self-signed certificate the tree could not make, and
-   `rcgen` is a dev-dependency of `bit-cli-core` now, with
-   `loopback-tlsprobe/main.rs` as the worked example of using it. Nothing
-   stands between this entry and a loopback file server that speaks TLS.
+4. **[T-253](cli-surface.md), P2, `partial`.** Its blocker went two sessions
+   ago and nothing has been done with that: `rcgen` is a dev dependency and
+   `loopback-tlsprobe` now generates a certificate authority as well as a leaf,
+   so a loopback file server that speaks TLS has two worked examples to copy
+   rather than one.
 
 5. **[T-251](trackers.md), P2, `M`, `partial`.** Unchanged: a `[[tracker]]`
    table in the file `--web-seed-config` reads, then the `[[peer]]` table after
    it. `scripts/check-announce.ps1` is where the case goes.
 
-6. **[T-244](cli-surface.md), P2, `partial`, and it needs the ruling in
-   "Open questions" before it is workable.** The entry's `Left:` list is six
-   items and the first is the one that unblocks two others.
+6. **[T-262](cli-surface.md) and [T-263](cli-surface.md), both P3**, both filed
+   this session out of what the fingerprint work measured, and both small. The
+   first is a PRIORITY payload in `h2`'s frame encoder; the second is GREASE
+   and a shuffled extension order in the vendored `rustls`. Neither moves JA4,
+   which is what makes them cheap to verify: the goldens do not change.
 
-7. **[T-260](cli-surface.md), P2, `M`, and [T-261](trackers.md), P2, `M`**,
-   both filed this session at the operator's request. T-260 publishes what a
-   release already builds plus the data files a program wants by URL; T-261 is
-   the tracker list that is the second consumer of that format. Neither blocks
-   the other and T-260 does not wait for T-261.
+7. **[T-260](cli-surface.md), P2, `M`, and [T-261](trackers.md), P2, `M`.**
+   T-260 publishes what a release already builds plus the data files a program
+   wants by URL, and it has more to publish now than when it was filed:
+   `fingerprints/*.json`, and the two staleness reports, all three carrying a
+   `schema` field for exactly this. T-261 is the tracker list that is the
+   second consumer of that format. Neither blocks the other.
 
 8. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
@@ -482,36 +473,22 @@ to 29 for [T-234](peers.md); entries 30 to 37 for [T-238](peers.md) and
 
 ## Open questions for the operator
 
-**None. All three were put to the operator at the end of this session and all
-three were ruled on.** The rulings are recorded here because the next session
-is the one that acts on them.
+**None.** The three rulings of 2026-08-29 were all acted on and T-244 closed on
+them. Three things to be aware of rather than to decide.
 
-1. **The impersonating client ships in the default build, on every artifact.**
-   Not a Cargo feature and not off by default. The reasoning the operator gave
-   is that almost everything that fetches a remote URL passes through this
-   path, so a release binary that does not impersonate is a release binary the
-   work did not reach. The costs are known and measured: five upstream trees
-   vendored under `vendor/`, `--cfg reqwest_unstable` in all three
-   `.cargo/config.toml` target blocks **and** the three `RUSTFLAGS` blocks in
-   `ci.yml`, and two `reqwest` majors in the graph.
-2. **`--render` is a Cargo feature, off by default**, with a CI job that builds
-   it so it cannot rot. 136 packages in every artifact for a flag that is inert
-   without an external browser is the wrong trade. The browser resolver stays
-   in the default build and stays tested everywhere, which is where it already
-   is.
-3. **The publishing foundation is schema and staleness detection only** in the
-   next session: versioned JSON with a stable schema, and the job that detects
-   drift and emits the replacement values as proof. Uploading it to a release
-   is [T-260](cli-surface.md), filed this session at the operator's request so
-   it is not lost, along with [T-261](trackers.md) for the tracker list that is
-   the second consumer that format has to fit.
+**The `--render` ruling was given a number that is wrong by a factor of nine.**
+Ruling 2 made it a Cargo feature because it cost 136 packages. Measured in this
+tree it costs **15**: `chromiumoxide`'s dependencies are almost all already
+here. The ruling was not reopened and `--render` is a feature. Whether it
+should be is now a decision on a different number.
 
-**Three things to be aware of rather than to decide.**
-
-**[T-253](cli-surface.md)'s blocker is gone**, which the kickoff asked to have
-recorded. It needed a certificate generator and `rcgen` arrived this session as
-a **dev** dependency of `bit-cli-core`, so it reaches no released binary and no
-notice file. `about.toml` sets `ignore-dev-dependencies`.
+**The browser profile is two majors behind stable**, and the tool that says so
+is new. `scripts/check-browser-version.ps1` reports Chrome 153 against a
+profile claiming 151. It is not bumped because the TLS half is `impit`'s
+fingerprint database, whose newest Chrome is 151, and a User-Agent that
+disagrees with the `ClientHello` under it is a worse tell than being one
+version behind. What unblocks it is `impit` shipping a newer profile, which
+`scripts/upstream-scan.ps1` will notice.
 
 **Twelve repositories in `TheDancingDeveloper-org`** redistribute Apache-2.0
 code under MIT with no licence file and no attribution. Nothing was said to
@@ -519,28 +496,37 @@ anybody, by [RULES.md](RULES.md) section 6a. Unchanged.
 
 **One dependabot pull request is still open**, number 6,
 `ci(deps): bump taiki-e/install-action from 2.86.3 to 2.86.5`. Not taken again,
-for the same reason as the last three sessions.
+for the same reason as the last four sessions.
 
 ## Behaviour changes worth the operator's eye
 
-**A URL that serves a web page is now a source rather than an error.** Every
-command that reads a `SOURCE` will fetch a page, extract the torrents it links,
-and resolve the one it finds. **A script that branched on exit 4 to mean "that
-URL is not a torrent" will now get a torrent** where the page named exactly one.
-Where it names several the exit code is still 4 and the message lists them.
+**The fetch of a source document is a browser at every layer an origin reads.**
+Chrome's `ClientHello`, Chrome's HTTP/2 settings and pseudo-header order,
+Chrome's header set in Chrome's order. The JA4 is Chrome 151's own, verified
+against a real Chrome 151 on the same machine. `--page-client plain` restores
+`bit-cli/<version>`.
 
-**The fetch of a source document presents as Chrome by default.** Chrome's
-header set, and ALPN offering HTTP/2 where it offered only HTTP/1.1 before.
-`--page-client plain` restores the old behaviour, and
-`--web-seed-user-agent` still wins over both. **A web seed is unaffected** and
-still sends `bit-cli/<version>`.
+**A web seed, a tracker announce, a peer handshake and a list fetched by URL
+are all unaffected** and still say `bit-cli`. The list fetchers go through the
+plain client whatever `--page-client` says, which is new and is tested.
 
-**`bit-cli` now decompresses.** `reqwest` gained `gzip`, `brotli`, `deflate`
-and `zstd`, so a document fetch advertises and accepts compressed responses
-where it previously took them raw.
+**`--render` exists.** It needs a build with the `render` feature, which the
+released binaries do not carry; without one the flag is refused by name.
+`--browser-path` and `--browser-port` came with it. Nine commands gained all
+three.
 
-**Nine commands gained two flags**, `--page-select` and `--page-client`, under
-a "Resolving a web page" heading.
+**`BIT_CLI_EXTRA_CA_FILE` is read.** A PEM bundle named by it is trusted **in
+addition to** the usual roots when a source document is fetched, and a run that
+reads it logs a warning naming the file. There is no flag anywhere that stops
+verifying certificates.
 
-**`fingerprints/` is a new top level directory**, holding what this client puts
-on the wire. `scripts/check-tree.ps1` was told about it on purpose.
+**A page's links are matched three ways now**, not one: the `.torrent`
+extension, a declared `type="application/x-bittorrent"`, or a torrent label
+over a URL carrying an identifier. **A script that counted links on an indexer
+page will see more of them**, which is the point: one real index went from 0 to
+75. Each link in a refusal carries a new `matched` field saying which rule took
+it.
+
+**`bit-cli` does not speak HTTP/3 and did not before**, and now it will not by
+construction: the vendored client's HTTP/3 path is removed rather than carried
+behind an unstable compiler flag.

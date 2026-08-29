@@ -1784,6 +1784,15 @@ per-request timeout set just above survives the round trip.
 is wrong for this tree specifically: two profiles, one process, a multi-thread
 runtime.
 
+**Two of this crate's defaults are load bearing and are not changed here**,
+recorded so a reconciliation that moves them is noticed rather than discovered.
+`vendor/impit/impit/src/impit.rs:133` defaults `vanilla_fallback` to false, so
+a connect failure produces **no second request**; nothing in `bit-cli` calls
+`with_fallback_to_vanilla`. And `cookie_store` defaults to `None`, so
+`reqwest`'s cookie provider is never set and no jar exists to write to. Both
+are what "one `GET`, no retry, nothing stored" rests on, and both are in the
+abuse read for `TODO/cli-surface.md` T-244.
+
 ---
 
 ## impit: HTTP/3 costs an unstable `rustc` flag in six places
@@ -1794,7 +1803,7 @@ Files:       vendor/impit/impit/Cargo.toml
              vendor/impit/impit/src/impit.rs
              vendor/impit/impit/src/lib.rs
              vendor/impit/impit/src/tls/mod.rs
-             the whole of impit's own http3 module, deleted
+             impit/src/http3.rs, deleted with the feature, tree-relative
              patches/impit/0002-impit-Cargo.toml.patch
              patches/impit/0004-impit-src-http3.rs.patch
              patches/impit/0005-impit-src-impit.rs.patch
@@ -1864,7 +1873,7 @@ message.
 Unblocks:    T-244, and the `deny` gate, which fails on the advisory
 Files:       vendor/impit/impit/Cargo.toml
              vendor/impit/impit/src/lib.rs
-             the whole of impit's own response_parsing module, deleted
+             impit/src/response_parsing/mod.rs, deleted, tree-relative
              patches/impit/0002-impit-Cargo.toml.patch
              patches/impit/0006-impit-src-lib.rs.patch
              patches/impit/0007-impit-src-response_parsing-mod.rs.patch
