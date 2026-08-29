@@ -116,11 +116,12 @@ pwsh -NoProfile -File scripts/gates.ps1
 
 - **CI:** **twenty-four** jobs, one more than last session: `The rendered tier`
   is new and builds `--features render`, lints it, tests it and drives both
-  tiers of the proving ground. Green at run **33250896807** against commit
-  `2282658`, with **all twenty-four passing**, including all three release
-  targets and the rendered tier driving a real Chrome on the runner. That
-  answers the one question T-244 had left to CI: the vendored trees build on
-  both musl targets.
+  tiers of the proving ground. Green at run **33253156829** against commit
+  `f4a10f0`, the last code push of the session, with **all twenty-four
+  passing**, including all three release targets and the rendered tier driving
+  a real Chrome on the runner. That answers the one question T-244 had left to
+  CI: the vendored trees build on both musl targets. Run **33250896807**
+  against `2282658` was green the same way earlier in the session.
   A **second** workflow arrived, `Staleness`, which is a schedule and a
   `workflow_dispatch` and does not run on a push at all.
 
