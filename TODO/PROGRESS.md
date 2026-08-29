@@ -91,9 +91,17 @@ it, and it says so in its own first paragraph.
   because everything else sat on it. The operator interrupted twice, both times
   about the same defect and both times correctly; the review section says what
   it was.
-- **Tests:** 1,462 passing, 0 failing, up from 1,425. Plus **479** in the
-  vendored `h2` tree and **153** in `rqbit` and **76** in `librqbit-utp`, none
+- **Tests:** 1,462 passing, 0 failing, up from 1,425. Plus **439** in the
+  vendored `h2` library, **153** in `rqbit` and **76** in `librqbit-utp`, none
   of which the workspace gates run.
+
+  **One of the 439 fails about one run in one under `--workspace` and is
+  upstream's.** `proto::streams::recv::tests::clear_recv_buffer_caps_capacity_before_overflow`
+  reproduces on a pristine `v0.4.19` checkout carrying only the two changes
+  that make the tree loadable here, so it predates every patch in
+  `patches/h2/`. It passes alone and it passes under `--lib`. Nothing was done
+  for it and no entry was opened: it is not this repository's code and one
+  flake in somebody else's test is not a measurement.
 
 ```bash
 cargo test --manifest-path vendor/h2/Cargo.toml --workspace --target-dir target/vendor-h2
