@@ -24,14 +24,31 @@
 #
 # It **recommends** rather than only reporting, which is the operator's
 # requirement: when the profile is behind, the output carries the replacement
-# `BROWSER_MAJOR`, the replacement `BROWSER_USER_AGENT` and the replacement
-# `sec-ch-ua` value, in the shape `page.rs` wants, so patching is applying a
-# diff rather than doing the work again.
+# `BROWSER_MAJOR` and `BROWSER_USER_AGENT`, in the shape `page.rs` wants, so
+# patching is applying a diff rather than doing the work again.
 #
-# What it cannot recommend is the TLS `ClientHello`, which is a cipher and
-# extension list rather than a version string.
-# `scripts/check-browser-fingerprint.ps1` is the half that reads that off a
-# real browser.
+# **Two things it deliberately does not recommend**, because neither can be
+# computed from a version number:
+#
+#   the ClientHello    a cipher list, a key exchange list, a signature
+#                      algorithm list and an extension order. Stable across
+#                      Chrome 136, 142 and 151 in the vendored database and not
+#                      guaranteed to stay so: 151 added the three ML-DSA
+#                      signature algorithms and moved the HTTP/2 connection
+#                      window.
+#   sec-ch-ua          Chrome permutes its brand list and varies the spelling
+#                      of the fake brand per major, on purpose. The vendored
+#                      database has `"Not.A/Brand"` at 136, `"Not_A Brand"` at
+#                      142 and `"Not=A?Brand"` at 151, with the order flipped.
+#                      Guessing the next one produces a header no browser
+#                      sends.
+#
+# So this reports **where the ceiling is** as well as how far behind the
+# profile has fallen: the newest Chrome the vendored `impit` fingerprint
+# database carries. That is the real blocker on a bump, and a session reading
+# the drift should not have to go and find it.
+# `scripts/check-browser-fingerprint.ps1` is the half that reads a real
+# browser.
 #
 # Usage:
 #   pwsh scripts/check-browser-version.ps1
@@ -89,6 +106,19 @@ if ($null -eq $claimedMajor) {
 $claimedAgent = ""
 if ($pageText -match 'pub const BROWSER_USER_AGENT:\s*&str\s*=\s*"([^"]*)"') {
     $claimedAgent = $Matches[1] -replace '\s+', ' '
+}
+
+# The newest Chrome the vendored fingerprint database can actually produce a
+# `ClientHello` for. A profile cannot honestly claim a version past this: a
+# User-Agent that disagrees with the handshake under it is a worse tell than
+# being one version behind, which is why the profile is not simply bumped.
+$databaseMajor = $null
+$databasePath = "vendor/impit/impit/src/fingerprint/database/chrome.rs"
+$databaseFile = Join-Path $repo $databasePath
+if (Test-Path $databaseFile) {
+    $majors = @([regex]::Matches((Get-Content -Raw $databaseFile), 'pub mod chrome_(\d+)') |
+            ForEach-Object { [int]$_.Groups[1].Value })
+    if ($majors.Count -gt 0) { $databaseMajor = ($majors | Sort-Object -Descending)[0] }
 }
 
 # ---------------------------------------------------------------------------
@@ -171,8 +201,19 @@ if ($chrome.error) {
         $detail = "the profile claims Chrome $claimedMajor and stable is $($chrome.major)"
     }
 
+    # A recommendation identical to what is already there is noise. When the
+    # database caps the reachable version at the one the profile already
+    # claims, there is nothing to apply and the block above has said why.
     if ($behind -ne 0) {
+        # Recommend what can be reached, not what is newest. A profile past
+        # the database's newest entry is a User-Agent with the wrong
+        # handshake under it.
         $newMajor = $chrome.major
+        $capped = $false
+        if ($null -ne $databaseMajor -and $newMajor -gt $databaseMajor) {
+            $newMajor = $databaseMajor
+            $capped = $true
+        }
         $recommend = [ordered]@{
             # Exactly the three literals in page.rs that carry a version, in
             # the shape they are written there. What this cannot produce is
@@ -181,12 +222,15 @@ if ($chrome.error) {
             browser_major      = $newMajor
             browser_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$newMajor.0.0.0 Safari/537.36"
             sec_ch_ua          = "`"Not=A?Brand`";v=`"99`", `"Google Chrome`";v=`"$newMajor`", `"Chromium`";v=`"$newMajor`""
+            reachable          = $newMajor
+            capped_by_database = $capped
             unresolved         = @(
                 "the TLS ClientHello, which is a cipher and extension list rather than a version string",
-                "the HTTP/2 SETTINGS values, which are numbers a browser chooses rather than a version"
+                "the HTTP/2 SETTINGS values, which are numbers a browser chooses rather than a version",
+                "the sec-ch-ua brand list, which Chrome permutes and respells per major on purpose"
             )
             proof              = "https://versionhistory.googleapis.com/v1/chrome/platforms/win/channels/stable/versions?pageSize=1 answered $($chrome.version)"
-            next               = "pwsh scripts/check-browser-fingerprint.ps1 -Recommend, on a machine with that Chrome installed"
+            next               = "pwsh scripts/check-browser-fingerprint.ps1, on a machine running that Chrome"
         }
     }
 }
@@ -198,6 +242,10 @@ $report = [ordered]@{
         browser_major      = $claimedMajor
         browser_user_agent = $claimedAgent
         source             = "crates/bit-cli-core/src/page.rs"
+    }
+    database  = [ordered]@{
+        newest_major = $databaseMajor
+        source       = $databasePath
     }
     latest    = @($sources | ForEach-Object {
             $row = [ordered]@{ browser = $_.browser }
@@ -226,6 +274,9 @@ if ($Json) {
     Write-Output $jsonText
 } else {
     Write-Host ("profile  Chrome {0}" -f $claimedMajor)
+    if ($null -ne $databaseMajor) {
+        Write-Host ("database Chrome {0}, the newest the vendored fingerprints reach" -f $databaseMajor)
+    }
     foreach ($s in $sources) {
         if ($s.error) {
             Write-Host ("{0,-9} unreachable: {1}" -f $s.browser, $s.error)
@@ -237,13 +288,28 @@ if ($Json) {
     Write-Host ("check-browser-version: {0}" -f $detail)
     if ($recommend) {
         Write-Host ""
-        Write-Host "the replacement, for $($recommend.file):"
-        Write-Host ("  pub const BROWSER_MAJOR: u32 = {0};" -f $recommend.browser_major)
-        Write-Host ("  pub const BROWSER_USER_AGENT: &str = `"{0}`";" -f $recommend.browser_user_agent)
-        Write-Host ("  sec-ch-ua: {0}" -f $recommend.sec_ch_ua)
-        Write-Host "  still unresolved, and this cannot produce them:"
-        foreach ($u in $recommend.unresolved) { Write-Host "    $u" }
-        Write-Host ("  next: {0}" -f $recommend.next)
+        if ($recommend.capped_by_database) {
+            Write-Host ("stable is Chrome {0} and the vendored fingerprint database stops at {1}." -f `
+                    $chrome.major, $databaseMajor)
+            Write-Host "  Bumping past it would send that version's User-Agent over this version's"
+            Write-Host "  handshake, which is a combination no browser produces. What unblocks it is"
+            Write-Host "  a newer entry in $databasePath, or a capture from a real browser of that"
+            Write-Host "  version through scripts/check-browser-fingerprint.ps1."
+            Write-Host ""
+        }
+        if ($recommend.reachable -eq $claimedMajor) {
+            Write-Host "there is no replacement to apply: the profile already claims the newest"
+            Write-Host "version the vendored fingerprints can produce a handshake for."
+            Write-Host ("  next: {0}" -f $recommend.next)
+        } else {
+            Write-Host "the replacement, for $($recommend.file):"
+            Write-Host ("  pub const BROWSER_MAJOR: u32 = {0};" -f $recommend.browser_major)
+            Write-Host ("  pub const BROWSER_USER_AGENT: &str = `"{0}`";" -f $recommend.browser_user_agent)
+            Write-Host ("  sec-ch-ua: {0}" -f $recommend.sec_ch_ua)
+            Write-Host "  still unresolved, and this cannot produce them:"
+            foreach ($u in $recommend.unresolved) { Write-Host "    $u" }
+            Write-Host ("  next: {0}" -f $recommend.next)
+        }
     }
 }
 
