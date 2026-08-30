@@ -215,10 +215,15 @@ back. Three values in sixteen therefore failed to parse:
 add: a server built from this fork rejected a real browser's hello whenever its
 GREASE landed there. All three carry `Option<Payload>` now.
 
-| | handshakes | reached HTTP/2 | failed |
-| --- | --- | --- | --- |
-| before | 29 | 27 | 2 |
-| after | 64 | 64 | **0** |
+**The as-shipped rate was never swept**, because a CI failure found it rather
+than a measurement did. `3/16` is arithmetic from the three codepoints, and the
+middle row below is what confirms the model: one codepoint left predicts a
+sixteenth, and two in twenty-nine is what it gave.
+
+| state | broken codepoints | handshakes | reached HTTP/2 | failed |
+| --- | --- | --- | --- | --- |
+| two of three fixed | 1 of 16 | 29 | 27 | 2 |
+| all three fixed | 0 | 64 | 64 | **0** |
 
 **The check that missed it made one handshake**, so it sampled one draw of
 sixteen and saw a three-in-sixteen defect four times in five.

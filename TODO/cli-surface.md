@@ -6490,13 +6490,22 @@ Correction:  **The first version of this shipped a defect and CI caught it, at
              this entry did not add: a rustls server built from this fork
              rejected a real browser's hello whenever its GREASE landed there.
 
-             Measured either side of the fix, `bit-cli` driven at the probe
-             with the CA trusted, counting connections that reached HTTP/2:
+             Measured with `bit-cli` driven at the probe with the CA trusted,
+             counting connections that reached HTTP/2. **The middle row is the
+             state after two of the three fields were fixed**, which is why its
+             rate is a sixteenth rather than three, and it is recorded rather
+             than dropped because it is what pointed at `0xbaba`:
 
-             | | handshakes | reached HTTP/2 | failed |
-             | --- | --- | --- | --- |
-             | before | 29 | 27 | 2 |
-             | after | 64 | 64 | **0** |
+             | state | broken codepoints | handshakes | reached HTTP/2 | failed |
+             | --- | --- | --- | --- | --- |
+             | as shipped | 3 of 16 | one CI run | — | that run |
+             | two fields fixed | 1 of 16 | 29 | 27 | 2 |
+             | all three fixed | 0 | 64 | 64 | **0** |
+
+             The as-shipped rate was not measured over many handshakes, because
+             it was found by a CI failure rather than by a sweep. `3/16` is
+             arithmetic from the three codepoints, and `2/29` against a
+             predicted `1/16` is the measurement that confirms the model.
 
              The regression test is
              `a_grease_extension_with_a_body_reads_at_any_reserved_codepoint`
