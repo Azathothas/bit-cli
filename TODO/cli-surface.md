@@ -6479,6 +6479,23 @@ Correction:  **The first version of this shipped a defect and CI caught it, at
              values. It cannot be run here, because rustls's own suite needs a
              `test-ca/` tree this repository does not vendor; the wire
              measurement above is what holds it.
+
+             **The check that missed it is repaired too, and that is the part
+             worth keeping.** `scripts/check-fingerprint.ps1` made **one**
+             handshake, so it sampled one draw of sixteen and a
+             three-in-sixteen defect reached it four times in five. It makes
+             eight now, `-Handshakes` sets it, and every one of them has to
+             reach HTTP/2. Three consecutive runs pass.
+
+             **A second finding came out of doing that**, and it inverted the
+             assertion that was written first. Requiring every capture to be
+             identical fails, and correctly: over eleven captures of one
+             binary, **eight carried `session_ticket` and three carried
+             `pre_shared_key`**, because the connection resumed, and the two
+             produce different JA4s. That is the client telling the truth and
+             it is what a real Chrome does. So the cold capture is the one
+             compared, which is the first, and the captures after it are read
+             only for whether they reached HTTP/2 at all.
 Notes:       `JA4_ro` is what made this visible and it was added in the same
              session, for exactly this: JA4 and JA4_r sort, so they say two
              clients are the same when their wire order says otherwise. It is

@@ -59,7 +59,14 @@ param(
     [string]$Profile = "",
     [string]$GoldenDir = "fingerprints",
     [ValidateSet("debug", "release")]
-    [string]$Build = "release"
+    [string]$Build = "release",
+    # How many handshakes each capture makes. More than one because the
+    # `ClientHello` draws two GREASE codepoints per connection, so one
+    # handshake samples one draw of sixteen. Eight puts the odds of missing a
+    # three-in-sixteen defect at about one in ten, where one handshake put them
+    # at four in five. See TODO/cli-surface.md, T-263.
+    [ValidateRange(1, 64)]
+    [int]$Handshakes = 8
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,13 +93,23 @@ if ($Update) { New-Item -ItemType Directory -Force -Path $goldenRoot | Out-Null 
 $scratch = Join-Path $repo ".tmp/fingerprint"
 New-Item -ItemType Directory -Force -Path $scratch | Out-Null
 
-# Start the probe, point one bit-cli run at it, and return the capture it made.
-# `$Raw` decides which half of the fingerprint is reachable.
+# Start the probe, point `$Handshakes` bit-cli runs at it, and return the
+# capture they made. `$Mode` decides which half of the fingerprint is reachable.
+#
+# **More than one run, and that is a repair rather than thoroughness.** The
+# `ClientHello` carries two GREASE codepoints drawn per connection from the
+# sixteen RFC 8701 reserves, so one handshake samples one draw. T-263 shipped a
+# defect that rejected three of those sixteen, which is one handshake in five,
+# and this check made exactly one: it failed a CI run, passed the next one over
+# the same defect, and would have been called noise by anybody reading a single
+# green run. Every capture has to match, so a rate is caught rather than
+# sampled.
 function Get-Capture([string]$profileName, [string]$Mode) {
     $tag = "$profileName-$Mode"
     $out = Join-Path $scratch "$tag-out.txt"
     $err = Join-Path $scratch "$tag-err.txt"
-    $probeArgs = @('--once', '--json', '--port', '0')
+    if (Test-Path $out) { Remove-Item -Force $out }
+    $probeArgs = @('--json', '--port', '0')
     if ($Mode -eq 'raw') { $probeArgs += '--raw' }
     if ($Mode -eq 'plain') { $probeArgs += '--plain' }
     # The `tls` capture is the only one that completes a handshake, so it is
@@ -130,8 +147,10 @@ function Get-Capture([string]$profileName, [string]$Mode) {
     $hadCa = $env:BIT_CLI_EXTRA_CA_FILE
     if ($caFile) { $env:BIT_CLI_EXTRA_CA_FILE = $caFile }
     try {
-        Start-Process -FilePath $bit -ArgumentList $argv -NoNewWindow -Wait `
-            -RedirectStandardOutput $runOut -RedirectStandardError "$runOut.err" | Out-Null
+        for ($run = 0; $run -lt $Handshakes; $run++) {
+            Start-Process -FilePath $bit -ArgumentList $argv -NoNewWindow -Wait `
+                -RedirectStandardOutput $runOut -RedirectStandardError "$runOut.err" | Out-Null
+        }
     } finally {
         if ($null -eq $hadCa) {
             Remove-Item Env:BIT_CLI_EXTRA_CA_FILE -ErrorAction SilentlyContinue
@@ -140,13 +159,40 @@ function Get-Capture([string]$profileName, [string]$Mode) {
         }
     }
 
-    $p.WaitForExit(10000) | Out-Null
+    # The probe serves until it is stopped now, because it is no longer told to
+    # exit after one connection.
     if (-not $p.HasExited) { $p | Stop-Process -Force -ErrorAction SilentlyContinue }
 
-    $lines = @(Get-Content $out -ErrorAction SilentlyContinue)
-    if ($lines.Count -lt 2) { return @{ error = "the probe captured nothing" } }
+    $captures = @()
+    foreach ($line in @(Get-Content $out -ErrorAction SilentlyContinue)) {
+        if ($line -notlike '{*') { continue }
+        try { $captures += ($line | ConvertFrom-Json) } catch { }
+    }
+    if ($captures.Count -eq 0) { return @{ error = "the probe captured nothing" } }
+
+    # **The cold capture is the one that counts, and it is the first.**
+    # Measured on 2026-08-30 over eleven captures of one binary: eight carried
+    # `session_ticket` and three carried `pre_shared_key` instead, because the
+    # connection resumed, and the two produce different JA4s. That is the
+    # client telling the truth rather than a defect, and it is the same thing a
+    # real Chrome does. So the captures are **not** required to be identical: a
+    # resumed hello legitimately differs, and comparing one against the golden
+    # would fail for the wrong reason.
+    #
+    # What every capture does have to do in `tls` mode is reach HTTP/2, which
+    # is the shape the T-263 defect took: a handshake that failed for three
+    # draws in sixteen left an Akamai fingerprint that was simply absent, and
+    # one handshake sampled it four times in five.
+    if ($Mode -eq 'tls') {
+        $withoutH2 = @($captures | Where-Object { -not $_.akamai }).Count
+        if ($withoutH2 -gt 0) {
+            return @{
+                error = "$withoutH2 of $($captures.Count) handshake(s) reached no HTTP/2 at all, so something in the handshake fails at a rate rather than always; see $err"
+            }
+        }
+    }
     try {
-        return @{ capture = ($lines[1] | ConvertFrom-Json) }
+        return @{ capture = $captures[0] }
     } catch {
         return @{ error = "the probe's output is not JSON: $($lines[1])" }
     }
