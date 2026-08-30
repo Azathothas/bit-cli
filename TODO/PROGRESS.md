@@ -116,8 +116,8 @@ gh run list --limit 1
   [T-262](cli-surface.md) then edited `h2` and `impit` for a reason that is not
   data: a frame this client could not write.
 - **Soak:** nothing ran this session.
-- **Entries:** 213 items. 30 open, 4 partial, 0 blocked, 168 done, 11 deferred
-  to Phase C. 168 of 202 workable done, 34 left.
+- **Entries:** 213 items. 29 open, 4 partial, 0 blocked, 169 done, 11 deferred
+  to Phase C. 169 of 202 workable done, 33 left.
 - **Tree:** 108 Rust files, 65,392 lines of code, 17,330 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
@@ -137,7 +137,29 @@ page was written.
 
 **The three entries were the whole of what T-244 left behind**, and what closed
 two of them is the same thing: a capture from a browser, taken on demand,
-instead of a claim about one.
+instead of a claim about one. [T-259](cli-surface.md) closed after them and is
+unrelated to any of it.
+
+### [T-259](cli-surface.md): the schema's prose is compared now, not just its rows
+
+`docs/schema.md` is generated and the test keeping it true read **field rows
+only**, so an edit to `schema::HEADER` that was never regenerated passed
+eighteen schema tests and never reached a reader. Everything that is not a row
+is compared for equality now.
+
+**Equality is safe because the prose is not timing dependent, and that was
+checked rather than assumed**: `render` emits a section for every name in the
+tables whether a sample turned up or not. Only the rows depend on what a run
+produced, which is why they stay containment. The old heading check was
+containment for a hazard that does not exist.
+
+**The proof is the defect, run.** A sentinel line in `HEADER` with no
+regeneration turns the tree red and names the line on both sides; reverted, the
+eighteen pass again.
+
+`carry_across`'s section logic became `hand_written_sections`, called by the
+writer and by the check, so what is preserved and what is exempt cannot drift
+apart.
 
 ### [T-263](cli-surface.md): GREASE at both ends, and an order that moves
 
@@ -291,9 +313,10 @@ machine wide and takes the podman machine down with it.
 ## In progress
 
 **[T-264](cli-surface.md) is `partial`** and the entry says what is left, in
-order: name `0x12e0`; add both codepoints to `impit`'s `ExtensionType` and to
-`vendor/rustls`'s extension encoder; capture a branded Chrome 152 with `-Source
-apt`; then bump. Only the last of those is waiting on the open question below.
+order: add `0x12e0` and its two zero bytes to the vendored extension encoder,
+for which [T-263](cli-surface.md)'s two new GREASE slots are the worked example;
+get a ruling on `0xca34`; capture a branded Chrome 152 with `-Source apt`; then
+bump. Two of those four are waiting on the questions below and two are not.
 
 **Nothing else is half done.** The three entries [T-244](cli-surface.md) filed
 are two done and one partial, and no other entry was opened or touched.
@@ -325,11 +348,12 @@ gh run list --limit 1
    throughout: clear the small entries so the open count comes down, then take
    the bigger ones a category at a time.
 
-   [T-259](cli-surface.md) P3 `S`, still the smallest thing open and untouched
-   for four sessions. [T-250](cli-surface.md) P2. [T-253](cli-surface.md) P2
-   `partial`, which now has three worked examples of `rcgen` to copy.
-   [T-251](trackers.md) P2 `partial`. Then [T-260](cli-surface.md) and
-   [T-261](trackers.md), the publishing pair.
+   [T-250](cli-surface.md) P2, which has more to report than when it was filed
+   now that a page's links carry a `matched` rule each.
+   [T-253](cli-surface.md) P2 `partial`, which now has three worked examples of
+   `rcgen` to copy. [T-251](trackers.md) P2 `partial`. Then
+   [T-260](cli-surface.md) and [T-261](trackers.md), the publishing pair, which
+   have four schema-carrying files to publish now rather than one.
 
 4. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
@@ -364,7 +388,7 @@ says whether something stopped cleaning up.
 
 ## Open questions for the operator
 
-**One, and it is about honesty rather than about work.**
+**Two, and both are about honesty rather than about work.**
 
 1. **How far may one profile be assembled from more than one capture?** The bump
    to 152 needs three things that no single browser reachable from this machine
@@ -377,6 +401,20 @@ says whether something stopped cleaning up.
    This session read it as one and therefore did not bump. If captures may be
    combined where each field is measured and the seams are written down, the
    bump is a session's work rather than a blocked item.
+
+2. **What should a client with no root store of its own put in `0xca34`?**
+   Chrome 152 sends the trust anchors extension, and its body is not a constant
+   to copy: 206 bytes, a length-prefixed list of twenty-four identifiers, which
+   is a snapshot of the browser's own root store. It changes when that store
+   changes, on its own schedule. `bit-cli` has no such store to enumerate.
+
+   Three answers and none of them is obviously right. **Omit it**, which is
+   what happens today and which is one extension short of a real Chrome.
+   **Carry a captured list**, which is honest on the day it is captured and is
+   then a fingerprint of exactly which build it came from. **Send it empty**,
+   which is a shape no browser sends. This session did not choose, because the
+   choice is what the profile *claims* rather than how it is built, and section
+   6b is the operator's rule about that.
 
 **Two things to be aware of rather than to decide.**
 

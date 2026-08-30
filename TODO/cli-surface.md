@@ -1547,7 +1547,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1569` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1578` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -5531,7 +5531,7 @@ Acceptance:  `BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema` on a
              four in place, `git diff --stat` reports no deletion, and a test
              fails when the carry-across is removed.
 
-Closed:      `carry_across` at `crates/bit-cli/src/schema_gen.rs:1304`, called
+Closed:      `carry_across` at `crates/bit-cli/src/schema_gen.rs:1401`, called
              at the end of `merge_schema`. It appends every `##` section of the
              committed file whose heading line the render does not emit, in
              committed order, after the generated content.
@@ -5939,11 +5939,13 @@ Source:      found while closing [T-257](#t-257-two-documents-answer-to-type-pro
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      done, 2026-08-30. Everything that is not a field row is compared
+             for equality now, and an edit to `HEADER` that is not regenerated
+             turns the tree red.
 
 Problem:     `docs/schema.md` is generated, and the test that keeps it true
              compares **field rows only**. `the_committed_schema_matches_what_the_program_writes`
-             at `crates/bit-cli/src/schema_gen.rs:1608` filters both sides to
+             at `crates/bit-cli/src/schema_gen.rs:1578` filters both sides to
              lines starting with `` | ` `` before comparing, so every other
              line of the file is outside the check: the header, the "How this
              file is kept true" section, and the one-line description under
@@ -5973,7 +5975,7 @@ Approach:    The row filter is there for a reason and it stays: the check is
              deliberately **containment** over rows, because these runs are
              timed and a download that beats its own report tick emits no
              `progress`. See the comment at
-             `crates/bit-cli/src/schema_gen.rs:1600`.
+             `crates/bit-cli/src/schema_gen.rs:1609`.
 
              What can be equality is everything that is **not** a row.
              `HEADER` is a constant, the per-name descriptions come from
@@ -5985,8 +5987,10 @@ Approach:    The row filter is there for a reason and it stays: the check is
              The hand-written sections `carry_across` preserves have to stay
              exempt, or the new half fails on the four sections at the end of
              the file that the generator does not produce. `carry_across` at
-             `crates/bit-cli/src/schema_gen.rs:1371` already knows which `##`
+             `crates/bit-cli/src/schema_gen.rs:1401` already knows which `##`
              headings those are, and the test can ask it the same question.
+             It does: that logic is `hand_written_sections` at
+             `crates/bit-cli/src/schema_gen.rs:1357` now and both call it.
 Prove:       ```
              cargo test -p bit-cli --lib schema
              ```
@@ -5995,6 +5999,40 @@ Prove:       ```
              `HEADER` differs from the committed file and passes when they
              agree, with the hand-written tail exempt. Editing `HEADER` and not
              regenerating must turn the tree red.
+Closed:      **2026-08-30**, in
+             `the_committed_schema_matches_what_the_program_writes`, which now
+             does two comparisons rather than one. Rows stay containment, for
+             the reason the comment beside them already gave. Every other line
+             is compared for **equality**, after dropping the hand-written
+             sections and the table separators.
+
+             **Equality is safe because the prose is not timing dependent, and
+             that was checked rather than assumed.** `schema::render` emits a
+             `###` section for every name in `DOCUMENT_KINDS` and
+             `EVENT_TYPES` whether a sample turned up or not, writing "not
+             covered by the generator yet" when one did not. So the section
+             list and the descriptions are a function of the constants alone,
+             and only the rows depend on what a run produced. The old heading
+             check was containment for a hazard that does not exist.
+
+             **`carry_across`'s section logic became
+             `hand_written_sections`**, called by the writer and by the check,
+             so what is preserved and what is exempt are the same answer to the
+             same question rather than two copies that disagree the first time
+             a heading changes.
+
+             **The proof is the defect, run.** With `A SENTINEL LINE` inserted
+             into `schema::HEADER` and no regeneration, the test fails and
+             names the line on both sides:
+
+             ```
+             generator: "...prints the version of everything below. A SENTINEL LINE. This file is"
+             committed: "...prints the version of everything below. This file is"
+             ```
+
+             Eighteen schema tests passed over that same edit before this
+             change, which is the entry's premise reproduced one more time.
+             Reverted, and the eighteen pass again.
 
 ### T-260 A release publishes binaries and nothing a program can consume
 
@@ -6616,15 +6654,39 @@ found:       **Done on 2026-08-30**, in the order the work order gave.
              ca34  fe0d  0033  001b  000d  0012  44cd  002b  0005  5a5a GREASE
              ```
 
-             `0xca34` is the trust anchors draft and `0x12e0` is not a
-             codepoint this session could identify. `impit`'s `ExtensionType`
-             names neither, and `vendor/rustls`'s `ClientExtensions` has a
-             typed field per extension and so has nowhere to put either. A
-             profile claiming 152 without them is a `ClientHello` that exists
-             nowhere, which [RULES.md](RULES.md) section 6b says is a stronger
-             tell than being one version behind. **So the profile stays at 151
-             deliberately**, and that is the ruling applied rather than a
-             deferral.
+             `impit`'s `ExtensionType` names neither, and `vendor/rustls`'s
+             `ClientExtensions` has a typed field per extension type and so has
+             nowhere to put either. A profile claiming 152 without them is a
+             `ClientHello` that exists nowhere, which [RULES.md](RULES.md)
+             section 6b says is a stronger tell than being one version behind.
+             **So the profile stays at 151 deliberately**, and that is the
+             ruling applied rather than a deferral.
+
+             **The two bodies were read as well as the codepoints, and they are
+             not the same problem.**
+
+             | codepoint | length | body |
+             | --- | --- | --- |
+             | `0x12e0` | 2 | `0000` |
+             | `0xca34` | 206 | a length-prefixed list of 24 identifiers |
+
+             `0x12e0` is two zero bytes and is reproducible by anything that
+             can write an extension. `0xca34` is the trust anchors draft, and
+             its body is **a snapshot of the browser's own root store**:
+             twenty-four identifiers, each a length-prefixed value, in an order
+             that is the browser's. That is not a constant to copy. It changes
+             when Chrome's root store changes, which is on its own schedule,
+             and a client that carries one build's list is advertising exactly
+             which build it copied. This repository has no root store to
+             enumerate and cannot generate the list honestly.
+
+             **So the blocker is one extension rather than two**, and it is a
+             harder one than a missing enum variant: emitting `0xca34` needs a
+             decision about what a client with no root store of its own should
+             put in it, and the honest answers are to omit it, which is what
+             happens today, or to carry a captured list and accept that it
+             ages. That is a question for the operator rather than a defect,
+             and it is raised in `PROGRESS.md`.
 
              **The header half needs a second capture whatever happens to the
              TLS half.** Chrome for Testing is unbranded: its `sec-ch-ua` is
@@ -6636,9 +6698,12 @@ found:       **Done on 2026-08-30**, in the order the work order gave.
              measured is the **order**: 152 moves `accept-language` from
              twelfth to fourth.
 
-             What is left, in order: name `0x12e0`; add both codepoints to
+             What is left, in order: add `0x12e0` with its two zero bytes to
              `impit`'s `ExtensionType` and to `vendor/rustls`'s extension
-             encoder; capture a branded 152; then bump.
+             encoder, for which
+             [T-263](#t-263-the-extension-list-is-chromes-set-in-a-fixed-order-and-chrome-shuffles-it)'s
+             two GREASE slots are the worked example; get a ruling on `0xca34`;
+             capture a branded 152 with `-Source apt`; then bump.
 
 Notes:       **The distro is removed in the same run that made it**, with
              `-Ephemeral` or an explicit `Remove`, and the acceptance checks

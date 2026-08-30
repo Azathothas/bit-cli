@@ -1346,25 +1346,15 @@ mod tests {
         out
     }
 
-    /// Append every `##` section of the committed file the generator does not
-    /// produce.
+    /// Every `##` section of the committed file the generator does not
+    /// produce, in committed order.
     ///
-    /// `merge_schema` unions **rows**, which is T-158's half of this. The
-    /// other half is prose: `docs/schema.md` ends with four sections nothing
-    /// produces, and one of them carries the only committed measurement of
-    /// what seven PowerShell redirection forms do to non-ASCII output.
-    /// Regenerating deleted all four, 130 lines, and neither the schema test
-    /// nor `check-docs.ps1` failed, because the first compares fields and the
-    /// second resolves links.
-    ///
-    /// Sections are matched by their heading line, so a hand-written one is
-    /// kept and a generated one is never duplicated. They are appended in
-    /// committed order after the generated content, which makes this
-    /// idempotent: a second run finds them at the end, does not recognise
-    /// them, and puts them back in the same place.
-    ///
-    /// See `TODO/cli-surface.md`, T-255.
-    fn carry_across(out: &mut String, committed: &str, rendered: &str) {
+    /// One function so that what the writer preserves and what the check
+    /// exempts are the same answer to the same question. Two copies of this
+    /// would disagree the first time a heading changed, and the disagreement
+    /// would be a check passing over prose the writer had already dropped.
+    /// See `TODO/cli-surface.md`, T-255 and T-259.
+    fn hand_written_sections(committed: &str, rendered: &str) -> String {
         let generated: std::collections::BTreeSet<&str> = rendered
             .lines()
             .filter(|line| line.starts_with("## "))
@@ -1387,6 +1377,29 @@ mod tests {
                 keep.push('\n');
             }
         }
+        keep
+    }
+
+    /// Append every `##` section of the committed file the generator does not
+    /// produce.
+    ///
+    /// `merge_schema` unions **rows**, which is T-158's half of this. The
+    /// other half is prose: `docs/schema.md` ends with four sections nothing
+    /// produces, and one of them carries the only committed measurement of
+    /// what seven PowerShell redirection forms do to non-ASCII output.
+    /// Regenerating deleted all four, 130 lines, and neither the schema test
+    /// nor `check-docs.ps1` failed, because the first compares fields and the
+    /// second resolves links.
+    ///
+    /// Sections are matched by their heading line, so a hand-written one is
+    /// kept and a generated one is never duplicated. They are appended in
+    /// committed order after the generated content, which makes this
+    /// idempotent: a second run finds them at the end, does not recognise
+    /// them, and puts them back in the same place.
+    ///
+    /// See `TODO/cli-surface.md`, T-255.
+    fn carry_across(out: &mut String, committed: &str, rendered: &str) {
+        let keep = hand_written_sections(committed, rendered);
         if keep.trim().is_empty() {
             return;
         }
@@ -1613,18 +1626,62 @@ mod tests {
             missing.join("\n  ")
         );
 
-        // The prose and the section headings are not timing dependent, so
-        // those do have to match exactly: a kind added to the tables without
-        // regenerating leaves the file without its section.
-        let headings: Vec<&str> = rendered
-            .lines()
-            .filter(|line| line.starts_with("### "))
-            .filter(|line| !committed.contains(*line))
-            .collect();
-        assert!(
-            headings.is_empty(),
-            "docs/schema.md is missing sections: {headings:?}\nRegenerate with BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema"
-        );
+        // Everything that is **not** a row has to match exactly, and that is
+        // T-259. The row filter above is containment on purpose, because a run
+        // that beats its own report tick produces fewer rows; nothing else in
+        // this file depends on what a run happened to produce. `render` emits
+        // a `###` section for every name in the tables whether a sample turned
+        // up or not, writing "not covered by the generator yet" when one did
+        // not, so the prose is a function of the constants alone.
+        //
+        // What this catches, measured before it existed: three sentences added
+        // to `schema::HEADER` passed eighteen schema tests and never reached
+        // `docs/schema.md`, because the old check read field rows and section
+        // headings and nothing between them.
+        //
+        // The hand-written tail is exempt, or this fails on the four sections
+        // at the end that the generator does not produce and `carry_across`
+        // preserves. Both ask `hand_written_sections` the same question.
+        let hand_written = hand_written_sections(&committed, &rendered);
+        let exempt: std::collections::BTreeSet<&str> = hand_written.lines().collect();
+        let prose = |text: &str, drop_exempt: bool| -> Vec<String> {
+            let mut lines: Vec<String> = Vec::new();
+            let mut fenced = false;
+            let mut in_exempt = false;
+            for line in text.lines() {
+                if line.starts_with("```") {
+                    fenced = !fenced;
+                } else if drop_exempt && !fenced && line.starts_with("## ") {
+                    in_exempt = exempt.contains(line);
+                }
+                if in_exempt || line.starts_with("| `") || line.starts_with("| ---") {
+                    continue;
+                }
+                lines.push(line.to_string());
+            }
+            while lines.last().is_some_and(|line| line.trim().is_empty()) {
+                lines.pop();
+            }
+            lines
+        };
+
+        let want = prose(&rendered, false);
+        let have = prose(&committed, true);
+        if want != have {
+            let first = want
+                .iter()
+                .zip(have.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or(want.len().min(have.len()));
+            panic!(
+                "docs/schema.md's prose is not what the generator writes, from line {} of the \
+                 comparison:\n  generator: {:?}\n  committed: {:?}\nRegenerate with \
+                 BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema",
+                first + 1,
+                want.get(first),
+                have.get(first),
+            );
+        }
     }
 
     /// Coverage does not go backwards.
