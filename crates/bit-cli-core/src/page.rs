@@ -228,13 +228,24 @@ pub const BROWSER_SIGNATURE_ALGORITHMS: &[SignatureAlgorithm] = &[
     SignatureAlgorithm::RsaPkcs1Sha512,
 ];
 
-/// The order the extensions go on the wire in.
+/// A fixed order to write the extensions in, and **it is deliberately empty**.
 ///
-/// **A real Chrome shuffles this per connection and this list does not.** JA4
-/// sorts before hashing so it cannot see the difference; `JA4_ro` can, and
-/// `TODO/cli-surface.md` T-263 is the entry. The list is here rather than in
-/// the vendored tree so that closing T-263 edits a file this repository owns.
-pub const BROWSER_EXTENSION_ORDER: &[ExtensionType] = &[
+/// A real Chrome shuffles its extension list per connection and has since 110;
+/// the shuffle is the reason JA4 sorts at all. A client whose order never
+/// changes is *more* distinguishable than one that shuffles, because the fixed
+/// sequence is itself the signal. So nothing is pinned here and the handshake
+/// permutes the list per connection, keeping only what the specification pins:
+/// `pre_shared_key` last, and GREASE at the two ends.
+///
+/// **Naming an extension here pins it**, which is what this list is for if a
+/// browser is ever measured pinning one. Every entry it used to carry is in
+/// the git history of this file and in `TODO/cli-surface.md` T-263.
+pub const BROWSER_EXTENSION_ORDER: &[ExtensionType] = &[];
+
+/// The order this profile used to write, kept only so a test can assert the
+/// shuffle actually moves things.
+#[cfg(test)]
+const BROWSER_EXTENSION_ORDER_WAS: &[ExtensionType] = &[
     ExtensionType::ServerName,
     ExtensionType::ExtendedMasterSecret,
     ExtensionType::SessionTicket,
@@ -334,7 +345,12 @@ pub fn browser_fingerprint() -> BrowserFingerprint {
         BROWSER_EXTENSION_ORDER.to_vec(),
     )
     // Chrome 136 and later use 17613 rather than 17513 for ALPS.
-    .with_new_alps_codepoint(true);
+    .with_new_alps_codepoint(true)
+    // GREASE at both ends of the extension list, at a codepoint chosen per
+    // connection. Measured on a real Chrome: `0x3a3a` first with an empty
+    // body and `0x5a5a` last with a single zero byte, and the pair differs
+    // between connections. See `TODO/cli-surface.md`, T-263.
+    .with_grease_both_ends(true);
 
     let tls = TlsFingerprint::new(
         BROWSER_CIPHER_SUITES.to_vec(),
@@ -1532,6 +1548,11 @@ mod tests {
         assert_eq!(f.tls.key_exchange_groups, BROWSER_KEY_EXCHANGE_GROUPS);
         assert_eq!(f.tls.signature_algorithms, BROWSER_SIGNATURE_ALGORITHMS);
         assert_eq!(f.tls.extensions.extension_order, BROWSER_EXTENSION_ORDER);
+        assert!(
+            BROWSER_EXTENSION_ORDER.is_empty(),
+            "an order pinned here is an order that never changes, which is T-263"
+        );
+        assert!(!BROWSER_EXTENSION_ORDER_WAS.is_empty());
         assert_eq!(f.name, "Chrome");
         assert_eq!(f.version, BROWSER_MAJOR.to_string());
     }
@@ -1579,14 +1600,20 @@ mod tests {
 
     #[test]
     fn grease_leads_the_cipher_and_group_lists() {
-        // Chrome's own shape, and the half of T-263 that is already right: the
-        // ciphers and the groups carry GREASE and the extension list does not.
+        // Chrome's own shape: GREASE first in both lists.
         assert_eq!(BROWSER_CIPHER_SUITES[0], CipherSuite::Grease);
         assert_eq!(BROWSER_KEY_EXCHANGE_GROUPS[0], KeyExchangeGroup::Grease);
-        assert!(
-            !BROWSER_EXTENSION_ORDER.contains(&ExtensionType::Grease),
-            "T-263 is what adds GREASE here; invert this assertion when it closes"
-        );
+    }
+
+    #[test]
+    fn the_extension_lists_grease_is_not_this_lists_business() {
+        // T-263 put GREASE at both ends of the **extension** list, and it is
+        // not done by naming it here: `ExtensionType::Grease` in an order list
+        // is the older single fixed-codepoint form, and Chrome sends two at
+        // codepoints it chooses per connection. `with_grease_both_ends` is
+        // what asks for that, and the vendored `rustls` picks the values.
+        assert!(!BROWSER_EXTENSION_ORDER.contains(&ExtensionType::Grease));
+        assert!(browser_fingerprint().tls.extensions.grease_both_ends);
     }
 
     #[test]

@@ -973,6 +973,18 @@ extension_struct! {
         ExtensionType::ReservedGrease =>
             pub(crate) reserved_grease: Option<()>,
 
+        /// GREASE at the front of the extension list, RFC 8701. Added by this
+        /// repository; see patches/UPSTREAM.md and TODO/cli-surface.md T-263.
+        /// The body is empty, which is what a browser sends here.
+        ExtensionType::ReservedGreaseFirst =>
+            pub(crate) reserved_grease_first: Option<()>,
+
+        /// GREASE at the back of the extension list. Its body is a single zero
+        /// byte, which is what a browser sends there and is why the two are
+        /// separate fields rather than one repeated.
+        ExtensionType::ReservedGreaseLast =>
+            pub(crate) reserved_grease_last: Option<()>,
+
         /// Bogus impit extension
         ExtensionType::SCT =>
             pub(crate) signed_certificate_timestamp: Option<()>,
@@ -1007,6 +1019,15 @@ extension_struct! {
 
         /// Extensions that must appear contiguously.
         pub(crate) contiguous_extensions: Vec<ExtensionType>,
+
+        /// The two GREASE codepoints this connection chose, first and last.
+        ///
+        /// RFC 8701 reserves sixteen values and says a client picks among them
+        /// so that a server tolerating one tolerates all. A client that always
+        /// sent the same pair would be advertising a constant, which is the
+        /// opposite of the point. Added by this repository; see
+        /// patches/UPSTREAM.md and TODO/cli-surface.md T-263.
+        pub(crate) grease_codepoints: Option<(u16, u16)>,
     }
 }
 
@@ -1046,6 +1067,9 @@ impl ClientExtensions<'_> {
             record_size_limit,
             padding,
             contiguous_extensions,
+            reserved_grease_first,
+            reserved_grease_last,
+            grease_codepoints,
         } = self;
         ClientExtensions {
             server_name: server_name.map(|x| x.into_owned()),
@@ -1074,6 +1098,9 @@ impl ClientExtensions<'_> {
             encrypted_client_hello_outer,
             order_seed,
             contiguous_extensions,
+            reserved_grease_first,
+            reserved_grease_last,
+            grease_codepoints,
             application_settings,
             application_settings_new,
             reserved_grease,
@@ -1097,6 +1124,19 @@ impl ClientExtensions<'_> {
         if self.encrypted_client_hello.is_some() {
             exts.push(ExtensionType::EncryptedClientHello);
         }
+
+        // GREASE goes at the two ends, which is what makes it GREASE rather
+        // than one more extension in the middle. The last one goes before any
+        // PSK offer, because RFC 8446 requires `pre_shared_key` to be the
+        // final extension and that is not negotiable. Added by this
+        // repository; see TODO/cli-surface.md T-263.
+        if self.reserved_grease_first.is_some() {
+            exts.insert(0, ExtensionType::ReservedGreaseFirst);
+        }
+        if self.reserved_grease_last.is_some() {
+            exts.push(ExtensionType::ReservedGreaseLast);
+        }
+
         if self.preshared_key_offer.is_some() {
             exts.push(ExtensionType::PreSharedKey);
         }
@@ -1126,6 +1166,11 @@ impl ClientExtensions<'_> {
                 ExtensionType::PreSharedKey
                     | ExtensionType::EncryptedClientHello
                     | ExtensionType::EncryptedClientHelloOuterExtensions
+                    // The two GREASE slots are placed by
+                    // `used_extensions_in_encoding_order` and must not also be
+                    // shuffled into the middle. Added by this repository.
+                    | ExtensionType::ReservedGreaseFirst
+                    | ExtensionType::ReservedGreaseLast
             ) || self.contiguous_extensions.contains(ext))
         });
 
@@ -1148,7 +1193,25 @@ impl<'a> Codec<'a> for ClientExtensions<'a> {
 
         let body = LengthPrefixedBuffer::new(ListLength::U16, bytes);
         for item in order {
-            self.encode_one(item, body.buf);
+            // The two GREASE slots carry a codepoint chosen per connection
+            // rather than the placeholder their `ExtensionType` names, so they
+            // are written here instead of through `encode_one`, which takes
+            // the codepoint from the type. The bodies are what a browser
+            // sends and were read off one: empty at the front, a single zero
+            // byte at the back. Added by this repository; see
+            // patches/UPSTREAM.md and TODO/cli-surface.md T-263.
+            match (item, self.grease_codepoints) {
+                (ExtensionType::ReservedGreaseFirst, Some((first, _))) => {
+                    first.encode(body.buf);
+                    0u16.encode(body.buf);
+                }
+                (ExtensionType::ReservedGreaseLast, Some((_, last))) => {
+                    last.encode(body.buf);
+                    1u16.encode(body.buf);
+                    0u8.encode(body.buf);
+                }
+                _ => self.encode_one(item, body.buf),
+            }
         }
     }
 

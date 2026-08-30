@@ -6227,7 +6227,8 @@ Source:      measured 2026-08-29 with `loopback-tlsprobe --raw --hello-out`,
 Category:    cli
 Priority:    P3
 Effort:      M
-Status:      open
+Status:      done, 2026-08-30. GREASE at both ends at a codepoint chosen per
+             connection, and the order permuted per connection.
 
 Problem:     `bit-cli`'s browser profile and a real Chrome 151 on the same
              machine produce the **same JA4**,
@@ -6337,10 +6338,78 @@ Acceptance:  `loopback-tlsprobe --raw` reports a `JA4_ro` whose extension
              inverted rather than deleted, the way
              `scripts/check-listener.ps1`'s cases were when
              [T-020](peers.md) closed.
+Closed:      **2026-08-30, and the shuffle half was already built.**
+             `ClientExtensions::order_insensitive_extensions_in_random_order`
+             sorts by a hash of a per-connection `order_seed` and
+             `used_extensions_in_encoding_order` emits those before the
+             `contiguous_extensions` list. Naming **every** extension in
+             `extension_order` left the random set empty, so nothing moved. The
+             fix is that `BROWSER_EXTENSION_ORDER` in
+             `crates/bit-cli-core/src/page.rs` is now **empty**: nothing is
+             pinned, and the handshake permutes the list. No rustls code was
+             needed for that half at all.
+
+             **The GREASE half needed a new shape**, as the entry predicted.
+             `ClientExtensions` has one typed field per extension type and one
+             GREASE slot at the fixed `0xbaba`, and a browser sends two at two
+             codepoints it picks per connection. So `vendor/rustls` gained
+             `ReservedGreaseFirst` and `ReservedGreaseLast`, whose enum
+             codepoints are placeholders, and a `grease_codepoints` field
+             carrying the pair actually written; `encode` writes those two
+             directly, because `encode_one` takes the codepoint from the type.
+             The last one is placed **before** any PSK offer, because RFC 8446
+             requires `pre_shared_key` last.
+
+             **The bodies were measured rather than chosen.** From a real
+             Chrome's hello: the first GREASE extension has an empty body and
+             the last has a single zero byte. That is why they are two fields
+             rather than one repeated. The codepoints come from the provider's
+             secure random, mapped onto the sixteen RFC 8701 reserves, and are
+             drawn **distinct**, because the same value at both ends is a
+             constant a server can key on.
+
+             Two consecutive captures of the same binary, off the wire:
+
+             | | first | last | order |
+             | --- | --- | --- | --- |
+             | capture 1 | `0x6a6a` | `0x7a7a` | one permutation |
+             | capture 2 | `0x7a7a` | `0x0a0a` | a different one |
+             | before | none | none | fixed, every time |
+
+Acceptance
+run:         **The goldens did not move**, which is what the entry predicted and
+             is the argument for having done it: JA4 and JA4_r both sort and
+             strip GREASE, so the assertion that would catch a mistake was
+             already there and already insensitive to the fix.
+             `check-fingerprint.ps1` passes with
+             `t13i1515h2_8daaf6152771_806a8c22fdea` unchanged.
+
+```bash
+pwsh -NoProfile -File scripts/check-fingerprint.ps1
+```
+
+             `crates/bit-cli-core/examples/loopback-tlsprobe/tlsfp.rs` carries a
+             fresh recorded hello and the
+             `!browser.extensions.iter().any(is_grease)` assertion is
+             **inverted rather than deleted**, the way
+             `scripts/check-listener.ps1`'s cases were when
+             [T-020](peers.md) closed. It now asserts that the first and last
+             extensions are both GREASE, that they differ, and that there are
+             exactly two.
 Notes:       `JA4_ro` is what made this visible and it was added in the same
              session, for exactly this: JA4 and JA4_r sort, so they say two
              clients are the same when their wire order says otherwise. It is
              recorded and never asserted, for the same reason JA3 is not.
+
+             **One difference from a real Chrome is left and it is not this
+             entry's.** The vendored rustls forces `encrypted_client_hello`
+             second to last, and the Chrome 152 capture has it at position 11,
+             in the middle of the shuffle. That is a placement rule in
+             `used_extensions_in_encoding_order` rather than anything the
+             profile chooses, and it is invisible to JA4 for the same reason
+             the order was. It is recorded here rather than filed, because it
+             is one extension's position and the entry that would own it is a
+             capture of a browser this repository can now take on demand.
 
 ### T-264 The browser profile can only be refreshed on a machine that runs that browser
 

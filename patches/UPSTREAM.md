@@ -1762,8 +1762,8 @@ pwsh -NoProfile -File scripts/check-fingerprint.ps1
 Unblocks:    T-262, TODO/cli-surface.md
 Files:       vendor/impit/impit/src/impit.rs
              vendor/impit/impit/src/lib.rs
-             patches/impit/0005-impit-src-impit.rs.patch
-             patches/impit/0006-impit-src-lib.rs.patch
+             patches/impit/0006-impit-src-impit.rs.patch
+             patches/impit/0007-impit-src-lib.rs.patch
 Upstream:    ours, and the same shape as the two HTTP/2 settings beside it.
 Added:       2026-08-30T02:30Z
 ```
@@ -1856,7 +1856,7 @@ it.
 ```
 Unblocks:    T-244, TODO/cli-surface.md
 Files:       vendor/impit/impit/src/impit.rs
-             patches/impit/0005-impit-src-impit.rs.patch
+             patches/impit/0006-impit-src-impit.rs.patch
 Upstream:    ours. apify's own `h2` fork is what reads the variable, and this
              repository does not carry that fork, so there is nothing for a
              release to retire.
@@ -1898,10 +1898,10 @@ Files:       vendor/impit/impit/Cargo.toml
              vendor/impit/impit/src/tls/mod.rs
              impit/src/http3.rs, deleted with the feature, tree-relative
              patches/impit/0002-impit-Cargo.toml.patch
-             patches/impit/0004-impit-src-http3.rs.patch
-             patches/impit/0005-impit-src-impit.rs.patch
-             patches/impit/0006-impit-src-lib.rs.patch
-             patches/impit/0008-impit-src-tls-mod.rs.patch
+             patches/impit/0005-impit-src-http3.rs.patch
+             patches/impit/0006-impit-src-impit.rs.patch
+             patches/impit/0007-impit-src-lib.rs.patch
+             patches/impit/0009-impit-src-tls-mod.rs.patch
 Upstream:    ours. `reqwest` gates `http3` behind `--cfg reqwest_unstable` on
              purpose, and a release of either could make it stable, at which
              point this patch is worth reconsidering rather than deleting.
@@ -1968,8 +1968,8 @@ Files:       vendor/impit/impit/Cargo.toml
              vendor/impit/impit/src/lib.rs
              impit/src/response_parsing/mod.rs, deleted, tree-relative
              patches/impit/0002-impit-Cargo.toml.patch
-             patches/impit/0006-impit-src-lib.rs.patch
-             patches/impit/0007-impit-src-response_parsing-mod.rs.patch
+             patches/impit/0007-impit-src-lib.rs.patch
+             patches/impit/0008-impit-src-response_parsing-mod.rs.patch
 Upstream:    ours, and RUSTSEC-2021-0153 is the defect: `encoding` has had no
              release since 2016 and the advisory names `encoding_rs` as the
              replacement. A release that ports it retires this.
@@ -2000,8 +2000,8 @@ in the HTTP client.
 Unblocks:    T-244, the half of its acceptance that needs a completed handshake
 Files:       vendor/impit/impit/src/tls/mod.rs
              vendor/impit/impit/src/impit.rs
-             patches/impit/0005-impit-src-impit.rs.patch
-             patches/impit/0008-impit-src-tls-mod.rs.patch
+             patches/impit/0006-impit-src-impit.rs.patch
+             patches/impit/0009-impit-src-tls-mod.rs.patch
 Upstream:    ours. `rustls-platform-verifier` already takes extra roots and
              `impit` passes it the `webpki` set; surfacing the caller's is a
              small thing a release could do.
@@ -2089,12 +2089,107 @@ distinguishable on that alone.
 
 ---
 
+## rustls: a hello carries no GREASE at the ends and its extensions never move
+
+```
+Unblocks:    T-263, TODO/cli-surface.md
+Files:       vendor/rustls/rustls/src/msgs/enums.rs
+             vendor/rustls/rustls/src/msgs/handshake.rs
+             vendor/rustls/rustls/src/client/hs.rs
+             vendor/rustls/rustls/src/crypto/emulation/mod.rs
+             patches/rustls/0003-rustls-src-client-hs.rs.patch
+             patches/rustls/0004-rustls-src-crypto-emulation-mod.rs.patch
+             patches/rustls/0005-rustls-src-msgs-enums.rs.patch
+             patches/rustls/0006-rustls-src-msgs-handshake.rs.patch
+Upstream:    ours, and only meaningful behind the `impit` feature. Upstream
+             rustls already shuffles its own extension order per connection,
+             which is half of this; what it has no reason to add is a second
+             and third GREASE slot at codepoints chosen per connection, because
+             that is an impersonation feature rather than a TLS one. The fork
+             carries the emulation module it belongs to.
+Added:       2026-08-30T03:00Z
+```
+
+Two changes, and the first is smaller than it looks.
+
+**The shuffle was already built.** `ClientExtensions::order_insensitive_extensions_in_random_order`
+sorts by a hash of a per-connection `order_seed`, and
+`used_extensions_in_encoding_order` emits those first and the
+`contiguous_extensions` list after them. A fingerprint naming **every**
+extension in `extension_order` leaves the random set empty, so nothing moves.
+Naming none of them, which is what this repository's profile now does, gives
+the shuffle for free. Nothing in rustls changed for that half.
+
+**GREASE at the two ends needed a new shape.** `ClientExtensions` has one typed
+field per extension type and one GREASE slot, `reserved_grease` at the fixed
+codepoint `0xbaba`. A browser sends **two**, at two different codepoints it
+picks per connection, one first and one last, which that shape cannot express.
+So there are two more slots, `ReservedGreaseFirst` and `ReservedGreaseLast`,
+whose enum codepoints are placeholders, and a `grease_codepoints` field
+carrying the pair actually written. `ClientExtensions::encode` writes those two
+directly rather than through `encode_one`, because `encode_one` takes the
+codepoint from the type.
+
+`used_extensions_in_encoding_order` places them, and the last one goes **before**
+any PSK offer, because RFC 8446 requires `pre_shared_key` to be the final
+extension and that is not negotiable. Both are excluded from the shuffle, since
+an extension placed at an end must not also be dealt into the middle.
+
+**The bodies are measured, not chosen.** Read off a real Chrome's hello: the
+first GREASE extension has an empty body and the last has a single zero byte.
+That is why they are two fields rather than one repeated.
+
+**The codepoints are drawn from the provider's secure random**, mapped onto the
+sixteen RFC 8701 reserves by `grease_codepoint`, and drawn **distinct**: a
+client sending the same value at both ends is advertising a constant, which is
+the opposite of the point.
+
+**How it was measured.** Two consecutive captures of the same binary, raw
+hello, `loopback-tlsprobe --raw --hello-out`:
+
+| | first extension | last extension | order |
+| --- | --- | --- | --- |
+| capture 1 | `0x6a6a` | `0x7a7a` | one permutation |
+| capture 2 | `0x7a7a` | `0x0a0a` | a different one |
+| before | none | none | fixed, every time |
+
+The JA4 does not move, which is the point of asserting it: JA4 sorts and strips
+GREASE, so a golden written before this passes after it unchanged.
+
+```bash
+pwsh -NoProfile -File scripts/check-fingerprint.ps1
+```
+
+---
+
+## impit: a fingerprint cannot ask for GREASE at both ends
+
+```
+Unblocks:    T-263, TODO/cli-surface.md
+Files:       vendor/impit/impit/src/fingerprint/mod.rs
+             patches/impit/0004-impit-src-fingerprint-mod.rs.patch
+Upstream:    ours, and the same shape as `with_new_alps_codepoint` beside it.
+Added:       2026-08-30T03:00Z
+```
+
+`TlsExtensions::with_grease_both_ends` sets a flag that reaches rustls's
+`TlsExtensionsConfig`. It is a builder method rather than a fourteenth
+positional argument to `TlsExtensions::new`, which is how the two switches
+beside it are done and which is what keeps the vendored profile database from
+changing at all.
+
+`ExtensionType::Grease` in an `extension_order` list is the older, single,
+fixed-codepoint form and stays what it was. This is a different thing and the
+two are independent.
+
+---
+
 ## rustls: the workspace lists eleven members this repository does not vendor
 
 ```
 Unblocks:    nothing. It is what makes the vendored tree loadable at all
 Files:       vendor/rustls/Cargo.toml
-             patches/rustls/0001-Cargo.toml.patch
+             patches/rustls/0002-Cargo.toml.patch
 Upstream:    ours, and it would make no sense upstream: their members are all
              there.
 Added:       2026-08-29T09:20Z

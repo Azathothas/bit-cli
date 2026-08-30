@@ -79,11 +79,11 @@ capture proved a bump today would ship a `ClientHello` that exists nowhere.
   **The plan was written before starting**, per [RULES.md](RULES.md) section 1
   step 4: T-264 in the work order's own four-piece order, because each piece
   makes the next testable.
-- **Tests:** 1,472 passing, 0 failing, up from 1,462. Plus **439** in the
+- **Tests:** 1,473 passing, 0 failing, up from 1,462. Plus **441** in the
   vendored `h2` library, **153** in `rqbit` and **76** in `librqbit-utp`, none
   of which the workspace gates run.
 
-  **One of the 439 fails about one run in one under `--workspace` and is
+  **One of the 441 fails about one run in one under `--workspace` and is
   upstream's**, unchanged and still not this repository's code:
   `proto::streams::recv::tests::clear_recv_buffer_caps_capacity_before_overflow`.
 
@@ -107,8 +107,8 @@ pwsh -NoProfile -File scripts/gates.ps1
 gh run list --limit 1
 ```
 
-- **Vendored:** **eight upstreams** and **49 patches** across thirty-six
-  sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md), one more than
+- **Vendored:** **eight upstreams** and **55 patches** across thirty-eight
+  sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md), seven more than
   last session. `scripts/vendor-status.ps1` says the series matches the trees,
   every patch has a section, and the version, changelog and pins agree.
 
@@ -116,8 +116,8 @@ gh run list --limit 1
   [T-262](cli-surface.md) then edited `h2` and `impit` for a reason that is not
   data: a frame this client could not write.
 - **Soak:** nothing ran this session.
-- **Entries:** 213 items. 31 open, 4 partial, 0 blocked, 167 done, 11 deferred
-  to Phase C. 167 of 202 workable done, 35 left.
+- **Entries:** 213 items. 30 open, 4 partial, 0 blocked, 168 done, 11 deferred
+  to Phase C. 168 of 202 workable done, 34 left.
 - **Tree:** 108 Rust files, 65,392 lines of code, 17,330 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
@@ -127,12 +127,51 @@ gh run list --limit 1
 
 ## What the last session did
 
-**[T-262](cli-surface.md) closed and [T-264](cli-surface.md) went from open to
-`partial` with three of its four pieces done**, its fourth blocked on something
-measured rather than predicted. Two new scripts, one committed pin, two new
-probe switches, one whole-file profile move, two new vendored patches, and
+**[T-262](cli-surface.md) and [T-263](cli-surface.md) both closed, and
+[T-264](cli-surface.md) went from open to `partial`** with three of its four
+pieces done and the fourth blocked on something measured rather than predicted.
+Two new scripts, one committed pin, two new probe switches, one whole-file
+profile move, seven new vendored patches across three trees, and
 `docs/containers.md` rewritten against tooling that gained two actions since the
 page was written.
+
+**The three entries were the whole of what T-244 left behind**, and what closed
+two of them is the same thing: a capture from a browser, taken on demand,
+instead of a claim about one.
+
+### [T-263](cli-surface.md): GREASE at both ends, and an order that moves
+
+**Half of it was already built and nobody had noticed.** The vendored rustls
+sorts extensions by a hash of a per-connection seed, and only the ones **not**
+named in the fingerprint's `extension_order` take part. That list named every
+extension, so the random set was empty and nothing ever moved. The fix is that
+`BROWSER_EXTENSION_ORDER` is empty now: nothing is pinned and the handshake
+permutes the list. No rustls code was needed for that half at all.
+
+**The GREASE half needed a new shape**, as the entry predicted.
+`ClientExtensions` has one typed field per extension type and one GREASE slot at
+a fixed codepoint; a browser sends two, at two codepoints it picks per
+connection, one first and one last. So there are two more slots whose enum
+codepoints are placeholders and a field carrying the pair actually written.
+
+**The bodies were measured rather than chosen**, off a real Chrome: the first
+GREASE extension has an empty body and the last has a single zero byte. That is
+why they are two fields rather than one repeated. The two codepoints are drawn
+distinct, because the same value at both ends is a constant a server can key on.
+
+Two consecutive captures of the same binary:
+
+| | first | last | order |
+| --- | --- | --- | --- |
+| capture 1 | `0x6a6a` | `0x7a7a` | one permutation |
+| capture 2 | `0x7a7a` | `0x0a0a` | a different one |
+| before | none | none | fixed, every time |
+
+**The goldens did not move**, which the entry predicted and which is the
+argument for having done it: JA4 and JA4_r both sort and strip GREASE, so the
+assertion that would catch a mistake was already there and already insensitive
+to the fix. The probe's own
+`!browser.extensions.iter().any(is_grease)` was inverted rather than deleted.
 
 ### [T-262](cli-surface.md): the Akamai fingerprint is a browser's in all four fields
 
@@ -256,9 +295,8 @@ order: name `0x12e0`; add both codepoints to `impit`'s `ExtensionType` and to
 `vendor/rustls`'s extension encoder; capture a branded Chrome 152 with `-Source
 apt`; then bump. Only the last of those is waiting on the open question below.
 
-**Nothing else is half done.** [T-262](cli-surface.md) and
-[T-263](cli-surface.md) are untouched code and both gained a second
-measurement's worth of detail from the 152 capture.
+**Nothing else is half done.** The three entries [T-244](cli-surface.md) filed
+are two done and one partial, and no other entry was opened or touched.
 
 ## Start here next session
 
@@ -273,21 +311,17 @@ pwsh -NoProfile -File scripts/gates.ps1
 gh run list --limit 1
 ```
 
-2. **[T-263](cli-surface.md), P3, `M`**, and it is now the entry with the most
-   already worked out. It carries the Chrome 152 wire order, the two GREASE
-   codepoints that connection chose, and the finding that **the shuffle is half
-   built in the vendored tree already**: rustls sorts by a per-connection
-   `order_seed` and only the extensions **not** named in `extension_order` take
-   part, so naming fewer of them is most of the work. The GREASE half needs a
-   new shape, because `ClientExtensions` has one slot at a fixed codepoint and
-   Chrome sends two at chosen ones.
-
-3. **[T-264](cli-surface.md)'s remainder**, which is the list under "In
+2. **[T-264](cli-surface.md)'s remainder**, which is the list under "In
    progress" and finishes with the bump. The first two items are the same
-   vendored extension encoder T-263 touches, so doing T-263 first is what makes
-   them cheap.
+   vendored extension encoder [T-263](cli-surface.md) just changed, so the
+   shape to add a codepoint to is fresh: `ReservedGreaseFirst` and
+   `ReservedGreaseLast` are the worked example of adding an extension type
+   `impit` and `rustls` did not have.
 
-4. **Then the ordinary list resumes**, in the shape the operator has kept
+   Take the pieces in the entry's order and stop before the bump if the open
+   question below is still open.
+
+3. **Then the ordinary list resumes**, in the shape the operator has kept
    throughout: clear the small entries so the open count comes down, then take
    the bigger ones a category at a time.
 
@@ -297,19 +331,19 @@ gh run list --limit 1
    [T-251](trackers.md) P2 `partial`. Then [T-260](cli-surface.md) and
    [T-261](trackers.md), the publishing pair.
 
-5. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
+4. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
    so the two candidates left are on the read side and are named with their
    lines. Build the fixture first: a pair of real `librqbit_utp` streams in one
    process.
 
-6. **The three entries that were ruled on and are still work.**
+5. **The three entries that were ruled on and are still work.**
    [T-227](memory.md) is a throughput curve then a flag.
    [T-242](performance.md) is two sweeps from `scripts/bench-leech.ps1`.
    [T-234](peers.md) and [T-238](peers.md) are the two large ones and both need
    [T-239](peers.md) first.
 
-7. **Then the category pass, and `bep-coverage.md` is still first.**
+6. **Then the category pass, and `bep-coverage.md` is still first.**
    [T-101](bep-coverage.md) is open on a latency measurement loopback cannot
    produce, which [T-239](peers.md) is the prerequisite for.
    [T-102](bep-coverage.md) and [T-168](bep-coverage.md) are the untouched two,
@@ -358,15 +392,25 @@ for the same reason as the last five sessions.
 
 ## Behaviour changes worth the operator's eye
 
-**One thing `bit-cli` puts on the wire changed, and it is five bytes.** The
-HEADERS frame opening a source-document fetch now carries a PRIORITY block,
-exclusive on stream 0 with weight 255, which is what a browser sends. Nothing
-else moved: the `ClientHello` is byte identical and so is the header set.
+**Two things `bit-cli` puts on the wire changed, and both make it look more
+like a browser rather than less.**
 
-**The profile moving file changed nothing at all**, which is the point of that
-half: one file this repository owns is now the only place a fingerprint comes
-from, and `vendor/impit`'s database is read by nothing that ships. The goldens
-did not move for it, only for the five bytes above.
+**The HEADERS frame opening a source-document fetch carries a PRIORITY block**,
+exclusive on stream 0 with weight 255, which is what a browser sends. Five
+bytes, and the Akamai fingerprint is a real Chrome's in all four fields now.
+
+**The `ClientHello` carries GREASE at both ends and its extension order is
+permuted per connection.** The extension **set** is unchanged, and so is the
+JA4: JA4 sorts and strips GREASE, which is why the goldens did not move. A tool
+reading the raw hello sees a different order every time, where it used to see
+one fixed sequence.
+
+**The header set did not move at all**, and neither did anything a web seed, a
+tracker announce or a peer handshake sends.
+
+**The profile moving file changed nothing on the wire**, which is the point of
+that half: one file this repository owns is now the only place a fingerprint
+comes from, and `vendor/impit`'s database is read by nothing that ships.
 
 **`loopback-tlsprobe` takes `--bind` and `--until-h2`.** Both are test fixture
 switches and neither reaches a shipping binary. `--bind` defaults to loopback

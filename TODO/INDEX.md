@@ -253,13 +253,13 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-260](cli-surface.md) | P2 | ci | open | A release publishes binaries and nothing a program can consume |
 | [T-261](trackers.md) | P2 | trackers | open | There is no way to get a current tracker list, so every torrent carries whatever it was born with |
 | [T-262](cli-surface.md) | P3 | cli | **done** | The HTTP/2 fingerprint matches a real Chrome in three fields of four |
-| [T-263](cli-surface.md) | P3 | cli | open | The extension list is Chrome's set in a fixed order, and Chrome shuffles it |
+| [T-263](cli-surface.md) | P3 | cli | **done** | The extension list is Chrome's set in a fixed order, and Chrome shuffles it |
 | [T-264](cli-surface.md) | P2 | cli | partial | The browser profile can only be refreshed on a machine that runs that browser |
 
 ## Counts
 
 213 items: 202 to work through, and 11 deferred to Phase C.
-31 open, 4 partial, 0 blocked, 167 done.
+30 open, 4 partial, 0 blocked, 168 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -269,9 +269,9 @@ when a number here disagrees with them.
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 2 | 0 | 0 | 70 | 72 |
 | P2 | 18 | 4 | 0 | 63 | 85 |
-| P3 | 11 | 0 | 0 | 22 | 33 |
+| P3 | 10 | 0 | 0 | 23 | 33 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **31** | **4** | **0** | **167** | **213** |
+| **All** | **30** | **4** | **0** | **168** | **213** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

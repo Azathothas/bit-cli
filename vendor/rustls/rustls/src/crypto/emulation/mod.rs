@@ -299,6 +299,12 @@ pub enum FingerprintCertCompressionAlgorithm {
 pub struct TlsExtensionsConfig {
     /// Whether to send GREASE extensions
     pub grease: bool,
+    /// Whether to put a GREASE extension at **each end** of the extension
+    /// list, at a codepoint chosen per connection, which is what a browser
+    /// does. `grease` above is one extension at a fixed codepoint and is a
+    /// different thing. Added by this repository; see
+    /// TODO/cli-surface.md T-263.
+    pub grease_both_ends: bool,
     /// Whether to send signed_certificate_timestamp extension
     pub signed_certificate_timestamp: bool,
     /// Whether to send application_settings extension

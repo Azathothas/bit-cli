@@ -148,6 +148,13 @@ enum_builder! {
         EncryptedClientHello => 0xfe0d, // https://datatracker.ietf.org/doc/html/draft-ietf-tls-esni-18#section-11.1
         EncryptedClientHelloOuterExtensions => 0xfd00, // https://datatracker.ietf.org/doc/html/draft-ietf-tls-esni-18#section-5.1
         ReservedGrease => 0xbaba,
+        // Two more GREASE slots, so a hello can carry one at each end the way
+        // a browser does. The codepoints here are placeholders: the value
+        // actually written is chosen per connection from the sixteen RFC 8701
+        // reserves, and `ClientExtensions::encode` overrides these. See
+        // TODO/cli-surface.md T-263.
+        ReservedGreaseFirst => 0x0a0a,
+        ReservedGreaseLast => 0x1a1a,
         DelegatedCredentials => 0x0022,
         RecordSizeLimit => 0x001c,
         ApplicationSettings => 0x4469, // Old ALPS codepoint (17513)

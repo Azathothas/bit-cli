@@ -17,7 +17,7 @@ about an entry that says `done` and reach a commit.
 
 ## What owning the fork is worth, counted
 
-**16 entries: 15 done, 0 partial, 0 blocked, 1 open.** Every one of them was
+**17 entries: 16 done, 0 partial, 0 blocked, 1 open.** Every one of them was
 held up by a seam somebody else's crate does not expose. **No open P0 is left
 in the record, and nothing in the record is blocked.**
 
@@ -45,6 +45,7 @@ vendored beside them. The section below is what each one is for.
 | [T-256](../TODO/trackers.md) | P1 | **done** | a private announce loop that recomputed its event |
 | [T-244](../TODO/cli-surface.md) | P2 | **done** | a `ClientHello`, a SETTINGS frame and a pseudo-header order |
 | [T-262](../TODO/cli-surface.md) | P3 | **done** | a PRIORITY block on the HEADERS frame a client opens with |
+| [T-263](../TODO/cli-surface.md) | P3 | **done** | GREASE at both ends of the extension list, at chosen codepoints |
 
 One is not done: [T-102](../TODO/bep-coverage.md), BEP 55, and it is no longer
 waiting on a seam. The seam that blocked it is the one
