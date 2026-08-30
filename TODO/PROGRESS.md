@@ -103,6 +103,10 @@ pwsh -NoProfile -File scripts/gates.ps1
   passing. A second workflow, `Staleness`, is a schedule and a
   `workflow_dispatch` and does not run on a push.
 
+  **The last run of this session is 33291807449, against `ed2db8f`, green.**
+  Six of the seven pushes were green on the first run; the seventh,
+  33289807801, failed and is [T-263](cli-surface.md)'s correction.
+
 ```bash
 gh run list --limit 1
 ```
@@ -118,7 +122,7 @@ gh run list --limit 1
 - **Soak:** nothing ran this session.
 - **Entries:** 213 items. 29 open, 4 partial, 0 blocked, 169 done, 11 deferred
   to Phase C. 169 of 202 workable done, 33 left.
-- **Tree:** 108 Rust files, 65,392 lines of code, 17,330 of comment,
+- **Tree:** 108 Rust files, 65,514 lines of code, 17,407 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
   `reference/HISTORY/`. Nothing was mined this session and nothing was read
