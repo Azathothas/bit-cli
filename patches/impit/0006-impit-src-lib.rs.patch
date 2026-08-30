@@ -5,7 +5,7 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/impit/src/lib.rs b/impit/src/lib.rs
-index 0af8cae..9dcbc6f 100644
+index 0af8cae..fa22db8 100644
 --- a/impit/src/lib.rs
 +++ b/impit/src/lib.rs
 @@ -52,17 +52,11 @@
@@ -26,7 +26,7 @@ index 0af8cae..9dcbc6f 100644
  /// Main module that contains the `Impit` struct and its methods.
  pub mod impit;
  
-@@ -75,14 +69,6 @@ pub mod errors;
+@@ -75,13 +69,12 @@ pub mod errors;
  /// Browser fingerprint definitions and types.
  pub mod fingerprint;
  
@@ -37,7 +37,12 @@ index 0af8cae..9dcbc6f 100644
 -    pub use crate::response_parsing::ContentType;
 -    pub use encoding::all as encodings;
 -}
--
++/// Reexports the HTTP/2 extension types a caller needs to configure this
++/// client, so a caller does not have to depend on `h2` directly and risk
++/// depending on a different `h2` than this one resolves.
++///
++/// Added by this repository; see patches/UPSTREAM.md.
++pub use h2::ext as h2_ext;
+ 
  /// Reexports reqwest cookie-related types and functions.
  /// This module is used to provide a default cookie store for the `Impit` struct.
- pub mod cookie {

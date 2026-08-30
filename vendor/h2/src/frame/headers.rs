@@ -153,6 +153,22 @@ impl Headers {
         self.header_block.pseudo_order = order;
     }
 
+    /// Open this stream with a PRIORITY block, the way a browser does.
+    ///
+    /// **Added by this repository; see `patches/UPSTREAM.md`.** It sets the
+    /// flag as well as the payload, because the two are one decision: a head
+    /// carrying the flag with no block is a frame a peer cannot parse, and a
+    /// block with no flag is five bytes of header block. `crate::ext::
+    /// StreamPriority` says why a client would want one at all.
+    pub fn set_stream_priority(&mut self, priority: crate::ext::StreamPriority) {
+        self.stream_dep = Some(StreamDependency::new(
+            StreamId::from(priority.dependency_id()),
+            priority.weight(),
+            priority.is_exclusive(),
+        ));
+        self.flags.set_priority();
+    }
+
     pub fn trailers(stream_id: StreamId, fields: HeaderMap) -> Self {
         let mut flags = HeadersFlag::default();
         flags.set_end_stream();
@@ -309,9 +325,19 @@ impl Headers {
         // Get the HEADERS frame head
         let head = self.head();
 
+        // The priority block goes ahead of the header block, which is what the
+        // closure is for: the payload length is measured after it runs, so the
+        // five bytes are counted in the frame length and in any CONTINUATION
+        // split without either being computed here. `PushPromise` writes its
+        // promised stream id through the same seam.
+        let stream_dep = self.stream_dep;
         self.header_block
             .into_encoding(encoder)
-            .encode(&head, dst, Some(encoder), |_| {})
+            .encode(&head, dst, Some(encoder), |dst| {
+                if let Some(dep) = stream_dep {
+                    dep.encode(dst);
+                }
+            })
     }
 
     fn head(&self) -> Head {
@@ -800,6 +826,13 @@ impl HeadersFlag {
         self.0 & PADDED == PADDED
     }
 
+    /// **Added by this repository; see `patches/UPSTREAM.md`.** Only
+    /// `Headers::set_stream_priority` calls it, and that sets the payload in
+    /// the same step, so the flag and the block cannot disagree.
+    pub fn set_priority(&mut self) {
+        self.0 |= PRIORITY;
+    }
+
     pub fn is_priority(&self) -> bool {
         self.0 & PRIORITY == PRIORITY
     }
@@ -1065,6 +1098,67 @@ mod test {
     use super::*;
     use crate::frame;
     use crate::hpack::{huffman, Encoder};
+
+    // Added by this repository; see patches/UPSTREAM.md and
+    // TODO/cli-surface.md T-262.
+    #[test]
+    fn a_priority_block_is_written_ahead_of_the_header_block() {
+        let mut encoder = Encoder::default();
+        let mut dst = BytesMut::new();
+
+        let mut headers = Headers::new(
+            StreamId::from(1),
+            Default::default(),
+            HeaderMap::from_iter(vec![(
+                HeaderName::from_static("hello"),
+                HeaderValue::from_static("world"),
+            )]),
+        );
+        headers.set_end_headers();
+        headers.set_stream_priority(crate::ext::StreamPriority::new(0, 255, true));
+        let continuation = headers.encode(&mut encoder, &mut (&mut dst).limit(64 * 1024));
+        assert!(continuation.is_none());
+
+        // The head is nine bytes: three of length, one kind, one flags, four
+        // of stream id. The PRIORITY flag has to be in the flags byte, or a
+        // peer reads the five bytes below as a header block.
+        assert_eq!(dst[3], Kind::Headers as u8);
+        assert_eq!(dst[4] & PRIORITY, PRIORITY, "the PRIORITY flag is not set");
+
+        // Then the block itself: an exclusive dependency on stream 0 with
+        // weight 255, which is what a browser opens stream 1 with.
+        assert_eq!(&dst[9..14], &[0x80, 0x00, 0x00, 0x00, 0xff]);
+
+        // And the frame length counts it, so a peer that trusts the length
+        // reads the header block from the right offset.
+        let len = u32::from_be_bytes([0, dst[0], dst[1], dst[2]]) as usize;
+        assert_eq!(len, dst.len() - 9);
+        assert!(len > 5, "the header block is missing entirely");
+    }
+
+    // Added by this repository; the flag and the block are one decision, so a
+    // frame that was never given a priority must carry neither.
+    #[test]
+    fn a_frame_with_no_priority_writes_no_block_and_no_flag() {
+        let mut encoder = Encoder::default();
+        let mut dst = BytesMut::new();
+
+        let mut headers = Headers::new(
+            StreamId::from(1),
+            Default::default(),
+            HeaderMap::from_iter(vec![(
+                HeaderName::from_static("hello"),
+                HeaderValue::from_static("world"),
+            )]),
+        );
+        headers.set_end_headers();
+        assert!(headers
+            .encode(&mut encoder, &mut (&mut dst).limit(64 * 1024))
+            .is_none());
+        assert_eq!(dst[4] & PRIORITY, 0);
+        let len = u32::from_be_bytes([0, dst[0], dst[1], dst[2]]) as usize;
+        assert_eq!(len, dst.len() - 9);
+    }
 
     #[test]
     fn test_nameless_header_at_resume() {

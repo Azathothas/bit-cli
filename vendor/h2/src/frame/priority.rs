@@ -69,4 +69,20 @@ impl StreamDependency {
     pub fn dependency_id(&self) -> StreamId {
         self.dependency_id
     }
+
+    /// Write the five byte block: a 31 bit stream id with the exclusive flag
+    /// in the top bit, then the weight.
+    ///
+    /// **Added by this repository; see `patches/UPSTREAM.md`.** `load` was the
+    /// only half that existed, because nothing here sent a priority block.
+    /// `crate::ext::StreamPriority` says why one is sent now.
+    pub fn encode<B: bytes::BufMut>(&self, dst: &mut B) {
+        const STREAM_ID_MASK: u32 = 1 << 31;
+        let mut id = self.dependency_id.into();
+        if self.is_exclusive {
+            id |= STREAM_ID_MASK;
+        }
+        dst.put_u32(id);
+        dst.put_u8(self.weight);
+    }
 }

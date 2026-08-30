@@ -69,6 +69,13 @@ pub mod errors;
 /// Browser fingerprint definitions and types.
 pub mod fingerprint;
 
+/// Reexports the HTTP/2 extension types a caller needs to configure this
+/// client, so a caller does not have to depend on `h2` directly and risk
+/// depending on a different `h2` than this one resolves.
+///
+/// Added by this repository; see patches/UPSTREAM.md.
+pub use h2::ext as h2_ext;
+
 /// Reexports reqwest cookie-related types and functions.
 /// This module is used to provide a default cookie store for the `Impit` struct.
 pub mod cookie {

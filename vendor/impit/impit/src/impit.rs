@@ -1,4 +1,4 @@
-use h2::ext::PseudoOrder;
+use h2::ext::{PseudoOrder, StreamPriority};
 use log::debug;
 use reqwest::{cookie::CookieStore, header::HeaderMap, Method, Response, Version};
 use std::{fmt::Debug, net::IpAddr, str::FromStr, sync::Arc, time::Duration};
@@ -103,6 +103,9 @@ pub struct ImpitBuilder<CookieStoreImpl: CookieStore + 'static> {
     /// Whether to leave `SETTINGS_MAX_FRAME_SIZE` out of the SETTINGS frame.
     /// A current Chrome does not send it and `hyper` always does.
     http2_omit_max_frame_size: bool,
+    /// The PRIORITY block to open the first stream with, which the fingerprint
+    /// database does not carry and a current Chrome does send.
+    http2_stream_priority: Option<StreamPriority>,
 }
 
 impl<CookieStoreImpl: CookieStore + 'static> Clone for ImpitBuilder<CookieStoreImpl> {
@@ -121,6 +124,7 @@ impl<CookieStoreImpl: CookieStore + 'static> Clone for ImpitBuilder<CookieStoreI
             extra_roots: self.extra_roots.clone(),
             http2_header_table_size: self.http2_header_table_size,
             http2_omit_max_frame_size: self.http2_omit_max_frame_size,
+            http2_stream_priority: self.http2_stream_priority,
         }
     }
 }
@@ -141,6 +145,7 @@ impl<CookieStoreImpl: CookieStore + 'static> Default for ImpitBuilder<CookieStor
             extra_roots: Vec::new(),
             http2_header_table_size: None,
             http2_omit_max_frame_size: false,
+            http2_stream_priority: None,
         }
     }
 }
@@ -245,6 +250,19 @@ impl<CookieStoreImpl: CookieStore + 'static> ImpitBuilder<CookieStoreImpl> {
     /// Added by this repository; see patches/UPSTREAM.md.
     pub fn with_http2_omit_max_frame_size(mut self, omit: bool) -> Self {
         self.http2_omit_max_frame_size = omit;
+        self
+    }
+
+    /// Opens the first stream with a PRIORITY block, the way a browser does.
+    ///
+    /// It is here rather than on [`crate::fingerprint::Http2Fingerprint`] for
+    /// the same reason the two settings above are: the database does not carry
+    /// the value and putting it there would edit twenty-seven profile literals
+    /// that do not use it, which is a reconciliation cost for nothing.
+    ///
+    /// Added by this repository; see patches/UPSTREAM.md.
+    pub fn with_http2_stream_priority(mut self, priority: Option<StreamPriority>) -> Self {
+        self.http2_stream_priority = priority;
         self
     }
 
@@ -439,18 +457,24 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
             req = req.body(body);
         }
 
-        let Some(pseudo_order) = self.pseudo_header_order else {
+        let stream_priority = self.config.http2_stream_priority;
+        if self.pseudo_header_order.is_none() && stream_priority.is_none() {
             return req.send().await;
-        };
+        }
 
         // reqwest keeps its own per-request settings in the same extension
-        // map and does not expose it, so the two orders go on through the two
-        // public conversions rather than through a private field. Both are
-        // lossless, so the timeout set above survives the round trip and
+        // map and does not expose it, so what `h2` has to read goes on through
+        // the two public conversions rather than through a private field. Both
+        // are lossless, so the timeout set above survives the round trip and
         // reaches `h2` beside ours. See patches/UPSTREAM.md.
         let request = req.build()?;
         let mut http_request: http::Request<reqwest::Body> = request.try_into()?;
-        http_request.extensions_mut().insert(pseudo_order);
+        if let Some(pseudo_order) = self.pseudo_header_order {
+            http_request.extensions_mut().insert(pseudo_order);
+        }
+        if let Some(priority) = stream_priority {
+            http_request.extensions_mut().insert(priority);
+        }
         let request: reqwest::Request = http_request.try_into()?;
         client.execute(request).await
     }

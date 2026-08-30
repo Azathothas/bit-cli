@@ -5,13 +5,13 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/impit/src/impit.rs b/impit/src/impit.rs
-index 1dbf3bc..9601b3c 100644
+index 1dbf3bc..a509e72 100644
 --- a/impit/src/impit.rs
 +++ b/impit/src/impit.rs
 @@ -1,5 +1,4 @@
 -use tokio::sync::RwLock;
 -
-+use h2::ext::PseudoOrder;
++use h2::ext::{PseudoOrder, StreamPriority};
  use log::debug;
  use reqwest::{cookie::CookieStore, header::HeaderMap, Method, Response, Version};
  use std::{fmt::Debug, net::IpAddr, str::FromStr, sync::Arc, time::Duration};
@@ -51,7 +51,7 @@ index 1dbf3bc..9601b3c 100644
  ///   .build()
  ///   .unwrap();
  ///
-@@ -91,6 +96,13 @@ pub struct ImpitBuilder<CookieStoreImpl: CookieStore + 'static> {
+@@ -91,6 +96,16 @@ pub struct ImpitBuilder<CookieStoreImpl: CookieStore + 'static> {
      cookie_store: Option<Arc<CookieStoreImpl>>,
      headers: Option<Vec<(String, String)>>,
      local_address: Option<IpAddr>,
@@ -62,30 +62,35 @@ index 1dbf3bc..9601b3c 100644
 +    /// Whether to leave `SETTINGS_MAX_FRAME_SIZE` out of the SETTINGS frame.
 +    /// A current Chrome does not send it and `hyper` always does.
 +    http2_omit_max_frame_size: bool,
++    /// The PRIORITY block to open the first stream with, which the fingerprint
++    /// database does not carry and a current Chrome does send.
++    http2_stream_priority: Option<StreamPriority>,
  }
  
  impl<CookieStoreImpl: CookieStore + 'static> Clone for ImpitBuilder<CookieStoreImpl> {
-@@ -106,6 +118,9 @@ impl<CookieStoreImpl: CookieStore + 'static> Clone for ImpitBuilder<CookieStoreI
+@@ -106,6 +121,10 @@ impl<CookieStoreImpl: CookieStore + 'static> Clone for ImpitBuilder<CookieStoreI
              cookie_store: self.cookie_store.clone(),
              headers: self.headers.clone(),
              local_address: self.local_address,
 +            extra_roots: self.extra_roots.clone(),
 +            http2_header_table_size: self.http2_header_table_size,
 +            http2_omit_max_frame_size: self.http2_omit_max_frame_size,
++            http2_stream_priority: self.http2_stream_priority,
          }
      }
  }
-@@ -123,6 +138,9 @@ impl<CookieStoreImpl: CookieStore + 'static> Default for ImpitBuilder<CookieStor
+@@ -123,6 +142,10 @@ impl<CookieStoreImpl: CookieStore + 'static> Default for ImpitBuilder<CookieStor
              cookie_store: None,
              headers: None,
              local_address: None,
 +            extra_roots: Vec::new(),
 +            http2_header_table_size: None,
 +            http2_omit_max_frame_size: false,
++            http2_stream_priority: None,
          }
      }
  }
-@@ -169,18 +187,6 @@ impl<CookieStoreImpl: CookieStore + 'static> ImpitBuilder<CookieStoreImpl> {
+@@ -169,18 +192,6 @@ impl<CookieStoreImpl: CookieStore + 'static> ImpitBuilder<CookieStoreImpl> {
          self
      }
  
@@ -104,7 +109,7 @@ index 1dbf3bc..9601b3c 100644
      /// Sets the desired redirect behavior.
      ///
      /// By default, the client will follow up to 10 redirects.
-@@ -226,6 +232,31 @@ impl<CookieStoreImpl: CookieStore + 'static> ImpitBuilder<CookieStoreImpl> {
+@@ -226,6 +237,44 @@ impl<CookieStoreImpl: CookieStore + 'static> ImpitBuilder<CookieStoreImpl> {
          self
      }
  
@@ -124,6 +129,19 @@ index 1dbf3bc..9601b3c 100644
 +        self
 +    }
 +
++    /// Opens the first stream with a PRIORITY block, the way a browser does.
++    ///
++    /// It is here rather than on [`crate::fingerprint::Http2Fingerprint`] for
++    /// the same reason the two settings above are: the database does not carry
++    /// the value and putting it there would edit twenty-seven profile literals
++    /// that do not use it, which is a reconciliation cost for nothing.
++    ///
++    /// Added by this repository; see patches/UPSTREAM.md.
++    pub fn with_http2_stream_priority(mut self, priority: Option<StreamPriority>) -> Self {
++        self.http2_stream_priority = priority;
++        self
++    }
++
 +    /// Trusts these DER certificate authorities as well as the usual roots.
 +    ///
 +    /// Added rather than substituted, and nothing here disables verification.
@@ -136,7 +154,7 @@ index 1dbf3bc..9601b3c 100644
      /// Builds the [`Impit`] instance.
      pub fn build(self) -> Result<Impit<CookieStoreImpl>, ImpitError> {
          Impit::new(self)
-@@ -258,13 +289,18 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -258,13 +307,18 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
              if let Some(max_size) = fingerprint.http2.max_header_list_size {
                  client = client.http2_max_header_list_size(max_size);
              }
@@ -158,7 +176,7 @@ index 1dbf3bc..9601b3c 100644
  
          let tls_config = tls_config_builder.build();
  
-@@ -278,10 +314,6 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -278,10 +332,6 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
              client = client.cookie_provider(cookie_provider.clone());
          }
  
@@ -169,7 +187,7 @@ index 1dbf3bc..9601b3c 100644
          if !config.proxy_url.is_empty() {
              client = client.proxy(
                  reqwest::Proxy::all(&config.proxy_url)
-@@ -309,16 +341,7 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -309,16 +359,7 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
  
      /// Creates a new [`Impit`] instance based on the options stored in the [`ImpitBuilder`] instance.
      fn new(config: ImpitBuilder<CookieStoreImpl>) -> Result<Self, ImpitError> {
@@ -187,7 +205,7 @@ index 1dbf3bc..9601b3c 100644
  
          let vanilla_client = if config.vanilla_fallback && config.fingerprint.is_some() {
              Some(Self::new_reqwest_client(
-@@ -332,26 +355,28 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -332,26 +373,28 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
              None
          };
  
@@ -230,7 +248,7 @@ index 1dbf3bc..9601b3c 100644
          })
      }
  
-@@ -371,32 +396,6 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -371,32 +414,6 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
          }
      }
  
@@ -263,7 +281,7 @@ index 1dbf3bc..9601b3c 100644
      fn build_request(
          &self,
          method: Method,
-@@ -427,16 +426,11 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -427,16 +444,11 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
          client: &reqwest::Client,
          prepared: &mut PreparedRequest,
          timeout: Option<Duration>,
@@ -280,29 +298,35 @@ index 1dbf3bc..9601b3c 100644
          if let Some(t) = timeout {
              req = req.timeout(t);
          }
-@@ -445,7 +439,20 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -445,7 +457,26 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
              req = req.body(body);
          }
  
 -        req.send().await
-+        let Some(pseudo_order) = self.pseudo_header_order else {
++        let stream_priority = self.config.http2_stream_priority;
++        if self.pseudo_header_order.is_none() && stream_priority.is_none() {
 +            return req.send().await;
-+        };
++        }
 +
 +        // reqwest keeps its own per-request settings in the same extension
-+        // map and does not expose it, so the two orders go on through the two
-+        // public conversions rather than through a private field. Both are
-+        // lossless, so the timeout set above survives the round trip and
++        // map and does not expose it, so what `h2` has to read goes on through
++        // the two public conversions rather than through a private field. Both
++        // are lossless, so the timeout set above survives the round trip and
 +        // reaches `h2` beside ours. See patches/UPSTREAM.md.
 +        let request = req.build()?;
 +        let mut http_request: http::Request<reqwest::Body> = request.try_into()?;
-+        http_request.extensions_mut().insert(pseudo_order);
++        if let Some(pseudo_order) = self.pseudo_header_order {
++            http_request.extensions_mut().insert(pseudo_order);
++        }
++        if let Some(priority) = stream_priority {
++            http_request.extensions_mut().insert(priority);
++        }
 +        let request: reqwest::Request = http_request.try_into()?;
 +        client.execute(request).await
      }
  
      async fn send(
-@@ -454,24 +461,15 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -454,24 +485,15 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
          timeout: Option<Duration>,
          http3_prior_knowledge: Option<bool>,
      ) -> Result<Response, ImpitError> {
@@ -332,7 +356,7 @@ index 1dbf3bc..9601b3c 100644
  
          let header_map_result: Result<HeaderMap, ImpitError> =
              HttpHeaders::from(request.headers).into();
-@@ -493,9 +491,7 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -493,9 +515,7 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
              body: request.body,
          };
  
@@ -343,7 +367,7 @@ index 1dbf3bc..9601b3c 100644
  
          let response = match primary_result {
              Ok(resp) => resp,
-@@ -523,7 +519,7 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -523,7 +543,7 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
                      "Primary request to {url} failed with {primary_error}, retrying with vanilla client"
                  );
                  match self
@@ -352,7 +376,7 @@ index 1dbf3bc..9601b3c 100644
                      .await
                  {
                      Ok(resp) => resp,
-@@ -532,24 +528,6 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
+@@ -532,24 +552,6 @@ impl<CookieStoreImpl: CookieStore + 'static> Impit<CookieStoreImpl> {
              }
          };
  

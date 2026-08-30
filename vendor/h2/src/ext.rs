@@ -234,3 +234,59 @@ impl fmt::Display for InvalidPseudoOrder {
 }
 
 impl std::error::Error for InvalidPseudoOrder {}
+
+/// The PRIORITY block a client opens its first stream with.
+///
+/// **Added by this repository; see `patches/UPSTREAM.md`.** RFC 9113 section
+/// 5.3.1 deprecates stream priority and says a sender SHOULD NOT send the
+/// PRIORITY frame, and `h2` follows that: it parses `stream_dep` on receive and
+/// writes none on send. A browser does send one, so the four field Akamai
+/// HTTP/2 fingerprint of a client that omits it carries `0` where a browser
+/// carries `1:1:0:255`, and that one field is what an origin comparing the two
+/// can still tell apart. See `TODO/cli-surface.md`, T-262.
+///
+/// It reaches the frame the same way [`PseudoOrder`] does: the caller puts it
+/// in the request's extension map, `proto::streams::streams` lifts it out
+/// before the map is cleared, and the HEADERS encoder writes the five byte
+/// block ahead of the header block with the PRIORITY flag set.
+///
+/// **This carries the block and never a PRIORITY frame of its own.** The frame
+/// is a connection level write on a different seam; this is part of converting
+/// one request, which is the seam a fingerprint is read on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StreamPriority {
+    dependency_id: u32,
+    weight: u8,
+    exclusive: bool,
+}
+
+impl StreamPriority {
+    /// A block naming the stream depended on, the weight, and whether the
+    /// dependency is exclusive.
+    ///
+    /// **The weight is the wire value**, 0 to 255, which is one less than the
+    /// 1 to 256 the specification talks in. A browser writing "weight 256"
+    /// puts `255` on the wire and that is what a fingerprint reads back.
+    pub const fn new(dependency_id: u32, weight: u8, exclusive: bool) -> Self {
+        Self {
+            dependency_id,
+            weight,
+            exclusive,
+        }
+    }
+
+    /// The stream this one depends on.
+    pub const fn dependency_id(&self) -> u32 {
+        self.dependency_id
+    }
+
+    /// The wire weight, 0 to 255.
+    pub const fn weight(&self) -> u8 {
+        self.weight
+    }
+
+    /// Whether the dependency is exclusive.
+    pub const fn is_exclusive(&self) -> bool {
+        self.exclusive
+    }
+}

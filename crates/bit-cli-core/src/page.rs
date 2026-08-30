@@ -268,6 +268,25 @@ pub const BROWSER_H2_CONNECTION_WINDOW: u32 = 15_728_640;
 /// `SETTINGS_MAX_HEADER_LIST_SIZE`.
 pub const BROWSER_H2_MAX_HEADER_LIST_SIZE: u32 = 262_144;
 
+/// The PRIORITY block Chrome opens its first stream with: exclusive, no
+/// dependency, weight 255.
+///
+/// This is the third field of a four field Akamai fingerprint, and it was the
+/// one field of the four where this client differed from a browser: `h2`
+/// parses a priority block on receive and wrote none on send, so the
+/// fingerprint carried `0` where a browser carries `1:1:0:255`.
+///
+/// **RFC 9113 section 5.3.1 deprecates stream priority** and says a sender
+/// SHOULD NOT send the PRIORITY frame. That is about the standalone frame; the
+/// block in the HEADERS frame is what a browser actually emits and what a
+/// fingerprint reads. Measured identical on Chrome 151 and Chrome 152.
+/// See `TODO/cli-surface.md`, T-262.
+///
+/// The tuple is `(dependency stream id, wire weight, exclusive)`. The wire
+/// weight is one less than the weight the specification talks in, so a browser
+/// asking for 256 puts 255 here.
+pub const BROWSER_H2_STREAM_PRIORITY: (u32, u8, bool) = (0, 255, true);
+
 /// The pseudo-header order, which is the fourth field of an Akamai
 /// fingerprint.
 ///

@@ -107,15 +107,17 @@ pwsh -NoProfile -File scripts/gates.ps1
 gh run list --limit 1
 ```
 
-- **Vendored:** unchanged, and deliberately so. `scripts/vendor-status.ps1` says
-  everything agrees: **eight upstreams**, **48 patches** across thirty-four
-  sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md), the series
-  matching the trees, and the version, changelog and pins agreeing. **No
-  `vendor/` file was edited this session**, which is the other half of what
-  [T-264](cli-surface.md) was for.
+- **Vendored:** **eight upstreams** and **49 patches** across thirty-six
+  sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md), one more than
+  last session. `scripts/vendor-status.ps1` says the series matches the trees,
+  every patch has a section, and the version, changelog and pins agree.
+
+  **The profile move edited no vendored file**, which was the point of it, and
+  [T-262](cli-surface.md) then edited `h2` and `impit` for a reason that is not
+  data: a frame this client could not write.
 - **Soak:** nothing ran this session.
-- **Entries:** 213 items. 32 open, 4 partial, 0 blocked, 166 done, 11 deferred
-  to Phase C. 166 of 202 workable done, 36 left.
+- **Entries:** 213 items. 31 open, 4 partial, 0 blocked, 167 done, 11 deferred
+  to Phase C. 167 of 202 workable done, 35 left.
 - **Tree:** 108 Rust files, 65,392 lines of code, 17,330 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
@@ -125,11 +127,37 @@ gh run list --limit 1
 
 ## What the last session did
 
-**[T-264](cli-surface.md) went from open to `partial` with three of its four
-pieces done**, and the fourth is blocked on something measured rather than
-predicted. Two new scripts, one committed pin, two new probe switches, one
-whole-file profile move, and `docs/containers.md` rewritten against tooling that
-gained two actions since the page was written.
+**[T-262](cli-surface.md) closed and [T-264](cli-surface.md) went from open to
+`partial` with three of its four pieces done**, its fourth blocked on something
+measured rather than predicted. Two new scripts, one committed pin, two new
+probe switches, one whole-file profile move, two new vendored patches, and
+`docs/containers.md` rewritten against tooling that gained two actions since the
+page was written.
+
+### [T-262](cli-surface.md): the Akamai fingerprint is a browser's in all four fields
+
+The one field of four where this client was still distinguishable. Chrome opens
+stream 1 with a PRIORITY block and `h2` wrote none, so the fingerprint carried
+`0` where a browser carries `1:1:0:255`.
+
+**The encoder needed nothing new**, which is the finding: the HEADERS encoder
+already takes a closure that runs after the head and before the header block,
+which is how `PushPromise` writes its promised stream id, and the payload length
+is measured after it runs. So the five bytes are counted in the frame length and
+in any CONTINUATION split without either being computed by hand, and the part
+the entry expected to be delicate was already solved.
+
+Off the wire, not derived:
+
+| | PRIORITY field |
+| --- | --- |
+| before | `0` |
+| after | `1:1:0:255` |
+| a real Chrome 151, and a real Chrome 152 | `1:1:0:255` |
+
+The golden moved in that one field and nothing else. The exemption in
+`scripts/check-browser-fingerprint.ps1` came off with the entry, which is the
+other half of the rule about a check that measures an open defect.
 
 ### The profile is this repository's now, and the move is behaviour neutral
 
@@ -254,16 +282,12 @@ gh run list --limit 1
    new shape, because `ClientExtensions` has one slot at a fixed codepoint and
    Chrome sends two at chosen ones.
 
-3. **[T-262](cli-surface.md), P3, `S`.** The PRIORITY payload in `h2`'s frame
-   encoder, `vendor/h2/src/frame/headers.rs:301`. The 152 capture reproduced the
-   difference on a second version, so the premise is firmer than when it was
-   filed. `cargo test --manifest-path vendor/h2/Cargo.toml --workspace` is what
-   holds it.
+3. **[T-264](cli-surface.md)'s remainder**, which is the list under "In
+   progress" and finishes with the bump. The first two items are the same
+   vendored extension encoder T-263 touches, so doing T-263 first is what makes
+   them cheap.
 
-4. **[T-264](cli-surface.md)'s remainder**, which is the list under "In
-   progress" and finishes with the bump.
-
-5. **Then the ordinary list resumes**, in the shape the operator has kept
+4. **Then the ordinary list resumes**, in the shape the operator has kept
    throughout: clear the small entries so the open count comes down, then take
    the bigger ones a category at a time.
 
@@ -273,19 +297,19 @@ gh run list --limit 1
    [T-251](trackers.md) P2 `partial`. Then [T-260](cli-surface.md) and
    [T-261](trackers.md), the publishing pair.
 
-6. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
+5. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
    so the two candidates left are on the read side and are named with their
    lines. Build the fixture first: a pair of real `librqbit_utp` streams in one
    process.
 
-7. **The three entries that were ruled on and are still work.**
+6. **The three entries that were ruled on and are still work.**
    [T-227](memory.md) is a throughput curve then a flag.
    [T-242](performance.md) is two sweeps from `scripts/bench-leech.ps1`.
    [T-234](peers.md) and [T-238](peers.md) are the two large ones and both need
    [T-239](peers.md) first.
 
-8. **Then the category pass, and `bep-coverage.md` is still first.**
+7. **Then the category pass, and `bep-coverage.md` is still first.**
    [T-101](bep-coverage.md) is open on a latency measurement loopback cannot
    produce, which [T-239](peers.md) is the prerequisite for.
    [T-102](bep-coverage.md) and [T-168](bep-coverage.md) are the untouched two,
@@ -334,10 +358,15 @@ for the same reason as the last five sessions.
 
 ## Behaviour changes worth the operator's eye
 
-**Nothing `bit-cli` puts on the wire changed.** The profile moved file and the
-goldens did not move, which is the point of the move: one file this repository
-owns is now the only place a fingerprint comes from, and `vendor/impit`'s
-database is read by nothing that ships.
+**One thing `bit-cli` puts on the wire changed, and it is five bytes.** The
+HEADERS frame opening a source-document fetch now carries a PRIORITY block,
+exclusive on stream 0 with weight 255, which is what a browser sends. Nothing
+else moved: the `ClientHello` is byte identical and so is the header set.
+
+**The profile moving file changed nothing at all**, which is the point of that
+half: one file this repository owns is now the only place a fingerprint comes
+from, and `vendor/impit`'s database is read by nothing that ships. The goldens
+did not move for it, only for the five bytes above.
 
 **`loopback-tlsprobe` takes `--bind` and `--until-h2`.** Both are test fixture
 switches and neither reaches a shipping binary. `--bind` defaults to loopback

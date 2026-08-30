@@ -24,7 +24,10 @@
 
 use std::time::Duration;
 
-use crate::page::{BROWSER_H2_HEADER_TABLE_SIZE, BROWSER_H2_OMIT_MAX_FRAME_SIZE, ClientProfile};
+use crate::page::{
+    BROWSER_H2_HEADER_TABLE_SIZE, BROWSER_H2_OMIT_MAX_FRAME_SIZE, BROWSER_H2_STREAM_PRIORITY,
+    ClientProfile,
+};
 
 /// What to fetch, and the two bounds every fetch here carries.
 #[derive(Debug, Clone)]
@@ -334,6 +337,11 @@ impl BrowserFetcher {
             .with_fingerprint(browser_fingerprint())
             .with_http2_header_table_size(Some(BROWSER_H2_HEADER_TABLE_SIZE))
             .with_http2_omit_max_frame_size(BROWSER_H2_OMIT_MAX_FRAME_SIZE)
+            .with_http2_stream_priority(Some(impit::h2_ext::StreamPriority::new(
+                BROWSER_H2_STREAM_PRIORITY.0,
+                BROWSER_H2_STREAM_PRIORITY.1,
+                BROWSER_H2_STREAM_PRIORITY.2,
+            )))
             .with_default_timeout(deadline)
             // A source document is one hop. Following a redirect is still one
             // document, and a mirror answering 302 is the normal case, so the

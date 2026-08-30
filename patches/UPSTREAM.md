@@ -1642,7 +1642,7 @@ Files:       vendor/h2/src/ext.rs
              patches/h2/0002-src-client.rs.patch
              patches/h2/0003-src-ext.rs.patch
              patches/h2/0004-src-frame-headers.rs.patch
-             patches/h2/0006-src-proto-streams-streams.rs.patch
+             patches/h2/0007-src-proto-streams-streams.rs.patch
 Upstream:    ours. RFC 9113 section 8.3 leaves the order among the
              pseudo-headers to the sender and this crate has always written one
              fixed sequence, so a release could expose the choice on
@@ -1695,12 +1695,105 @@ pwsh -NoProfile -File scripts/check-fingerprint.ps1
 
 ---
 
+## h2: a client cannot open a stream with the PRIORITY block a browser sends
+
+```
+Unblocks:    T-262, TODO/cli-surface.md
+Files:       vendor/h2/src/ext.rs
+             vendor/h2/src/frame/priority.rs
+             vendor/h2/src/frame/headers.rs
+             vendor/h2/src/client.rs
+             vendor/h2/src/proto/streams/streams.rs
+             patches/h2/0002-src-client.rs.patch
+             patches/h2/0003-src-ext.rs.patch
+             patches/h2/0004-src-frame-headers.rs.patch
+             patches/h2/0005-src-frame-priority.rs.patch
+             patches/h2/0007-src-proto-streams-streams.rs.patch
+Upstream:    unlikely, and for a reason rather than by neglect. RFC 9113
+             section 5.3.1 deprecates stream priority and says a sender SHOULD
+             NOT send the PRIORITY frame, so a release adding a way to send one
+             would be adding a way to do the thing the specification tells
+             clients not to do. A release could still expose it as an
+             impersonation feature the way it exposes `Protocol`, and nothing
+             says it will.
+Added:       2026-08-30T02:30Z
+```
+
+`h2::ext::StreamPriority` carries a dependency stream id, a wire weight and an
+exclusive flag, read off the request's extensions the same way `PseudoOrder`
+is. Absent, nothing is written and the frame is byte-identical to before.
+
+`Headers::set_stream_priority` sets the payload and the PRIORITY flag in one
+call, because the two are one decision: a head carrying the flag with no block
+is a frame a peer cannot parse, and a block with no flag is five bytes of
+header block. `StreamDependency::encode` is the other new half; `load` already
+existed, because this crate parses a priority block on receive and wrote none
+on send.
+
+**Why the encoder needed nothing new.** `EncodingHeaderBlock::encode` already
+takes a closure that runs after the head and before the header block, which is
+how `PushPromise` writes its promised stream id, and the payload length is
+measured after it runs. So the five bytes are counted in the frame length and
+in any CONTINUATION split without either being computed here.
+
+**Why it is the HEADERS block and not a PRIORITY frame.** A standalone PRIORITY
+frame on the connection is what a browser also sends, and it is a different
+seam: a connection level write rather than part of converting one request. The
+block is what the four field Akamai fingerprint reads.
+
+**How it was measured.** Off the wire, `loopback-tlsprobe` reading a real
+HTTP/2 request, and against a real Chrome on the same probe:
+
+| | PRIORITY field |
+| --- | --- |
+| before | `0` |
+| after | `1:1:0:255` |
+| Chrome 151 and Chrome 152 | `1:1:0:255` |
+
+```bash
+pwsh -NoProfile -File scripts/check-fingerprint.ps1
+```
+
+---
+
+## impit: the PRIORITY block is not part of the fingerprint database
+
+```
+Unblocks:    T-262, TODO/cli-surface.md
+Files:       vendor/impit/impit/src/impit.rs
+             vendor/impit/impit/src/lib.rs
+             patches/impit/0005-impit-src-impit.rs.patch
+             patches/impit/0006-impit-src-lib.rs.patch
+Upstream:    ours, and the same shape as the two HTTP/2 settings beside it.
+Added:       2026-08-30T02:30Z
+```
+
+`ImpitBuilder::with_http2_stream_priority` takes the block and the client puts
+it in each request's extension map beside the pseudo-header order.
+`impit::h2_ext` reexports `h2::ext`, so a caller configures this without
+depending on `h2` directly and cannot end up naming a different `h2` than this
+graph resolves.
+
+**Why it is on the builder and not on `Http2Fingerprint`.** It belongs to the
+HTTP/2 fingerprint by rights, and putting it there would edit twenty-seven
+profile literals in the vendored database that do not use it, every one of them
+a conflict at the next reconciliation. `http2_header_table_size` and
+`http2_omit_max_frame_size` are on the builder for the same reason and this
+follows them.
+
+**Where the value lives.** `crates/bit-cli-core/src/page.rs`,
+`BROWSER_H2_STREAM_PRIORITY`, with the rest of the profile.
+[RULES.md](../TODO/RULES.md) section 6b: the vendored database is a starting
+point and not the home of the answer.
+
+---
+
 ## h2: an HPACK story whose fixture is not vendored fails rather than skips
 
 ```
 Unblocks:    nothing. It is the cost of not vendoring 59 MB of test vectors
 Files:       vendor/h2/src/hpack/test/fixture.rs
-             patches/h2/0005-src-hpack-test-fixture.rs.patch
+             patches/h2/0006-src-hpack-test-fixture.rs.patch
 Upstream:    ours, and it would make no sense upstream: their fixtures are
              always there.
 Added:       2026-08-29T09:20Z

@@ -1638,6 +1638,7 @@ impl Peer {
         request: Request<()>,
         protocol: Option<Protocol>,
         pseudo_order: Option<crate::ext::PseudoOrder>,
+        stream_priority: Option<crate::ext::StreamPriority>,
         end_of_stream: bool,
     ) -> Result<Headers, SendError> {
         use http::request::Parts;
@@ -1694,6 +1695,12 @@ impl Peer {
         // `crate::ext::PseudoOrder`.
         if let Some(order) = pseudo_order {
             frame.set_pseudo_order(order);
+        }
+
+        // And for a PRIORITY block on the stream. See
+        // `crate::ext::StreamPriority`; added by this repository.
+        if let Some(priority) = stream_priority {
+            frame.set_stream_priority(priority);
         }
 
         if end_of_stream {

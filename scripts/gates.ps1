@@ -205,8 +205,16 @@ $eolArgs = @("-NoProfile", "-File", (Join-Path $PSScriptRoot "check-eol.ps1"))
 if ($Fix) { $eolArgs += "-Fix" }
 $eolSaid = & pwsh @eolArgs 2>&1
 $eolOk = ($LASTEXITCODE -eq 0)
+# Counting the `wrong` lines is right when the check only reported, and wrong
+# under -Fix, where a file it could not repair is labelled something else. That
+# combination printed `eol FAILED (0 file(s) disagree)` on 2026-08-30 over two
+# real files, which sends a reader looking at a count instead of at the check.
+# So the count is used when there is one and the check's own last line
+# otherwise: a gate must never report a failure as zero of anything.
+$eolWrong = @($eolSaid | Select-String '^  wrong ').Count
 Record "eol" $eolOk $(if ($eolOk) { "" }
-    else { "$(@($eolSaid | Select-String '^  wrong ').Count) file(s) disagree with .gitattributes; run with -Fix" })
+    elseif ($eolWrong -gt 0) { "$eolWrong file(s) disagree with .gitattributes; run with -Fix" }
+    else { "$(@($eolSaid)[-1])" })
 
 # ---------------------------------------------------------------------------
 # man

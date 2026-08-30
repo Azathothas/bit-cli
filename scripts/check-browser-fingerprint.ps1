@@ -130,21 +130,18 @@ New-Item -ItemType Directory -Force -Path $scratch | Out-Null
 # Differences an open entry already names, so this check records them rather
 # than failing a build for them. One row per entry, and the row goes when the
 # entry closes.
-$known = @(
-    @{
-        field = "akamai"
-        # Chrome opens stream 1 with a PRIORITY block; `h2` writes no priority
-        # information at all and RFC 9113 deprecates it. Every other field of
-        # the Akamai fingerprint matches.
-        pattern = '^(?<head>.*\|)(?<priority>[^|]*)\|(?<tail>.*)$'
-        entry = "T-262"
-        why = "the PRIORITY field: Chrome opens stream 1 with one and h2 sends none"
-    }
-)
+#
+# **It is empty, and that is the state to keep it in.** T-262's row was the
+# only one: the Akamai PRIORITY field, where Chrome opened stream 1 with a
+# block and `h2` sent none. T-262 closed, so the row came off, which is the
+# other half of the rule about a check that measures an open defect. Adding one
+# back means naming the entry that owns the difference.
+$known = @()
 
-# Whether a difference is one an entry already names. For the Akamai
-# fingerprint that means every field but the third agrees; anything else is a
-# real disagreement even on the same line.
+# Whether a difference is one an entry already names. Nothing is exempt today;
+# this is the shape a row would be judged by. For the Akamai fingerprint an
+# exemption would mean every field but the third agrees, because anything else
+# is a real disagreement even on the same line.
 function Test-KnownAkamai([string]$claim, [string]$browser) {
     $a = $claim -split '\|'
     $b = $browser -split '\|'
@@ -502,9 +499,10 @@ if ($claim.akamai -cne $observed.akamai) {
         where = "crates/bit-cli-core/src/page.rs, BROWSER_H2_* and impit's fingerprint database"
         known = $null
     }
-    if (-not $Strict -and (Test-KnownAkamai $claim.akamai $observed.akamai)) {
-        $row.known = ($known | Where-Object { $_.field -eq 'akamai' } | Select-Object -First 1)
-        $row.where = "$($row.known.entry): $($row.known.why)"
+    $exempt = @($known | Where-Object { $_.field -eq 'akamai' }) | Select-Object -First 1
+    if (-not $Strict -and $exempt -and (Test-KnownAkamai $claim.akamai $observed.akamai)) {
+        $row.known = $exempt
+        $row.where = "$($exempt.entry): $($exempt.why)"
     }
     $problems += $row
 }

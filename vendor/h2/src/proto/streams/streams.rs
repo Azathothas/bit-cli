@@ -2,7 +2,7 @@ use super::recv::RecvHeaderBlockError;
 use super::store::{self, Entry, Resolve, Store};
 use super::{Buffer, BufferStatus, Config, Counts, Prioritized, Recv, Send, Stream, StreamId};
 use crate::codec::{Codec, SendError, UserError};
-use crate::ext::{Protocol, PseudoOrder};
+use crate::ext::{Protocol, PseudoOrder, StreamPriority};
 use crate::frame::{self, Frame, Reason};
 use crate::proto::{peer, Error, Initiator, Open, Peer, WindowSize};
 use crate::{client, proto, server};
@@ -274,6 +274,9 @@ where
         // before the frame is built. Added by this repository; see
         // patches/UPSTREAM.md.
         let pseudo_order = request.extensions_mut().remove::<PseudoOrder>();
+        // And the PRIORITY block, for the same reason and at the same seam.
+        // See `crate::ext::StreamPriority`; added by this repository.
+        let stream_priority = request.extensions_mut().remove::<StreamPriority>();
 
         // Clear before taking lock, incase extensions contain a StreamRef.
         request.extensions_mut().clear();
@@ -328,6 +331,7 @@ where
                 request,
                 protocol,
                 pseudo_order,
+                stream_priority,
                 end_of_stream,
             )?;
 

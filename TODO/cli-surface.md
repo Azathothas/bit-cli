@@ -6093,7 +6093,8 @@ Source:      measured 2026-08-29 by `scripts/check-browser-fingerprint.ps1`,
 Category:    cli
 Priority:    P3
 Effort:      S
-Status:      open
+Status:      done, 2026-08-30. The Akamai fingerprint is a real Chrome's in all
+             four fields now, read off the wire and not derived.
 
 Problem:     An Akamai HTTP/2 fingerprint is four fields:
              `SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_HEADER_ORDER`. Captured
@@ -6154,10 +6155,70 @@ Acceptance:  `pwsh scripts/check-browser-fingerprint.ps1 -Strict` exits 0 on a
              `cargo test --manifest-path vendor/h2/Cargo.toml --workspace
              --target-dir target/vendor-h2` still passes: the frame writer is
              what this touches and h2's own tests are what cover it.
-Notes:       The check already records this and does not judge it, following
-             `scripts/check-close-wait.ps1`'s pattern, so nothing goes red
-             while it is open. `patches/UPSTREAM.md` gets a section when it
-             closes.
+Closed:      **2026-08-30, and the encoder needed nothing new.**
+             `EncodingHeaderBlock::encode` already takes a closure that runs
+             after the head and before the header block, which is how
+             `PushPromise` writes its promised stream id, and the payload
+             length is measured after it runs. So the five bytes are counted in
+             the frame length and in any CONTINUATION split without either
+             being computed by hand, which is the part the entry expected to be
+             delicate.
+
+             What was added: `h2::ext::StreamPriority`, lifted off the request
+             extensions in `streams.rs` beside `PseudoOrder`;
+             `StreamDependency::encode`, which is the half `load` never had;
+             `Headers::set_stream_priority`, which sets the payload **and** the
+             flag in one call because a head with the flag and no block is a
+             frame a peer cannot parse; and
+             `ImpitBuilder::with_http2_stream_priority`.
+
+             **The value lives in `crates/bit-cli-core/src/page.rs`**,
+             `BROWSER_H2_STREAM_PRIORITY`, not in the vendored fingerprint
+             database. Putting it on `Http2Fingerprint` would have edited
+             twenty-seven profile literals that do not use it, so it is a
+             builder option beside the two HTTP/2 settings that are there for
+             the same reason. [RULES.md](RULES.md) section 6b.
+
+             Measured off the wire rather than asserted:
+
+             | | PRIORITY field |
+             | --- | --- |
+             | before | `0` |
+             | after | `1:1:0:255` |
+             | a real Chrome 151, and a real Chrome 152 | `1:1:0:255` |
+
+             The golden moved in that one field and nothing else, which is what
+             says the change is the change:
+             `fingerprints/bit-cli-browser.json`.
+
+```bash
+pwsh -NoProfile -File scripts/check-fingerprint.ps1
+```
+
+             `h2`'s own suite holds the frame writer: 437 passed, 1 ignored,
+             and the one failure is the upstream flake `PROGRESS.md` already
+             names, which passes on its own.
+
+```bash
+cargo test --manifest-path vendor/h2/Cargo.toml --workspace --target-dir target/vendor-h2
+```
+
+             Two new tests in `vendor/h2/src/frame/headers.rs` assert the wire
+             bytes directly, `80 00 00 00 ff` after a nine byte head with the
+             PRIORITY flag set, and that a frame given no priority carries
+             neither the flag nor the block.
+Notes:       The check recorded this and did not judge it while it was open,
+             following `scripts/check-close-wait.ps1`'s pattern. **The
+             exemption came off with the entry**, which is the other half of
+             that rule: `$known` in
+             `scripts/check-browser-fingerprint.ps1` is empty now and a row
+             added back has to name the entry that owns it.
+
+             **`StreamPriority::parse` was written and then removed.** It took
+             the Akamai third field's `<exclusive>:<dependency>:<weight>` shape
+             and nothing called it, because the value comes from a typed
+             constant rather than from text. An untested public parser in a
+             protocol library is machinery with no caller.
 
 ### T-263 The extension list is Chrome's set in a fixed order, and Chrome shuffles it
 

@@ -5,18 +5,19 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/src/client.rs b/src/client.rs
-index cb7e677..7935428 100644
+index cb7e677..abadd86 100644
 --- a/src/client.rs
 +++ b/src/client.rs
-@@ -1637,6 +1637,7 @@ impl Peer {
+@@ -1637,6 +1637,8 @@ impl Peer {
          id: StreamId,
          request: Request<()>,
          protocol: Option<Protocol>,
 +        pseudo_order: Option<crate::ext::PseudoOrder>,
++        stream_priority: Option<crate::ext::StreamPriority>,
          end_of_stream: bool,
      ) -> Result<Headers, SendError> {
          use http::request::Parts;
-@@ -1689,6 +1690,12 @@ impl Peer {
+@@ -1689,6 +1691,18 @@ impl Peer {
          // Create the HEADERS frame
          let mut frame = Headers::new(id, pseudo, headers);
  
@@ -24,6 +25,12 @@ index cb7e677..7935428 100644
 +        // `crate::ext::PseudoOrder`.
 +        if let Some(order) = pseudo_order {
 +            frame.set_pseudo_order(order);
++        }
++
++        // And for a PRIORITY block on the stream. See
++        // `crate::ext::StreamPriority`; added by this repository.
++        if let Some(priority) = stream_priority {
++            frame.set_stream_priority(priority);
 +        }
 +
          if end_of_stream {
