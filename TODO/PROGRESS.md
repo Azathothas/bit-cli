@@ -127,9 +127,11 @@ gh run list --limit 1
 
 ## What the last session did
 
-**[T-262](cli-surface.md) and [T-263](cli-surface.md) both closed, and
-[T-264](cli-surface.md) went from open to `partial`** with three of its four
-pieces done and the fourth blocked on something measured rather than predicted.
+**Three entries closed and two are `partial`.** [T-262](cli-surface.md),
+[T-263](cli-surface.md) and [T-259](cli-surface.md) closed, and
+[T-264](cli-surface.md) went from open to `partial` with three of its four
+pieces done and the fourth blocked on something measured rather than predicted,
+while [T-253](cli-surface.md) advanced one fixture of the three it had left.
 Two new scripts, one committed pin, two new probe switches, one whole-file
 profile move, seven new vendored patches across three trees, and
 `docs/containers.md` rewritten against tooling that gained two actions since the
@@ -194,6 +196,39 @@ argument for having done it: JA4 and JA4_r both sort and strip GREASE, so the
 assertion that would catch a mistake was already there and already insensitive
 to the fix. The probe's own
 `!browser.extensions.iter().any(is_grease)` was inverted rather than deleted.
+
+### The first version of T-263 shipped a defect, and CI caught it
+
+**Run 33289807801 failed and the next run passed over the same code**, which is
+what says it was a rate rather than a break. The two new extension variants sit
+on real GREASE codepoints, so they are also what a **received** hello's GREASE
+extension decodes into, and their bodies were typed `()`. RFC 8701 lets a
+client put any body in one, and this client puts a zero byte in the one at the
+back. Three values in sixteen therefore failed to parse:
+`TrailingData("Empty")`, about one handshake in five.
+
+**The pre-existing `0xbaba` field had the same defect**, which T-263 did not
+add: a server built from this fork rejected a real browser's hello whenever its
+GREASE landed there. All three carry `Option<Payload>` now.
+
+| | handshakes | reached HTTP/2 | failed |
+| --- | --- | --- | --- |
+| before | 29 | 27 | 2 |
+| after | 64 | 64 | **0** |
+
+**The check that missed it made one handshake**, so it sampled one draw of
+sixteen and saw a three-in-sixteen defect four times in five.
+`scripts/check-fingerprint.ps1` makes eight now and requires every one to reach
+HTTP/2.
+
+**And that turned up a second thing, which inverted the assertion written
+first.** Requiring the captures to be identical fails, correctly: over eleven
+captures of one binary, eight carried `session_ticket` and three carried
+`pre_shared_key`, because the connection resumed, and the two produce different
+JA4s. The container capture of Chrome 152 showed exactly the same thing. So the
+**cold** capture is the one compared, which is the first, and the rest are read
+only for whether they completed. A check asserting determinism where the
+protocol has none would have been "fixed" by loosening the golden.
 
 ### [T-262](cli-surface.md): the Akamai fingerprint is a browser's in all four fields
 
@@ -310,6 +345,23 @@ trusted CA still gives `CertificateUnknown`, that `New -Command` now returns the
 inner command's code where it used to report 0, and that `wsl --shutdown` is
 machine wide and takes the podman machine down with it.
 
+### [T-253](cli-surface.md): the redirect fixture, and it stays partial
+
+`FileServer::start_redirecting(root, hops)` answers `302` with a `Location` one
+`via/` segment longer until the chain is walked, then serves what was asked
+for. It counts hops in the path rather than in server state, so it is stateless.
+The schema sample drives `webseed test` through **two** hops, because a chain
+and a single redirect are different shapes and only the chain proves the array
+is an array.
+
+**Proved the way the acceptance asks**: the three `sources[].redirects[]` rows
+were deleted from `docs/schema.md`, regenerated, and all three came back, with
+the file byte-identical to what was there before.
+
+Two pieces are left and neither was started: TLS on `FileServer`, for
+`sources[].tls`'s six fields plus `server` and `resolved_url`; and a sample
+torrent whose paths need sanitising, for `context.report.renamed[]`.
+
 ## In progress
 
 **[T-264](cli-surface.md) is `partial`** and the entry says what is left, in
@@ -318,8 +370,11 @@ for which [T-263](cli-surface.md)'s two new GREASE slots are the worked example;
 get a ruling on `0xca34`; capture a branded Chrome 152 with `-Source apt`; then
 bump. Two of those four are waiting on the questions below and two are not.
 
-**Nothing else is half done.** The three entries [T-244](cli-surface.md) filed
-are two done and one partial, and no other entry was opened or touched.
+**[T-253](cli-surface.md) is `partial` and was already partial**, one of its
+three remaining fixtures done. The two left are described above and in the
+entry, and neither is blocked on anything.
+
+**Nothing else is half done.** No other entry was opened or touched.
 
 ## Start here next session
 
@@ -344,30 +399,39 @@ gh run list --limit 1
    Take the pieces in the entry's order and stop before the bump if the open
    question below is still open.
 
-3. **Then the ordinary list resumes**, in the shape the operator has kept
+3. **[T-253](cli-surface.md), P2, `S`, `partial`, and it is the cheapest thing
+   open.** One of its three fixtures landed this session and the two left are
+   named with what they produce: TLS on `FileServer`, for `sources[].tls`'s six
+   fields plus `server` and `resolved_url`, with three worked examples of
+   `rcgen` in `loopback-tlsprobe` to copy and `BIT_CLI_EXTRA_CA_FILE` already
+   the client half; and a sample torrent whose paths need sanitising, for
+   `context.report.renamed[]`. The acceptance is mechanical: delete the rows,
+   regenerate, and they come back.
+
+4. **[T-250](cli-surface.md), P2, `M`**, and its acceptance asks for a
+   two-redirect chain from `loopback-fileserver`, which is the fixture T-253
+   just built one of. It has more to report than when it was filed, now that a
+   page's links carry a `matched` rule each.
+
+5. **Then the ordinary list resumes**, in the shape the operator has kept
    throughout: clear the small entries so the open count comes down, then take
-   the bigger ones a category at a time.
+   the bigger ones a category at a time. [T-251](trackers.md) P2 `partial`,
+   then [T-260](cli-surface.md) and [T-261](trackers.md), the publishing pair,
+   which have four schema-carrying files to publish now rather than one.
 
-   [T-250](cli-surface.md) P2, which has more to report than when it was filed
-   now that a page's links carry a `matched` rule each.
-   [T-253](cli-surface.md) P2 `partial`, which now has three worked examples of
-   `rcgen` to copy. [T-251](trackers.md) P2 `partial`. Then
-   [T-260](cli-surface.md) and [T-261](trackers.md), the publishing pair, which
-   have four schema-carrying files to publish now rather than one.
-
-4. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
+6. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
    so the two candidates left are on the read side and are named with their
    lines. Build the fixture first: a pair of real `librqbit_utp` streams in one
    process.
 
-5. **The three entries that were ruled on and are still work.**
+7. **The three entries that were ruled on and are still work.**
    [T-227](memory.md) is a throughput curve then a flag.
    [T-242](performance.md) is two sweeps from `scripts/bench-leech.ps1`.
    [T-234](peers.md) and [T-238](peers.md) are the two large ones and both need
    [T-239](peers.md) first.
 
-6. **Then the category pass, and `bep-coverage.md` is still first.**
+8. **Then the category pass, and `bep-coverage.md` is still first.**
    [T-101](bep-coverage.md) is open on a latency measurement loopback cannot
    produce, which [T-239](peers.md) is the prerequisite for.
    [T-102](bep-coverage.md) and [T-168](bep-coverage.md) are the untouched two,
@@ -418,11 +482,13 @@ says whether something stopped cleaning up.
 
 **Two things to be aware of rather than to decide.**
 
-**The container engine was left as it was found.** The only image pulled this
-session was `debian:bookworm-slim`, and `wsl-ephemeral.ps1 -Action List` reports
-`(none)` with no orphaned rootfs tarball. One run was killed mid-install and did
-leave a distro and a 74.3 MiB tarball; `Purge` removed both in the same session,
-which is what that command is for.
+**The container engine was left as it was found, which is zero of everything.**
+`podman system df` reports no images, no containers and no volumes, and
+`wsl-tool.ps1 -Action List` reports `(none)` with no orphaned rootfs tarball.
+The only image pulled this session was `debian:bookworm-slim` and it was removed
+at the end. One run was killed mid-install and did leave a distro and a 74.3 MiB
+tarball behind; `Purge` removed both in the same session, which is what that
+command is for and what the `finally` cannot cover.
 
 **One dependabot pull request is still open**, number 6,
 `ci(deps): bump taiki-e/install-action from 2.86.3 to 2.86.5`. Not taken again,

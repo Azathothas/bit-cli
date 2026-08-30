@@ -305,6 +305,13 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
     // See `TODO/webseed.md`, T-254.
     let cdn = FileServer::start_cdn(dir.clone());
     let cdn_source = format!("{}payload/", cdn.base);
+    // A third, behind two redirects, so `sources[].redirects[]` is documented
+    // from a run rather than from a real S3 endpoint somebody once pointed at.
+    // Two hops rather than one, because a chain and a single redirect are
+    // different shapes and only the chain proves the array is an array. See
+    // `TODO/cli-surface.md`, T-253.
+    let redirected = FileServer::start_redirecting(dir.clone(), 2);
+    let redirected_source = format!("{}payload/", redirected.base);
     for format in ["--json", "--jsonl"] {
         let (_, out) = capture(
             &[
@@ -590,6 +597,20 @@ fn collect() -> (Vec<Sample>, Vec<Sample>) {
                 "--no-torrent-web-seed",
                 "--web-seed",
                 &cdn_source,
+                "--web-seed-mode",
+                "prefix",
+            ],
+        ),
+        (
+            "bit-cli webseed test <TORRENT> --web-seed <URL> --json, behind two redirects",
+            vec![
+                "--json",
+                "webseed",
+                "test",
+                &torrent,
+                "--no-torrent-web-seed",
+                "--web-seed",
+                &redirected_source,
                 "--web-seed-mode",
                 "prefix",
             ],

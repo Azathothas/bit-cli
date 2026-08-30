@@ -503,7 +503,7 @@ pub struct FileServer {
 impl FileServer {
     /// Serve `root` on loopback, speaking BEP 19: ranged GETs against a path.
     pub fn start(root: impl Into<PathBuf>) -> Self {
-        Self::start_with(root, false, false)
+        Self::start_with(root, false, false, 0)
     }
 
     /// Serve `root` on loopback speaking BEP 17 instead.
@@ -513,7 +513,7 @@ impl FileServer {
     /// them. The piece length is the fixtures' 1024. See `TODO/webseed.md`,
     /// T-004.
     pub fn start_hoffman(root: impl Into<PathBuf>) -> Self {
-        Self::start_with(root, true, false)
+        Self::start_with(root, true, false, 0)
     }
 
     /// Serve `root` the way a CDN in front of a bucket does.
@@ -525,10 +525,26 @@ impl FileServer {
     /// because it is the kind of header every origin sends and none of it is
     /// diagnostic. See `TODO/webseed.md`, T-254.
     pub fn start_cdn(root: impl Into<PathBuf>) -> Self {
-        Self::start_with(root, false, true)
+        Self::start_with(root, false, true, 0)
     }
 
-    fn start_with(root: impl Into<PathBuf>, hoffman: bool, cdn: bool) -> Self {
+    /// Serve `root` behind `hops` redirects, the way a bucket behind a signed
+    /// URL or a mirror redirector does.
+    ///
+    /// A request that has not been redirected `hops` times yet is answered
+    /// `302` with a `Location` one `via/` segment longer; the segments are
+    /// stripped before the file is opened. So the client walks a real chain
+    /// and every hop is a separate request with a separate status.
+    ///
+    /// It exists because `sources[].redirects[]` is three documented fields
+    /// that no sample run had ever produced: `loopback-fileserver` issues no
+    /// redirect, so the schema described them from a real S3 endpoint rather
+    /// than from a run. See `TODO/cli-surface.md`, T-253.
+    pub fn start_redirecting(root: impl Into<PathBuf>, hops: u8) -> Self {
+        Self::start_with(root, false, false, hops)
+    }
+
+    fn start_with(root: impl Into<PathBuf>, hoffman: bool, cdn: bool, redirects: u8) -> Self {
         use std::io::{Read, Write};
 
         let root = root.into();
@@ -601,6 +617,27 @@ impl FileServer {
                     // which is what makes the BEP 17 probe a question about
                     // the length of the answer rather than its status.
                     let (path, query) = path.split_once('?').unwrap_or((path, ""));
+
+                    // A redirect chain, counted in `via/` segments so the
+                    // server is stateless and two clients cannot interfere.
+                    // The segments are stripped before the file is opened, so
+                    // the last hop serves the resource that was asked for.
+                    let mut walked = 0u8;
+                    let mut rest = path.trim_start_matches('/');
+                    while let Some(tail) = rest.strip_prefix("via/") {
+                        walked = walked.saturating_add(1);
+                        rest = tail;
+                    }
+                    if walked < redirects {
+                        let location = format!("/{}{}", "via/".repeat(walked as usize + 1), rest);
+                        let head = format!(
+                            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        );
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.flush();
+                        return;
+                    }
+                    let path = rest;
                     let relative = percent_decode(path.trim_start_matches('/'));
                     let mut target = root.clone();
                     for part in relative.split('/').filter(|p| !p.is_empty()) {

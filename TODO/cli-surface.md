@@ -1547,7 +1547,7 @@ tree, so it grows and shrinks and "one row" was never the number. The
 mechanism is the defect, not the size.
 
 The read-only half of the check is fine and stays fine.
-`schema_gen.rs:1578` `the_committed_schema_matches_what_the_program_writes`
+`schema_gen.rs:1599` `the_committed_schema_matches_what_the_program_writes`
 passes, and it is deliberately a **containment** check rather than an equality
 one, for the reason its own comment gives: these runs are timed, so a download
 that finished before its second report tick emits no `progress`, and requiring
@@ -5433,6 +5433,32 @@ Acceptance:  `BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema` on a
              rather than inheriting it from the committed file. Deleting the
              thirteen rows and regenerating puts all thirteen back.
 
+**Done on 2026-08-30: the redirect fixture, and three of the thirteen rows now
+come from a run.** `FileServer::start_redirecting(root, hops)` answers `302`
+with a `Location` one `via/` segment longer until the chain is walked, then
+serves the resource that was asked for. It counts hops in the path rather than
+in server state, so it is stateless and two clients cannot interfere.
+
+The schema sample drives `webseed test` through **two** hops rather than one,
+because a chain and a single redirect are different shapes and only the chain
+proves the array is an array.
+
+**Proved the way the acceptance asks**, rather than by reading the file: the
+three `sources[].redirects[]` rows were deleted from `docs/schema.md` and
+`BIT_CLI_UPDATE_SCHEMA=1 cargo test -p bit-cli --lib schema` put all three
+back, and the regenerated file is byte-identical to what was there before.
+
+**Still partial, and two pieces are left**, both named in Approach above and
+neither started:
+
+- **TLS on `FileServer`**, for `sources[].tls`'s six fields plus
+  `sources[].server` and `sources[].resolved_url`. A self-signed certificate is
+  enough, and there are three worked examples of `rcgen` in this tree now, in
+  `crates/bit-cli-core/examples/loopback-tlsprobe/main.rs`. The client half
+  already exists: `BIT_CLI_EXTRA_CA_FILE` adds one root.
+- **A sample torrent whose paths need sanitising**, for
+  `context.report.renamed[]`.
+
 **Done in the session that filed it:** the thirteen rows, each from output that
 was produced rather than read off a struct. `cargo test -p bit-cli --lib schema`
 passes with them, because the committed check is containment: it asserts that
@@ -5945,7 +5971,7 @@ Status:      done, 2026-08-30. Everything that is not a field row is compared
 
 Problem:     `docs/schema.md` is generated, and the test that keeps it true
              compares **field rows only**. `the_committed_schema_matches_what_the_program_writes`
-             at `crates/bit-cli/src/schema_gen.rs:1578` filters both sides to
+             at `crates/bit-cli/src/schema_gen.rs:1599` filters both sides to
              lines starting with `` | ` `` before comparing, so every other
              line of the file is outside the check: the header, the "How this
              file is kept true" section, and the one-line description under
@@ -5975,7 +6001,7 @@ Approach:    The row filter is there for a reason and it stays: the check is
              deliberately **containment** over rows, because these runs are
              timed and a download that beats its own report tick emits no
              `progress`. See the comment at
-             `crates/bit-cli/src/schema_gen.rs:1609`.
+             `crates/bit-cli/src/schema_gen.rs:1630`.
 
              What can be equality is everything that is **not** a row.
              `HEADER` is a constant, the per-name descriptions come from
