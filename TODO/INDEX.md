@@ -254,12 +254,12 @@ S is under a day, M is a few days, L is a week, XL is longer.
 | [T-261](trackers.md) | P2 | trackers | open | There is no way to get a current tracker list, so every torrent carries whatever it was born with |
 | [T-262](cli-surface.md) | P3 | cli | open | The HTTP/2 fingerprint matches a real Chrome in three fields of four |
 | [T-263](cli-surface.md) | P3 | cli | open | The extension list is Chrome's set in a fixed order, and Chrome shuffles it |
-| [T-264](cli-surface.md) | P2 | cli | open | The browser profile can only be refreshed on a machine that runs that browser |
+| [T-264](cli-surface.md) | P2 | cli | partial | The browser profile can only be refreshed on a machine that runs that browser |
 
 ## Counts
 
 213 items: 202 to work through, and 11 deferred to Phase C.
-33 open, 3 partial, 0 blocked, 166 done.
+32 open, 4 partial, 0 blocked, 166 done.
 
 Counted from the rows above by `scripts/check-todo.ps1`, which fails a gate
 when a number here disagrees with them.
@@ -268,10 +268,10 @@ when a number here disagrees with them.
 | --- | --- | --- | --- | --- | --- |
 | P0 | 0 | 0 | 0 | 12 | 12 |
 | P1 | 2 | 0 | 0 | 70 | 72 |
-| P2 | 19 | 3 | 0 | 63 | 85 |
+| P2 | 18 | 4 | 0 | 63 | 85 |
 | P3 | 12 | 0 | 0 | 21 | 33 |
 | Phase C | | | | 11 deferred | 11 |
-| **All** | **33** | **3** | **0** | **166** | **213** |
+| **All** | **32** | **4** | **0** | **166** | **213** |
 
 `blocked` is zero and has been since 2026-08-22. Two entries were blocked on
 `librqbit` and vendoring it removed the blocker, which is what vendoring was

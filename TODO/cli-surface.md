@@ -6191,6 +6191,24 @@ Problem:     `bit-cli`'s browser profile and a real Chrome 151 on the same
              - **Chrome's order is shuffled per connection** and `bit-cli`'s
                is fixed. Chrome has shuffled its extensions since 110; the
                shuffle is why JA4 sorts at all.
+
+             **Reproduced on Chrome 152 on 2026-08-30**, from a raw hello
+             captured in a container by
+             [T-264](#t-264-the-browser-profile-can-only-be-refreshed-on-a-machine-that-runs-that-browser),
+             so this is two versions and two platforms rather than one
+             reading. The wire order, with the GREASE values it chose that
+             connection:
+
+             ```
+             3a3a GREASE  0023  ff01  002d  000b  000a  12e0  0017  0010
+             ca34  fe0d  0033  001b  000d  0012  44cd  002b  0005  5a5a GREASE
+             ```
+
+             Two things that reading settles which the 151 one left open.
+             **The GREASE values differ at the two ends**, `0x3a3a` and
+             `0x5a5a`, so this is two extensions with two chosen codepoints
+             rather than one repeated. And **`alpn` is inside the shuffle**, at
+             position 9, so it is not one of the extensions Chrome pins.
 Relevance:   [T-244](#t-244-a-web-page-is-not-a-source-and-nothing-extracts-a-link-from-one)
              ships a client whose reason for existing is that an origin
              fingerprinting its callers cannot tell it from a browser. An
@@ -6202,10 +6220,32 @@ Relevance:   [T-244](#t-244-a-web-page-is-not-a-source-and-nothing-extracts-a-li
              It is P3 because the fingerprint that is actually published,
              compared and sold as a service is JA4, and that one matches
              exactly. This is the layer below it.
-Approach:    The extension list and its order are apify's `rustls` fork's, in
-             `vendor/rustls/rustls/src/crypto/emulation/mod.rs`, which builds
-             the `ClientHello` from a `TlsFingerprint`. Two changes, and the
+Approach:    **The list itself is `crates/bit-cli-core/src/page.rs`'s now**,
+             `BROWSER_EXTENSION_ORDER`, moved there by
+             [T-264](#t-264-the-browser-profile-can-only-be-refreshed-on-a-machine-that-runs-that-browser).
+             What still lives in apify's `rustls` fork is the encoder that
+             turns it into a `ClientHello`,
+             `vendor/rustls/rustls/src/crypto/emulation/mod.rs` and
+             `vendor/rustls/rustls/src/msgs/handshake.rs`. Two changes, and the
              second is the harder one.
+
+             **The shuffle is half built already and was not noticed.**
+             `ClientExtensions::order_insensitive_extensions_in_random_order`
+             sorts by a hash of a per-connection `order_seed`, and
+             `used_extensions_in_encoding_order` emits those first and the
+             `contiguous_extensions` list after them. Today the fingerprint
+             names **every** extension in `extension_order`, so the random set
+             is empty and nothing shuffles. Naming fewer of them is most of
+             this entry.
+
+             **The GREASE half needs a new shape rather than a new value.**
+             `ClientExtensions` has one typed field per extension type and one
+             GREASE slot, `reserved_grease: Option<()>` at the fixed codepoint
+             `0xbaba`, set from `TlsExtensionsConfig::grease`. Chrome sends
+             **two**, at two different chosen codepoints, one first and one
+             last, which that shape cannot express. So this needs either two
+             fields carrying a codepoint each or a general unknown-extension
+             list, and it is why the entry is `M`.
 
              **GREASE at both ends** is a value from the sixteen the
              specification reserves, chosen per connection, added first and
@@ -6248,7 +6288,10 @@ Source:      the operator's ruling of 2026-08-29, after T-244 closed a major
 Category:    cli
 Priority:    P2
 Effort:      M
-Status:      open
+Status:      partial, 2026-08-30. Three of the four pieces are done and the
+             fourth, the bump, is blocked on two TLS extensions this stack
+             cannot emit. The blocker is named under "What the capture found"
+             and it is measured rather than predicted.
 
 Problem:     `crates/bit-cli-core/src/page.rs` pins the profile to Chrome 151
              and the TLS half of it comes from
@@ -6388,35 +6431,139 @@ Acceptance:  `pwsh scripts/check-browser-fingerprint.ps1 -Container` on a
              which `pwsh scripts/vendor-diff.ps1 -Check` proves by the series
              for `impit` not gaining a patch to
              `impit/src/fingerprint/database/chrome.rs`.
+What the
+capture
+found:       **Done on 2026-08-30**, in the order the work order gave.
+
+             1. **`--bind` on `loopback-tlsprobe`**, defaulting to `127.0.0.1`.
+                The leaf certificate carries whatever it names, so a client
+                that trusts `--ca-out` still verifies the name it dialled, and
+                the announced URL carries the bound host rather than a literal.
+                A hostname and the unspecified address are both refused by
+                name: the certificate needs a literal, and a fixture that
+                terminates TLS and records header values does not belong on
+                every interface. Measured reaching `172.23.96.1:59629` from
+                the host and from a distro.
+             2. **`scripts/wsl-tool.ps1` and `scripts/toolkit-pin.json`.** The
+                tooling is pinned to a commit with both digests recorded, and
+                one script resolves it, verifies it and forwards everything
+                else. Written because the launcher's resolution order made the
+                pin silently ineffective; see Notes.
+             3. **`scripts/check-browser-fingerprint.ps1 -Container`**, which
+                installs a browser in a throwaway `debian:bookworm-slim`
+                distro, drives it at the probe on the address
+                `wsl-tool.ps1 -Action HostAddress` prints, and removes the
+                distro in the same run, reading the state back rather than
+                trusting it. `-Source cft` takes a Chrome for Testing build of
+                `-Channel Stable|Beta|Dev|Canary`; `-Source apt` takes Google's
+                branded stable package. Evidence:
+                `bench/browser-fingerprint-cft-152.json`.
+             4. **The whole profile is in `page.rs`.** Ciphers, groups,
+                signature algorithms, extension order, ALPN, the HTTP/2
+                settings, the pseudo-header order and the headers, with
+                `page::browser_fingerprint()` constructing `impit`'s type from
+                them. `vendor/impit`'s database is no longer read by anything
+                that ships. **The move is behaviour neutral and that is
+                measured**, not assumed: `scripts/check-fingerprint.ps1` passes
+                with the goldens untouched, same JA4, same header order.
+
+             **The bump is what is blocked, and the container is what proved
+             it.** Chrome for Testing Stable 152.0.7977.64, captured in a
+             distro and read off the wire:
+
+             | | 151, this host | 152, in the container |
+             | --- | --- | --- |
+             | JA4 | `t13i1515h2_8daaf6152771_806a8c22fdea` | `t13i1517h2_8daaf6152771_4980c97edce0` |
+             | Akamai | `...\|15663105\|1:1:0:255\|m,a,s,p` | **the same** |
+             | header order | `accept-language` twelfth | `accept-language` **fourth** |
+
+             **Two extensions are new in 152 and neither can be emitted here.**
+             From the raw hello, `bench/browser-fingerprint-cft-152.json`'s
+             `recommend.hello`, decoded in wire order:
+
+             ```
+             3a3a GREASE  0023  ff01  002d  000b  000a  12e0  0017  0010
+             ca34  fe0d  0033  001b  000d  0012  44cd  002b  0005  5a5a GREASE
+             ```
+
+             `0xca34` is the trust anchors draft and `0x12e0` is not a
+             codepoint this session could identify. `impit`'s `ExtensionType`
+             names neither, and `vendor/rustls`'s `ClientExtensions` has a
+             typed field per extension and so has nowhere to put either. A
+             profile claiming 152 without them is a `ClientHello` that exists
+             nowhere, which [RULES.md](RULES.md) section 6b says is a stronger
+             tell than being one version behind. **So the profile stays at 151
+             deliberately**, and that is the ruling applied rather than a
+             deferral.
+
+             **The header half needs a second capture whatever happens to the
+             TLS half.** Chrome for Testing is unbranded: its `sec-ch-ua` is
+             `"Not?A_Brand";v="24", "Chromium";v="152"` with no Google Chrome
+             entry at all, and a Linux container reports
+             `sec-ch-ua-platform: "Linux"` and a Linux User-Agent. `-Source
+             apt` is what reaches a branded build and it reaches stable only.
+             The one header change that is platform independent and already
+             measured is the **order**: 152 moves `accept-language` from
+             twelfth to fourth.
+
+             What is left, in order: name `0x12e0`; add both codepoints to
+             `impit`'s `ExtensionType` and to `vendor/rustls`'s extension
+             encoder; capture a branded 152; then bump.
+
 Notes:       **The distro is removed in the same run that made it**, with
              `-Ephemeral` or an explicit `Remove`, and the acceptance checks
              that rather than trusting it. A session that leaves one behind has
-             left a VHDX of a few hundred MiB on somebody's disk.
+             left a VHDX of a few hundred MiB on somebody's disk. Measured
+             when a killed run left one: `Purge` removed a registered distro
+             and a 74.3 MiB orphaned tarball.
 
-             **What `wsl-ephemeral.ps1` could offer so this needs no
-             workaround**, written down because the operator asked what to
-             request of the agent that owns it. Two things, and the first is
-             most of the value:
+             **Both asks made of `wsl-ephemeral.ps1` were answered**, and the
+             tool is what changed rather than this entry.
 
-             - **`-Action HostAddress`**, printing the address a distro reaches
-               this host at, for the current networking mode. Today a caller
-               reads `/proc/net/route` inside a distro and decodes
-               little-endian hex, which means creating a distro to find out how
-               to talk to the host. The tool already knows the mode and can
-               answer without one. In mirrored mode the answer is `127.0.0.1`
-               and every caller's code stops branching.
-             - **`-PortForward <PORT>`**, or documentation saying plainly that
-               NAT mode requires binding a host service to the WSL adapter
-               address rather than to loopback. The trap is silent: a fixture
-               on `127.0.0.1` simply never receives a connection, and nothing
-               says why.
+             - **`-Action HostAddress` exists.** It prints the address a distro
+               reaches this host at for the current networking mode, on stdout
+               alone, without creating a distro. Measured here as
+               `172.23.96.1`, agreeing with what `/proc/net/route` said inside
+               a real distro. Every caller's little-endian hex decoding goes.
+             - **`-PortForward` was asked for and refused**, with the
+               documentation the ask offered as its alternative. Forwarding a
+               port on Windows needs an elevated session and leaves a rule on
+               the machine after the tool exits. `HostAddress` plus `--bind` is
+               the answer and it is what this entry uses.
 
-             Neither is required for this entry. `--bind` plus reading the
-             gateway is enough, and it is written so that a tool which later
-             answers the first ask replaces four lines rather than a design.
+             **The pin was silently ineffective and that is why
+             `wsl-tool.ps1` exists.** The launcher resolves a local path, then
+             a `wsl-ephemeral.ps1` **beside** it, then the pinned ref, first hit
+             winning. With the previous session's copy still in `.tmp/`, a run
+             passing both `-LauncherRef` and `-LauncherSha256` printed
+             `Using the copy beside this launcher`, ran the stale file and
+             verified nothing; the stale copy had no `HostAddress`, so it
+             surfaced as a `ValidateSet` error about an argument that does
+             exist. `wsl-tool.ps1` keeps its cache holding the launcher alone
+             and removes any sibling first.
+
+             **A browser opens sockets it abandons, so `--once` is the wrong
+             stop condition.** Driving Chrome 152 at the probe produced 13
+             connections: the first carried no HTTP/2 at all, and every one
+             after the second carried `pre_shared_key` because the session
+             resumed. `--until-h2` stops at the first connection that reached
+             HTTP/2, and the script picks that capture rather than the first or
+             the last line.
+
+             **Chrome on Linux does not read `~/.pki/nssdb`.** Adding the
+             probe's authority with `certutil -t "C,,"` and seeing `certutil
+             -L` list it still produced `CertificateUnknown`, because Chrome
+             uses its own root store there. The container capture therefore
+             passes `--ignore-certificate-errors --test-type` **to the
+             browser**, which is the argument `browser-capture` already made
+             and which nothing that ships carries.
 
              [T-262](#t-262-the-http-2-fingerprint-matches-a-real-chrome-in-three-fields-of-four)
              and [T-263](#t-263-the-extension-list-is-chromes-set-in-a-fixed-order-and-chrome-shuffles-it)
              are the two differences a capture of Chrome 151 already found.
              Both are edits to the vendored `rustls` and `h2` rather than to
              the fingerprint database, and neither is blocked by this entry.
+             **The 152 capture reproduces both on a second version**: the
+             Akamai PRIORITY field is `1:1:0:255` there too, and the raw hello
+             carries GREASE at both ends, `0x3a3a` first and `0x5a5a` last,
+             over a shuffled order.

@@ -51,6 +51,12 @@
 //! returns nothing there. `scripts/check-page-fetch.ps1` is the measurement.
 //! The host is reported per link instead, so a caller can see it.
 
+use impit::fingerprint::ExtensionType;
+use impit::fingerprint::{
+    BrowserFingerprint, CertificateCompressionAlgorithm, CipherSuite, EchConfig, EchMode,
+    HpkeKemId, Http2Fingerprint, KeyExchangeGroup, SignatureAlgorithm, TlsExtensions,
+    TlsFingerprint,
+};
 use url::Url;
 
 /// Which client `bit-cli` presents itself as when it fetches a source
@@ -93,6 +99,15 @@ impl ClientProfile {
 /// to move when the profile is refreshed, and `scripts/check-fingerprint.ps1`
 /// records what was captured against it.
 pub const BROWSER_MAJOR: u32 = 151;
+
+/// The exact build the profile below was captured from.
+///
+/// A major on its own does not say which capture produced these values, and
+/// two builds of one major have differed here before. `TODO/RULES.md` section
+/// 6b is why this is recorded rather than derived: everything the profile
+/// claims comes off a browser, so the browser it came off is part of the
+/// record.
+pub const BROWSER_BUILD: &str = "151.0.7922.72";
 
 /// The `User-Agent` the browser profile sends.
 pub const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
@@ -160,6 +175,183 @@ pub const BROWSER_HEADERS: &[(&str, &str)] = &[
     ("accept-language", "en-US,en;q=0.9"),
     ("priority", "u=0, i"),
 ];
+
+// ===== the TLS and HTTP/2 halves, which used to live in the vendored tree ====
+
+/// The cipher suites the profile offers, in the order it offers them.
+///
+/// GREASE leads, which is Chrome's own shape and is not an artefact of how
+/// this list is written down. RFC 8701 is why a server tolerates it.
+pub const BROWSER_CIPHER_SUITES: &[CipherSuite] = &[
+    CipherSuite::Grease,
+    CipherSuite::TLS13_AES_128_GCM_SHA256,
+    CipherSuite::TLS13_AES_256_GCM_SHA384,
+    CipherSuite::TLS13_CHACHA20_POLY1305_SHA256,
+    CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+    CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+    CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+    CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+    CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+    CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+    CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+    CipherSuite::TLS_RSA_WITH_AES_128_GCM_SHA256,
+    CipherSuite::TLS_RSA_WITH_AES_256_GCM_SHA384,
+    CipherSuite::TLS_RSA_WITH_AES_128_CBC_SHA,
+    CipherSuite::TLS_RSA_WITH_AES_256_CBC_SHA,
+];
+
+/// The key exchange groups, including the post-quantum hybrid Chrome ships.
+pub const BROWSER_KEY_EXCHANGE_GROUPS: &[KeyExchangeGroup] = &[
+    KeyExchangeGroup::Grease,
+    KeyExchangeGroup::X25519MLKEM768,
+    KeyExchangeGroup::X25519,
+    KeyExchangeGroup::Secp256r1,
+    KeyExchangeGroup::Secp384r1,
+];
+
+/// The signature algorithms, led by the three ML-DSA codepoints.
+///
+/// Those three are what separates a 151 hello from a 142 one at the TLS layer,
+/// and they are the reason the JA4 moved between the two.
+pub const BROWSER_SIGNATURE_ALGORITHMS: &[SignatureAlgorithm] = &[
+    SignatureAlgorithm::MlDsa44,
+    SignatureAlgorithm::MlDsa65,
+    SignatureAlgorithm::MlDsa87,
+    SignatureAlgorithm::EcdsaSecp256r1Sha256,
+    SignatureAlgorithm::RsaPssRsaSha256,
+    SignatureAlgorithm::RsaPkcs1Sha256,
+    SignatureAlgorithm::EcdsaSecp384r1Sha384,
+    SignatureAlgorithm::RsaPssRsaSha384,
+    SignatureAlgorithm::RsaPkcs1Sha384,
+    SignatureAlgorithm::RsaPssRsaSha512,
+    SignatureAlgorithm::RsaPkcs1Sha512,
+];
+
+/// The order the extensions go on the wire in.
+///
+/// **A real Chrome shuffles this per connection and this list does not.** JA4
+/// sorts before hashing so it cannot see the difference; `JA4_ro` can, and
+/// `TODO/cli-surface.md` T-263 is the entry. The list is here rather than in
+/// the vendored tree so that closing T-263 edits a file this repository owns.
+pub const BROWSER_EXTENSION_ORDER: &[ExtensionType] = &[
+    ExtensionType::ServerName,
+    ExtensionType::ExtendedMasterSecret,
+    ExtensionType::SessionTicket,
+    ExtensionType::SignatureAlgorithms,
+    ExtensionType::StatusRequest,
+    ExtensionType::SupportedGroups,
+    ExtensionType::ApplicationLayerProtocolNegotiation,
+    ExtensionType::SignedCertificateTimestamp,
+    ExtensionType::KeyShare,
+    ExtensionType::PskKeyExchangeModes,
+    ExtensionType::SupportedVersions,
+    ExtensionType::CompressCertificate,
+    ExtensionType::ApplicationSettings,
+];
+
+/// The ALPN list, which is what makes the HTTP/2 half of the fingerprint exist
+/// at all.
+pub const BROWSER_ALPN: &[&[u8]] = &[b"h2", b"http/1.1"];
+
+/// `SETTINGS_INITIAL_WINDOW_SIZE`.
+pub const BROWSER_H2_INITIAL_STREAM_WINDOW: u32 = 6_291_456;
+
+/// The connection window Chrome opens, **as a window and not as an increment**.
+///
+/// This is a value `impit`'s own database got wrong in the other direction, and
+/// it is the one field where the difference is invisible until it reaches the
+/// wire: the emitted WINDOW_UPDATE is this minus the protocol's own 65,535
+/// default, so 15,728,640 here is `15663105` in an Akamai fingerprint.
+pub const BROWSER_H2_CONNECTION_WINDOW: u32 = 15_728_640;
+
+/// `SETTINGS_MAX_HEADER_LIST_SIZE`.
+pub const BROWSER_H2_MAX_HEADER_LIST_SIZE: u32 = 262_144;
+
+/// The pseudo-header order, which is the fourth field of an Akamai
+/// fingerprint.
+///
+/// `http::HeaderMap` cannot carry an order, so this reaches the wire through
+/// the vendored `h2` rather than through the header map. See
+/// `patches/UPSTREAM.md`.
+pub const BROWSER_PSEUDO_HEADER_ORDER: &[&str] = &[
+    ":method",
+    ":authority",
+    ":scheme",
+    ":path",
+    ":protocol",
+    ":status",
+];
+
+/// The whole profile, as the type the vendored client wants.
+///
+/// **Every value in it is this repository's**, which is the point.
+/// `TODO/RULES.md` section 6b: `impit`'s fingerprint database is a starting
+/// point and not an authority, it has already been wrong here, and a starting
+/// point does not get to be the home of the answer. So the enums stay
+/// `impit`'s, because they are the vocabulary the vendored `rustls` speaks,
+/// and every value chosen out of them is above.
+///
+/// What this buys is that a bump edits **one file** this repository owns, a
+/// staleness recommendation has one file to name, and
+/// `vendor/impit/impit/src/fingerprint/database/chrome.rs` carries no data
+/// this repository authored. A value those enums cannot express is a finding
+/// to record rather than a value to drop quietly.
+pub fn browser_fingerprint() -> BrowserFingerprint {
+    let extensions = TlsExtensions::new(
+        true, // server_name
+        true, // status_request
+        true, // supported_groups
+        true, // signature_algorithms
+        true, // application_layer_protocol_negotiation
+        true, // signed_certificate_timestamp
+        true, // key_share
+        true, // psk_key_exchange_modes
+        true, // supported_versions
+        Some(vec![CertificateCompressionAlgorithm::Brotli]),
+        true,  // application_settings
+        false, // delegated_credentials, which Chrome does not send
+        None,  // record_size_limit, which Chrome does not send
+        BROWSER_EXTENSION_ORDER.to_vec(),
+    )
+    // Chrome 136 and later use 17613 rather than 17513 for ALPS.
+    .with_new_alps_codepoint(true);
+
+    let tls = TlsFingerprint::new(
+        BROWSER_CIPHER_SUITES.to_vec(),
+        BROWSER_KEY_EXCHANGE_GROUPS.to_vec(),
+        BROWSER_SIGNATURE_ALGORITHMS.to_vec(),
+        extensions,
+        Some(EchConfig::new(
+            EchMode::Grease {
+                hpke_suite: HpkeKemId::DhKemX25519HkdfSha256,
+            },
+            None,
+        )),
+        BROWSER_ALPN.iter().map(|p| p.to_vec()).collect(),
+    );
+
+    let http2 = Http2Fingerprint {
+        pseudo_header_order: BROWSER_PSEUDO_HEADER_ORDER
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        initial_stream_window_size: Some(BROWSER_H2_INITIAL_STREAM_WINDOW),
+        initial_connection_window_size: Some(BROWSER_H2_CONNECTION_WINDOW),
+        max_header_list_size: Some(BROWSER_H2_MAX_HEADER_LIST_SIZE),
+    };
+
+    BrowserFingerprint::new(
+        "Chrome",
+        BROWSER_MAJOR.to_string(),
+        tls,
+        http2,
+        BROWSER_HEADERS
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect(),
+    )
+}
 
 /// What kind of torrent link was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1307,5 +1499,90 @@ mod tests {
             b"d8:announce",
             Some("application/x-bittorrent")
         ));
+    }
+
+    // ===== the profile =====
+
+    #[test]
+    fn the_fingerprint_is_built_from_the_constants_above_it() {
+        // The whole reason the profile lives here: what goes on the wire is
+        // what this file declares, so a bump edits one list and the client
+        // follows. TODO/RULES.md section 6b.
+        let f = browser_fingerprint();
+        assert_eq!(f.tls.cipher_suites, BROWSER_CIPHER_SUITES);
+        assert_eq!(f.tls.key_exchange_groups, BROWSER_KEY_EXCHANGE_GROUPS);
+        assert_eq!(f.tls.signature_algorithms, BROWSER_SIGNATURE_ALGORITHMS);
+        assert_eq!(f.tls.extensions.extension_order, BROWSER_EXTENSION_ORDER);
+        assert_eq!(f.name, "Chrome");
+        assert_eq!(f.version, BROWSER_MAJOR.to_string());
+    }
+
+    #[test]
+    fn the_http2_half_carries_the_window_as_a_window() {
+        // The field is the window and the wire carries the increment, which is
+        // the one number here that reads wrong if it is taken at face value.
+        let f = browser_fingerprint();
+        assert_eq!(
+            f.http2.initial_connection_window_size,
+            Some(BROWSER_H2_CONNECTION_WINDOW)
+        );
+        assert_eq!(
+            BROWSER_H2_CONNECTION_WINDOW - 65_535,
+            15_663_105,
+            "the WINDOW_UPDATE an Akamai fingerprint records"
+        );
+        assert_eq!(
+            f.http2.initial_stream_window_size,
+            Some(BROWSER_H2_INITIAL_STREAM_WINDOW)
+        );
+        assert_eq!(
+            f.http2.max_header_list_size,
+            Some(BROWSER_H2_MAX_HEADER_LIST_SIZE)
+        );
+    }
+
+    #[test]
+    fn the_pseudo_header_order_is_chromes_and_reaches_the_fingerprint() {
+        let f = browser_fingerprint();
+        assert_eq!(
+            f.http2.pseudo_header_order,
+            vec![
+                ":method",
+                ":authority",
+                ":scheme",
+                ":path",
+                ":protocol",
+                ":status"
+            ]
+        );
+        assert_eq!(BROWSER_PSEUDO_HEADER_ORDER[0], ":method");
+    }
+
+    #[test]
+    fn grease_leads_the_cipher_and_group_lists() {
+        // Chrome's own shape, and the half of T-263 that is already right: the
+        // ciphers and the groups carry GREASE and the extension list does not.
+        assert_eq!(BROWSER_CIPHER_SUITES[0], CipherSuite::Grease);
+        assert_eq!(BROWSER_KEY_EXCHANGE_GROUPS[0], KeyExchangeGroup::Grease);
+        assert!(
+            !BROWSER_EXTENSION_ORDER.contains(&ExtensionType::Grease),
+            "T-263 is what adds GREASE here; invert this assertion when it closes"
+        );
+    }
+
+    #[test]
+    fn the_header_list_and_the_user_agent_agree_about_the_major() {
+        let major = BROWSER_MAJOR.to_string();
+        assert!(BROWSER_USER_AGENT.contains(&format!("Chrome/{major}.0.0.0")));
+        assert!(BROWSER_BUILD.starts_with(&format!("{major}.")));
+        let brands = BROWSER_HEADERS
+            .iter()
+            .find(|(name, _)| *name == "sec-ch-ua")
+            .map(|(_, value)| *value)
+            .expect("sec-ch-ua is part of the profile");
+        assert!(
+            brands.contains(&format!("\"Google Chrome\";v=\"{major}\"")),
+            "sec-ch-ua claims a different major than BROWSER_MAJOR: {brands}"
+        );
     }
 }

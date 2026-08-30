@@ -52,56 +52,40 @@ answers "could a release retire this patch on its own?" and nothing else.
 session lasts six hours, and a session ending kills the process it started. A
 session's job is to read the CSV the operator's run leaves behind, not to start
 one. A short soak is a different thing and a session may run one; this session
-ran none, because the one entry it worked on is not about a long run.
+ran none, because nothing it worked on is about a long run.
 
-## One decision was reopened, and it is section 6's iroh line
+## Section 6b was applied for the first time, including the part that says no
 
-The operator's ruling: `bit-cli` will be BEP and RFC compliant, and will not
-limit itself to BEPs and RFCs written long ago, because NATs and heavily
-censored networks are everywhere. [RULES.md](RULES.md) section 6 is rewritten,
-the retired paragraph is in `reference/HISTORY/RULES-section-6-iroh.md`, and
-[T-238](peers.md) carries it.
-
-**The follow-up ruling went further than the recommendation.** Relays are in
-scope, several of them rather than one, ranked by how widely deployed the
-provider is. That makes the protocol choice first and the vendor choice second,
-and the protocol is TURN, RFC 8656, because it is the only relay protocol with
-more than one provider. Speaking a relay protocol is not the same as taking the
-`iroh` crate, and that refusal is unchanged: it is refused because BitTorrent
-has nowhere to put a node id, not because of its size.
-
-**Decision 7.4, no daemon and no RPC, was not reopened** and this session did
-not treat it as reopened. [T-243](phase-c.md) is the draft that collides with
-it, and it says so in its own first paragraph.
+**A fingerprint is measured, never derived and never inherited.**
+[RULES.md](RULES.md) section 6b carries it in full. This session did the two
+things it asks for and then declined the third on the ruling's own argument:
+[T-264](cli-surface.md) moved the whole profile out of the vendored tree into
+`crates/bit-cli-core/src/page.rs`, built the container capture the ruling names
+as the second instrument, and then **did not bump the profile**, because the
+capture proved a bump today would ship a `ClientHello` that exists nowhere.
 
 ## State
 
-- **Last session:** 2026-08-29T07:05:02Z, unattended, and a **one-off** for the
-  second time running: the kickoff carried its own work order rather than
-  taking this file's, per [RULES.md](RULES.md) section 3. The whole session was
-  [T-244](cli-surface.md), which **closed done**. The ordinary work order
-  resumes under "Start here next session" below and this file's shape goes back
-  to normal with it.
+- **Last session:** 2026-08-30T01:24:31Z, unattended, and the ordinary work
+  order resumed: this file's "Start here next session" rather than the
+  kickoff's. The kickoff added one thing on top of it, the new WSL tooling to
+  read and the container page to correct, and that is folded into
+  [T-264](cli-surface.md) and `docs/containers.md` rather than carried apart
+  from them.
   The duration is not restated here: `scripts/session-report.ps1` derives it
   from the instant above, and a duration written down twice is a number two
   documents disagree about.
 
   **The plan was written before starting**, per [RULES.md](RULES.md) section 1
-  step 4, and it held: the kickoff's eight tasks in its order, vendoring first
-  because everything else sat on it. The operator interrupted twice, both times
-  about the same defect and both times correctly; the review section says what
-  it was.
-- **Tests:** 1,462 passing, 0 failing, up from 1,425. Plus **439** in the
+  step 4: T-264 in the work order's own four-piece order, because each piece
+  makes the next testable.
+- **Tests:** 1,472 passing, 0 failing, up from 1,462. Plus **439** in the
   vendored `h2` library, **153** in `rqbit` and **76** in `librqbit-utp`, none
   of which the workspace gates run.
 
   **One of the 439 fails about one run in one under `--workspace` and is
-  upstream's.** `proto::streams::recv::tests::clear_recv_buffer_caps_capacity_before_overflow`
-  reproduces on a pristine `v0.4.19` checkout carrying only the two changes
-  that make the tree loadable here, so it predates every patch in
-  `patches/h2/`. It passes alone and it passes under `--lib`. Nothing was done
-  for it and no entry was opened: it is not this repository's code and one
-  flake in somebody else's test is not a measurement.
+  upstream's**, unchanged and still not this repository's code:
+  `proto::streams::recv::tests::clear_recv_buffer_caps_capacity_before_overflow`.
 
 ```bash
 cargo test --manifest-path vendor/h2/Cargo.toml --workspace --target-dir target/vendor-h2
@@ -114,474 +98,180 @@ cargo test --manifest-path vendor/h2/Cargo.toml --workspace --target-dir target/
 pwsh -NoProfile -File scripts/gates.ps1
 ```
 
-- **CI:** **twenty-four** jobs, one more than last session: `The rendered tier`
-  is new and builds `--features render`, lints it, tests it and drives both
-  tiers of the proving ground. Green at run **33253156829** against commit
-  `f4a10f0`, the last code push of the session, with **all twenty-four
-  passing**, including all three release targets and the rendered tier driving
-  a real Chrome on the runner. That answers the one question T-244 had left to
-  CI: the vendored trees build on both musl targets. Run **33250896807**
-  against `2282658` was green the same way earlier in the session.
-  A **second** workflow arrived, `Staleness`, which is a schedule and a
-  `workflow_dispatch` and does not run on a push at all.
-
-  **The new job failed once, at run 33249228182, and it was the job's own
-  fault rather than the code's.**
-  `dtolnay/rust-toolchain` installs a toolchain and nothing else, so a job that
-  runs clippy has to name `components: clippy`, and this one did not:
-  `cargo-clippy is not installed for the toolchain`. Every other clippy job in
-  the file already asked for it. Fixed in the same push as this line.
+- **CI:** **twenty-four** jobs. The baseline this session started from is
+  run **33253156829**, against commit `f4a10f0`, green with all twenty-four
+  passing. A second workflow, `Staleness`, is a schedule and a
+  `workflow_dispatch` and does not run on a push.
 
 ```bash
 gh run list --limit 1
 ```
 
-- **Soak:** nothing ran this session. The entry it worked on is not about a
-  long run.
-- **Entries:** 213 items. 33 open, 3 partial, 0 blocked, 166 done, 11 deferred
+- **Vendored:** unchanged, and deliberately so. `scripts/vendor-status.ps1` says
+  everything agrees: **eight upstreams**, **48 patches** across thirty-four
+  sections in [`patches/UPSTREAM.md`](../patches/UPSTREAM.md), the series
+  matching the trees, and the version, changelog and pins agreeing. **No
+  `vendor/` file was edited this session**, which is the other half of what
+  [T-264](cli-surface.md) was for.
+- **Soak:** nothing ran this session.
+- **Entries:** 213 items. 32 open, 4 partial, 0 blocked, 166 done, 11 deferred
   to Phase C. 166 of 202 workable done, 36 left.
-- **Tree:** 108 Rust files, 65,082 lines of code, 17,216 of comment,
+- **Tree:** 108 Rust files, 65,392 lines of code, 17,330 of comment,
   `scc --no-cocomo crates/`. Excludes `vendor/`.
 - **Corpus:** **thirty-nine trees** in forty-one `RESEARCH.md` entries. Plus
   `reference/HISTORY/`. Nothing was mined this session and nothing was read
   from it.
-- **Vendored:** **eight upstreams** now, five added this session: `rustls`,
-  `h2`, `impit`, `reqwest` and `hyper-util` beside `rqbit` and its two
-  siblings. **48 patches** across thirty-four sections in
-  [`patches/UPSTREAM.md`](../patches/UPSTREAM.md). 9.1 MB and 824 tracked
-  files, from 3.4 MB and 390.
 - **Version:** `bit-cli` 0.2.0, unchanged.
 
 ## What the last session did
 
-**One entry closed, and it is the largest thing `cli-surface.md` had.** Two
-pushes, five upstreams vendored, one new library module, two new acceptance
-scripts, one new example, one new workflow and two new entries filed out of
-what the work measured.
+**[T-264](cli-surface.md) went from open to `partial` with three of its four
+pieces done**, and the fourth is blocked on something measured rather than
+predicted. Two new scripts, one committed pin, two new probe switches, one
+whole-file profile move, and `docs/containers.md` rewritten against tooling that
+gained two actions since the page was written.
 
-### [T-244](cli-surface.md), P2, `L`: the fetch is a browser, off the wire
+### The profile is this repository's now, and the move is behaviour neutral
 
-**The JA4 reached Chrome's exactly**, which is what the entry asked for and did
-not assume. Measured with the oracle already in the tree, and beside a real
-Chrome 151 driven at the same probe on the same machine:
+`crates/bit-cli-core/src/page.rs` carries the whole of it: the cipher list, the
+key exchange groups, the signature algorithms, the extension order, ALPN, the
+HTTP/2 settings, the pseudo-header order and the headers.
+`page::browser_fingerprint()` constructs `impit`'s type from those values, where
+`fetch.rs` used to take `chrome_151::fingerprint()` and overwrite the header
+half.
 
-| | before | after | Chrome 151 |
-| --- | --- | --- | --- |
-| JA4 | `t13i1010h2_61a7ad8aa9b6_3fcd1a44f3e3` | `t13i1515h2_8daaf6152771_806a8c22fdea` | **the same** |
-| Akamai | not reachable at all | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` | same but for `1:1:0:255` |
-| header order | `accept` first | Chrome's | **the same** |
+**That it changed nothing on the wire is measured rather than assumed.**
+`scripts/check-fingerprint.ps1` passes with the goldens untouched: the same JA4
+`t13i1515h2_8daaf6152771_806a8c22fdea` and the same header order.
 
-Ten ciphers and ten extensions became fifteen and fifteen, with ALPS, ECH,
-certificate compression, SCT and the ML-DSA signature algorithms. The cipher
-list is Chrome's value for value **in Chrome's order**, GREASE included.
+The one test still making the vendored database the authority asserted that our
+TLS half **equals** `impit`'s `chrome_151` entry. It is replaced by one
+asserting the client presents what `page.rs` declares, which is the assertion
+that survives a bump.
 
-**Reading the HTTP/2 half needed a completed handshake and no weakened
-verification.** `loopback-tlsprobe` mints its own certificate authority per
-run and writes it to `--ca-out`; `BIT_CLI_EXTRA_CA_FILE` adds that one root to
-the platform's. Nothing anywhere stops verifying a certificate.
+### The capture from a browser this machine does not have
 
-### Five upstreams, and three the survey named that are not among them
+`scripts/check-browser-fingerprint.ps1 -Container` installs a browser in a
+throwaway `debian:bookworm-slim` distro, drives it at `loopback-tlsprobe` on the
+address a distro reaches this host at, and removes the distro in the same run,
+reading the state back rather than trusting it. `-Source cft -Channel
+Stable|Beta|Dev|Canary` takes a Chrome for Testing build; `-Source apt` takes
+Google's branded stable package. Evidence:
+`bench/browser-fingerprint-cft-152.json`.
 
-`apify/rustls` for the `ClientHello`, `hyperium/h2` at `v0.4.19` for the
-pseudo-header order, `apify/impit` for the fingerprint database and the client,
-`seanmonstar/reqwest`'s 0.13 line for one line, and `hyperium/hyper-util`
-**unpatched** for one method a release has not carried.
+Two probe switches were needed and both are worth having on their own.
+**`--bind`** takes the address, defaults to `127.0.0.1`, puts whatever it names
+in the leaf certificate so a verifying client still verifies the name it
+dialled, and refuses a hostname and the unspecified address by name.
+**`--until-h2`** stops at the first connection that reached HTTP/2.
 
-Three of the survey's five are not vendored and each is a measurement.
-`apify/h2` is `0.4.7` against the `0.4.19` this graph resolves, so a `[patch]`
-at that version is declined and the fork never runs; vendoring it would record
-a base that does not describe the tree. `apify/tower-http` comments out the two
-lines that strip `Content-Encoding` and `Content-Length` after decompressing.
-`apify/hyper-util` adds a status code to a proxy tunnel error nothing here
-reads.
+### Four things the measurement found, and three were not predicted
 
-**Two of the three accepted costs were not paid.** `--cfg reqwest_unstable`
-is needed nowhere, because HTTP/3 is removed from the vendored `impit` rather
-than carried: the flag would have gone in all three `.cargo/config.toml` target
-blocks and all three `RUSTFLAGS` blocks in `ci.yml`, which is
-[T-146](cli-surface.md)'s shape. And two `reqwest` majors were already in the
-graph before any of this, through `librqbit`.
+**Chrome 152's Akamai fingerprint is Chrome 151's exactly**, including the
+`1:1:0:255` PRIORITY field. [T-262](cli-surface.md) is now reproduced on two
+versions and two platforms.
 
-### Staleness is detected, and the fix is recommended with proof
+**Two extensions are new in 152 and this stack can emit neither.** From the raw
+hello in wire order, `0x12e0` at position 7 and `0xca34` at position 10.
+`0xca34` is the trust anchors draft; `0x12e0` this session could not identify
+and says so rather than guessing. `impit`'s `ExtensionType` names neither, and
+`vendor/rustls`'s `ClientExtensions` has one typed field per extension type, so
+it has nowhere to put either. **That is why the profile was not bumped.** A
+client claiming 152 without them sends a `ClientHello` that exists nowhere,
+which section 6b says is a stronger tell than being one version behind.
 
-The operator's first-class requirement. Two checks, both writing versioned JSON
-with a `schema` field per ruling 3, both on a weekly schedule rather than on a
-push, because a browser shipping is not a defect in a commit.
+**Chrome for Testing cannot supply the header half of a branded profile.** Its
+`sec-ch-ua` carries no Google Chrome entry at all, which is why `-Source apt`
+exists. The one header change that is platform independent and already measured
+is the **order**: 152 moves `accept-language` from twelfth to fourth.
 
-`scripts/check-browser-version.ps1` asks Google, Mozilla and Microsoft what
-stable is, every fetch trapped on its own, and prints the replacement
-`BROWSER_MAJOR`, `BROWSER_USER_AGENT` and `sec-ch-ua`. It says **Chrome 152**
-today against a profile claiming 151, and it said 153 until the endpoint it
-reads was corrected; the review section below carries that.
+**A browser opens sockets it abandons.** Driving Chrome 152 at the probe made 13
+connections: the **first** carried no HTTP/2 at all, and every one after the
+second carried `pre_shared_key` because the session resumed. So neither the
+first capture nor the last is the one to read. Both paths now take the first
+that reached HTTP/2, which fixes a defect the host path already had and which
+was invisible only because a Chrome on loopback happened to win the race.
 
-`scripts/check-browser-fingerprint.ps1` drives the browser this machine has at
-the probe and prints the replacement `BROWSER_HEADERS` in the shape `page.rs`
-wants, naming the browser and version they came from. With no browser it exits
-**2** naming every path it looked at.
+### The tooling is pinned by a file rather than by a habit
 
-**The profile was not bumped**, and that is a decision: the TLS half is
-`impit`'s database, whose newest Chrome is 151, and claiming a version over
-another version's `ClientHello` is a mismatch an origin can see.
+`scripts/wsl-tool.ps1` resolves `Azathothas/ToolKit`'s WSL2 tooling at the
+commit `scripts/toolkit-pin.json` names, verifies both digests, and forwards
+everything else unchanged. It exists because of a defect this session hit: the
+launcher resolves a sibling `wsl-ephemeral.ps1` **ahead of** a pinned ref, so
+with the previous session's copy still in `.tmp/`, a run passing both a ref and
+a digest ran the stale file and verified nothing. The only sign was one line
+reading `Using the copy beside this launcher`. `wsl-tool.ps1` keeps its cache
+holding the launcher alone and removes any sibling first.
 
-### `--render` ships, and it leaves nothing behind
+### `docs/containers.md` is rewritten, and both asks were answered
 
-Behind a Cargo feature, off by default, built and run by a CI job. The flag is
-in **every** build and a binary without the feature refuses it by name. The
-driver navigates, waits for the document to **stop changing** rather than for a
-guessed duration, and composes one HTML string out of the document and any open
-shadow roots, which the same `extract` reads.
+The operator asked for the page to be corrected against the new tooling. Two
+things it described as workarounds are now actions. **`-Action HostAddress`**
+prints the address a distro reaches this host at, on stdout alone, without
+creating a distro, which retires the `/proc/net/route` little-endian decoding
+the page carried; measured here as `172.23.96.1`, agreeing with what a real
+distro said. **`-Action Resources`** reports what WSL and the engine hold and
+prints the cleanup commands without running one. `-PortForward` was asked for
+and refused, with the documentation the ask itself offered as its alternative.
 
-```
-check-page-extract: 26 case(s) over static and rendered, 26 passed, 0 failed
-  links only a rendered tier reaches:
-    L4-script      level 4  static 1  rendered 7  (+6)
-    L5-hostile     level 5  static 0  rendered 2  (+2)
-    L6-hidden      level 6  static 3  rendered 4  (+1)
-    L7-unfriendly  level 7  static 0  rendered 2  (+2)
-  no browser was left running: 15 before, 15 after
-```
-
-### Both extraction gaps, and the one the entry described wrongly
-
-A link is a torrent now when its path ends `.torrent`, when it declares
-`type="application/x-bittorrent"`, or when its **label** says so and its URL
-carries an identifier. The label is the anchor text, then the element's
-`title`, then a wrapped image's `alt`.
-
-That last fallback is the whole finding. The entry proposed matching the anchor
-text; `linuxtracker.org`'s torrent links **have no anchor text**, only an icon
-whose `alt` is `Download Torrent`. Over the fifteen pages already fetched, run
-through the shipping extractor and committed as
-`bench/page-extract-20260829.json`: **75 links on that page where there were
-0**, one of them a false positive, and nothing changed on the other fourteen.
+The page also gained what this session measured the hard way: the sibling
+shadowing above, that a hard interrupt leaves a registered distro and an
+orphaned tarball, that Chrome on Linux does not read its NSS database so a
+trusted CA still gives `CertificateUnknown`, that `New -Command` now returns the
+inner command's code where it used to report 0, and that `wsl --shutdown` is
+machine wide and takes the podman machine down with it.
 
 ## In progress
 
-**Nothing.** [T-244](cli-surface.md) closed and its two residuals are filed
-with their own acceptance: [T-262](cli-surface.md), the PRIORITY field of the
-Akamai fingerprint, and [T-263](cli-surface.md), GREASE and the extension
-order. Both are P3 and both are invisible to JA4.
+**[T-264](cli-surface.md) is `partial`** and the entry says what is left, in
+order: name `0x12e0`; add both codepoints to `impit`'s `ExtensionType` and to
+`vendor/rustls`'s extension encoder; capture a branded Chrome 152 with `-Source
+apt`; then bump. Only the last of those is waiting on the open question below.
 
-**Review 1, every claim against the code it cites.** Four things.
-
-- **One citation into a vendored tree was five lines out.**
-  `streams.rs:271` names `Protocol`'s removal and the pseudo-header order is
-  lifted at `:276`. Corrected by reading the line.
-- **Seven citations into `cli.rs` drifted by 29 lines**, four in
-  `cli-surface.md` and two in `performance.md`, as `--render`,
-  `--browser-path` and `--browser-port` were added above them. The `record`
-  gate caught every one.
-- **A claim had no test behind it.** "The list fetcher goes through the plain
-  client, and there is a test" was written before there was one. There are two
-  now, in `crates/bit-cli/src/source.rs`.
-- **Two of `impit`'s defaults are load bearing and nothing named them.** The
-  abuse read rests on `vanilla_fallback` and `cookie_store` both defaulting
-  off. They are written into `patches/UPSTREAM.md` with their lines, so a
-  reconciliation that moves them is noticed.
-
-**Review 2, a cold read.** Two numbers that were wrong.
-
-- **`--render` costs 15 packages here and the entry said 136 in three
-  places.** The 136 was a standalone probe with an empty graph;
-  `chromiumoxide`'s dependencies are almost all already here. **Ruling 2 was
-  not reopened** and `--render` is still a feature. The number is corrected in
-  the entry so the operator can revisit rather than rediscover.
-- **`http::HeaderMap` was not why the header order was wrong.** The previous
-  session named two causes and only one is real: `reqwest` appends
-  `user-agent` and `accept-encoding` itself. With both in the map at Chrome's
-  positions the wire order is Chrome's, and `HeaderMap` iterated in insertion
-  order both times it was measured. That retired a patch this session had
-  already written and proved changed nothing.
-
-**Review 3, adversarial.** Under "In progress" is the wrong place for it, so it
-is here in full below.
-
-**Review 4, the inherited claims.** Below.
-
-**Review 5, the abuse read.** Below.
-
-**A sixth review, after the entry closed, and it found the worst defect of the
-session in this session's own tooling.**
-
-`scripts/check-browser-version.ps1` read
-`.../channels/stable/versions?pageSize=1`, which answers with the highest
-version **known** on the channel rather than the version being served. Chrome
-rolls out in stages, so for days that is a build almost nobody has. Measured:
-
-| | |
-| --- | --- |
-| what the check reported as stable | `153.0.8010.12` |
-| that build's rollout fraction | **0.005** |
-| what was at fraction 1 | `152.0.7977.65` |
-| Chrome for Testing's `Stable` | `152.0.7977.64` |
-
-So the check inflated the drift by a whole major, which is the **opposite** of
-the defect it was written to catch: chasing a build one user in two hundred has
-produces a correct fingerprint of a browser that does not exist. It reads the
-releases endpoint and the rollout fraction now, cross-checks against Chrome for
-Testing, and prints the highest published version and its fraction beside the
-answer so a reader can check the choice rather than take it.
-
-It was found by asking a question the entry had not asked: whether any other
-source offers a newer Chrome. Chrome for Testing answered with a different
-number, and two first-party endpoints disagreeing is a finding rather than an
-error.
-
-**Review 3, adversarial: what would make this the wrong implementation?**
-
-1. **Five vendored trees is a reconciliation cost that never ends.** True, and
-   it is the strongest objection. What answers it in part is that two of them
-   carry **one line and no lines**: `reqwest` is a single statement and
-   `hyper-util` is unpatched. The two that carry real patches, `impit` and
-   `h2`, are the two whose behaviour this repository actually depends on.
-2. **The impersonation is a claim about a browser that keeps moving.** Also
-   true, and it is why half this session is the staleness tooling rather than
-   the client. The profile is already a major behind stable and the tool said
-   so on its first run, once the endpoint it read was corrected.
-3. **The label rule reads a human-facing string to make a machine decision.**
-   Conceded. It is bounded to a closed list of whole labels and a query
-   requirement, measured at 74 true and 1 false over fifteen real pages, and a
-   false positive costs one line in a list a person is already reading rather
-   than a wrong download. The alternative, fetching each candidate, turns one
-   page into one request per link.
-4. **What the proving ground still does not generate.** A page behind a login,
-   a page whose links are in a JSON API the page fetches and renders into a
-   framework component, and an indexer that paginates. The first is out of
-   scope by construction. The second is L4's `from-fetch` case in miniature
-   and would be found. The third is not: `bit-cli` reads one page and does not
-   follow a next link, by the one-hop rule.
-5. **What was asserted about an origin never fetched.** Nothing new. The
-   fifteen pages were fetched once each, robots honoured, and the only new
-   fetch this session was the three `index` group pages, to read
-   `linuxtracker.org`'s actual markup rather than guess at it. That guess would
-   have been wrong.
-6. **What breaks when apify moves.** `rustls` is the tree that matters: its
-   emulation module is where the `ClientHello` comes from, and a release that
-   restructures it is a real reconciliation. `scripts/vendor-status.ps1` and
-   `scripts/upstream-scan.ps1` are what notice. `impit`'s patches are larger in
-   line count and smaller in risk, because they are removals.
-7. **A driven Chrome is not a stealthy Chrome.** Unchanged and still fine:
-   `--render` exists for pages that build links in script, and a challenge is
-   refused in both tiers.
-
-**Review 4, the research's claims, re-verified and still asserted.**
-
-Re-run here on the whole tree rather than on a probe:
-
-- **MSRV 1.88 passes**, with everything vendored **and** with
-  `--features render`. `cargo +1.88 check --workspace --locked`.
-- **`x86_64-pc-windows-msvc` with `+crt-static`**: `scripts/check-static.ps1`
-  passes, no VCRUNTIME or UCRT import.
-- **Both musl targets build.** CI's `Build` matrix at run **33245679142**,
-  which is the one question the entry left to CI.
-- **The profile holds on a second platform.** The `Staleness` workflow's first
-  run, **33251738663**, drove `ubuntu-latest`'s Chrome 151.0.7922.173 and read
-  the **same JA4 and the same Akamai fingerprint** as this machine's Windows
-  Chrome 151.0.7922.76. Two platforms, two patch releases, one fingerprint.
-- **The Akamai fingerprint is not profile-invariant**, which the survey said it
-  was. `impit`'s own database disagrees with itself: `chrome_151`'s connection
-  window is 15,728,640 and `chrome_125`'s is 15,663,105, in
-  `vendor/impit/impit/src/fingerprint/database/chrome.rs`. Read rather than
-  measured on the wire, and said so.
-
-**Still asserted and never tested here**, inherited from the survey and named
-so the next session knows: `wreq` and `koon` failing to static-link, the
-BoringSSL classification of the four candidates that were never built, every
-star count, and every claim about macOS. HTTP/3 and QUIC are unverified and are
-now deliberately **not shipped**, which is the honest resolution of that one.
-
-One inherited belief is partly resolved: this tree already carried `aws-lc-rs`,
-which is AWS's fork of BoringSSL, through `rustls` and
-`librqbit-sha1-wrapper`, and `scripts/setup-nasm.ps1` exists because of it. The
-"two TLS stacks" objection to a BoringSSL client was therefore weaker than the
-entry recorded.
-
-**Review 5, the abuse read, and the bar is higher than it was.**
-
-- **A CAPTCHA is a refusal in the code.** One `GET`, no retry, no backoff, no
-  second request, and the trait that says so is `bit_cli_core::fetch::Fetcher`.
-  `impit`'s `vanilla_fallback` is the one path that could produce a second
-  request and it defaults off and is never turned on; the default is cited in
-  `patches/UPSTREAM.md`. L7's challenge case in the proving ground carries a
-  real-looking verification form and its expected answer is a refusal in both
-  tiers, so a change that starts posting one fails a check.
-- **Nothing retries past a bot check**, because nothing retries at all.
-- **Nothing logs a credential or a cookie**, and this session added the one
-  thing that could. `--header-values` on the probe records header **values**,
-  and it is used by exactly one script, against a browser that script launched
-  itself into a throwaway profile at a loopback port having visited nothing.
-  `cookie` and `authorization` are dropped even there, and the default shape
-  carries names only, which a test asserts. No cookie jar exists on either
-  client: `cookie_store` defaults to `None` and nothing sets it.
-- **`--render` leaves no browser running when the command fails.** Measured on
-  the timeout path, which is the one that would leak, and asserted every run:
-  `check-page-extract.ps1` counts browser processes either side of the rendered
-  tier and fails if the count grew.
-- **A web seed still identifies itself honestly**, and so does a tracker
-  announce, a peer handshake and a list fetched by URL. Two tests hold the
-  seam.
-- **The fetching honoured `robots.txt` and stayed to one request per page.**
-  Three pages were fetched this session, through
-  `scripts/check-page-fetch.ps1`, which reads `robots.txt` per host and pauses
-  between requests. The extraction inventory over all fifteen was run from
-  **disk**, through a loopback file server, so no second request reached
-  anybody.
-- **What this makes easier that it should not.** The client now looks like
-  Chrome to a log at every layer an origin reads, by default. Its blast radius
-  is one `GET` of a document the caller named. It does not defeat a challenge,
-  does not solve one, does not retry into one, and the one new capability that
-  could be misused, reading header values, is confined to a browser this
-  repository started itself.
-- **One thing to keep an eye on.** `impit` exposes
-  `with_ignore_tls_errors`, which sets `danger_accept_invalid_certs`.
-  `bit-cli` never calls it and there is no flag that would.
-  `BIT_CLI_EXTRA_CA_FILE` **adds** a root and is the deliberate alternative.
-
-## A ruling arrived after the entry closed, and it is section 6b now
-
-**A fingerprint is measured, never derived and never inherited.** Given by the
-operator on 2026-08-29 once T-244 closed with the profile a major behind
-stable. [RULES.md](RULES.md) section 6b carries it in full and
-[T-264](cli-surface.md) is the entry that makes it routine.
-
-Three parts, and each one closes a shortcut before somebody reaches for it.
-`impit`'s fingerprint database is a starting point and not an authority, and it
-has already been wrong here. A value Chromium computes from a version number is
-still not one this repository may compute, because it cannot vendor Chromium
-and would be the only consumer of a port that drifts. And the profile therefore
-moves only behind a capture from a browser of that version.
-
-**The second instrument is a container, and it was used before it was written
-down.** Measured on this machine on 2026-08-29:
-
-| | |
-| --- | --- |
-| `debian:bookworm-slim` plus Google's own apt repository | **Chrome 152.0.7977.64** |
-| this host | Chrome 151.0.7922.76 |
-| `ubuntu-latest`, run 33251738663 | Chrome 151.0.7922.173 |
-| `versionhistory`, Windows stable, actually serving | 152.0.7977.65 |
-| Chrome for Testing, Stable | 152.0.7977.64 |
-| `versionhistory`, highest published, at fraction 0.005 | 153.0.8010.12 |
-
-**So the container's Chrome 152 is current stable**, and the capture that
-closes the gap is available today rather than blocked on anything. The apparent
-disagreement between the apt channel and the Windows channel was the check
-reading the wrong endpoint, not the channels differing; the correction is
-below.
-
-**One piece needs code and the measurement says which.** WSL is in NAT mode on
-this host, so a distro cannot reach the Windows loopback and
-`loopback-tlsprobe` binds `127.0.0.1` only. The distro **does** reach the host
-at the WSL adapter address, `172.23.96.1`, and a listener bound there accepted
-the connection. So the probe takes a `--bind` that defaults to loopback, and
-the capture binds it to that address, which is a Hyper-V internal network and
-is not the LAN. That is T-264's second piece.
-
-[`docs/containers.md`](../docs/containers.md) is the procedure, including the
-traps: pin a commit rather than a branch, pass a command as base64 because
-PowerShell parses text before the distro sees it, `/bin/sh` is dash and has no
-`/dev/tcp`, and a rootfs costs several times its own size as a virtual disk.
-
-**Everything this session created in a container was removed in the same
-session.** One distro, `eph-bitcli-chrome`, and
-`wsl-ephemeral.ps1 -Action List` reports `(none)` afterwards with no orphaned
-rootfs tarball.
-
-## The engine was not left as it was found, and not by this session
-
-Asked to look, reported, and then cleaned on the operator's authorisation.
-
-```bash
-podman system df
-```
-
-| | total | active | size | reclaimable |
-| --- | --- | --- | --- | --- |
-| images | 554 | 1 | 31.35 GB | **31.35 GB, 100 percent** |
-| containers | 1 | 0 | 5.08 GB | 5.08 GB |
-| local volumes | 5 | 0 | 18.78 MB | 18.78 MB |
-
-Nothing is in use. There are **21 dangling images**, one exited container
-called `pmarch` from about nineteen hours before this session, and five
-orphaned volumes: `xwork`, `fwd`, `dlopen-exp2` and two hash-named ones, none
-attached to any container. The named images that survive, `localhost/archlinux`
-in five architectures and `ghcr.io/pkgforge-dev/archlinux:loong64`, look
-deliberate and were left alone.
-
-`podman system prune -a --volumes` reclaimed **306.2 GB**, which is larger than
-the `df` figure above because `df` counts deduplicated image size and the prune
-counts every layer and blob it removed. The engine reports zero images, zero
-containers and zero volumes afterwards.
-
-It was not run until the operator authorised it: some of those images take a
-long time to rebuild and no session should decide that for somebody else.
+**Nothing else is half done.** [T-262](cli-surface.md) and
+[T-263](cli-surface.md) are untouched code and both gained a second
+measurement's worth of detail from the 152 capture.
 
 ## Start here next session
 
-**The operator allocated one more session to T-244 and it is the last one.**
-The ordinary work order is below it and resumes the session after. This is not
-a one-off in the [RULES.md](RULES.md) section 3 sense: the work order is here,
-in this file, where it belongs, and the kickoff prompt stays generic.
-
-**What "finish it for real" means**, and it is three entries rather than a
-feeling: [T-262](cli-surface.md), [T-263](cli-surface.md) and
-[T-264](cli-surface.md) all close, and T-264's move takes the profile out of
-the vendored tree. Every one has an acceptance command already written and
-every one has its measurement already taken. **Nothing in the three needs a
-decision**: both that were open were ruled on and are in
-[RULES.md](RULES.md) section 6b.
+1. **Re-measure the baseline rather than trusting the one above**, which is
+   [RULES.md](RULES.md) section 1 step 5.
 
 ```bash
-pwsh -NoProfile -File scripts/check-todo.ps1
+pwsh -NoProfile -File scripts/gates.ps1
 ```
-
-1. **Re-measure the baseline rather than trusting the one above**, which is
-   [RULES.md](RULES.md) section 1 step 5. This session touched `vendor/`
-   heavily, so `scripts/vendor-status.ps1` goes first.
 
 ```bash
 gh run list --limit 1
 ```
 
-2. **[T-264](cli-surface.md), P2, `M`, and it is the spine.** Four pieces and
-   three are already measured; the entry carries the numbers so none of it
-   needs re-deriving.
+2. **[T-263](cli-surface.md), P3, `M`**, and it is now the entry with the most
+   already worked out. It carries the Chrome 152 wire order, the two GREASE
+   codepoints that connection chose, and the finding that **the shuffle is half
+   built in the vendored tree already**: rustls sorts by a per-connection
+   `order_seed` and only the extensions **not** named in `extension_order` take
+   part, so naming fewer of them is most of the work. The GREASE half needs a
+   new shape, because `ClientExtensions` has one slot at a fixed codepoint and
+   Chrome sends two at chosen ones.
 
-   Do them in this order, because each makes the next testable: `--bind` on
-   `loopback-tlsprobe`, then the container capture in
-   `scripts/check-browser-fingerprint.ps1 -Container`, then **the move of the
-   whole profile into `crates/bit-cli-core/src/page.rs`**, then the bump from
-   what Chrome for Testing's Stable emitted.
+3. **[T-262](cli-surface.md), P3, `S`.** The PRIORITY payload in `h2`'s frame
+   encoder, `vendor/h2/src/frame/headers.rs:301`. The 152 capture reproduced the
+   difference on a second version, so the premise is firmer than when it was
+   filed. `cargo test --manifest-path vendor/h2/Cargo.toml --workspace` is what
+   holds it.
 
-   The move is the part with the leverage and the part to do carefully: after
-   it, a bump edits one file this repository owns and `vendor/impit` carries no
-   data this repository authored.
-
-3. **[T-263](cli-surface.md), P3, `M`.** GREASE at both ends of the extension
-   list and a shuffled order, in the vendored `rustls` emulation module. Cheap
-   to verify because it moves no golden: JA4 and JA4_r both sort, so
-   `scripts/check-fingerprint.ps1` passes unchanged and `JA4_ro` is what shows
-   the fix landed.
-
-4. **[T-262](cli-surface.md), P3, `S`.** The PRIORITY payload in `h2`'s frame
-   encoder, which is the one field of four where the Akamai fingerprint still
-   differs from a real Chrome. Smallest of the three and the riskiest code:
-   `vendor/h2/src/frame/headers.rs:301` is a protocol library's frame writer.
-   `cargo test --manifest-path vendor/h2/Cargo.toml --workspace` is what holds
-   it.
+4. **[T-264](cli-surface.md)'s remainder**, which is the list under "In
+   progress" and finishes with the bump.
 
 5. **Then the ordinary list resumes**, in the shape the operator has kept
-   throughout: not priority first, clear the small entries so the open count
-   comes down, then take the bigger ones a category at a time.
+   throughout: clear the small entries so the open count comes down, then take
+   the bigger ones a category at a time.
 
    [T-259](cli-surface.md) P3 `S`, still the smallest thing open and untouched
-   for three sessions. [T-250](cli-surface.md) P2, which has more to report
-   than when it was filed now that a page's links carry a `matched` rule each.
-   [T-253](cli-surface.md) P2 `partial`, whose blocker went two sessions ago
-   and which now has two worked examples of `rcgen` to copy.
+   for four sessions. [T-250](cli-surface.md) P2. [T-253](cli-surface.md) P2
+   `partial`, which now has three worked examples of `rcgen` to copy.
    [T-251](trackers.md) P2 `partial`. Then [T-260](cli-surface.md) and
-   [T-261](trackers.md), the publishing pair, which have three schema-carrying
-   files to publish now rather than one.
+   [T-261](trackers.md), the publishing pair.
 
 6. **[T-233](peers.md), P1, effort M**, unchanged and still the largest thing
    open. The write side and the transport are both eliminated by measurement,
@@ -608,73 +298,55 @@ to 29 for [T-234](peers.md); entries 30 to 37 for [T-238](peers.md) and
 **All of it is a read.** Nothing was read from it this session.
 
 **A container is available and [`docs/containers.md`](../docs/containers.md) is
-the procedure.** It answers in seconds what CI answers in five minutes, and
-everything it creates is removed in the same run. `podman system df` before
-finishing is the number that says whether something stopped cleaning up.
+the procedure**, rewritten this session and now describing tooling that answers
+the host address without building a distro to ask.
+`pwsh -NoProfile -File scripts/wsl-tool.ps1 -Action List` is the first thing to
+run and the last, and `podman system df` before finishing is the number that
+says whether something stopped cleaning up.
 
 ## Open questions for the operator
 
-**None. Two were raised at the end of this session and both were ruled on**,
-and they are in [RULES.md](RULES.md) section 6b so the next session acts on
-them rather than re-deriving them.
+**One, and it is about honesty rather than about work.**
 
-1. **The profile lives in `bit-cli-core`, not in the vendored tree.**
-   `page.rs` holds all of it and builds `impit`'s `BrowserFingerprint` from its
-   own values. One file is the truth, a staleness recommendation has one file
-   to target, and `vendor/impit` carries no data this repository authored.
-2. **The shipped profile claims Stable.** Beta is captured and recorded beside
-   it so the next bump is ready the day it ships, and it is not what the client
-   claims to be.
+1. **How far may one profile be assembled from more than one capture?** The bump
+   to 152 needs three things that no single browser reachable from this machine
+   emits together: the TLS half, which the Linux container supplies and which
+   run 33251738663 already measured to be identical across platforms for 151;
+   the branded `sec-ch-ua`, which only a branded build supplies; and the Windows
+   platform strings, which only a Windows build supplies.
+   [RULES.md](RULES.md) section 6b says everything the profile claims is
+   measured off a browser. It does not say whether that means **one** browser.
+   This session read it as one and therefore did not bump. If captures may be
+   combined where each field is measured and the seams are written down, the
+   bump is a session's work rather than a blocked item.
 
-**Three things to be aware of rather than to decide.**
+**Two things to be aware of rather than to decide.**
 
-**The container engine was cleaned, on the operator's authorisation.**
-`podman system df` reported 554 images at 31.35 GB with nothing in use, one
-exited container and five orphaned volumes, all from earlier sessions that did
-not clean up after themselves. `podman system prune -a --volumes` reported
-**306.2 GB** reclaimed, which is larger than the `df` figure because `df`
-counts deduplicated image size and the prune counts every layer and blob it
-removed. The engine reports zero of everything now.
-
-**Two asks were written down for whoever owns `wsl-ephemeral.ps1`**, in
-[T-264](cli-surface.md) under Notes. The useful one is `-Action HostAddress`:
-today a caller has to create a distro, read `/proc/net/route` and decode
-little-endian hex to find out how to talk to the host, and the tool already
-knows the networking mode. Neither ask blocks anything.
+**The container engine was left as it was found.** The only image pulled this
+session was `debian:bookworm-slim`, and `wsl-ephemeral.ps1 -Action List` reports
+`(none)` with no orphaned rootfs tarball. One run was killed mid-install and did
+leave a distro and a 74.3 MiB tarball; `Purge` removed both in the same session,
+which is what that command is for.
 
 **One dependabot pull request is still open**, number 6,
 `ci(deps): bump taiki-e/install-action from 2.86.3 to 2.86.5`. Not taken again,
-for the same reason as the last four sessions.
+for the same reason as the last five sessions.
 
 ## Behaviour changes worth the operator's eye
 
-**The fetch of a source document is a browser at every layer an origin reads.**
-Chrome's `ClientHello`, Chrome's HTTP/2 settings and pseudo-header order,
-Chrome's header set in Chrome's order. The JA4 is Chrome 151's own, verified
-against a real Chrome 151 on the same machine. `--page-client plain` restores
-`bit-cli/<version>`.
+**Nothing `bit-cli` puts on the wire changed.** The profile moved file and the
+goldens did not move, which is the point of the move: one file this repository
+owns is now the only place a fingerprint comes from, and `vendor/impit`'s
+database is read by nothing that ships.
 
-**A web seed, a tracker announce, a peer handshake and a list fetched by URL
-are all unaffected** and still say `bit-cli`. The list fetchers go through the
-plain client whatever `--page-client` says, which is new and is tested.
+**`loopback-tlsprobe` takes `--bind` and `--until-h2`.** Both are test fixture
+switches and neither reaches a shipping binary. `--bind` defaults to loopback
+and refuses the unspecified address by name.
 
-**`--render` exists.** It needs a build with the `render` feature, which the
-released binaries do not carry; without one the flag is refused by name.
-`--browser-path` and `--browser-port` came with it. Nine commands gained all
-three.
+**`scripts/check-browser-fingerprint.ps1` takes `-Container`, `-Source` and
+`-Channel`**, and its host path now reads the first capture that reached HTTP/2
+rather than the second line of output, which is a correctness fix on a path that
+already existed.
 
-**`BIT_CLI_EXTRA_CA_FILE` is read.** A PEM bundle named by it is trusted **in
-addition to** the usual roots when a source document is fetched, and a run that
-reads it logs a warning naming the file. There is no flag anywhere that stops
-verifying certificates.
-
-**A page's links are matched three ways now**, not one: the `.torrent`
-extension, a declared `type="application/x-bittorrent"`, or a torrent label
-over a URL carrying an identifier. **A script that counted links on an indexer
-page will see more of them**, which is the point: one real index went from 0 to
-75. Each link in a refusal carries a new `matched` field saying which rule took
-it.
-
-**`bit-cli` does not speak HTTP/3 and did not before**, and now it will not by
-construction: the vendored client's HTTP/3 path is removed rather than carried
-behind an unstable compiler flag.
+**`scripts/wsl-tool.ps1` is new** and is the only thing in this repository that
+should fetch the WSL tooling.

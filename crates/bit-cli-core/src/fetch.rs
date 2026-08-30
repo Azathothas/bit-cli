@@ -24,9 +24,7 @@
 
 use std::time::Duration;
 
-use crate::page::{
-    BROWSER_H2_HEADER_TABLE_SIZE, BROWSER_H2_OMIT_MAX_FRAME_SIZE, BROWSER_HEADERS, ClientProfile,
-};
+use crate::page::{BROWSER_H2_HEADER_TABLE_SIZE, BROWSER_H2_OMIT_MAX_FRAME_SIZE, ClientProfile};
 
 /// What to fetch, and the two bounds every fetch here carries.
 #[derive(Debug, Clone)]
@@ -267,18 +265,14 @@ pub struct BrowserFetcher {
 
 /// The fingerprint the browser profile presents.
 ///
-/// `impit`'s Chrome 151 entry for the TLS and HTTP/2 halves, and this tree's
-/// own header list for the HTTP half. The two are kept apart on purpose: the
-/// cipher and extension lists need `impit`'s types and move when a browser's
-/// TLS stack moves, while the header set is what a staleness check rewrites
-/// and belongs in a file this repository owns.
+/// **All of it is [`crate::page`]'s now**, ciphers, groups, signature
+/// algorithms, extension order, HTTP/2 settings and headers, where the TLS and
+/// HTTP/2 halves used to be `impit`'s Chrome 151 database entry. `TODO/RULES.md`
+/// section 6b is the ruling: the vendored database is a starting point rather
+/// than an authority, and it has already been wrong here. This is one line so
+/// that there is exactly one place a profile comes from.
 fn browser_fingerprint() -> impit::fingerprint::BrowserFingerprint {
-    let mut fingerprint = impit::fingerprint::database::chrome_151::fingerprint();
-    fingerprint.headers = BROWSER_HEADERS
-        .iter()
-        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-        .collect();
-    fingerprint
+    crate::page::browser_fingerprint()
 }
 
 /// Extra roots the source-document fetcher will trust, as PEM, from the path
@@ -492,19 +486,30 @@ mod tests {
             .iter()
             .map(|(name, _)| name.as_str())
             .collect();
-        let want: Vec<&str> = BROWSER_HEADERS.iter().map(|(name, _)| *name).collect();
+        let want: Vec<&str> = crate::page::BROWSER_HEADERS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
         assert_eq!(names, want);
     }
 
     #[test]
-    fn the_browser_fingerprint_keeps_impits_tls_half() {
+    fn the_client_takes_the_whole_profile_from_page_and_nothing_from_the_database() {
+        // What this used to assert was that our TLS half equals `impit`'s
+        // `chrome_151` entry, which made the vendored database the authority.
+        // TODO/RULES.md section 6b rules the other way and T-264 moved the
+        // profile here, so the assertion is now that this client presents
+        // exactly what `page.rs` declares. A bump edits that file and this
+        // test follows it without being touched.
         let ours = browser_fingerprint();
-        let theirs = impit::fingerprint::database::chrome_151::fingerprint();
-        assert_eq!(ours.tls, theirs.tls);
+        let declared = crate::page::browser_fingerprint();
+        assert_eq!(ours.tls, declared.tls);
         assert_eq!(
             ours.http2.pseudo_header_order,
-            theirs.http2.pseudo_header_order
+            declared.http2.pseudo_header_order
         );
+        assert_eq!(ours.headers, declared.headers);
+        assert_eq!(ours.version, crate::page::BROWSER_MAJOR.to_string());
     }
 
     #[test]

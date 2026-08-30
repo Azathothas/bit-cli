@@ -54,6 +54,17 @@
 //! handshake, so nothing has to be disabled to reach it. The Akamai HTTP/2
 //! fingerprint needs the opposite: it only exists after ALPN picks `h2`.
 //!
+//! **`--bind` is how a browser that is not on this machine reaches it.** The
+//! default is `127.0.0.1` and nothing else changes it. A WSL2 distro in NAT
+//! mode cannot reach the Windows loopback at all, so a capture from a browser
+//! installed in a throwaway distro needs the probe on the address that distro
+//! reaches the host at, which `wsl-ephemeral.ps1 -Action HostAddress` prints.
+//! The leaf certificate carries whatever `--bind` names, so a client that
+//! trusts `--ca-out` still verifies the name it dialled. The unspecified
+//! address is refused by name: a fixture that terminates TLS and records
+//! header values does not belong on every interface, and the specific address
+//! is always knowable.
+//!
 //! Exit status is 1 when any `--expect` assertion fails, 2 when it could not
 //! run at all, so it drops into an acceptance script unchanged.
 
@@ -62,12 +73,13 @@ mod huffman;
 mod tlsfp;
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
 
 /// Every switch, parsed by hand because an example takes no `clap`.
 struct Args {
+    bind: IpAddr,
     port: u16,
     json: bool,
     raw: bool,
@@ -81,6 +93,7 @@ struct Args {
     expect_akamai: Option<String>,
     expect_file: Option<String>,
     write_golden: Option<String>,
+    until_h2: bool,
 }
 
 const HELP: &str = "\
@@ -91,6 +104,9 @@ USAGE:
 
 OPTIONS:
     -p, --port <N>            listen port, 0 for one the OS picks (default 0)
+    -b, --bind <ADDR>         listen address (default 127.0.0.1). Use it to
+                              reach a browser that is not on this machine; the
+                              unspecified address is refused
         --raw                 do not terminate TLS, capture the ClientHello only
         --plain               speak cleartext HTTP/1.1, capture the header order
         --ca-out <PATH>       write the generated CA certificate here, as PEM,
@@ -101,6 +117,9 @@ OPTIONS:
                               which is how a parser test vector is recorded
         --json                one JSON object per connection on stdout
         --once                exit after the first connection
+        --until-h2            exit after the first connection that completed
+                              HTTP/2. A browser opens sockets it abandons, so
+                              --once can capture one of those and nothing else
         --expect-ja4 <S>      assert the JA4 string, else exit 1
         --expect-ja3 <S>      assert the JA3 hash, else exit 1
         --expect-akamai <S>   assert the Akamai HTTP/2 fingerprint, else exit 1
@@ -121,8 +140,47 @@ fn next_value(argv: &[String], i: &mut usize) -> String {
     }
 }
 
+/// The address the listener binds, refusing the two shapes that are a mistake
+/// rather than a choice.
+///
+/// A hostname is refused because the leaf certificate and the announced URL
+/// both need a literal, and resolving one here would put a name in the
+/// certificate that does not match what the caller dialled. The unspecified
+/// address is refused because this fixture terminates TLS with a throwaway
+/// authority and records header values, and neither belongs on every interface
+/// a machine has.
+fn parse_bind(raw: &str) -> IpAddr {
+    let Ok(addr) = raw.parse::<IpAddr>() else {
+        eprintln!(
+            "loopback-tlsprobe: --bind {raw} is not an IP address. \
+             A hostname is not accepted: the certificate and the announced URL \
+             both carry the literal this binds."
+        );
+        std::process::exit(2);
+    };
+    if addr.is_unspecified() {
+        eprintln!(
+            "loopback-tlsprobe: --bind {raw} would listen on every interface, \
+             which this fixture does not do. Name the one address the client \
+             reaches this host at; for a WSL2 distro in NAT mode that is \
+             `wsl-ephemeral.ps1 -Action HostAddress`."
+        );
+        std::process::exit(2);
+    }
+    addr
+}
+
 fn parse_args() -> Args {
+    parse_argv(&std::env::args().skip(1).collect::<Vec<String>>())
+}
+
+/// The parser, over a slice a test can supply.
+///
+/// `parse_args` reads the process's own command line, which a test cannot set,
+/// so the loop lives here and that one is the two lines that fetch it.
+fn parse_argv(argv: &[String]) -> Args {
     let mut a = Args {
+        bind: IpAddr::from([127, 0, 0, 1]),
         port: 0,
         json: false,
         raw: false,
@@ -136,13 +194,13 @@ fn parse_args() -> Args {
         expect_akamai: None,
         expect_file: None,
         write_golden: None,
+        until_h2: false,
     };
-    let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
             "--port" | "-p" => {
-                let raw = next_value(&argv, &mut i);
+                let raw = next_value(argv, &mut i);
                 a.port = match raw.parse() {
                     Ok(p) => p,
                     Err(_) => {
@@ -151,18 +209,23 @@ fn parse_args() -> Args {
                     }
                 };
             }
+            "--bind" | "-b" => {
+                let raw = next_value(argv, &mut i);
+                a.bind = parse_bind(&raw);
+            }
             "--json" => a.json = true,
             "--raw" => a.raw = true,
             "--plain" => a.plain = true,
-            "--ca-out" => a.ca_out = Some(next_value(&argv, &mut i)),
+            "--ca-out" => a.ca_out = Some(next_value(argv, &mut i)),
             "--header-values" => a.header_values = true,
-            "--hello-out" => a.hello_out = Some(next_value(&argv, &mut i)),
+            "--hello-out" => a.hello_out = Some(next_value(argv, &mut i)),
             "--once" => a.once = true,
-            "--expect-ja4" => a.expect_ja4 = Some(next_value(&argv, &mut i)),
-            "--expect-ja3" => a.expect_ja3 = Some(next_value(&argv, &mut i)),
-            "--expect-akamai" => a.expect_akamai = Some(next_value(&argv, &mut i)),
-            "--expect-file" => a.expect_file = Some(next_value(&argv, &mut i)),
-            "--write-golden" => a.write_golden = Some(next_value(&argv, &mut i)),
+            "--until-h2" => a.until_h2 = true,
+            "--expect-ja4" => a.expect_ja4 = Some(next_value(argv, &mut i)),
+            "--expect-ja3" => a.expect_ja3 = Some(next_value(argv, &mut i)),
+            "--expect-akamai" => a.expect_akamai = Some(next_value(argv, &mut i)),
+            "--expect-file" => a.expect_file = Some(next_value(argv, &mut i)),
+            "--write-golden" => a.write_golden = Some(next_value(argv, &mut i)),
             "-h" | "--help" => {
                 println!("{HELP}");
                 std::process::exit(0);
@@ -187,9 +250,14 @@ fn parse_args() -> Args {
 /// read through that handshake is not the one it ships.
 ///
 /// The leaf carries `localhost`, `127.0.0.1` and `::1`, which is every name a
-/// loopback fixture is reached by.
+/// loopback fixture is reached by, plus whatever `--bind` named when that is
+/// something else. Without that last one a client dialling the WSL adapter
+/// address would fail on the name rather than on the chain, which is the same
+/// error message for a different cause and would send a session looking at the
+/// authority.
 fn tls_config(
     ca_out: Option<&str>,
+    bind: IpAddr,
 ) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error>> {
     let mut ca_params = rcgen::CertificateParams::new(Vec::new())?;
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
@@ -202,11 +270,16 @@ fn tls_config(
     ];
     let ca = rcgen::CertifiedIssuer::self_signed(ca_params, rcgen::KeyPair::generate()?)?;
 
-    let mut leaf_params = rcgen::CertificateParams::new(vec![
+    let mut names = vec![
         "localhost".to_string(),
         "127.0.0.1".to_string(),
         "::1".to_string(),
-    ])?;
+    ];
+    let bound = bind.to_string();
+    if !names.contains(&bound) {
+        names.push(bound);
+    }
+    let mut leaf_params = rcgen::CertificateParams::new(names)?;
     leaf_params
         .distinguished_name
         .push(rcgen::DnType::CommonName, "localhost");
@@ -682,7 +755,7 @@ fn main() {
     let cfg = if a.raw || a.plain {
         None
     } else {
-        match tls_config(a.ca_out.as_deref()) {
+        match tls_config(a.ca_out.as_deref(), a.bind) {
             Ok(c) => Some(c),
             Err(e) => {
                 eprintln!("loopback-tlsprobe: cannot build a TLS config ({e})");
@@ -691,10 +764,10 @@ fn main() {
         }
     };
 
-    let listener = match TcpListener::bind(("127.0.0.1", a.port)) {
+    let listener = match TcpListener::bind((a.bind, a.port)) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("loopback-tlsprobe: cannot bind 127.0.0.1:{}: {e}", a.port);
+            eprintln!("loopback-tlsprobe: cannot bind {}:{}: {e}", a.bind, a.port);
             std::process::exit(2);
         }
     };
@@ -709,9 +782,16 @@ fn main() {
     // One line on stdout before the first connection, the same contract the
     // other loopback fixtures keep, so a script can read the port it got. The
     // scheme is the one a client should actually use, so a script never has to
-    // know which mode it started.
+    // know which mode it started, and the host is what was bound rather than a
+    // literal, so a caller can hand the line to a browser that is not here.
+    // An IPv6 literal is bracketed, which is the one part of a URL a `format!`
+    // over an address gets wrong.
+    let host = match a.bind {
+        IpAddr::V4(v4) => v4.to_string(),
+        IpAddr::V6(v6) => format!("[{v6}]"),
+    };
     println!(
-        "{}://127.0.0.1:{}",
+        "{}://{host}:{}",
         if a.plain { "http" } else { "https" },
         bound.port()
     );
@@ -724,6 +804,13 @@ fn main() {
             (false, false) => "raw ClientHello only",
         }
     );
+    if !a.bind.is_loopback() {
+        eprintln!(
+            "loopback-tlsprobe: {} is not a loopback address, so this fixture is \
+             reachable by anything on that network for as long as it runs",
+            a.bind
+        );
+    }
 
     let mut all_ok = true;
     let mut wrote_golden = false;
@@ -767,6 +854,15 @@ fn main() {
         }
         all_ok &= assert_all(&cap, &a);
         if a.once {
+            break;
+        }
+        // Wait on the condition rather than on a connection count. A browser
+        // opens sockets it then abandons: measured on 2026-08-30, a Chrome 152
+        // driven at this fixture made 13 connections and the **first** carried
+        // no HTTP/2 at all. `--once` captured that one and stopped, so the run
+        // reported a TLS-only capture and no Akamai fingerprint, which reads
+        // as a failed handshake rather than as the wrong socket.
+        if a.until_h2 && cap.akamai.is_some() {
             break;
         }
     }
@@ -872,6 +968,88 @@ mod tests {
         assert!(asked.contains("\"header_pairs\""), "{asked}");
         assert!(asked.contains("Mozilla/5.0"), "{asked}");
         assert_eq!(golden_headers(&asked), Some(cap.headers.clone()));
+    }
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_command_line_with_no_bind_listens_on_loopback() {
+        // The default is the whole safety argument for the switch: every other
+        // script in this tree passes nothing and must keep the address it has.
+        assert_eq!(parse_argv(&argv(&[])).bind, IpAddr::from([127, 0, 0, 1]));
+        assert_eq!(
+            parse_argv(&argv(&["--port", "0", "--raw"])).bind,
+            IpAddr::from([127, 0, 0, 1])
+        );
+    }
+
+    #[test]
+    fn until_h2_is_off_unless_asked_for_and_is_not_once() {
+        // Two switches that both end the loop and end it on different facts.
+        // `--once` stops at the first connection; `--until-h2` stops at the
+        // first one that reached HTTP/2, which a browser's preconnect is not.
+        let plain = parse_argv(&argv(&[]));
+        assert!(!plain.until_h2 && !plain.once);
+        let a = parse_argv(&argv(&["--until-h2"]));
+        assert!(a.until_h2 && !a.once);
+        let b = parse_argv(&argv(&["--once"]));
+        assert!(b.once && !b.until_h2);
+    }
+
+    #[test]
+    fn bind_takes_a_literal_under_either_spelling() {
+        for flag in ["--bind", "-b"] {
+            let a = parse_argv(&argv(&[flag, "172.23.96.1", "--once"]));
+            assert_eq!(a.bind, IpAddr::from([172, 23, 96, 1]));
+            assert!(a.once, "{flag} swallowed the switch after it");
+        }
+        assert_eq!(
+            parse_argv(&argv(&["--bind", "::1"])).bind,
+            "::1".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_bound_address_that_is_already_a_san_is_not_added_twice() {
+        // What `tls_config` does with the bind address, asserted on the list
+        // rather than on the certificate, because the certificate needs a key
+        // and this is the part that could be wrong.
+        for (bind, expected) in [
+            ("127.0.0.1", 3),
+            ("::1", 3),
+            ("172.23.96.1", 4),
+            ("10.0.0.5", 4),
+        ] {
+            let mut names = vec![
+                "localhost".to_string(),
+                "127.0.0.1".to_string(),
+                "::1".to_string(),
+            ];
+            let bound = bind.parse::<IpAddr>().unwrap().to_string();
+            if !names.contains(&bound) {
+                names.push(bound);
+            }
+            assert_eq!(names.len(), expected, "{bind} produced {names:?}");
+        }
+    }
+
+    #[test]
+    fn an_ipv6_bind_is_bracketed_in_the_announced_url_and_ipv4_is_not() {
+        for (bind, expected) in [
+            ("127.0.0.1", "127.0.0.1"),
+            ("172.23.96.1", "172.23.96.1"),
+            ("::1", "[::1]"),
+            ("fd00::1", "[fd00::1]"),
+        ] {
+            let addr: IpAddr = bind.parse().unwrap();
+            let host = match addr {
+                IpAddr::V4(v4) => v4.to_string(),
+                IpAddr::V6(v6) => format!("[{v6}]"),
+            };
+            assert_eq!(host, expected);
+        }
     }
 
     #[test]
