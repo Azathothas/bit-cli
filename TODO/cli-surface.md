@@ -6434,6 +6434,51 @@ pwsh -NoProfile -File scripts/check-fingerprint.ps1
              [T-020](peers.md) closed. It now asserts that the first and last
              extensions are both GREASE, that they differ, and that there are
              exactly two.
+Correction:  **The first version of this shipped a defect and CI caught it, at
+             run 33289807801.** `The fingerprint against its golden` failed
+             with an empty Akamai fingerprint on `ubuntu-latest` where every
+             local run had passed.
+
+             The cause is the read side rather than the write side.
+             `ReservedGreaseFirst` and `ReservedGreaseLast` were given real
+             GREASE codepoints as placeholders, `0x0a0a` and `0x1a1a`, so they
+             are also what a **received** hello's GREASE extension decodes
+             into. Their bodies were typed `Option<()>`, which reads an empty
+             body and nothing else. RFC 8701 lets a client put any body in a
+             GREASE extension, and this client puts one zero byte in the one
+             at the back. When the per-connection draw put that extension on
+             `0x0a0a`, `0x1a1a` or the pre-existing `ReservedGrease` at
+             `0xbaba`, the server rejected the hello:
+             `TrailingData("Empty")`. Three values in sixteen, so about one
+             handshake in five, which is why every local run passed and CI did
+             not.
+
+             **The next CI run passed over the same defect**, at 33290401084,
+             which is what says it was a rate rather than a break. A check that
+             makes one handshake fails about one time in five, and a session
+             that read a single green run would have concluded the first
+             failure was noise.
+
+             All three fields carry `Option<Payload>` now, so any body reads.
+             **The defect was also in the pre-existing `0xbaba` field**, which
+             this entry did not add: a rustls server built from this fork
+             rejected a real browser's hello whenever its GREASE landed there.
+
+             Measured either side of the fix, `bit-cli` driven at the probe
+             with the CA trusted, counting connections that reached HTTP/2:
+
+             | | handshakes | reached HTTP/2 | failed |
+             | --- | --- | --- | --- |
+             | before | 29 | 27 | 2 |
+             | after | 64 | 64 | **0** |
+
+             The regression test is
+             `a_grease_extension_with_a_body_reads_at_any_reserved_codepoint`
+             in `vendor/rustls/rustls/src/client/hs.rs`, which reads a
+             one-byte-bodied GREASE extension at each of the sixteen reserved
+             values. It cannot be run here, because rustls's own suite needs a
+             `test-ca/` tree this repository does not vendor; the wire
+             measurement above is what holds it.
 Notes:       `JA4_ro` is what made this visible and it was added in the same
              session, for exactly this: JA4 and JA4_r sort, so they say two
              clients are the same when their wire order says otherwise. It is

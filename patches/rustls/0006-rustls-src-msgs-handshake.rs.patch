@@ -5,29 +5,39 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/rustls/src/msgs/handshake.rs b/rustls/src/msgs/handshake.rs
-index b3067df..fbeb114 100644
+index b3067df..1c6dcde 100644
 --- a/rustls/src/msgs/handshake.rs
 +++ b/rustls/src/msgs/handshake.rs
-@@ -973,6 +973,18 @@ extension_struct! {
-         ExtensionType::ReservedGrease =>
-             pub(crate) reserved_grease: Option<()>,
+@@ -971,7 +971,27 @@ extension_struct! {
  
+         // Bogus impit extension
+         ExtensionType::ReservedGrease =>
+-            pub(crate) reserved_grease: Option<()>,
++            pub(crate) reserved_grease: Option<Payload<'a>>,
++
 +        /// GREASE at the front of the extension list, RFC 8701. Added by this
 +        /// repository; see patches/UPSTREAM.md and TODO/cli-surface.md T-263.
-+        /// The body is empty, which is what a browser sends here.
++        /// On the wire the body is empty, which is what a browser sends here.
++        ///
++        /// **The body type is `Payload` and that is not cosmetic.** These two
++        /// variants sit on real GREASE codepoints, so this field is also what
++        /// a **received** hello's GREASE extension decodes into, and RFC 8701
++        /// lets a client send any body it likes. `Option<()>` was tried and
++        /// rejects a GREASE extension carrying one byte, which a browser sends
++        /// and which this client sends at the other end: reading it failed
++        /// about one handshake in five against our own probe.
 +        ExtensionType::ReservedGreaseFirst =>
-+            pub(crate) reserved_grease_first: Option<()>,
++            pub(crate) reserved_grease_first: Option<Payload<'a>>,
 +
-+        /// GREASE at the back of the extension list. Its body is a single zero
-+        /// byte, which is what a browser sends there and is why the two are
-+        /// separate fields rather than one repeated.
++        /// GREASE at the back of the extension list. On the wire its body is a
++        /// single zero byte, which is what a browser sends there and is why the
++        /// two are separate fields rather than one repeated.
 +        ExtensionType::ReservedGreaseLast =>
-+            pub(crate) reserved_grease_last: Option<()>,
-+
++            pub(crate) reserved_grease_last: Option<Payload<'a>>,
+ 
          /// Bogus impit extension
          ExtensionType::SCT =>
-             pub(crate) signed_certificate_timestamp: Option<()>,
-@@ -1007,6 +1019,15 @@ extension_struct! {
+@@ -1007,6 +1027,15 @@ extension_struct! {
  
          /// Extensions that must appear contiguously.
          pub(crate) contiguous_extensions: Vec<ExtensionType>,
@@ -43,7 +53,7 @@ index b3067df..fbeb114 100644
      }
  }
  
-@@ -1046,6 +1067,9 @@ impl ClientExtensions<'_> {
+@@ -1046,6 +1075,9 @@ impl ClientExtensions<'_> {
              record_size_limit,
              padding,
              contiguous_extensions,
@@ -53,17 +63,21 @@ index b3067df..fbeb114 100644
          } = self;
          ClientExtensions {
              server_name: server_name.map(|x| x.into_owned()),
-@@ -1074,6 +1098,9 @@ impl ClientExtensions<'_> {
+@@ -1074,9 +1106,12 @@ impl ClientExtensions<'_> {
              encrypted_client_hello_outer,
              order_seed,
              contiguous_extensions,
-+            reserved_grease_first,
-+            reserved_grease_last,
++            reserved_grease_first: reserved_grease_first.map(|x| x.into_owned()),
++            reserved_grease_last: reserved_grease_last.map(|x| x.into_owned()),
 +            grease_codepoints,
              application_settings,
              application_settings_new,
-             reserved_grease,
-@@ -1097,6 +1124,19 @@ impl ClientExtensions<'_> {
+-            reserved_grease,
++            reserved_grease: reserved_grease.map(|x| x.into_owned()),
+             signed_certificate_timestamp,
+             delegated_credentials,
+             record_size_limit,
+@@ -1097,6 +1132,19 @@ impl ClientExtensions<'_> {
          if self.encrypted_client_hello.is_some() {
              exts.push(ExtensionType::EncryptedClientHello);
          }
@@ -83,7 +97,7 @@ index b3067df..fbeb114 100644
          if self.preshared_key_offer.is_some() {
              exts.push(ExtensionType::PreSharedKey);
          }
-@@ -1126,6 +1166,11 @@ impl ClientExtensions<'_> {
+@@ -1126,6 +1174,11 @@ impl ClientExtensions<'_> {
                  ExtensionType::PreSharedKey
                      | ExtensionType::EncryptedClientHello
                      | ExtensionType::EncryptedClientHelloOuterExtensions
@@ -95,7 +109,7 @@ index b3067df..fbeb114 100644
              ) || self.contiguous_extensions.contains(ext))
          });
  
-@@ -1148,7 +1193,25 @@ impl<'a> Codec<'a> for ClientExtensions<'a> {
+@@ -1148,7 +1201,25 @@ impl<'a> Codec<'a> for ClientExtensions<'a> {
  
          let body = LengthPrefixedBuffer::new(ListLength::U16, bytes);
          for item in order {

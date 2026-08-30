@@ -5,13 +5,17 @@
 # the vendored tree is the truth and this is derived from it. What the
 # change is for is patches/UPSTREAM.md.
 diff --git a/rustls/src/client/hs.rs b/rustls/src/client/hs.rs
-index d680d6d..f4334fc 100644
+index d680d6d..3f973be 100644
 --- a/rustls/src/client/hs.rs
 +++ b/rustls/src/client/hs.rs
-@@ -267,6 +267,30 @@ fn emit_client_hello_for_retry(
-             exts.reserved_grease = Some(());
-         }
+@@ -264,7 +264,35 @@ fn emit_client_hello_for_retry(
+         let ext_config = &fingerprint.extensions;
  
+         if ext_config.grease {
+-            exts.reserved_grease = Some(());
++            exts.reserved_grease = Some(Payload::new(Vec::new()));
++        }
++
 +        // GREASE at both ends, at two codepoints chosen from the sixteen
 +        // RFC 8701 reserves. They are drawn from the provider's secure random
 +        // rather than from a counter, and they are drawn **distinct**, because
@@ -30,16 +34,18 @@ index d680d6d..f4334fc 100644
 +                if second == first {
 +                    second = grease_codepoint(raw[1].wrapping_add(1));
 +                }
-+                exts.reserved_grease_first = Some(());
-+                exts.reserved_grease_last = Some(());
++                // The payloads carried here are never what reaches the wire:
++                // `ClientExtensions::encode` writes the measured bodies, empty
++                // at the front and one zero byte at the back, beside the
++                // chosen codepoint. These say the slots are used.
++                exts.reserved_grease_first = Some(Payload::new(Vec::new()));
++                exts.reserved_grease_last = Some(Payload::new(vec![0u8]));
 +                exts.grease_codepoints = Some((first, second));
 +            }
-+        }
-+
-         if ext_config.signed_certificate_timestamp {
-             exts.signed_certificate_timestamp = Some(());
          }
-@@ -1320,3 +1344,51 @@ impl Deref for ClientSessionValue {
+ 
+         if ext_config.signed_certificate_timestamp {
+@@ -1320,3 +1348,86 @@ impl Deref for ClientSessionValue {
          self.common()
      }
  }
@@ -89,5 +95,40 @@ index d680d6d..f4334fc 100644
 +            seen.insert(grease_codepoint(seed));
 +        }
 +        assert_eq!(seen.len(), 16, "some reserved value can never be chosen");
++    }
++
++    /// A GREASE extension carrying a body has to read, whatever value it
++    /// landed on.
++    ///
++    /// This is the regression for a defect this repository shipped and CI
++    /// caught. `ReservedGreaseFirst` and `ReservedGreaseLast` sit on real
++    /// GREASE codepoints, so they are also what a **received** hello's GREASE
++    /// extension decodes into. With their bodies typed `()`, a hello whose
++    /// GREASE landed on one of those three values, `0x0a0a`, `0x1a1a` or
++    /// `0xbaba`, was rejected for a non-empty body: about one handshake in five
++    /// against our own probe, and every one of them a browser's hello too.
++    #[test]
++    fn a_grease_extension_with_a_body_reads_at_any_reserved_codepoint() {
++        use crate::msgs::codec::{Codec, Reader};
++        use crate::msgs::handshake::ClientExtensions;
++
++        for seed in 0..16u8 {
++            let codepoint = grease_codepoint(seed);
++            // One extension, that codepoint, one byte of body: the shape a
++            // browser sends at the back of its list.
++            let mut wire = Vec::new();
++            6u16.encode(&mut wire); // extensions length
++            codepoint.encode(&mut wire);
++            1u16.encode(&mut wire); // body length
++            wire.push(0u8);
++
++            let mut reader = Reader::init(&wire);
++            let read = ClientExtensions::read(&mut reader);
++            assert!(
++                read.is_ok(),
++                "a GREASE extension at {codepoint:#06x} with a one byte body did not read: {:?}",
++                read.err()
++            );
++        }
 +    }
 +}

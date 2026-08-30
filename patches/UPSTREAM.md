@@ -2144,6 +2144,15 @@ sixteen RFC 8701 reserves by `grease_codepoint`, and drawn **distinct**: a
 client sending the same value at both ends is advertising a constant, which is
 the opposite of the point.
 
+**All three GREASE fields carry `Option<Payload>` and that is a fix rather than
+a choice.** Because these variants sit on real GREASE codepoints, they are also
+what a **received** hello's GREASE extension decodes into, and RFC 8701 lets a
+client put any body in one. Typed `Option<()>`, they rejected a GREASE
+extension carrying a byte, which is what a browser sends at the back of its
+list and what this client sends there: `TrailingData("Empty")` on about one
+handshake in five. The pre-existing `reserved_grease` at `0xbaba` had the same
+defect, so a server built from this fork rejected some real browser hellos.
+
 **How it was measured.** Two consecutive captures of the same binary, raw
 hello, `loopback-tlsprobe --raw --hello-out`:
 

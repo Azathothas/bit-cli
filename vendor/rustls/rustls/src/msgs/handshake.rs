@@ -971,19 +971,27 @@ extension_struct! {
 
         // Bogus impit extension
         ExtensionType::ReservedGrease =>
-            pub(crate) reserved_grease: Option<()>,
+            pub(crate) reserved_grease: Option<Payload<'a>>,
 
         /// GREASE at the front of the extension list, RFC 8701. Added by this
         /// repository; see patches/UPSTREAM.md and TODO/cli-surface.md T-263.
-        /// The body is empty, which is what a browser sends here.
+        /// On the wire the body is empty, which is what a browser sends here.
+        ///
+        /// **The body type is `Payload` and that is not cosmetic.** These two
+        /// variants sit on real GREASE codepoints, so this field is also what
+        /// a **received** hello's GREASE extension decodes into, and RFC 8701
+        /// lets a client send any body it likes. `Option<()>` was tried and
+        /// rejects a GREASE extension carrying one byte, which a browser sends
+        /// and which this client sends at the other end: reading it failed
+        /// about one handshake in five against our own probe.
         ExtensionType::ReservedGreaseFirst =>
-            pub(crate) reserved_grease_first: Option<()>,
+            pub(crate) reserved_grease_first: Option<Payload<'a>>,
 
-        /// GREASE at the back of the extension list. Its body is a single zero
-        /// byte, which is what a browser sends there and is why the two are
-        /// separate fields rather than one repeated.
+        /// GREASE at the back of the extension list. On the wire its body is a
+        /// single zero byte, which is what a browser sends there and is why the
+        /// two are separate fields rather than one repeated.
         ExtensionType::ReservedGreaseLast =>
-            pub(crate) reserved_grease_last: Option<()>,
+            pub(crate) reserved_grease_last: Option<Payload<'a>>,
 
         /// Bogus impit extension
         ExtensionType::SCT =>
@@ -1098,12 +1106,12 @@ impl ClientExtensions<'_> {
             encrypted_client_hello_outer,
             order_seed,
             contiguous_extensions,
-            reserved_grease_first,
-            reserved_grease_last,
+            reserved_grease_first: reserved_grease_first.map(|x| x.into_owned()),
+            reserved_grease_last: reserved_grease_last.map(|x| x.into_owned()),
             grease_codepoints,
             application_settings,
             application_settings_new,
-            reserved_grease,
+            reserved_grease: reserved_grease.map(|x| x.into_owned()),
             signed_certificate_timestamp,
             delegated_credentials,
             record_size_limit,
