@@ -84,7 +84,7 @@ jobs:
       # other target, so build it rather than switching hash on one platform.
       - name: Install b3sum (Windows)
         if: runner.os == 'Windows'
-        uses: taiki-e/install-action@v2.86.3
+        uses: taiki-e/install-action@v2.87.0
         with:
           tool: b3sum
 
