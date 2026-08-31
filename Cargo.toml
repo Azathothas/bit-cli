@@ -56,7 +56,7 @@ librqbit-core = { version = "9.0.1", default-features = false }
 librqbit-peer-protocol = { version = "9.0.1", default-features = false }
 md-5 = "0.11.0"
 percent-encoding = "2.3.2"
-quick-xml = { version = "0.41.0", features = ["serialize"] }
+quick-xml = { version = "0.42.0", features = ["serialize"] }
 rand = "0.10.2"
 # A throwaway certificate for `loopback-tlsprobe`, which is the fixture that
 # reads this client's own TLS fingerprint off the wire. A **dev** dependency

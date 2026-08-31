@@ -123,7 +123,7 @@ openssl = "0.10"
 parking_lot = "0.12"
 parse_duration = "2"
 pollster = "1"
-quick-xml = "0.41"
+quick-xml = "0.42"
 rand = "0.10"
 regex = "1"
 reqwest = { version = "0.13", default-features = false }
