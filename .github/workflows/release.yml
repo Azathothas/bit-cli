@@ -84,7 +84,7 @@ jobs:
       # other target, so build it rather than switching hash on one platform.
       - name: Install b3sum (Windows)
         if: runner.os == 'Windows'
-        uses: taiki-e/install-action@v2.86.3
+        uses: taiki-e/install-action@v2.87.27
         with:
           tool: b3sum
 
@@ -146,7 +146,7 @@ jobs:
           tar -cJf "$name.tar.xz" "$name"
           b3sum "$name.tar.xz" > "$name.tar.xz.b3sum"
 
-      - uses: actions/upload-artifact@v7.0.1
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: bit-cli-${{ matrix.target }}
           path: |
@@ -169,7 +169,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: artifacts
           merge-multiple: true
