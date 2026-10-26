@@ -41,7 +41,7 @@ jobs:
         run: ./scripts/check-browser-version.ps1 -Out .tmp/browser-versions.json
       - name: The report, whichever way it went
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: browser-versions
           path: .tmp/browser-versions.json
@@ -55,7 +55,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_GATE }}
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo build --release --workspace --bins --examples --locked
       # The runner image ships Chrome. With none the check exits 2 and names
       # every path it looked at, which is the case that has to keep working:
@@ -66,7 +66,7 @@ jobs:
         run: ./scripts/check-browser-fingerprint.ps1 -Out .tmp/browser-fingerprint.json
       - name: The capture and the replacement it recommends
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: browser-fingerprint
           path: .tmp/browser-fingerprint.json

@@ -121,7 +121,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_GATE }}
           components: clippy
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   # What the next two toolchains want, six weeks before one of them is the
@@ -147,7 +147,7 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           components: clippy
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       # `clippy` compiles every target, so this covers what `cargo test` and
       # `cargo build` would find on the same toolchain as well as the lints.
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -173,7 +173,7 @@ jobs:
       - name: Install NASM (Windows)
         if: runner.os == 'Windows'
         run: pwsh -NoProfile -File scripts/setup-nasm.ps1
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo test --workspace --locked --all-features
 
   msrv:
@@ -187,7 +187,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo check --workspace --locked --all-features
 
   build:
@@ -212,7 +212,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_GATE }}
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       # The workflow-level RUSTFLAGS replaces the per-target rustflags in
       # .cargo/config.toml rather than adding to them, so every flag that
       # matters to the artifact has to be repeated here. That is what once let
@@ -253,7 +253,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_GATE }}
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       # `--features cli` because cargo-about 0.9 gates its own binary behind
       # it, and `cargo install` without it compiles the crate, installs
       # nothing, and warns rather than failing.
@@ -322,7 +322,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_GATE }}
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo build --workspace --bins --examples --locked
       # Everything binds 127.0.0.1: the tracker, the web seed, the seeder, and
       # aria2c. The job never reaches the network.
@@ -331,7 +331,7 @@ jobs:
         run: ./scripts/interop-roundtrip.ps1 -TimeoutSeconds 180
       - name: Upload the record
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: interop-${{ matrix.os }}
           path: .tmp/interop/
@@ -352,7 +352,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_GATE }}
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       # The same payload has to produce a byte-identical .torrent on both
       # platforms. Path separator and ordering bugs are exactly what this
       # catches, and they only show up across platforms.
@@ -368,7 +368,7 @@ jobs:
       - name: Record the hash
         shell: bash
         run: sha256sum fixture.torrent | cut -d' ' -f1 > hash.txt && cat hash.txt
-      - uses: actions/upload-artifact@v7.0.1
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: determinism-${{ matrix.os }}
           path: hash.txt
@@ -379,7 +379,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: determinism
     steps:
-      - uses: actions/download-artifact@v8.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: hashes
       - name: The two platforms must agree
@@ -399,7 +399,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_GATE }}
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo build --release --workspace --bins --examples --locked
       # Six levels of page, each with the correct extraction recorded beside
       # it. Everything binds 127.0.0.1 and the job never reaches the network.
@@ -427,7 +427,7 @@ jobs:
           # and nothing else, so a job that runs clippy has to ask for it. This
           # one did not and failed on `cargo-clippy is not installed`.
           components: clippy
-      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
       # `--render` is off by default, so nothing else in this workflow builds
       # it. This job exists so it cannot rot: a `chromiumoxide` release that
       # moves an API, or a Chrome that changes what `Page.navigate` does, is
